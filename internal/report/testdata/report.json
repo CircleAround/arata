@@ -1,0 +1,237 @@
+{
+  "profile": "daily",
+  "window": {
+    "from": "2026-10-20T09:00:00Z",
+    "to": "2026-10-21T09:00:00Z"
+  },
+  "name": "acme",
+  "run_id": "run-1",
+  "generated_at": "2026-10-21T09:00:00Z",
+  "summary": {
+    "new": 3,
+    "changed": 1,
+    "recurred": 1,
+    "resolved": 1,
+    "still_open": 1,
+    "max_severity": "critical",
+    "collect_errors": [
+      {
+        "source": "trail-us",
+        "code": "QUERY_LIMIT",
+        "message": "cloudtrail:LookupEvents: throttled",
+        "covered_from": "2026-10-20T20:00:00Z",
+        "covered_until": "2026-10-21T09:00:00Z"
+      }
+    ]
+  },
+  "findings": {
+    "new": [
+      {
+        "id": "f-002",
+        "check": "root_usage",
+        "key": "arn:aws:iam::1:root|203.0.113.1",
+        "severity": "critical",
+        "summary": "summary of arn:aws:iam::1:root|203.0.113.1",
+        "status": "open",
+        "first_seen": "2026-10-21T09:00:00Z",
+        "last_seen": "2026-10-21T09:00:00Z",
+        "last_changed": "2026-10-21T09:00:00Z",
+        "data": {
+          "count": 1
+        }
+      },
+      {
+        "id": "f-010",
+        "check": "login_bruteforce",
+        "key": "198.51.100.7",
+        "severity": "medium",
+        "summary": "summary of 198.51.100.7",
+        "status": "open",
+        "first_seen": "2026-10-21T09:00:00Z",
+        "last_seen": "2026-10-21T09:00:00Z",
+        "last_changed": "2026-10-21T09:00:00Z",
+        "data": {
+          "count": 52,
+          "date": "2026-10-20",
+          "reason": "above_baseline"
+        }
+      },
+      {
+        "id": "f-001",
+        "check": "new_principal",
+        "key": "arn:aws:iam::1:user/x",
+        "severity": "medium",
+        "summary": "summary of arn:aws:iam::1:user/x",
+        "status": "open",
+        "first_seen": "2026-10-21T09:00:00Z",
+        "last_seen": "2026-10-21T09:00:00Z",
+        "last_changed": "2026-10-21T09:00:00Z",
+        "data": {
+          "count": 3,
+          "ips": [
+            "203.0.113.1"
+          ]
+        }
+      }
+    ],
+    "changed": [
+      {
+        "id": "f-003",
+        "check": "unknown_assume_role",
+        "key": "a-\u003eb",
+        "severity": "high",
+        "summary": "summary of a-\u003eb",
+        "status": "open",
+        "first_seen": "2026-10-20T08:00:00Z",
+        "last_seen": "2026-10-21T09:00:00Z",
+        "last_changed": "2026-10-20T08:00:00Z",
+        "reported_at": "2026-10-20T08:00:00Z",
+        "data": {
+          "count": 2
+        }
+      }
+    ],
+    "recurred": [
+      {
+        "id": "f-009",
+        "check": "root_usage",
+        "key": "arn:aws:iam::1:root|192.0.2.1",
+        "severity": "critical",
+        "summary": "summary of arn:aws:iam::1:root|192.0.2.1",
+        "status": "open",
+        "first_seen": "2026-10-10T09:00:00Z",
+        "last_seen": "2026-10-21T09:00:00Z",
+        "last_changed": "2026-10-10T09:00:00Z",
+        "reported_at": "2026-10-10T09:00:00Z",
+        "data": {
+          "count": 2
+        }
+      }
+    ],
+    "resolved": [
+      {
+        "id": "f-004",
+        "check": "iam_changes",
+        "key": "CreateUser|p|t",
+        "severity": "medium",
+        "summary": "summary of CreateUser|p|t",
+        "status": "resolved",
+        "first_seen": "2026-10-18T09:00:00Z",
+        "last_seen": "2026-10-21T09:00:00Z",
+        "last_changed": "2026-10-18T09:00:00Z",
+        "reported_at": "2026-10-18T09:00:00Z",
+        "data": {}
+      }
+    ],
+    "still_open": [
+      {
+        "id": "f-005",
+        "check": "new_principal",
+        "key": "arn:aws:iam::1:user/old",
+        "severity": "medium",
+        "summary": "summary of arn:aws:iam::1:user/old",
+        "status": "open",
+        "first_seen": "2026-10-17T09:00:00Z",
+        "last_seen": "2026-10-21T09:00:00Z",
+        "last_changed": "2026-10-17T09:00:00Z",
+        "reported_at": "2026-10-17T09:00:00Z",
+        "data": {
+          "count": 1
+        }
+      }
+    ]
+  },
+  "already_reported": [
+    {
+      "id": "f-006",
+      "check": "root_usage",
+      "key": "arn:aws:iam::1:root|198.51.100.1",
+      "severity": "critical",
+      "summary": "summary of arn:aws:iam::1:root|198.51.100.1",
+      "status": "open",
+      "first_seen": "2026-10-21T07:00:00Z",
+      "last_seen": "2026-10-21T09:00:00Z",
+      "last_changed": "2026-10-21T07:00:00Z",
+      "reported_at": "2026-10-21T08:00:00Z",
+      "data": {
+        "count": 1
+      }
+    }
+  ],
+  "info": [
+    {
+      "id": "f-007",
+      "check": "iam_changes",
+      "key": "PutRolePolicy|deploy|r",
+      "severity": "info",
+      "summary": "summary of PutRolePolicy|deploy|r",
+      "status": "open",
+      "first_seen": "2026-10-21T09:00:00Z",
+      "last_seen": "2026-10-21T09:00:00Z",
+      "last_changed": "2026-10-21T09:00:00Z",
+      "data": {
+        "known_deploy_principal": true
+      }
+    }
+  ],
+  "coverage": {
+    "sources_ok": [
+      "trail"
+    ],
+    "sources_failed": [
+      {
+        "source": "trail-us",
+        "code": "QUERY_LIMIT",
+        "covered_from": "2026-10-20T20:00:00Z",
+        "covered_until": "2026-10-21T09:00:00Z"
+      }
+    ],
+    "checks_run": [
+      "iam_changes",
+      "new_principal",
+      "root_usage",
+      "unknown_assume_role"
+    ],
+    "checks_skipped": [
+      {
+        "check": "login_bruteforce",
+        "reason": "no http_access source"
+      }
+    ],
+    "formats": [
+      {
+        "source": "nginx",
+        "format": "nginx_access",
+        "log_group": "/app/nginx",
+        "total": 1000,
+        "matched": 990,
+        "match_rate": 0.99,
+        "expected": 0.8,
+        "recent_average": 0.98,
+        "bytes_scanned": 1500000000
+      },
+      {
+        "source": "app",
+        "format": "json",
+        "log_group": "/app/rails",
+        "total": 1000,
+        "matched": 500,
+        "match_rate": 0.5,
+        "expected": 0.4,
+        "recent_average": 0.9,
+        "bytes_scanned": 0,
+        "code": "FORMAT_DRIFT"
+      },
+      {
+        "source": "waf",
+        "format": "wafv2",
+        "log_group": "aws-waf-logs-prod",
+        "total": 0,
+        "matched": 0,
+        "match_rate": null,
+        "expected": 0.8,
+        "bytes_scanned": 0
+      }
+    ]
+  }
+}

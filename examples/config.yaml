@@ -1,0 +1,112 @@
+# arata の設定サンプル (CloudTrail LookupEvents + CloudWatch Logs Insights)。
+# 監査対象ごとに 1 ファイル。allowlist.yaml と一緒に git 管理する。
+# 全チェック・全パラメータを明示した推奨設定は `arata config init` で書き出せる (この例はそれより短い、アプリ層を含む例)。
+
+name: example
+
+# ストア。Step 1 は dir:// のみ (JSONL 原本 + SQLite)。s3:// は後続 Step。
+store: dir:///var/lib/arata/example
+
+# 既知リスト。相対パスはこの設定ファイルからの相対。無ければ空として扱う。
+allowlist: allowlist.yaml
+
+aws:
+  region: ap-northeast-1
+  # profile: example-audit   # AWS SDK の標準認証チェーン (profile / 環境変数 / ロール) に従う
+
+sources:
+  - id: trail
+    kind: cloudtrail-lookup        # CloudTrail を API 経由で取得 (CloudWatch Logs 配信が無くても動く)
+    # regions: [ap-northeast-1, us-east-1]
+    # 省略時は [aws.region, us-east-1]。IAM の書き込み・ConsoleLogin・STS の一部は us-east-1 にしか記録されないので、
+    # us-east-1 を外すと root_usage / iam_changes がほぼ鳴らなくなる
+    # ingest_delay: 15m              # 記録の遅れの見込み。run は窓の前をこの分だけ引き直す (既定 15m、0 で引き直さない)
+
+  # アカウント単位の状態 (週次チェック用)。weekly プロファイルの run でだけ取る
+  - id: iam
+    kind: iam-credential-report    # iam:GenerateCredentialReport は書き込み系 (生成のみ)。拒否されても 4 時間以内のレポートがあれば使う
+  - id: guardduty
+    kind: guardduty
+    # regions: [ap-northeast-1]    # 既定は aws.region
+  - id: access_analyzer
+    kind: access-analyzer
+  - id: posture
+    kind: posture
+
+  # アプリ層: ロググループ → 形式プロファイル → 正規化レコード (設計書 2 章)。取得は Logs Insights の集計クエリのみ。
+  - id: nginx_prod
+    kind: cloudwatch-logs
+    log_group: prod-nginx-access
+    format: nginx_access             # nginx combined 形式 → http_access
+    # region: ap-northeast-1         # 既定は aws.region (1 つだけ)
+    # max_scan_gb: 5                 # 1 回の収集でスキャンしてよい量。超えたら QUERY_LIMIT (既定 0 = 無制限)
+    # ingest_delay: 5m               # 取り込みの遅れの見込み。run は窓の前をこの分だけ引き直す (既定 5m)
+  # - id: ecs_web
+  #   kind: cloudwatch-logs
+  #   log_group: /ecs/my-app-production
+  #   stream_prefix: web/            # ストリーム名 (web/web/<task-id>) で絞る。リバースプロキシとアプリのログが同じストリームに混在する
+  #   format: nginx_access
+  #   expected_match_rate: 0.3       # 混在ストリームは nginx 以外の行も数えるので閾値を下げる (doctor の解釈率を見て決める)
+  # - id: waf
+  #   kind: cloudwatch-logs
+  #   log_group: aws-waf-logs-prod
+  #   format: wafv2                  # → waf_action
+  # - id: rails_app
+  #   kind: cloudwatch-logs
+  #   log_group: prod-app.log
+  #   format: json                   # lograge など JSON 行ログ。どのフィールドが何に当たるかの対応表
+  #   fields: { ip: remote_ip, method: method, path: path, status: status }
+  #   expected_match_rate: 0.6       # 混在ストリームなど全行が該当しない場合は下げる (既定 0.8)
+  #   sample_lines: false            # FORMAT_MISMATCH のログに行の例を添えない (個人情報を含み得るログ)
+  # - id: rails_admin
+  #   kind: cloudwatch-logs
+  #   log_group: prod-app.log
+  #   format: regex                  # 名前付きキャプチャ (ip と path は必須) → Insights の parse に変換
+  #   regex: 'Started (?P<method>\w+) "(?P<path>/admin/[^"]*)" for (?P<ip>[\d.]+)'
+
+# 周期ごとの窓と有効チェック。実行されるのはここに書いたチェックだけ (arata profiles で確かめる)。
+# `default-<cadence>` はその周期のチェック全部に展開される (版が上がって増えたチェックも黙って入る。雛形では使わない)。
+# チェック: root_usage (hourly), unknown_assume_role (hourly), new_principal (daily), iam_changes (daily), ai_path_usage (daily),
+#           login_bruteforce / probe_paths (daily, http_access), waf_block_trend (daily, waf_action),
+#           credential_hygiene / guardduty_findings / posture / access_analyzer (weekly)
+# hourly に http_access / waf_action を使うチェックを入れなければ hourly では Logs Insights を回さない
+profiles:
+  hourly:
+    window: 1h
+    checks: [root_usage, unknown_assume_role]
+  daily:
+    window: 24h
+    # max_catchup: 7d              # cron が遅れた時に前回の窓の終わりから追いつく上限 (既定 7d)
+    checks: [default-daily, root_usage, unknown_assume_role]   # daily だけ運用する場合は hourly のチェックも入れる
+  weekly:
+    window: 7d
+    checks: [credential_hygiene, guardduty_findings, posture, access_analyzer]
+
+# アプリ層チェックのパス・閾値 (省略時の既定値)。平常帯 = その IP 自身の直近 baseline_days 日の中央値 × factor (下限 min_count)。
+checks:
+  login_bruteforce:
+    paths: [/users/sign_in, /login, /signin]   # sign-in の送信先 (完全一致、クエリ文字列は除く)
+    methods: [POST]
+    failure_statuses: [401, 403, 422]          # 失敗とみなすステータス (Devise の再表示は 401 / 422)
+    baseline_days: 14
+    factor: 3
+    min_count: 20
+    top_ip_min_count: 5                        # その日の最多 IP が初出なら、この件数以上で報告
+    min_baseline_days: 7                       # 「初出」判定に要る過去データの日数
+  probe_paths:
+    paths: [/.env, /.git/, /.aws/, /wp-login.php, /wp-admin, /xmlrpc.php, /phpmyadmin]   # 機密パスの接頭辞 (既定はもう少し多い)
+    exclude_paths: []                          # 正規の管理画面などを外す接頭辞
+    statuses: [403, 404]
+    min_count: 10
+  waf_block_trend:
+    top_n: 5                                   # BLOCK 件数の Top IP の入れ替わりを見る数
+    min_count: 10
+    new_rule_min_count: 1
+
+# 保持期間 (省略時の既定値)。prune は後続 Step。
+retention:
+  raw_jsonl: 365d
+  events: 90d
+  metrics: 400d
+  findings: 180d
+  runs: 400d

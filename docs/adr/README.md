@@ -1,0 +1,42 @@
+# ADR (Architecture Decision Records)
+
+設計上の重要な判断を、背景・選択肢・理由とともに残す。`docs/design.md` は「現在の仕様」、ADR は「なぜそうなったか」。
+
+- 1 ファイル 1 決定。番号は連番、ファイル名は `NNNN-短い題名.md`
+- 状態は `提案` / `採用` / `廃止` / `置換 (→ NNNN)`。採用済みの ADR は書き換えず、変更は新しい ADR で置き換える
+- 書く基準: 後から「なぜこうした?」と聞かれそうな判断、却下した案があった判断、外部 (顧客・運用) に影響する判断。実装の細部は設計書の「決定:」注記で足りる
+
+## テンプレート
+
+```markdown
+# NNNN. 題名
+
+- 日付: YYYY-MM-DD
+- 状態: 採用
+
+## 背景
+## 決定
+## 検討した選択肢
+## 結果 (良い点・引き受けるコスト)
+```
+
+## 一覧
+
+| 番号 | 題名 | 状態 |
+|---|---|---|
+| [0001](0001-engine-boundary.md) | エンジンの責務は収集・保存・差分判定・レポート生成まで | 採用 |
+| [0002](0002-go-single-binary.md) | Go 製の単一静的バイナリ | 採用 |
+| [0003](0003-two-layer-store.md) | JSONL 原本 + SQLite 派生の二層ストア | 採用 |
+| [0004](0004-new-signal-and-baselines.md) | 「新規」の判定は既知リスト (git 管理) と前回状態の二層で行う | 採用 |
+| [0005](0005-event-vs-state-checks.md) | チェックをイベント型と状態型に分け、差分判定の挙動を変える | 採用 |
+| [0006](0006-format-profiles.md) | ロググループと形式プロファイルの紐付け、Logs Insights での集計取得 | 採用 |
+| [0007](0007-baseline-principals.md) | init のベースライン収集で初出した主体は `baseline` 状態にし、new_principal の対象外にする | 採用 |
+| [0008](0008-deploy-tag-in-allowlist.md) | 既知デプロイ主体は allowlist の principals に `tags: [deploy]` で表す | 採用 |
+| [0009](0009-insights-query-templates.md) | Logs Insights のクエリテンプレートは前処理・集計・後処理の 3 層で組み、UTC 日次の集計を置き換えで保存する | 採用 |
+| [0010](0010-approve-text-insertion.md) | approve は allowlist.yaml を構造として書き直さず、principals の末尾に行を差し込む | 採用 |
+| [0011](0011-init-daily-chunks.md) | init のベースライン収集は UTC の 1 日単位に分け、進捗を runs に記録して再開できるようにする | 採用 |
+| [0012](0012-help-ai-embedded-docs.md) | LLM 向けの使い方は skill として配らず、`arata help ai` としてバイナリに埋め込む | 採用 |
+| [0013](0013-ingest-delay-rescan.md) | 記録の遅延は窓の終わりをずらさず、各ソースが `ingest_delay` だけ前を再走査して拾う | 採用 |
+| [0014](0014-explicit-config-scaffold.md) | 既定のプロファイルを実行時に暗黙で効かせず、推奨設定を雛形として書き出す | 採用 |
+| [0015](0015-weekly-snapshot-state-checks.md) | 週次チェックはアカウントの状態をスナップショットとして取り、成功したときだけ丸ごと置き換えて state 型で比べる | 採用 |
+| [0016](0016-period-report-from-store.md) | 期間レポートは収集せずストアだけから作り、そのために finding の状態遷移を履歴として残す | 採用 |

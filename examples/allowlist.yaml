@@ -1,0 +1,26 @@
+# 既知リスト (設計書 6-1)。人が承認したものだけを書く。git 管理。`arata approve` は principals の末尾に追記する。
+principals:
+  - arn: arn:aws:iam::123456789012:role/partner_developers_switch_role
+    note: パートナー開発者の switch role
+    approved_by: alice
+    approved_at: 2026-10-21
+  - arn: arn:aws:iam::123456789012:role/github-actions-deploy
+    note: GitHub Actions の OIDC デプロイロール。IAM 変更は info に下げる
+    approved_at: 2026-10-21
+    tags: [deploy]
+  - arn: arn:aws:iam::123456789012:user/contractor-x
+    approved_at: 2026-10-21
+    expires: 2026-12-31          # 期限付き承認。過ぎたら expired として再報告
+  # 主体の指定は arn (完全一致) / account (そのアカウントの全主体) / arn_pattern (glob。* は / も含む) のどれか 1 つ
+  - account: "111122223333"      # SaaS 連携 (例: 監視 SaaS) の外部アカウント。12 桁を文字列で書く
+    note: SaaS の監視連携
+    approved_at: 2026-10-21
+  - arn_pattern: arn:aws:iam::123456789012:role/github-actions-*
+    note: GitHub Actions のロール群
+    approved_at: 2026-10-21
+    tags: [deploy]
+source_ips:
+  - cidr: 203.0.113.0/24
+    note: 本社オフィス
+admin_users: []                  # アプリ層の管理者 ID (後続 Step)
+secrets_access: []               # 主体 × シークレット (後続 Step)

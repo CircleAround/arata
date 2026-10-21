@@ -1,0 +1,127 @@
+{
+  "profile": "daily",
+  "window": {
+    "from": "2026-10-21T09:00:00Z",
+    "to": "2026-10-22T09:00:00Z"
+  },
+  "name": "acme",
+  "run_id": "id-004",
+  "generated_at": "2026-10-22T09:00:00Z",
+  "summary": {
+    "new": 3,
+    "changed": 0,
+    "recurred": 0,
+    "resolved": 0,
+    "still_open": 0,
+    "max_severity": "critical",
+    "collect_errors": []
+  },
+  "findings": {
+    "new": [
+      {
+        "id": "id-006",
+        "check": "root_usage",
+        "key": "arn:aws:iam::123456789012:root|198.51.100.8",
+        "severity": "critical",
+        "summary": "ルートアカウント arn:aws:iam::123456789012:root が 198.51.100.8 から 1 件の操作",
+        "status": "open",
+        "first_seen": "2026-10-22T09:00:00Z",
+        "last_seen": "2026-10-22T09:00:00Z",
+        "last_changed": "2026-10-22T09:00:00Z",
+        "data": {
+          "count": 1,
+          "event_names": [
+            "ConsoleLogin"
+          ],
+          "first_time": "2026-10-22T08:00:00Z",
+          "ips": [
+            "198.51.100.8"
+          ],
+          "last_time": "2026-10-22T08:00:00Z",
+          "principal": "arn:aws:iam::123456789012:root"
+        }
+      },
+      {
+        "id": "id-007",
+        "check": "unknown_assume_role",
+        "key": "arn:aws:iam::123456789012:user/mallory-\u003earn:aws:iam::123456789012:role/Admin",
+        "severity": "high",
+        "summary": "既知リストに無い arn:aws:iam::123456789012:user/mallory が arn:aws:iam::123456789012:role/Admin を 1 回引き受け",
+        "status": "open",
+        "first_seen": "2026-10-22T09:00:00Z",
+        "last_seen": "2026-10-22T09:00:00Z",
+        "last_changed": "2026-10-22T09:00:00Z",
+        "data": {
+          "allowlist_status": "unknown",
+          "caller": "arn:aws:iam::123456789012:user/mallory",
+          "caller_kind": "user",
+          "count": 1,
+          "event_names": [
+            "AssumeRole"
+          ],
+          "first_time": "2026-10-22T07:00:00Z",
+          "ips": [
+            "198.51.100.7"
+          ],
+          "last_time": "2026-10-22T07:00:00Z",
+          "role_arn": "arn:aws:iam::123456789012:role/Admin"
+        }
+      },
+      {
+        "id": "id-005",
+        "check": "new_principal",
+        "key": "arn:aws:iam::123456789012:user/mallory",
+        "severity": "medium",
+        "summary": "新規の主体 arn:aws:iam::123456789012:user/mallory (user)",
+        "status": "open",
+        "first_seen": "2026-10-22T09:00:00Z",
+        "last_seen": "2026-10-22T09:00:00Z",
+        "last_changed": "2026-10-22T09:00:00Z",
+        "data": {
+          "allowlist_status": "unknown",
+          "count": 1,
+          "first_seen": "2026-10-22T07:00:00Z",
+          "ips": [
+            "198.51.100.7"
+          ],
+          "kind": "user",
+          "last_seen": "2026-10-22T07:00:00Z"
+        }
+      }
+    ],
+    "changed": [],
+    "recurred": [],
+    "resolved": [],
+    "still_open": []
+  },
+  "already_reported": [],
+  "info": [],
+  "coverage": {
+    "sources_ok": [
+      "trail"
+    ],
+    "sources_failed": [],
+    "checks_run": [
+      "ai_path_usage",
+      "iam_changes",
+      "new_principal",
+      "root_usage",
+      "unknown_assume_role"
+    ],
+    "checks_skipped": [
+      {
+        "check": "login_bruteforce",
+        "reason": "no http_access source"
+      },
+      {
+        "check": "probe_paths",
+        "reason": "no http_access source"
+      },
+      {
+        "check": "waf_block_trend",
+        "reason": "no waf_action source"
+      }
+    ],
+    "formats": []
+  }
+}

@@ -1,0 +1,47 @@
+profile daily (window 24h, max_catchup 7d)
+  CHECK                CADENCE  MODE   VIA
+  ai_path_usage        daily    event  default-daily
+  iam_changes          daily    event  default-daily
+  login_bruteforce     daily    event  default-daily
+  new_principal        daily    state  default-daily
+  probe_paths          daily    event  default-daily
+  root_usage           hourly   event  explicit
+  unknown_assume_role  hourly   event  explicit
+  waf_block_trend      daily    event  default-daily
+  PARAM                               ORIGIN     VALUE
+  login_bruteforce.paths              既定値     [/users/sign_in, /login, /signin]
+  login_bruteforce.methods            既定値     [POST]
+  login_bruteforce.failure_statuses   既定値     [401, 403, 422]
+  login_bruteforce.baseline_days      既定値     14
+  login_bruteforce.factor             overrides  5
+  login_bruteforce.min_count          checks:    30
+  login_bruteforce.min_baseline_days  既定値     7
+  login_bruteforce.top_ip_min_count   既定値     5
+  probe_paths.paths                   既定値     [/.env, /.git/, /.aws/, /.ssh/, /wp-login.php, /wp-admin, /xmlrpc.php, /phpmyadmin, /pma, /server-status, /actuator, /config.json, /backup, /.DS_Store]
+  probe_paths.exclude_paths           既定値     []
+  probe_paths.statuses                既定値     [403, 404]
+  probe_paths.baseline_days           既定値     14
+  probe_paths.factor                  既定値     3
+  probe_paths.min_count               既定値     10
+  probe_paths.min_baseline_days       既定値     7
+  probe_paths.top_ip_min_count        既定値     5
+  waf_block_trend.top_n               既定値     5
+  waf_block_trend.min_count           既定値     10
+  waf_block_trend.new_rule_min_count  既定値     1
+  waf_block_trend.baseline_days       既定値     14
+  waf_block_trend.min_baseline_days   既定値     7
+
+profile hourly (window 1h, max_catchup 7d)
+  CHECK                CADENCE  MODE   VIA
+  root_usage           hourly   event  explicit
+  unknown_assume_role  hourly   event  explicit
+
+profile weekly (window 7d, max_catchup 7d)
+  CHECK               CADENCE  MODE   VIA
+  access_analyzer     weekly   state  default-weekly
+  credential_hygiene  weekly   state  default-weekly
+  guardduty_findings  weekly   state  default-weekly
+  posture             weekly   state  default-weekly
+  PARAM                           ORIGIN  VALUE
+  credential_hygiene.unused_days  既定値  90
+  posture.min_password_length     既定値  14

@@ -1,0 +1,6 @@
+/bin/
+/dist/
+*.sqlite
+*.sqlite-journal
+/var/
+.env

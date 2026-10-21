@@ -1,0 +1,3 @@
+この版の雛形との差分: 2 件
+  [param_changed] checks.probe_paths.min_count: 設定 3 / 雛形 10 — この版の既定値と違う
+  [unknown_key] profiles.hourly.max_catchupp — arata が知らないキー (綴りの誤りか、この版で無くなったキー。設定の読み込みは失敗する)

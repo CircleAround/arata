@@ -1,0 +1,65 @@
+package record
+
+import (
+	"testing"
+	"time"
+)
+
+func TestMarshalRoundTrip(t *testing.T) {
+	ts := time.Date(2026, 10, 21, 1, 2, 3, 0, time.UTC)
+	cases := []struct {
+		name string
+		rec  Record
+	}{
+		{"trail_event", TrailEvent{EventID: "e1", Time: ts, Source: "trail", Name: "AssumeRole", PrincipalARN: "arn:aws:iam::1:user/x", PrincipalKind: PrincipalUser, Data: map[string]any{"role_arn": "arn:aws:iam::1:role/r"}}},
+		{"principal_seen", PrincipalSeen{Time: ts, FirstTime: ts, Source: "trail", ARN: "arn:aws:iam::1:root", Kind: PrincipalRoot, IP: "203.0.113.1", Count: 2}},
+		{"snapshot", SnapshotItem{Kind: KindPostureItem, Time: ts, Source: "posture", Key: "root_mfa", Data: map[string]any{"status": "ng"}}},
+		{"metric", Metric{Date: "2026-10-21", Source: "nginx", From: KindHTTPAccess, Metric: "sign_in_failures", Key: "198.51.100.7", Value: 12}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b, err := Marshal(tc.rec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := Unmarshal(b)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := ts
+			if _, ok := tc.rec.(Metric); ok {
+				want = time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC) // 日次集計は日付の 0 時
+			}
+			if got.RecordKind() != tc.rec.RecordKind() || !got.RecordTime().Equal(want) {
+				t.Fatalf("round trip mismatch: %+v", got)
+			}
+		})
+	}
+	if _, err := Unmarshal([]byte(`{"kind":"nope","time":"2026-01-01T00:00:00Z","data":{}}`)); err == nil {
+		t.Fatal("expected error for unknown kind")
+	}
+}
+
+func TestExternalAccount(t *testing.T) {
+	if l := PrincipalLabel("arn:aws:iam::111122223333:root", PrincipalUnknown); l != "外部アカウント 111122223333" {
+		t.Fatal(l)
+	}
+	if l := PrincipalLabel("arn:aws:iam::123456789012:root", PrincipalRoot); l != "arn:aws:iam::123456789012:root" {
+		t.Fatal(l)
+	}
+	if _, ok := ExternalAccount("arn:aws:iam::111122223333:role/x", PrincipalRole); ok {
+		t.Fatal("role is not an account")
+	}
+}
+
+func TestSnapshotItemAccessors(t *testing.T) {
+	b, _ := Marshal(SnapshotItem{Kind: KindGuardDuty, Source: "gd", Key: "f1", Data: map[string]any{"severity": 7.5, "count": 3, "type": "Recon:EC2/PortProbeUnprotectedPort", "archived": true}})
+	r, err := Unmarshal(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	it := r.(SnapshotItem)
+	if it.Number("severity") != 7.5 || it.Number("count") != 3 || it.String("type") == "" || !it.Bool("archived") || it.String("nope") != "" {
+		t.Fatalf("%+v", it)
+	}
+}

@@ -1,0 +1,190 @@
+{
+  "kind": "period",
+  "name": "acme",
+  "period": {
+    "from": "2026-10-01",
+    "to": "2026-10-31"
+  },
+  "generated_at": "2026-10-31T23:00:00Z",
+  "history_since": "2026-10-05T09:00:00Z",
+  "notes": [
+    "2026-10-05 以前は状態遷移の履歴なし (履歴は 2026-10-05T09:00:00Z の run から記録)。それより前の new / changed / recurred / resolved は数えていない"
+  ],
+  "summary": {
+    "new": 2,
+    "changed": 1,
+    "recurred": 1,
+    "resolved": 2,
+    "by_severity": {
+      "critical": 1,
+      "high": 1
+    },
+    "open": 2
+  },
+  "events": {
+    "new": [
+      {
+        "finding_id": "f1",
+        "check": "root_usage",
+        "key": "arn:aws:iam::1:root|203.0.113.1",
+        "severity": "critical",
+        "summary": "ルートユーザーの利用",
+        "at": "2026-10-06T09:00:00Z",
+        "profile": "daily"
+      },
+      {
+        "finding_id": "f2",
+        "check": "posture",
+        "key": "root_mfa",
+        "severity": "high",
+        "summary": "ルートユーザーに MFA が無い",
+        "at": "2026-10-07T09:00:00Z",
+        "profile": "weekly"
+      }
+    ],
+    "changed": [
+      {
+        "finding_id": "f4",
+        "check": "guardduty_findings",
+        "key": "g1",
+        "severity": "medium",
+        "summary": "GuardDuty: Recon (4 回)",
+        "at": "2026-10-14T09:00:00Z",
+        "profile": "weekly"
+      }
+    ],
+    "recurred": [
+      {
+        "finding_id": "f1",
+        "check": "root_usage",
+        "key": "arn:aws:iam::1:root|203.0.113.1",
+        "severity": "critical",
+        "summary": "ルートユーザーの利用",
+        "at": "2026-10-20T09:00:00Z",
+        "profile": "daily"
+      }
+    ],
+    "resolved": [
+      {
+        "finding_id": "f2",
+        "check": "posture",
+        "key": "root_mfa",
+        "severity": "high",
+        "summary": "ルートユーザーに MFA が無い",
+        "at": "2026-10-14T09:00:00Z",
+        "profile": "weekly"
+      },
+      {
+        "finding_id": "f5",
+        "check": "new_principal",
+        "key": "arn:aws:iam::1:user/mallory",
+        "severity": "medium",
+        "summary": "新規の主体",
+        "at": "2026-10-21T03:00:00Z"
+      }
+    ]
+  },
+  "new_principals": [
+    {
+      "arn": "arn:aws:iam::111122223333:root",
+      "label": "外部アカウント 111122223333",
+      "kind": "unknown",
+      "first_seen": "2026-10-09T02:00:00Z",
+      "status": "unknown"
+    }
+  ],
+  "open": [
+    {
+      "id": "f1",
+      "check": "root_usage",
+      "key": "k",
+      "severity": "critical",
+      "summary": "ルートユーザーの利用",
+      "status": "open",
+      "first_seen": "2026-10-06T09:00:00Z",
+      "last_seen": "2026-10-20T09:00:00Z",
+      "last_changed": "2026-10-20T09:00:00Z",
+      "data": {}
+    },
+    {
+      "id": "f4",
+      "check": "guardduty_findings",
+      "key": "g1",
+      "severity": "medium",
+      "summary": "GuardDuty: Recon (4 回)",
+      "status": "acked",
+      "first_seen": "2026-10-02T09:00:00Z",
+      "last_seen": "0001-01-01T00:00:00Z",
+      "last_changed": "0001-01-01T00:00:00Z",
+      "data": {}
+    }
+  ],
+  "metrics": {
+    "metrics": [
+      "probe_hits",
+      "sign_in_failures"
+    ],
+    "rows": [
+      {
+        "date": "2026-10-06",
+        "values": [
+          0,
+          123
+        ]
+      },
+      {
+        "date": "2026-10-07",
+        "values": [
+          9,
+          0
+        ]
+      }
+    ]
+  },
+  "runs_missing": [
+    {
+      "profile": "daily",
+      "kind": "partial",
+      "run_id": "d2",
+      "at": "2026-10-07T09:00:00Z",
+      "detail": "失敗したソース 1"
+    },
+    {
+      "profile": "daily",
+      "kind": "RUN_MISSED",
+      "at": "2026-10-07T09:00:00Z",
+      "until": "2026-10-20T09:00:00Z",
+      "detail": "13.0 日 空いた (窓 24 時間)"
+    },
+    {
+      "profile": "daily",
+      "kind": "RUN_MISSED",
+      "at": "2026-10-20T09:00:00Z",
+      "until": "2026-10-31T09:00:00Z",
+      "detail": "11.0 日 空いた (窓 24 時間)"
+    },
+    {
+      "profile": "daily",
+      "kind": "failed",
+      "run_id": "d4",
+      "at": "2026-10-31T09:00:00Z",
+      "detail": "check new_principal: boom"
+    }
+  ],
+  "profiles": [
+    {
+      "profile": "daily",
+      "runs": 4,
+      "ok": 2,
+      "partial": 1,
+      "failed": 1
+    },
+    {
+      "profile": "weekly",
+      "runs": 4,
+      "ok": 4,
+      "partial": 0,
+      "failed": 0
+    }
+  ]
+}

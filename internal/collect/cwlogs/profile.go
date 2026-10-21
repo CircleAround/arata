@@ -1,0 +1,130 @@
+// Package cwlogs は CloudWatch Logs Insights の集計クエリで日次集計 (metric) を作る collector と、
+// 形式プロファイル (= Insights クエリテンプレート集) を持つ (設計書 2 章、ADR 0006 / 0009)。
+//
+// クエリは 3 層で組み立てる。
+//
+//  1. 前処理 (Prelude): 形式プロファイルごと。ストリームの絞り込みと、生ログ → 正規化フィールド (ip, method, path, status ...) の変換
+//  2. 集計 (Aggregate): 正規化レコードの種類ごと (http_access / waf_action)。前処理が作ったフィールド名だけを使うので形式に依らない
+//  3. 共通の後処理: `stats count(*) as <metric> by bin(1d) as day, <key>` と件数上限
+//
+// 生ログは引かない。例外は FORMAT_MISMATCH 時のサンプル (最大 3 行) と doctor のサンプル (100 行) だけ。
+package cwlogs
+
+import (
+	"fmt"
+	"regexp"
+	"sort"
+	"strings"
+
+	"github.com/CircleAround/arata/internal/config"
+	"github.com/CircleAround/arata/internal/record"
+)
+
+// Profile は 1 ソース分の形式プロファイル。
+type Profile struct {
+	Format string
+	Yields record.Kind
+	// Prelude は生ログを正規化フィールドに変換する Insights コマンド列 (先頭の `|` なし)。
+	Prelude string
+	// MatchField は解釈できたかの判定に使う正規化フィールド。count(MatchField) が matched になる。
+	MatchField string
+}
+
+// nginx の combined 形式: `$remote_addr - $remote_user [$time_local] "$request" $status $body_bytes_sent "$http_referer" "$http_user_agent"`。
+// path はクエリ文字列を除く。
+const nginxParse = `parse @message /^(?<ip>\S+) \S+ \S+ \[[^\]]*\] "(?<method>[A-Z]+) (?<path>[^ ?"]*)[^"]*" (?<status>\d{3}) \S+ "[^"]*" "(?<ua>[^"]*)"/`
+
+// ALB アクセスログ: `type time elb client:port target:port req_t target_t resp_t elb_status target_status rx tx "request" "ua" ...`。
+// client は IPv6 でも最後の `:port` を外す。path は `METHOD scheme://host:port/path?query HTTP/x` から取り出す。
+const albParse = `parse @message /^\S+ \S+ \S+ (?<ip>\S+):\d+ \S+ \S+ (?<duration>\S+) \S+ (?<status>\d{3}|-) \S+ \S+ \S+ "(?<method>[A-Z]+|-) [a-z]+:\/\/[^\/ ]+(?<path>\/[^ ?"]*)[^"]*" "(?<ua>[^"]*)"/`
+
+// WAFv2 のログは JSON なので Insights が自動でフィールド化する。
+const wafPrelude = `fields action, terminatingRuleId as rule, httpRequest.clientIp as ip, httpRequest.uri as path, httpRequest.httpMethod as method`
+
+var plainField = regexp.MustCompile(`^[A-Za-z_@][A-Za-z0-9_.@]*$`)
+
+// ProfileFor は設定のソースから形式プロファイルを作る。config.Validate を通ったソースを前提とする。
+func ProfileFor(src config.Source) (Profile, error) {
+	p := Profile{Format: src.Format, Yields: record.Kind(src.Yields)}
+	var body string
+	switch src.Format {
+	case config.FormatNginxAccess:
+		body, p.MatchField = nginxParse, "path"
+	case config.FormatALBAccess:
+		body, p.MatchField = albParse, "path"
+	case config.FormatWAFv2:
+		body, p.MatchField = wafPrelude, "action"
+	case config.FormatJSON:
+		body, p.MatchField = jsonPrelude(src.Fields), "path"
+	case config.FormatRegex:
+		if _, err := config.RegexGroups(src.Regex, src.Yields); err != nil {
+			return Profile{}, err
+		}
+		body, p.MatchField = "parse @message /"+insightsRegex(src.Regex)+"/", "path"
+	default:
+		return Profile{}, fmt.Errorf("cwlogs: unsupported format %q", src.Format)
+	}
+	if src.StreamPrefix != "" {
+		body = "filter @logStream like /^" + regexLiteral(src.StreamPrefix) + "/\n| " + body
+	}
+	p.Prelude = body
+	return p, nil
+}
+
+// jsonPrelude は対応表から `fields <元> as <正規化名>, ...` を作る。time は Insights の @timestamp を使うので落とす。
+func jsonPrelude(fields map[string]string) string {
+	names := make([]string, 0, len(fields))
+	for dst := range fields {
+		if dst != "time" {
+			names = append(names, dst)
+		}
+	}
+	sort.Strings(names)
+	parts := make([]string, 0, len(names))
+	for _, dst := range names {
+		if fields[dst] == dst {
+			// 同名への別名 (`path as path`) はフィールドの再定義になり得るので書かない
+			parts = append(parts, fieldRef(dst))
+			continue
+		}
+		parts = append(parts, fieldRef(fields[dst])+" as "+dst)
+	}
+	return "fields " + strings.Join(parts, ", ")
+}
+
+// fieldRef は記号を含むフィールド名をバッククォートで囲む。
+func fieldRef(name string) string {
+	if plainField.MatchString(name) {
+		return name
+	}
+	return "`" + strings.ReplaceAll(name, "`", "") + "`"
+}
+
+// insightsRegex は Python 形式の名前付きキャプチャ (?P<name>) を Insights の (?<name>) に直し、`/` を `\/` にする。
+func insightsRegex(expr string) string {
+	expr = strings.ReplaceAll(expr, "(?P<", "(?<")
+	var b strings.Builder
+	escaped := false
+	for _, r := range expr {
+		switch {
+		case escaped:
+			escaped = false
+		case r == '\\':
+			escaped = true
+		case r == '/':
+			b.WriteRune('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// regexLiteral は文字列を Insights の /.../ 内で文字どおりに一致させる表現にする。
+func regexLiteral(s string) string {
+	return strings.ReplaceAll(regexp.QuoteMeta(s), "/", `\/`)
+}
+
+// stringLiteral は Insights の "..." 文字列リテラル。
+func stringLiteral(s string) string {
+	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"`
+}

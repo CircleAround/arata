@@ -1,0 +1,22 @@
+SOURCE           KIND                   ITEM        STATUS  CODE           DETAIL
+trail            cloudtrail-lookup      permission  ok      -              cloudtrail:LookupEvents (ap-northeast-1)
+trail            cloudtrail-lookup      permission  ok      -              cloudtrail:LookupEvents (us-east-1)
+iam              iam-credential-report  permission  ok      -              iam:GetCredentialReport
+iam              iam-credential-report  permission  ok      -              iam:GenerateCredentialReport (書き込み系 (レポートの生成のみ) なので doctor では試さない。拒否されても 4 時間以内に生成済みのレポートがあれば使う)
+guardduty        guardduty              permission  ok      -              guardduty:ListDetectors (ap-northeast-1)
+guardduty        guardduty              permission  ok      -              guardduty:ListFindings (ap-northeast-1: GuardDuty が有効でない (detector が無い / 停止中)。posture の guardduty_enabled を見る)
+access_analyzer  access-analyzer        permission  ng      ACCESS_DENIED  access-analyzer:ListAnalyzers が拒否された: access-analyzer:ListAnalyzers (ap-northeast-1): AccessDeniedException
+posture          posture                permission  ok      -              cloudtrail:DescribeTrails
+posture          posture                permission  ok      -              cloudtrail:GetTrailStatus
+posture          posture                permission  ok      -              guardduty:ListDetectors
+posture          posture                permission  ok      -              guardduty:GetDetector
+posture          posture                permission  ok      -              iam:GetAccountSummary
+posture          posture                permission  ok      -              iam:GetAccountPasswordPolicy
+posture          posture                permission  ng      ACCESS_DENIED  s3:GetAccountPublicAccessBlock が拒否された: AccessDeniedException
+-                -                      check       warn    -              login_bruteforce は skip される: no http_access source (profile daily)
+-                -                      check       warn    -              probe_paths は skip される: no http_access source (profile daily)
+-                -                      check       warn    -              waf_block_trend は skip される: no waf_action source (profile daily)
+
+必要な IAM action: access-analyzer:ListAnalyzers, access-analyzer:ListFindings, cloudtrail:DescribeTrails, cloudtrail:GetTrailStatus, cloudtrail:LookupEvents, guardduty:GetDetector, guardduty:GetFindings, guardduty:ListDetectors, guardduty:ListFindings, iam:GenerateCredentialReport, iam:GetAccountPasswordPolicy, iam:GetAccountSummary, iam:GetCredentialReport, s3:GetAccountPublicAccessBlock
+  (iam:GenerateCredentialReport だけは書き込み系: 認証情報レポートの生成のみ。拒否されても 4 時間以内に生成済みのレポートがあれば使う)
+結果: ng 2 / warn 3

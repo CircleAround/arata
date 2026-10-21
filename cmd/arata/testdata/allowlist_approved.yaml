@@ -1,0 +1,13 @@
+principals:
+  - arn: arn:aws:iam::123456789012:role/Deploy
+    note: GitHub Actions のデプロイロール
+    tags: [deploy]
+  - arn: arn:aws:iam::123456789012:user/mallory
+    note: '外注: 調査用'
+    approved_by: tester
+    approved_at: 2026-10-22
+    expires: 2026-12-31
+  - account: "111122223333"
+    note: SaaS の監視連携
+    approved_by: tester
+    approved_at: 2026-10-22

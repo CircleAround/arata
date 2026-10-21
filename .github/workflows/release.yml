@@ -1,0 +1,38 @@
+name: release
+
+# v* タグの push で linux/arm64 と linux/amd64 の静的バイナリを作り、SHA256SUMS と共に GitHub Releases に添付する。
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test ./...
+      - name: build
+        run: make build VERSION="${GITHUB_REF_NAME}"
+      - name: checksums
+        working-directory: bin
+        run: |
+          sha256sum arata-linux-arm64 arata-linux-amd64 > SHA256SUMS
+          cat SHA256SUMS
+      - name: smoke test (arm64 runner)
+        run: bin/arata-linux-arm64 --version | grep -F "${GITHUB_REF_NAME}"
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            bin/arata-linux-arm64 bin/arata-linux-amd64 bin/SHA256SUMS \
+            --title "${GITHUB_REF_NAME}" --generate-notes --verify-tag
