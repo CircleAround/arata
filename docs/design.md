@@ -11,7 +11,7 @@
 |---|---|
 | 言語 | Go。単一静的バイナリ。SQLite は `modernc.org/sqlite` (純 Go、cgo 不要) で aarch64 オンプレと Lambda arm64 に同一ソースからクロスコンパイル。CLI は標準の `flag` の上の小さなコマンド層 |
 | 依存 | 決定: 標準ライブラリで無理なく書けるものは依存にしない。CLI は cobra をやめ標準の `flag` で書き (ヘルプ書式とエラー文言は cobra と同じ)、LookupEvents のレート制限は `golang.org/x/time/rate` をやめ自前の `IntervalLimiter` (2 req/s・バースト 1、時刻は差し替え可能) にした。決定: SQLite (`modernc.org/sqlite`) は残す。ADR 0019 |
-| 責務の境界 | エンジンは **収集・保存・差分判定・レポート生成** まで。通知・起動・LLM 要約は組み込み側 |
+| 責務の境界 | エンジンは **収集・保存・差分判定・レポート生成** まで。通知・起動・LLM 要約は組み込み側。決定: LLM 要約と通知の標準品として別コマンド `aratam` を置き、arata とは出力 (`--out` の report.json / report.md) だけで連携する (`docs/aratam.md`、ADR 0018) |
 | 認証 | 顧客ごとの読み取り専用ロールに Roles Anywhere で入る。エンジンは AWS SDK の標準認証チェーンに従うだけ (profile / 環境変数 / Lambda ロール) |
 | 共通化 | AWS 層のチェックは全顧客共通。アプリ層は「ログの形式プロファイル」とロググループの紐付けを設定で行う (2 章) |
 | ストア | JSONL (原本) + SQLite (派生) の二層。保持期間は設定で指定し自動削除 (5 章) |
@@ -575,6 +575,8 @@ approve は人の判断を経て実行する。
 引数なしの `arata` (ルートのヘルプ) は、人向けの手順 (config init → doctor → init → run。決定: Step 3 で config init を先頭に足した。ADR 0014) と `arata help ai` への案内を最初に出す。
 
 ### 9-1. report.json から通知までの LLM の仕事
+
+決定 (ADR 0018): この章の仕事と規則は `aratam` (`docs/aratam.md`) が実装する。arata 自体は変えない。
 
 エンジンは「新規かどうか」と規則ベースの重大度までを決める。LLM はその先の **トリアージと説明** を担う。
 
