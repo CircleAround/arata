@@ -2,9 +2,9 @@ package config
 
 import "testing"
 
-// TestExampleConfig は examples/config.yaml が読めることを保証する (サンプルの陳腐化を防ぐ)。
+// TestExampleConfig は examples/arata.yaml が読めることを保証する (サンプルの陳腐化を防ぐ)。
 func TestExampleConfig(t *testing.T) {
-	cfg, err := Load("../../examples/config.yaml")
+	cfg, err := Load("../../examples/arata.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}

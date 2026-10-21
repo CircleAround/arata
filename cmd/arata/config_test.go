@@ -18,7 +18,7 @@ import (
 // TestConfigInitThenRun は「はじめての手順」(config init → doctor → init → run) を雛形のまま通す。
 func TestConfigInitThenRun(t *testing.T) {
 	c := newCLI(t)
-	if code := c.run("config", "init"); code != 0 || c.stdout.String() != string(scaffold.Generate(checks.NewRegistry())) {
+	if code := c.run("config", "init", "--out", "-"); code != 0 || c.stdout.String() != string(scaffold.Generate(checks.NewRegistry())) {
 		t.Fatalf("stdout must be the template: exit %d", code)
 	}
 	cfg := filepath.Join(c.dir, "new", "config.yaml")
@@ -107,6 +107,7 @@ func TestConfigInitDiff(t *testing.T) {
 	if err := json.Unmarshal(c.stdout.Bytes(), &items); err != nil || len(items) != 2 {
 		t.Fatalf("json: %v %s", err, c.stdout)
 	}
+	t.Chdir(t.TempDir()) // ./arata.yaml も無い
 	if code := c.run("config", "init", "--diff"); code != 2 {
 		t.Fatalf("--diff without -c must fail: %d", code)
 	}

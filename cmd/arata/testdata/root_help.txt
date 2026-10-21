@@ -2,13 +2,14 @@ arata は AWS のログと設定を定期的に改め、前回から新しく発
 収集・保存・差分判定・レポート生成 (report.json / report.md) までを行う。通知と要約は組み込み側の仕事。
 
 はじめての手順:
-  1. arata config init --out config.yaml                       推奨設定の雛形を書き出す (name / store / sources を編集する)
-  2. arata doctor -c config.yaml                               権限・ロググループ・ログ形式の解釈率を確かめる
-  3. arata init   -c config.yaml                               ベースラインを収集する (findings は出さない)
-  4. arata run    -c config.yaml --profile daily --out out/    差分を判定し out/report.md と report.json を出す
+  1. arata config init                             推奨設定の雛形を ./arata.yaml に書き出す (name / store / sources を編集する)
+  2. arata doctor                                  権限・ロググループ・ログ形式の解釈率を確かめる
+  3. arata init                                    ベースラインを収集する (findings は出さない)
+  4. arata run --profile daily --out out/          差分を判定し out/report.md と report.json を出す
 
-実行されるのは設定の profiles に書いたチェックだけ (暗黙の既定は無い)。効いている中身は arata profiles -c config.yaml、
-新しい版との差分は arata config init --diff -c config.yaml で確かめる。
+設定ファイルは -c で指定する。省略時は環境変数 ARATA_CONFIG、無ければカレントディレクトリの ./arata.yaml を読む。
+実行されるのは設定の profiles に書いたチェックだけ (暗黙の既定は無い)。効いている中身は arata profiles、
+新しい版との差分は arata config init --diff で確かめる。
 
 AI (LLM) から使う場合は `arata help ai` を最初に読んでください (report の読み方は `arata help ai report`、承認判断は `arata help ai approve`)。
 
@@ -20,7 +21,6 @@ Available Commands:
   ai          AI (LLM) 向けの使い方 (arata help ai と同じ。最初に読む)
   approve     finding の主体を allowlist.yaml に追記し、finding を resolved にする (人が判断して実行する)
   collect     収集だけを行いストアへ反映する
-  completion  Generate the autocompletion script for the specified shell
   config      設定の雛形を書き出す / 雛形と比べる (config init)
   doctor      権限・ロググループ・形式プロファイルの解釈率を検査する (問題があれば終了コード 2)
   evaluate    収集せずにチェックを走らせ、レポートを出す
@@ -34,7 +34,7 @@ Available Commands:
   snooze      finding を期日まで沈黙させる (--until。期日以降の再観測で new として再報告)
 
 Flags:
-  -c, --config string   設定ファイル (YAML)
+  -c, --config string   設定ファイル (YAML)。省略時は環境変数 ARATA_CONFIG、無ければ ./arata.yaml
   -h, --help            help for arata
   -v, --version         version for arata
 

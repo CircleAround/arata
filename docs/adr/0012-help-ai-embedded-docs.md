@@ -18,7 +18,7 @@
   - `arata help ai report`: report.json の構造と読み方、要約の手順、相関付け、分類の基準、個人特定値を書かないこと、approve は提案のみ
   - `arata help ai approve`: 承認判断の基準 (SaaS 連携は account、期限付き承認、tags の語彙、外部アカウント root の見方)
 - `--format json` で `{topic, title, sections: [{title, body}]}` を返す (見出し `##` 単位)。各トピックの見出しはテストで固定する
-- cobra の help の下だけに置くとコマンド一覧に出ないので、同じ内容をトップレベルの `arata ai` としても出し、`arata help ai ...` はそこへ振り分ける
+- help の下だけに置くとコマンド一覧に出ないので、同じ内容をトップレベルの `arata ai` としても出し、`arata help ai ...` はそこへ振り分ける
 - 引数なしの `arata` (ルートのヘルプ) は、人向けの 3 行手順 (doctor → init → run) と「AI から使う場合は `arata help ai` を最初に読む」を最初に出す
 - 固定語彙の code が `arata help ai` に全部書かれていることをテストで保証する (code を足したら文書も直す)
 

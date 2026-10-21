@@ -88,6 +88,7 @@ CI は [.github/workflows/test.yml](.github/workflows/test.yml): `go mod verify`
 - 依存は公開から 7 日待つ。Dependabot ([.github/dependabot.yml](.github/dependabot.yml)) は cooldown 7 日で提案し、CI は
   `go list -m -json all | go run ./tools/agegate -days 7` で indirect を含む全モジュールの公開時刻を確かめて、7 日未満なら落ちる。
   手で `go get` するときも 7 日以上前の版を選ぶ (`curl -s https://proxy.golang.org/<module>/@v/<version>.info` の `Time`)
+- 標準ライブラリで無理なく書けるものは依存にしない (CLI は標準の `flag`、レート制限は自前。SQLite は残す。ADR 0019)
 
 ゴールデンファイル (`internal/report/testdata`, `internal/scaffold/testdata`, `cmd/arata/testdata`) は `report.json` / `report.md` / 設定の雛形 / `doctor` / `profiles` の表の構造を固定している。
 構造を意図して変えたときは差分を確認してから `go test ./internal/report ./internal/scaffold ./cmd/arata -update` で更新する。
@@ -98,15 +99,20 @@ arata は実行時に暗黙の既定を持たない。**実行されるのは設
 (雛形は全プロファイル・全チェック・各チェックの既定パラメータをコメント付きで明示する。ADR 0014)。
 
 ```sh
-bin/arata config init --out /path/to/target/config.yaml    # 雛形を書き出す (既存ファイルは --force が無ければ上書きしない)
+cd /path/to/target
+arata config init                 # 雛形を ./arata.yaml に書き出す (既存ファイルは --force が無ければ上書きしない。標準出力へは --out -)
 # name / store / sources (cloudwatch-logs はコメントの例を外す) を編集する
-bin/arata doctor   -c /path/to/target/config.yaml          # 権限・ロググループ・解釈率を検査 (問題があれば終了コード 2)
-bin/arata init     -c /path/to/target/config.yaml --window 7d
-bin/arata run      -c /path/to/target/config.yaml --profile daily --out /tmp/arata-out
+arata doctor                      # 権限・ロググループ・解釈率を検査 (問題があれば終了コード 2)
+arata init --window 7d
+arata run --profile daily --out /tmp/arata-out
 
-bin/arata profiles -c /path/to/target/config.yaml          # プロファイルごとに実際に走るチェックとパラメータ、その由来 (overrides / checks: / 既定値)
-bin/arata config init --diff -c /path/to/target/config.yaml  # 版を上げたら: 入っていないチェック・既定値と違う値・未知のキー
+arata profiles                    # プロファイルごとに実際に走るチェックとパラメータ、その由来 (overrides / checks: / 既定値)
+arata config init --diff          # 版を上げたら: 入っていないチェック・既定値と違う値・未知のキー
 ```
+
+設定ファイルは `-c` (`--config`) で指定する。省略時は環境変数 `ARATA_CONFIG`、それも無ければカレントディレクトリの `./arata.yaml` を読む
+(`-c` > `ARATA_CONFIG` > `./arata.yaml`)。どれも無ければ探した場所を並べて `CONFIG_INVALID` (終了コード 2)。
+定期実行では `-c /path/to/target/arata.yaml` か `ARATA_CONFIG` で明示するとよい。以下の例は `-c` を省略している。
 
 - どのプロファイルにも入っていないチェックがあると、`run` / `evaluate` / `doctor` が `CHECK_UNUSED` を警告する
 - `profiles.<name>.overrides.<check>` でそのプロファイルだけ判定の閾値を変えられる (`min_count` など)。集計条件 (`paths` / `statuses` など) は
@@ -115,7 +121,7 @@ bin/arata config init --diff -c /path/to/target/config.yaml  # 版を上げた�
 
 ### サンプル設定で動かす
 
-`examples/config.yaml` と `examples/allowlist.yaml` を顧客ごとのディレクトリにコピーして編集してもよい (雛形より短い、アプリ層を含む例)。
+`examples/arata.yaml` と `examples/allowlist.yaml` を顧客ごとのディレクトリにコピーして編集してもよい (雛形より短い、アプリ層を含む例)。
 AWS の認証は SDK の標準チェーン (環境変数 / `~/.aws/config` の profile / ロール) に従う。読み取り専用の権限があればよい
 (`cloudtrail:LookupEvents`。cloudwatch-logs ソースがあれば `logs:DescribeLogGroups`, `logs:StartQuery`, `logs:GetQueryResults`, `logs:StopQuery`。
 週次のソースは下の「週次チェック」。必要な action は `arata doctor` の表の最後に出る)。
@@ -130,16 +136,17 @@ credential_process = aws configure export-credentials --profile <login済みprof
 ```
 
 ```sh
-cp examples/config.yaml examples/allowlist.yaml /path/to/target/
+cp examples/arata.yaml examples/allowlist.yaml /path/to/target/
+cd /path/to/target
 # store: の dir:// を書き込める場所に変える
 
-bin/arata doctor   --config /path/to/target/config.yaml             # 権限・ロググループ・解釈率を検査 (問題があれば終了コード 2)
-bin/arata init     --config /path/to/target/config.yaml --window 7d # ストア作成 + ベースライン収集 (findings は出さない)
-bin/arata run      --config /path/to/target/config.yaml --profile daily --out /tmp/arata-out
-cat /tmp/arata-out/report.md                                          # 人向け。report.json は機械向け
-bin/arata report   --config /path/to/target/config.yaml --profile daily --format md   # 最後の run のレポートを再表示
-bin/arata collect  --config /path/to/target/config.yaml --window 2h   # 収集だけ
-bin/arata evaluate --config /path/to/target/config.yaml --profile daily # 収集せずに評価だけ
+arata doctor                                  # 権限・ロググループ・解釈率を検査 (問題があれば終了コード 2)
+arata init     --window 7d                    # ストア作成 + ベースライン収集 (findings は出さない)
+arata run      --profile daily --out /tmp/arata-out
+cat /tmp/arata-out/report.md                  # 人向け。report.json は機械向け
+arata report   --profile daily --format md    # 最後の run のレポートを再表示
+arata collect  --window 2h                    # 収集だけ
+arata evaluate --profile daily                # 収集せずに評価だけ
 ```
 
 - `--out` を省略すると `report.json` を標準出力に出す (`--format md` で Markdown)
@@ -164,11 +171,11 @@ bin/arata evaluate --config /path/to/target/config.yaml --profile daily # 収集
 ### 承認と未対応の整理
 
 ```sh
-bin/arata review  --config c.yaml                 # 未対応 (open / acked) の一覧。APPROVE 列が approve の対象
-bin/arata approve <finding-id> --config c.yaml --note "外注先の調査用" --expires 2026-12-31 [--tag deploy] [--commit]
-bin/arata ack     <finding-id> --config c.yaml    # 確認済み。再報告しないが一覧には残る
-bin/arata snooze  <finding-id> --config c.yaml --until 2026-11-01
-bin/arata resolve <finding-id> --config c.yaml
+arata review                     # 未対応 (open / acked) の一覧。APPROVE 列が approve の対象
+arata approve <finding-id> --note "外注先の調査用" --expires 2026-12-31 [--tag deploy] [--commit]
+arata ack     <finding-id>       # 確認済み。再報告しないが一覧には残る
+arata snooze  <finding-id> --until 2026-11-01
+arata resolve <finding-id>
 ```
 
 - `approve` は allowlist.yaml の principals の末尾に追記する (他の行・コメント・空行は変えない)。git への commit は人が行う。`--commit` は allowlist.yaml だけを commit する
@@ -195,9 +202,9 @@ bin/arata resolve <finding-id> --config c.yaml
 - 監査ロールや AI 用の主体を allowlist で `tags: [ai]` にすると、`ai_path_usage` (daily) が利用を主体 × 送信元 IP で毎回 info に 1 行出す (自己監査)
 
 ```sh
-bin/arata run    -c c.yaml --profile weekly --out /tmp/arata-weekly
-bin/arata report -c c.yaml --month 2026-10 --format md             # 月次 (ストアだけから作る。収集しない)
-bin/arata report -c c.yaml --from 2026-10-01 --to 2026-12-31 --out /tmp/arata-q4
+arata run    --profile weekly --out /tmp/arata-weekly
+arata report --month 2026-10 --format md             # 月次 (ストアだけから作る。収集しない)
+arata report --from 2026-10-01 --to 2026-12-31 --out /tmp/arata-q4
 ```
 
 期間レポートには期間内の new / recurred / changed / resolved、重大度別件数、新規主体、未対応の残存、アプリ層の日次推移、取れなかった run (partial / failed / RUN_MISSED) が入る。
@@ -205,7 +212,7 @@ bin/arata report -c c.yaml --from 2026-10-01 --to 2026-12-31 --out /tmp/arata-q4
 
 ### アプリ層 (CloudWatch Logs) を足す
 
-`sources` に `kind: cloudwatch-logs` を足し、ロググループと形式プロファイルを紐付ける (examples/config.yaml)。生ログは引かず、
+`sources` に `kind: cloudwatch-logs` を足し、ロググループと形式プロファイルを紐付ける (examples/arata.yaml)。生ログは引かず、
 Logs Insights の集計クエリで日次集計 (IP 別の sign-in 失敗数など) だけを `metrics` に貯める。スキャン量課金なので次に注意する。
 
 - まず `arata doctor` で、ロググループの有無・直近 100 行の解釈率・集計クエリが Insights に受理されるかを確かめる。
@@ -220,7 +227,7 @@ Logs Insights の集計クエリで日次集計 (IP 別の sign-in 失敗数な�
 ### ディレクトリ
 
 ```
-cmd/arata/              CLI (cobra)。main_test.go がコマンドレベルの e2e
+cmd/arata/              CLI (標準の flag の上の小さなコマンド層 cli.go)。main_test.go がコマンドレベルの e2e
 internal/config/        YAML 設定
 internal/scaffold/      設定の雛形 (config init) と雛形との差分
 internal/store/         Store インターフェース、SQLite + JSONL の dir バックエンド

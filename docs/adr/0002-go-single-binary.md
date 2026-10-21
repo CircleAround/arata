@@ -11,7 +11,7 @@
 ## 決定
 
 Go で実装し、`CGO_ENABLED=0` の単一静的バイナリを配る。SQLite は純 Go 実装 (`modernc.org/sqlite`) を使い cgo を避ける。
-CLI は cobra。Lambda は同じ internal パッケージを呼ぶ薄いハンドラ。
+CLI は cobra (更新: ADR 0019 で標準の `flag` の小さなコマンド層に置き換えた)。Lambda は同じ internal パッケージを呼ぶ薄いハンドラ。
 
 ## 検討した選択肢
 

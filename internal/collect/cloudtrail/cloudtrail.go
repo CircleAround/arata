@@ -14,7 +14,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	ct "github.com/aws/aws-sdk-go-v2/service/cloudtrail"
 	"github.com/aws/aws-sdk-go-v2/service/cloudtrail/types"
-	"golang.org/x/time/rate"
 
 	"github.com/CircleAround/arata/internal/collect"
 	"github.com/CircleAround/arata/internal/record"
@@ -31,7 +30,7 @@ type RegionClient struct {
 	API    API
 }
 
-// Limiter はリクエスト間隔の制御。golang.org/x/time/rate.Limiter が満たす。テストでは差し替える。
+// Limiter はリクエスト間隔の制御。既定は IntervalLimiter。テストでは差し替える。
 type Limiter interface {
 	Wait(ctx context.Context) error
 }
@@ -58,7 +57,7 @@ type Collector struct {
 var _ collect.Collector = (*Collector)(nil)
 
 // NewLimiter は既定のレート制限 (2 req/s、バースト 1) を返す。
-func NewLimiter() Limiter { return rate.NewLimiter(rate.Limit(requestsPerSecond), 1) }
+func NewLimiter() Limiter { return NewIntervalLimiter(requestsPerSecond) }
 
 func sleepFor(ctx context.Context, d time.Duration) error {
 	t := time.NewTimer(d)
