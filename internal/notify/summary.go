@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/CircleAround/arata/docs/ai"
 	"github.com/CircleAround/arata/internal/report/schema"
@@ -187,40 +188,44 @@ func (f findingRef) line() string {
 	return l + "\n    id " + Escape(f.id)
 }
 
+// LLM の文字列の上限 (文字数)。system でも短く書くよう指示しているが、守られなくても書式を崩さないよう組み立て側で切る。
+const (
+	maxReasonRunes   = 200
+	maxIncidentRunes = 240
+)
+
+// 理由文の削り方 (切り詰めの段階)。
+const (
+	trimNone        = iota
+	trimInfoReason  // 情報の理由文を削る
+	trimInfoItems   // 情報を件数だけにする
+	trimConfirmText // 確認依頼の理由文を削る
+)
+
 // SummaryText は LLM の要約を決まった書式で組み立てる。
-// 件数・取れなかったソース・漏れた finding は規則で書き、切り詰めでも落とさない (LLM の分類と説明の部分だけを切る)。
+// 件数・取れなかったソース・漏れた finding は規則で書く。
+// 決定: 3,800 文字に収まらなければ、情報の理由文 → 情報の行 (件数だけ残す) → 確認依頼の理由文 の順に削る。
+// 見出し・要対処・インシデント候補・承認の提案・漏れた finding・取れなかったものは削らない。
+// それでも収まらなければ分類の部分 (要対処の行) を末尾から切り、インシデント候補と承認の提案は必ず残す。
 func SummaryText(in *Input, d Decision, r Rules, warnings []string, s *Summary) string {
 	_, byID := findingIndex(in)
 	lines := head(d.Route, r, "", warnings)
-	lines = append(lines, "*"+Escape(title(in))+"* "+Escape(period(in)), counts(in), Escape(strings.TrimSpace(s.Headline)))
+	lines = append(lines, "*"+Escape(title(in))+"* "+Escape(period(in)), counts(in), Escape(clipRunes(oneLine(s.Headline), maxReasonRunes)))
+	headText := strings.Join(lines, "\n")
 
-	var body []string
-	for _, c := range classes {
-		var ls []string
-		for _, it := range s.Items {
-			if it.Class == c.key {
-				ls = append(ls, byID[it.FindingID].line()+"\n    理由: "+Escape(oneLine(it.Reason)))
-			}
-		}
-		if len(ls) > 0 {
-			body = append(body, "", "*"+c.label+"*")
-			body = append(body, ls...)
-		}
-	}
+	var tail []string
 	if len(s.Incidents) > 0 {
-		body = append(body, "", "*インシデント候補*")
+		tail = append(tail, "", "*インシデント候補*")
 		for _, inc := range s.Incidents {
-			body = append(body, fmt.Sprintf("• %s: %s", Escape(strings.Join(inc.FindingIDs, ", ")), Escape(oneLine(inc.Summary))))
+			tail = append(tail, fmt.Sprintf("• %s: %s", Escape(strings.Join(inc.FindingIDs, ", ")), Escape(clipRunes(oneLine(inc.Summary), maxIncidentRunes))))
 		}
 	}
 	if len(s.ApproveSuggestions) > 0 {
-		body = append(body, "", "*approve の提案* (提案のみ。aratam は approve しない。人が判断して実行する)")
+		tail = append(tail, "", "*approve の提案* (提案のみ。aratam は approve しない。人が判断して実行する)")
 		for _, sg := range s.ApproveSuggestions {
-			body = append(body, fmt.Sprintf("• %s: %s\n    `arata approve %s --note \"...\"`", Escape(sg.FindingID), Escape(oneLine(sg.Reason)), Escape(sg.FindingID)))
+			tail = append(tail, fmt.Sprintf("• %s: %s\n    `arata approve %s --note \"...\"`", Escape(sg.FindingID), Escape(clipRunes(oneLine(sg.Reason), maxReasonRunes)), Escape(sg.FindingID)))
 		}
 	}
-
-	var tail []string
 	if miss := s.Missing(in); len(miss) > 0 {
 		tail = append(tail, "", "*要約に含まれていなかった指摘* (規則で追加)")
 		for _, f := range miss {
@@ -228,8 +233,64 @@ func SummaryText(in *Input, d Decision, r Rules, warnings []string, s *Summary) 
 		}
 	}
 	tail = append(tail, coverageLines(in)...)
-	tail = append(tail, "全文: "+Escape(filepath.Join(in.Dir, ReportMD)))
-	return fit(strings.Join(lines, "\n"), strings.Join(body, "\n"), strings.Join(tail, "\n"), "…(長いため省略)")
+	tail = append(tail, "", "全文: "+Escape(filepath.Join(in.Dir, ReportMD)))
+	tailText := strings.Join(tail, "\n")
+
+	var body string
+	for level := trimNone; level <= trimConfirmText; level++ {
+		body = classBody(s, byID, level)
+		if text := joinNonEmpty(headText, body, tailText); utf8.RuneCountInString(text) <= MaxTextRunes {
+			return text
+		}
+	}
+	return fit(headText, body, tailText, "…(長いため省略)")
+}
+
+// classBody は分類ごとの行。level に応じて理由文や情報の行を削る。
+func classBody(s *Summary, byID map[string]findingRef, level int) string {
+	var body []string
+	for _, c := range classes {
+		var ls []string
+		for _, it := range s.Items {
+			if it.Class != c.key {
+				continue
+			}
+			l := byID[it.FindingID].line()
+			withReason := !(c.key == "info" && level >= trimInfoReason) && !(c.key == "confirm" && level >= trimConfirmText)
+			if withReason {
+				l += "\n    理由: " + Escape(clipRunes(oneLine(it.Reason), maxReasonRunes))
+			}
+			ls = append(ls, l)
+		}
+		if len(ls) == 0 {
+			continue
+		}
+		if c.key == "info" && level >= trimInfoItems {
+			body = append(body, "", fmt.Sprintf("*%s* %d 件 (長いため省略)", c.label, len(ls)))
+			continue
+		}
+		body = append(body, "", "*"+c.label+"*")
+		body = append(body, ls...)
+	}
+	return strings.Join(body, "\n")
+}
+
+func joinNonEmpty(parts ...string) string {
+	var out []string
+	for _, p := range parts {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+// clipRunes は s を n 文字までにする (超えたら末尾に …)。
+func clipRunes(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n]) + "…"
+	}
+	return s
 }
 
 func period(in *Input) string {
@@ -300,6 +361,8 @@ func SystemPrompt(kind string) string {
 - approve は提案するだけ。あなたは approve しない。
 - 個人を特定できる値 (氏名・メールアドレスなど) を書かない。主体は ARN で書く。
 - 追加の照会はできない。report.json に書かれていることだけで判断し、推測は「可能性」と書く。
+- reason は 1〜2 文 (120 字程度)、incidents の summary は 200 字程度、approve_suggestions の reason も 1〜2 文にする。
+  重大度・data の値は通知に別に表示されるので繰り返さない (「severity high。」や data.xxx= の書き方をしない)。何がなぜ問題かだけを書く。
 
 ---
 

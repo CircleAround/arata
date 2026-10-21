@@ -38,4 +38,5 @@ root の利用が 2 件 (新規・再発)。既知リストに無い AssumeRole 
 • app (json): 解釈率 0.50、閾値 0.40 `FORMAT_DRIFT`
 
 *スキップしたチェック*: login_bruteforce (no http_access source)
+
 全文: <dir>/report.md

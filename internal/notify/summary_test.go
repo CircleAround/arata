@@ -3,12 +3,14 @@ package notify
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // fakeLLM は LLM の応答の固定値を返す。responses を順に返し、尽きたら最後のものを繰り返す。
@@ -176,4 +178,76 @@ func TestSummaryPeriod(t *testing.T) {
 		t.Fatalf("%+v", res)
 	}
 	checkGolden(t, "summary_period.txt", strings.ReplaceAll(s.got[0].text, dir, "<dir>"))
+}
+
+// 長い LLM 応答: 理由文は上限で切り、切り詰めは優先度で行う (情報 → 確認依頼の理由文の順に削る)。
+// 見出し・要対処・インシデント候補・承認の提案は残す。
+func TestSummaryLongResponseKeepsPriorities(t *testing.T) {
+	long := strings.Repeat("severity high。data.count=1 の根拠があり、", 20) // 400 字超
+	r := goldenRun(t)
+	for i := 0; i < 40; i++ { // 情報に分類される未対応を増やす
+		f := r.Findings.StillOpen[0]
+		f.ID = fmt.Sprintf("f-%03d", 100+i)
+		r.Findings.StillOpen = append(r.Findings.StillOpen, f)
+	}
+	items := []map[string]string{
+		{"finding_id": "f-002", "class": "action", "reason": long},
+		{"finding_id": "f-009", "class": "action", "reason": long},
+		{"finding_id": "f-003", "class": "action", "reason": long},
+		{"finding_id": "f-001", "class": "confirm", "reason": long},
+		{"finding_id": "f-010", "class": "confirm", "reason": long},
+	}
+	for i := 0; i < 40; i++ {
+		items = append(items, map[string]string{"finding_id": fmt.Sprintf("f-%03d", 100+i), "class": "info", "reason": long})
+	}
+	resp := marshal(t, map[string]any{
+		"headline":            "見出し",
+		"items":               items,
+		"incidents":           []map[string]any{{"finding_ids": []string{"f-002", "f-001"}, "summary": long}},
+		"approve_suggestions": []map[string]string{{"finding_id": "f-001", "reason": long}},
+	})
+	s := &fakeSender{}
+	res, _ := run(t, inputDir(t, marshal(t, r), ""), s, withLLM(&fakeLLM{responses: []string{string(resp)}}))
+	text := s.got[0].text
+	if res.Exit != ExitOK || utf8.RuneCountInString(text) > MaxTextRunes {
+		t.Fatalf("%+v len %d", res, utf8.RuneCountInString(text))
+	}
+	for _, want := range []string{"見出し", "*要対処*", "id f-009", "*インシデント候補*", "*approve の提案*", "`arata approve f-001 --note \"...\"`", "*取れなかったソース*", "全文: "} {
+		if !strings.Contains(text, want) {
+			t.Errorf("%q must remain:\n%s", want, text)
+		}
+	}
+	// 理由文は 200 字で切る
+	for _, l := range strings.Split(text, "\n") {
+		if r := utf8.RuneCountInString(l); r > 260 {
+			t.Errorf("line too long (%d): %s", r, l)
+		}
+	}
+	// 情報は件数だけになり、個々の行は出ない
+	if strings.Contains(text, "id f-120 ") || !strings.Contains(text, "*情報* 40 件 (長いため省略)") {
+		t.Errorf("info must be collapsed:\n%s", text)
+	}
+	if strings.Contains(text, "…(長いため省略)") {
+		t.Errorf("priority trimming should be enough here:\n%s", text)
+	}
+}
+
+// 優先度で削っても収まらないときも、承認の提案は必ず残す (要対処の行を末尾から切る)。
+func TestSummaryApproveSuggestionsAlwaysRemain(t *testing.T) {
+	r := goldenRun(t)
+	var items []map[string]string
+	for i := 0; i < 80; i++ {
+		f := r.Findings.New[0]
+		f.ID = fmt.Sprintf("f-%03d", 200+i)
+		r.Findings.New = append(r.Findings.New, f)
+		items = append(items, map[string]string{"finding_id": f.ID, "class": "action", "reason": "root の利用"})
+	}
+	resp := marshal(t, map[string]any{"headline": "多い", "items": items, "incidents": []any{},
+		"approve_suggestions": []map[string]string{{"finding_id": "f-001", "reason": "デプロイ用の可能性"}}})
+	s := &fakeSender{}
+	run(t, inputDir(t, marshal(t, r), ""), s, withLLM(&fakeLLM{responses: []string{string(resp)}}))
+	text := s.got[0].text
+	if utf8.RuneCountInString(text) > MaxTextRunes || !strings.Contains(text, "`arata approve f-001 --note \"...\"`") || !strings.Contains(text, "…(長いため省略)") {
+		t.Fatalf("len %d:\n%s", utf8.RuneCountInString(text), text)
+	}
 }
