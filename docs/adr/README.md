@@ -40,3 +40,4 @@
 | [0014](0014-explicit-config-scaffold.md) | 既定のプロファイルを実行時に暗黙で効かせず、推奨設定を雛形として書き出す | 採用 |
 | [0015](0015-weekly-snapshot-state-checks.md) | 週次チェックはアカウントの状態をスナップショットとして取り、成功したときだけ丸ごと置き換えて state 型で比べる | 採用 |
 | [0016](0016-period-report-from-store.md) | 期間レポートは収集せずストアだけから作り、そのために finding の状態遷移を履歴として残す | 採用 |
+| [0017](0017-supply-chain-hardening.md) | サプライチェーン対策は Actions の SHA 固定・依存の 7 日待機 (2 段構え)・来歴証明で行う | 採用 |

@@ -42,6 +42,18 @@ arata --version
 非公開リポジトリの間は `gh release download "${VERSION}" -R CircleAround/arata -p "arata-linux-${ARCH}" -p SHA256SUMS` で取得する。
 リリースの作り方: main で `git tag -a v0.2.0 -m "..." && git push origin v0.2.0` (タグ名がそのまま `arata --version` に入る)。
 
+### 来歴の検証 (build provenance attestation)
+
+公開リポジトリ (または GitHub Enterprise Cloud) では、release がバイナリに build provenance attestation を付ける。
+取得したバイナリがこのリポジトリの release ワークフローで作られたことを `gh` で確かめられる:
+
+```sh
+gh attestation verify "arata-linux-${ARCH}" -R CircleAround/arata \
+  --signer-workflow CircleAround/arata/.github/workflows/release.yml
+```
+
+**非公開リポジトリの間は来歴証明は付かない** (attestation のステップはスキップされる)。その間は上の `SHA256SUMS` で照合する。
+
 ## 開発
 
 ### Go のインストール (sudo 不要)
@@ -68,7 +80,14 @@ make build         # bin/arata-linux-arm64 と bin/arata-linux-amd64 (CGO_ENABLE
 make build-local   # このホスト向けの bin/arata
 ```
 
-CI (go vet + go test + make build) は [.github/workflows/test.yml](.github/workflows/test.yml)。
+CI は [.github/workflows/test.yml](.github/workflows/test.yml): `go mod verify` → age-gate → go vet → go test → govulncheck → make build。
+
+サプライチェーン対策 (ADR 0017):
+
+- Actions は 40 桁の SHA で固定し、版をコメントに書く。ワークフローは最小権限の `permissions:`
+- 依存は公開から 7 日待つ。Dependabot ([.github/dependabot.yml](.github/dependabot.yml)) は cooldown 7 日で提案し、CI は
+  `go list -m -json all | go run ./tools/agegate -days 7` で indirect を含む全モジュールの公開時刻を確かめて、7 日未満なら落ちる。
+  手で `go get` するときも 7 日以上前の版を選ぶ (`curl -s https://proxy.golang.org/<module>/@v/<version>.info` の `Time`)
 
 ゴールデンファイル (`internal/report/testdata`, `internal/scaffold/testdata`, `cmd/arata/testdata`) は `report.json` / `report.md` / 設定の雛形 / `doctor` / `profiles` の表の構造を固定している。
 構造を意図して変えたときは差分を確認してから `go test ./internal/report ./internal/scaffold ./cmd/arata -update` で更新する。

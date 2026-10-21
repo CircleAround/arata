@@ -1,23 +1,30 @@
 name: release
 
 # v* タグの push で linux/arm64 と linux/amd64 の静的バイナリを作り、SHA256SUMS と共に GitHub Releases に添付する。
+# 公開リポジトリでは build provenance attestation (来歴証明) も付ける。非公開の間は SHA256SUMS のみ (ADR 0017)。
 on:
   push:
     tags: ["v*"]
 
-permissions:
-  contents: write
+permissions: {}
 
 jobs:
   release:
     runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: write      # Release の作成
+      id-token: write      # attestation の署名 (Sigstore の OIDC)
+      attestations: write  # attestation の保存
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v5
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+      - run: go mod verify
+      - run: go list -m -json all | go run ./tools/agegate -days 7
       - run: go vet ./...
       - run: go test ./...
       - name: build
@@ -29,6 +36,14 @@ jobs:
           cat SHA256SUMS
       - name: smoke test (arm64 runner)
         run: bin/arata-linux-arm64 --version | grep -F "${GITHUB_REF_NAME}"
+      - name: attest build provenance
+        # 非公開リポジトリの attestation は Enterprise Cloud が要る。非公開の間はスキップしてリリースを止めない。
+        if: github.event.repository.visibility == 'public'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            bin/arata-linux-arm64
+            bin/arata-linux-amd64
       - name: publish
         env:
           GH_TOKEN: ${{ github.token }}
