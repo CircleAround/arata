@@ -502,6 +502,7 @@ arata collect   --window 24h [--source id]
 arata evaluate  --profile daily
 arata report    --from 2026-10-01 --to 2026-10-31 --format md|json [--template monthly]
                 # 決定: --month 2026-10 を糖衣にし、--template は作らない。収集せずストアだけから作る (ADR 0016)
+                # 決定: 期間を指定せず、そのプロファイルの run がまだ無ければ REPORT_NOT_FOUND を 1 行出して終了コード 2 (--out のディレクトリも作らない)
 arata review    [--status open|acked]
 arata approve   <finding-id> --note "..." [--expires date] [--tag deploy] [--by name] [--commit] [--account | --arn-pattern glob]
 arata ack|snooze|resolve <finding-id>        # snooze は --until date

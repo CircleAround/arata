@@ -132,7 +132,7 @@ func (c *cli) codes() []string {
 
 var vocabulary = map[string]bool{
 	"FORMAT_MISMATCH": true, "FORMAT_DRIFT": true, "LOG_GROUP_MISSING": true, "ACCESS_DENIED": true, "QUERY_LIMIT": true, "QUERY_INVALID": true,
-	"STORE_LOCKED": true, "STORE_CORRUPT": true, "RUN_MISSED": true, "COLLECT_FAILED": true, "CONFIG_INVALID": true, "CHECK_UNUSED": true,
+	"STORE_LOCKED": true, "STORE_CORRUPT": true, "RUN_MISSED": true, "COLLECT_FAILED": true, "CONFIG_INVALID": true, "CHECK_UNUSED": true, "REPORT_NOT_FOUND": true,
 }
 
 func (c *cli) assertCodesInVocabulary() {
@@ -291,9 +291,18 @@ func TestExitCodes(t *testing.T) {
 		}
 	})
 	t.Run("report before run", func(t *testing.T) {
+		// そのプロファイルの run が無ければ、固定語彙の code 付きで 1 行出して終了コード 2 (--out でもディレクトリを作らない)
 		c := newCLI(t)
-		if code := c.run("report", "--config", c.cfg); code != 2 {
-			t.Fatalf("exit %d", code)
+		out := filepath.Join(c.dir, "out")
+		for _, args := range [][]string{{}, {"--profile", "daily"}, {"--profile", "daily", "--out", out}} {
+			code := c.run(append([]string{"report", "--config", c.cfg}, args...)...)
+			if code != 2 || strings.Join(c.codes(), ",") != "REPORT_NOT_FOUND" || !strings.Contains(c.stderr.String(), "プロファイル daily の run がまだありません") ||
+				strings.Count(strings.TrimSpace(c.stderr.String()), "\n") != 0 {
+				t.Fatalf("%v: exit %d stderr %q", args, code, c.stderr)
+			}
+		}
+		if _, err := os.Stat(out); err == nil {
+			t.Fatal("--out directory must not be created")
 		}
 	})
 	t.Run("collect partially failed", func(t *testing.T) {

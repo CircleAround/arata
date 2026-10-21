@@ -393,7 +393,10 @@ func newReportCmd(d *Deps, g *globalFlags) *subcmd.Command {
 				return err
 			}
 			if b == nil {
-				return &engine.ExitError{Code: engine.CodeConfigInvalid, Exit: engine.ExitConfig, Err: fmt.Errorf("no report for profile %q yet; run `arata run --profile %s` first", profile, profile)}
+				// 決定: 終了コードは従来どおり 2。標準エラーに固定語彙の code 付きで 1 行出す (何も出さずに 2 で終わると原因が分からないため)
+				err := fmt.Errorf("プロファイル %s の run がまだありません。先に arata run --profile %s を実行してください", profile, profile)
+				d.Engine.Logger.Error(err.Error(), "code", engine.CodeReportNotFound, "profile", profile)
+				return &engine.ExitError{Code: engine.CodeReportNotFound, Exit: engine.ExitConfig, Err: err}
 			}
 			rep, err := report.Parse(b)
 			if err != nil {
