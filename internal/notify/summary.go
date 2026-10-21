@@ -188,7 +188,7 @@ func (f findingRef) line() string {
 	return l + "\n    id " + Escape(f.id)
 }
 
-// LLM の文字列の上限 (文字数)。system でも短く書くよう指示しているが、守られなくても書式を崩さないよう組み立て側で切る。
+// LLM の文字列の上限 (文字数 = rune 数。バイト数ではない)。system でも短く書くよう指示しているが、守られなくても書式を崩さないよう組み立て側で切る。
 const (
 	maxReasonRunes   = 200
 	maxIncidentRunes = 240

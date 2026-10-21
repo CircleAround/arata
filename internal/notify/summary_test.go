@@ -251,3 +251,45 @@ func TestSummaryApproveSuggestionsAlwaysRemain(t *testing.T) {
 		t.Fatalf("len %d:\n%s", utf8.RuneCountInString(text), text)
 	}
 }
+
+// 切り詰め (reason / approve / incidents / 全体) はすべて文字 (rune) 単位で、マルチバイト文字を途中で切らない。
+func TestTruncationKeepsValidUTF8(t *testing.T) {
+	r := goldenRun(t)
+	for i := 0; i < 60; i++ {
+		f := r.Findings.New[0]
+		f.ID = fmt.Sprintf("f-%03d", 300+i)
+		f.Summary = strings.Repeat("呼び出し元が不明🔑", 8)
+		r.Findings.New = append(r.Findings.New, f)
+	}
+	for shift := 0; shift < 4; shift++ { // 先頭をずらし、上限の位置がマルチバイト文字のどの位置にも来るようにする
+		long := strings.Repeat("a", shift) + strings.Repeat("同じ主体からの呼び出しが続いている🔑", 30)
+		items := []map[string]string{}
+		for i := 0; i < 60; i++ {
+			items = append(items, map[string]string{"finding_id": fmt.Sprintf("f-%03d", 300+i), "class": "action", "reason": long})
+		}
+		resp := marshal(t, map[string]any{"headline": long, "items": items,
+			"incidents":           []map[string]any{{"finding_ids": []string{"f-300"}, "summary": long}},
+			"approve_suggestions": []map[string]string{{"finding_id": "f-001", "reason": long}}})
+		s := &fakeSender{}
+		run(t, inputDir(t, marshal(t, r), ""), s, withLLM(&fakeLLM{responses: []string{string(resp)}}))
+		text := s.got[0].text
+		if !utf8.ValidString(text) || strings.ContainsRune(text, utf8.RuneError) {
+			t.Fatalf("shift %d: invalid UTF-8 in the message", shift)
+		}
+		if n := utf8.RuneCountInString(text); n > MaxTextRunes {
+			t.Fatalf("shift %d: %d runes", shift, n)
+		}
+		for _, l := range strings.Split(text, "\n") {
+			if strings.HasPrefix(l, "• f-300: ") && !strings.HasSuffix(l, "…") {
+				t.Fatalf("incident summary must be clipped: %s", l)
+			}
+		}
+	}
+	// ReportText (原文) の切り詰めも同じ
+	dir := inputDir(t, marshal(t, r), "")
+	s := &fakeSender{}
+	run(t, dir, s)
+	if !utf8.ValidString(s.got[0].text) || utf8.RuneCountInString(s.got[0].text) > MaxTextRunes {
+		t.Fatal("report text must be valid UTF-8 within the limit")
+	}
+}

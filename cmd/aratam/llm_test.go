@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/CircleAround/arata/internal/notify"
 )
@@ -173,5 +174,29 @@ func TestTestNotify(t *testing.T) {
 	c.hook.status = http.StatusNotFound
 	if code := c.run("test-notify", "-c", c.cfg); code != 5 || strings.Join(c.codes(), ",") != "URGENT_WEBHOOK_UNSET,SEND_FAILED" {
 		t.Fatalf("failure: exit %d %s", code, c.stderr)
+	}
+}
+
+// --dry-run の標準出力まで通して、長い日本語の要約がマルチバイト文字の途中で切れないこと。
+func TestDryRunOutputIsValidUTF8(t *testing.T) {
+	c := newCLI(t)
+	c.useClaude()
+	long := strings.Repeat("同じ主体からの呼び出しが続いている", 40)
+	resp, _ := json.Marshal(map[string]any{"headline": long,
+		"items":               []map[string]string{{"finding_id": "f-002", "class": "action", "reason": long}},
+		"incidents":           []map[string]any{{"finding_ids": []string{"f-002", "f-001"}, "summary": long}},
+		"approve_suggestions": []map[string]string{{"finding_id": "f-001", "reason": long}}})
+	c.claudeOut = claudeOutput(t, string(resp))
+	if code := c.run("notify", "-c", c.cfg, "--in", c.inputDir(), "--dry-run"); code != 0 {
+		t.Fatalf("exit %d %s", code, c.stderr)
+	}
+	out := c.stdout.String()
+	if !utf8.ValidString(out) || !strings.Contains(out, "• f-002, f-001: 同じ主体") {
+		t.Fatalf("invalid UTF-8 or missing incident:\n%s", out)
+	}
+	for _, l := range strings.Split(out, "\n") {
+		if strings.HasPrefix(l, "• f-002, f-001: ") && utf8.RuneCountInString(strings.TrimPrefix(l, "• f-002, f-001: ")) != 241 {
+			t.Fatalf("incident summary must be 240 runes + …: %d", utf8.RuneCountInString(l))
+		}
 	}
 }
