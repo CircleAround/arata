@@ -66,13 +66,19 @@ func QuietText(in *Input, d Decision, r Rules, warnings []string) string {
 	return strings.Join(lines, "\n")
 }
 
-// ReportText は report.md を整形した本文 (provider: none、または LLM が使えなかったときの原文)。
+// ReportText は通知の本文 (provider: none、または LLM が使えなかったときの原文)。
+// run は report.json から主要キーだけの短い形で作り (compact.go)、期間レポートは report.md から件数 0 の節を除いて整形する。
 // notice は冒頭に書く注記 (LLM が使えなかったときの「要約に失敗したため原文を送ります」)。
 func ReportText(in *Input, d Decision, r Rules, warnings []string, notice string) string {
 	lines := head(d.Route, r, notice, warnings)
-	footer := "出力: " + Escape(in.Dir)
-	return fit(strings.Join(lines, "\n"), Mrkdwn(in.Markdown), footer,
-		"…(長いため省略。全文は "+Escape(filepath.Join(in.Dir, ReportMD))+")")
+	var body string
+	if in.Run != nil {
+		body = RunText(in.Run)
+	} else {
+		body = Mrkdwn(dropEmptySections(in.Markdown))
+	}
+	full := Escape(filepath.Join(in.Dir, ReportMD))
+	return fit(strings.Join(lines, "\n"), body, "全文: "+full, "…(長いため省略)")
 }
 
 // InputProblemText は arata の出力が無い・読めない・古いときの通知 (LLM を通さず、緊急用に送る)。

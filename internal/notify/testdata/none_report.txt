@@ -1,71 +1,44 @@
 <!channel>
-*arata daily レポート (acme)*
-
-- 期間: 2026-10-20T09:00:00Z 〜 2026-10-21T09:00:00Z
-- 新規 3 / 変化 1 / 再発 1 / 解消 1 / 未対応 1 / 最大重大度 *critical*
-- *収集エラー 1 件* (カバレッジ参照)
+*arata daily (acme)* 2026-10-20T09:00:00Z 〜 2026-10-21T09:00:00Z
+新規 3 / 変化 1 / 再発 1 / 解消 1 / 未対応 1 / 最大重大度 *critical*
 
 *新規 (3)*
-
-- *[critical]* summary of arn:aws:iam::1:root|203.0.113.1 `root_usage`
-  - count: 1
-  - id: f-002 (初出 2026-10-21T09:00:00Z)
-- *[medium]* summary of 198.51.100.7 `login_bruteforce`
-  - count: 52
-  - date: 2026-10-20 (UTC)
-  - reason: above_baseline
-  - id: f-010 (初出 2026-10-21T09:00:00Z)
-- *[medium]* summary of arn:aws:iam::1:user/x `new_principal`
-  - count: 3
-  - ips: [203.0.113.1]
-  - id: f-001 (初出 2026-10-21T09:00:00Z)
+• *[critical]* summary of arn:aws:iam::1:root|203.0.113.1 `root_usage`
+    count 1 · id f-002 (初出 2026-10-21T09:00:00Z)
+• *[medium]* summary of 198.51.100.7 `login_bruteforce`
+    count 52 · date 2026-10-20 (UTC) · reason above_baseline · id f-010 (初出 2026-10-21T09:00:00Z)
+• *[medium]* summary of arn:aws:iam::1:user/x `new_principal`
+    count 3 · ips 203.0.113.1 · id f-001 (初出 2026-10-21T09:00:00Z)
 
 *変化 (1)*
-
-- *[high]* summary of a-&gt;b `unknown_assume_role`
-  - count: 2
-  - id: f-003 (初出 2026-10-20T08:00:00Z)
+• *[high]* summary of a-&gt;b `unknown_assume_role`
+    count 2 · id f-003 (初出 2026-10-20T08:00:00Z)
 
 *再発 (1)*
-
-- *[critical]* summary of arn:aws:iam::1:root|192.0.2.1 `root_usage`
-  - count: 2
-  - id: f-009 (初出 2026-10-10T09:00:00Z)
+• *[critical]* summary of arn:aws:iam::1:root|192.0.2.1 `root_usage`
+    count 2 · id f-009 (初出 2026-10-10T09:00:00Z)
 
 *解消 (1)*
-
-- *[medium]* summary of CreateUser|p|t `iam_changes`
-  - id: f-004 (初出 2026-10-18T09:00:00Z)
+• *[medium]* summary of CreateUser|p|t `iam_changes`
+    id f-004 (初出 2026-10-18T09:00:00Z)
 
 *未対応 (1)*
-
-- *[medium]* summary of arn:aws:iam::1:user/old `new_principal`
-  - count: 1
-  - id: f-005 (初出 2026-10-17T09:00:00Z)
+• *[medium]* summary of arn:aws:iam::1:user/old `new_principal`
+    count 1 · id f-005 (初出 2026-10-17T09:00:00Z)
 
 *本日報告済み (1)*
-
-- *[critical]* summary of arn:aws:iam::1:root|198.51.100.1 `root_usage`
-  - count: 1
-  - id: f-006 (初出 2026-10-21T07:00:00Z)
+• *[critical]* summary of arn:aws:iam::1:root|198.51.100.1 `root_usage`
+    count 1 · id f-006 (初出 2026-10-21T07:00:00Z)
 
 *情報 (1)*
+• *[info]* summary of PutRolePolicy|deploy|r `iam_changes`
+    id f-007 (初出 2026-10-21T09:00:00Z)
 
-- *[info]* summary of PutRolePolicy|deploy|r `iam_changes`
-  - known_deploy_principal: true
-  - id: f-007 (初出 2026-10-21T09:00:00Z)
+*取れなかったソース*
+• trail-us: `QUERY_LIMIT` 取れた期間 2026-10-20T20:00:00Z 〜 2026-10-21T09:00:00Z
 
-*カバレッジ*
+*形式の解釈率の警告*
+• app (json): 解釈率 0.50、閾値 0.40 `FORMAT_DRIFT`
 
-- 取得できたソース: trail
-- 取得に失敗したソース:
-  - trail-us: `QUERY_LIMIT` cloudtrail:LookupEvents: throttled
-    - 取得できた期間: 2026-10-20T20:00:00Z 〜 2026-10-21T09:00:00Z (それより古い側は未取得)
-- 形式の解釈率:
-  - nginx (nginx_access): 0.99 (990/1000)、閾値 0.80、直近平均 0.98
-  - app (json): 0.50 (500/1000)、閾値 0.40、直近平均 0.90 `FORMAT_DRIFT`
-  - waf (wafv2): 行なし、閾値 0.80
-- 実行したチェック: iam_changes, new_principal, root_usage, unknown_assume_role
-- スキップしたチェック:
-  - login_bruteforce: no http_access source
-出力: <dir>
+*スキップしたチェック*: login_bruteforce (no http_access source)
+全文: <dir>/report.md

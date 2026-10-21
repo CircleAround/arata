@@ -137,7 +137,7 @@ func TestNotifySendsToUrgentWebhookOnce(t *testing.T) {
 	if code := c.run("notify", "-c", c.cfg, "--in", in); code != 0 {
 		t.Fatalf("exit %d %s", code, c.stderr)
 	}
-	if got := c.hook.got[urgentPath]; len(got) != 1 || !strings.HasPrefix(got[0], "*arata daily レポート (acme)*") || len(c.hook.got[normalPath]) != 0 {
+	if got := c.hook.got[urgentPath]; len(got) != 1 || !strings.HasPrefix(got[0], "*arata daily (acme)*") || len(c.hook.got[normalPath]) != 0 {
 		t.Fatalf("got %v", c.hook.got)
 	}
 	if code := c.run("notify", "-c", c.cfg, "--in", in); code != 0 || len(c.hook.got[urgentPath]) != 1 || strings.Join(c.codes(), ",") != notify.CodeAlreadyNotified {

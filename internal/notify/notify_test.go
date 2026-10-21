@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -191,7 +192,7 @@ func TestRunDryRunDoesNotMark(t *testing.T) {
 	}
 	// report.md が無ければ report.json から arata と同じ書式で作る
 	if !strings.Contains(s.got[0].text, "*新規 (3)*") {
-		t.Fatalf("report.md must be rendered from report.json:\n%s", s.got[0].text)
+		t.Fatalf("the text must be rendered from report.json:\n%s", s.got[0].text)
 	}
 }
 
@@ -199,7 +200,7 @@ func TestRunPeriodReport(t *testing.T) {
 	dir := inputDir(t, golden(t, "period.json"), string(golden(t, "period.md")))
 	s := &fakeSender{}
 	res, _ := run(t, dir, s, func(o *Options) { o.Now = time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC) })
-	if res.Exit != ExitOK || len(s.got) != 1 || s.got[0].route != RouteNormal || !strings.HasPrefix(s.got[0].text, "*arata 期間レポート (acme)*") {
+	if res.Exit != ExitOK || len(s.got) != 1 || s.got[0].route != RouteNormal || !strings.HasPrefix(s.got[0].text, "*arata 期間レポート (acme)*") || strings.Contains(s.got[0].text, "(0)*") {
 		t.Fatalf("%+v %+v", res, s.got)
 	}
 	if b, _ := os.ReadFile(filepath.Join(dir, NotifiedFile)); string(b) != "period:2026-10-01/2026-10-31@2026-10-31T23:00:00Z\n" {
@@ -319,33 +320,75 @@ func TestMention(t *testing.T) {
 
 // ログ由来の値がメンションやリンクとして働かないよう、report の文字列は & < > をエスケープする。
 func TestReportValuesAreEscaped(t *testing.T) {
-	md := "# arata daily レポート (acme)\n\n## 新規 (1)\n\n- **[high]** UA <!channel> <https://evil.example|click> & more `x`\n"
+	r := goldenRun(t)
+	r.Findings.New[0].Summary = "UA <!channel> <https://evil.example|click> & more"
+	r.Findings.New[0].Data = map[string]any{"count": 1, "ips": []string{"<!here>"}}
 	s := &fakeSender{}
-	run(t, inputDir(t, golden(t, "report.json"), md), s, func(o *Options) { o.Rules.UrgentMention = "" })
+	run(t, inputDir(t, marshal(t, r), ""), s, func(o *Options) { o.Rules.UrgentMention = "" })
 	text := s.got[0].text
-	if strings.Contains(text, "<!channel>") || strings.Contains(text, "<https://") ||
-		!strings.Contains(text, "- *[high]* UA &lt;!channel&gt; &lt;https://evil.example|click&gt; &amp; more `x`") ||
-		!strings.HasPrefix(text, "*arata daily レポート (acme)*\n") {
+	if strings.Contains(text, "<!channel>") || strings.Contains(text, "<!here>") || strings.Contains(text, "<https://") ||
+		!strings.Contains(text, "• *[critical]* UA &lt;!channel&gt; &lt;https://evil.example|click&gt; &amp; more `root_usage`\n    count 1 · ips &lt;!here&gt; · id f-002") {
 		t.Fatalf("not escaped:\n%s", text)
 	}
 }
 
 func TestLongReportIsTruncated(t *testing.T) {
-	var b strings.Builder
-	b.WriteString("# arata daily レポート (acme)\n\n")
-	for i := 0; i < 500; i++ {
-		b.WriteString("- **[medium]** 新しい主体からの呼び出しが続いています `new_principal`\n")
+	r := goldenRun(t)
+	for i := 0; i < 200; i++ {
+		f := r.Findings.New[2]
+		f.ID = fmt.Sprintf("f-%03d", 100+i)
+		r.Findings.StillOpen = append(r.Findings.StillOpen, f)
 	}
-	dir := inputDir(t, golden(t, "report.json"), b.String())
+	dir := inputDir(t, marshal(t, r), "")
 	s := &fakeSender{}
 	run(t, dir, s)
 	text := s.got[0].text
 	if n := utf8.RuneCountInString(text); n > MaxTextRunes {
 		t.Fatalf("too long: %d", n)
 	}
-	if !strings.HasPrefix(text, "<!channel>\n*arata daily") ||
-		!strings.HasSuffix(text, "…(長いため省略。全文は "+filepath.Join(dir, ReportMD)+")\n出力: "+dir) {
+	if !strings.HasPrefix(text, "<!channel>\n*arata daily (acme)*") ||
+		!strings.HasSuffix(text, "…(長いため省略)\n全文: "+filepath.Join(dir, ReportMD)) {
 		t.Fatalf("truncated text:\n%s", text[len(text)-300:])
+	}
+}
+
+// 件数 0 の区分は出さない (run は report.json から作り、期間レポートは report.md の節を除く)。
+func TestEmptySectionsAreOmitted(t *testing.T) {
+	r := goldenRun(t)
+	r.Findings.Changed, r.Findings.Recurred, r.Info = nil, nil, nil
+	s := &fakeSender{}
+	run(t, inputDir(t, marshal(t, r), ""), s)
+	for _, h := range []string{"*変化", "*再発", "*情報", "ありません"} {
+		if strings.Contains(s.got[0].text, h) {
+			t.Errorf("%s must be omitted:\n%s", h, s.got[0].text)
+		}
+	}
+	md := "# t\n\n- x\n\n## 新規 (1)\n\n- a\n\n## 再発 (0)\n\nありません。\n\n## 新規の主体 (0)\n\n期間内に初めて観測した主体はありません。\n\n## 実行の状況\n\n- y\n"
+	if got := dropEmptySections(md); got != "# t\n\n- x\n\n## 新規 (1)\n\n- a\n\n## 実行の状況\n\n- y\n" {
+		t.Fatalf("%q", got)
+	}
+}
+
+// finding はチェックごとの主要キーだけを 1 行に出し、summary に既に入っている値は繰り返さない。
+func TestDetailShowsKeyFieldsOnly(t *testing.T) {
+	cases := []struct {
+		f    schema.Finding
+		want string
+	}{
+		{schema.Finding{ID: "f-1", Check: "unknown_assume_role", Summary: "既知リストに無い arn:aws:iam::111111111111:user/ci が arn:aws:iam::111111111111:role/admin を 2 回引き受け", FirstSeen: "2026-10-20T08:00:00Z",
+			Data: map[string]any{"caller": "arn:aws:iam::111111111111:user/ci", "caller_kind": "IAMUser", "count": 2.0, "ips": []any{"203.0.113.5", "203.0.113.6", "203.0.113.7", "203.0.113.8"}, "last_time": "2026-10-21T01:00:00Z", "event_names": []any{"AssumeRole"}}},
+			"ips 203.0.113.5, 203.0.113.6, 203.0.113.7 他 1 · last_time 2026-10-21T01:00:00Z · id f-1 (初出 2026-10-20T08:00:00Z)"},
+		{schema.Finding{ID: "f-2", Check: "login_bruteforce", Summary: "ログイン失敗が平常帯を超過: 198.51.100.7 から 52 件", FirstSeen: "2026-10-21T09:00:00Z",
+			Data: map[string]any{"ip": "198.51.100.7", "count": 52.0, "date": "2026-10-20", "reason": "above_baseline", "threshold": 20.0, "baseline_median": 3.0, "baseline_days_with_data": 14.0}},
+			"date 2026-10-20 (UTC) · reason above_baseline · threshold 20 · id f-2 (初出 2026-10-21T09:00:00Z)"},
+		{schema.Finding{ID: "f-3", Check: "some_future_check", Summary: "何か", FirstSeen: "2026-10-21T09:00:00Z",
+			Data: map[string]any{"count": 3.0, "ips": []any{"192.0.2.1"}, "other": "x"}},
+			"count 3 · ips 192.0.2.1 · id f-3 (初出 2026-10-21T09:00:00Z)"},
+	}
+	for _, tc := range cases {
+		if got := detail(tc.f); got != tc.want {
+			t.Errorf("%s:\n got %s\nwant %s", tc.f.Check, got, tc.want)
+		}
 	}
 }
 

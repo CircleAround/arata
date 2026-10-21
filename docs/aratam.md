@@ -49,7 +49,7 @@ aratam notify --in /var/lib/arata/out/daily
 決定 (実装順 1):
 - 入力: `report.json` が JSON として読めない・`generated_at` が無いか RFC 3339 でない・知らない `kind` も「失敗した」とみなす。
   ログと通知の code は `INPUT_MISSING` (無い・読めない) / `INPUT_INVALID` (解釈できない) / `INPUT_STALE` (古い)。未知のフィールドは無視する (arata が足したフィールドで止まらないように)。
-- 入力: `report.md` が無ければ `report.json` から arata と同じ関数 (`internal/report/schema` の `Markdown`) で作る。
+- 入力: 期間レポートの `report.md` が無ければ `report.json` から arata と同じ関数 (`internal/report/schema` の `Markdown`) で作る。
 - 入力: 設定の `name` と report.json の `name` が違えば、標準エラーに `NAME_MISMATCH` を出し、通知の冒頭にも警告の行を足す (別の監査対象の出力を送っている取り違えに気付けるように)。
 - 二重送信の防止: `.aratam-notified` の中身は直近の 1 件の識別子だけ (入力ディレクトリは監査対象・プロファイルごとに分かれ、arata が毎回上書きするため)。
   識別子は run の `run_id`。期間レポートは run_id を持たないので `period:<from>/<to>@<generated_at>` にする (作り直したら別の報告として送る)。
@@ -57,9 +57,16 @@ aratam notify --in /var/lib/arata/out/daily
 - 二重送信の防止: `.aratam-notified` を書けなくても送信は済んでいるので終了コードは変えず、`MARK_FAILED` の警告だけ出す (次回は同じ報告を再送する)。
 - `--dry-run` は `.aratam-notified` を見る (通知済みなら送らない旨をログに出す。中身を見たいときは `--force`) が、書かない。Webhook の環境変数も要らない。
 - 期間レポートは件数が 0 でも「静か」とみなさず送る (月次などの定期の報告は、何も無かったことも伝える)。
-- メッセージ: Slack の mrkdwn の本文だけで送る (8 章の未決は「まずは本文だけ」で進める)。report.md は見出しを `*見出し*`、`**太字**` を `*太字*` に置き換えるだけで整形する。
+- メッセージ: Slack の mrkdwn の本文だけで送る (8 章の未決は「まずは本文だけ」で進める)。
+- メッセージ (`none` と LLM が使えなかったときの原文): run は report.md をそのまま送らず、report.json から短い形を作る。
+  finding 1 件は「重大度・概要・チェック名」の行と「チェックごとの主要キー · id (初出)」の行の 2 行にする
+  (report.md は data の全キーを列挙するので 1 件が 10 行を超え、Slack では読めない)。主要キーの対応表は `internal/notify/compact.go` の `keyFields`
+  (例: unknown_assume_role = caller・count・ips・last_time、new_principal = kind・count・ips・external_account、login_bruteforce = ip・count・date・reason・threshold)。
+  対応表に無いチェックは count と ips だけ。summary の文に既に入っている値は繰り返さない (文字列は部分一致、数値は「N 件」「N 回」の形で見る)。リストは 3 個まで。
+  件数 0 の区分は出さない。カバレッジは問題 (取れなかったソース・解釈率の code・スキップしたチェック) があるときだけ出す。末尾に `全文: <dir>/report.md` を添える。
+  期間レポートは report.md から件数 0 の節 (`## 見出し (0)`) を除き、見出しを `*見出し*`、`**太字**` を `*太字*` に置き換えて送る。
 - メッセージ: report 由来の文字列は `&` `<` `>` をエスケープする。ログ由来の値 (User-Agent など) が `<!channel>` やリンクとして働かないようにするため。メンションは設定に書いたものだけを付ける。
-- メッセージ: 1 通は 3,800 文字までに切り詰める (Slack は text を 4,000 文字程度までにするよう求めている)。行の境目で切り、`…(長いため省略。全文は <dir>/report.md)` と出力ディレクトリのパスを添える。
+- メッセージ: 1 通は 3,800 文字までに切り詰める (Slack は text を 4,000 文字程度までにするよう求めている)。行の境目で切り、`…(長いため省略)` と report.md のパスを添える。
 - 送信: 再送はしない (Slack が受け取ったのに応答が届かなかった場合の二重送信を避ける。失敗は終了コード 5 で cron 側に任せる)。
   `net/http` のエラーは URL を含むので、中身だけを取り出してから返す (Webhook の URL をログに出さない)。
 
