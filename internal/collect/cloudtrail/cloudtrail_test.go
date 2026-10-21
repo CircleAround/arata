@@ -13,7 +13,6 @@ import (
 	ct "github.com/aws/aws-sdk-go-v2/service/cloudtrail"
 	"github.com/aws/aws-sdk-go-v2/service/cloudtrail/types"
 	"github.com/aws/smithy-go"
-	"golang.org/x/time/rate"
 
 	"github.com/CircleAround/arata/internal/collect"
 	"github.com/CircleAround/arata/internal/record"
@@ -358,9 +357,9 @@ func TestProgressLog(t *testing.T) {
 	}
 }
 
-func TestDefaultLimiterIsRateLimiter(t *testing.T) {
+func TestDefaultLimiterIsIntervalLimiter(t *testing.T) {
 	c := New("trail")
-	if _, ok := c.Limiter.(*rate.Limiter); !ok || c.Sleep == nil || c.Logger == nil {
+	if l, ok := c.Limiter.(*IntervalLimiter); !ok || l.Interval != 500*time.Millisecond || c.Sleep == nil || c.Logger == nil {
 		t.Fatalf("defaults: %+v", c)
 	}
 }
