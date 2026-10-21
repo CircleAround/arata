@@ -1,0 +1,18 @@
+*arata 期間レポート (acme)* 2026-10-01 〜 2026-10-31 (UTC)
+新規 2 / 変化 1 / 再発 1 / 解消 2 / 未対応の残存 2
+10 月は root の利用が 1 件
+
+*要約に含まれていなかった指摘* (規則で追加)
+• *[critical]* ルートユーザーの利用 `root_usage` (新規)
+    id f1
+• *[high]* ルートユーザーに MFA が無い `posture` (新規)
+    id f2
+• *[medium]* GuardDuty: Recon (4 回) `guardduty_findings` (変化)
+    id f4
+
+*取れなかった run*
+• daily `partial` 2026-10-07T09:00:00Z
+• daily `RUN_MISSED` 2026-10-07T09:00:00Z 〜 2026-10-20T09:00:00Z
+• daily `RUN_MISSED` 2026-10-20T09:00:00Z 〜 2026-10-31T09:00:00Z
+• daily `failed` 2026-10-31T09:00:00Z
+全文: <dir>/report.md

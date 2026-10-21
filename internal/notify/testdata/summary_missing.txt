@@ -1,0 +1,33 @@
+<!channel>
+*arata daily (acme)* 2026-10-20T09:00:00Z 〜 2026-10-21T09:00:00Z
+新規 3 / 変化 1 / 再発 1 / 解消 1 / 未対応 1 / 最大重大度 *critical*
+root の利用が 1 件 &lt;!channel&gt;
+
+*要対処*
+• *[critical]* summary of arn:aws:iam::1:root|203.0.113.1 `root_usage` (新規)
+    count 1 · id f-002 (初出 2026-10-21T09:00:00Z)
+    理由: root が操作 (改行を含む)
+
+*情報*
+• *[medium]* summary of arn:aws:iam::1:user/old `new_principal` (未対応)
+    count 1 · id f-005 (初出 2026-10-17T09:00:00Z)
+    理由: 未対応も分類してよい
+
+*要約に含まれていなかった指摘* (規則で追加)
+• *[medium]* summary of 198.51.100.7 `login_bruteforce` (新規)
+    count 52 · date 2026-10-20 (UTC) · reason above_baseline · id f-010 (初出 2026-10-21T09:00:00Z)
+• *[medium]* summary of arn:aws:iam::1:user/x `new_principal` (新規)
+    count 3 · ips 203.0.113.1 · id f-001 (初出 2026-10-21T09:00:00Z)
+• *[high]* summary of a-&gt;b `unknown_assume_role` (変化)
+    count 2 · id f-003 (初出 2026-10-20T08:00:00Z)
+• *[critical]* summary of arn:aws:iam::1:root|192.0.2.1 `root_usage` (再発)
+    count 2 · id f-009 (初出 2026-10-10T09:00:00Z)
+
+*取れなかったソース*
+• trail-us: `QUERY_LIMIT` 取れた期間 2026-10-20T20:00:00Z 〜 2026-10-21T09:00:00Z
+
+*形式の解釈率の警告*
+• app (json): 解釈率 0.50、閾値 0.40 `FORMAT_DRIFT`
+
+*スキップしたチェック*: login_bruteforce (no http_access source)
+全文: <dir>/report.md

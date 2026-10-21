@@ -1,0 +1,16 @@
+{
+  "headline": "root の利用が 2 件 (新規・再発)。既知リストに無い AssumeRole もあり、要対処です。",
+  "items": [
+    {"finding_id": "f-002", "class": "action", "reason": "root が 203.0.113.1 から操作 (count 1)。正当な理由が report.json から読み取れない"},
+    {"finding_id": "f-009", "class": "action", "reason": "root の利用が再発 (count 2)"},
+    {"finding_id": "f-003", "class": "action", "reason": "既知リストに無い主体の AssumeRole が 2 回"},
+    {"finding_id": "f-001", "class": "confirm", "reason": "新しい IAM ユーザー x が 203.0.113.1 から 3 回。業務上の理由があり得る"},
+    {"finding_id": "f-010", "class": "info", "reason": "ログイン失敗 52 件は平常帯超過だが単一 IP"}
+  ],
+  "incidents": [
+    {"finding_ids": ["f-002", "f-001"], "summary": "同じ IP 203.0.113.1 から root と新規ユーザーが操作した可能性"}
+  ],
+  "approve_suggestions": [
+    {"finding_id": "f-001", "reason": "デプロイ用ユーザーの可能性。担当者に確認のうえ承認"}
+  ]
+}

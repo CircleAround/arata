@@ -1,0 +1,12 @@
+{
+  "headline": "root の利用が 1 件 <!channel>",
+  "items": [
+    {"finding_id": "f-002", "class": "action", "reason": "root が操作\n(改行を含む)"},
+    {"finding_id": "f-999", "class": "action", "reason": "LLM が作った ID"},
+    {"finding_id": "f-003", "class": "urgent", "reason": "知らない class"},
+    {"finding_id": "f-002", "class": "info", "reason": "重複"},
+    {"finding_id": "f-005", "class": "info", "reason": "未対応も分類してよい"}
+  ],
+  "incidents": [{"finding_ids": ["f-998"], "summary": "知らない ID だけ"}],
+  "approve_suggestions": [{"finding_id": "f-997", "reason": "知らない ID"}]
+}

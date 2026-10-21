@@ -1,0 +1,4 @@
+要約です。
+```json
+{"headline": "コードフェンス付き", "items": [], "incidents": [], "approve_suggestions": []}
+```
