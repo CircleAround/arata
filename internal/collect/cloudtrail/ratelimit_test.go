@@ -154,7 +154,10 @@ func TestThrottleRetryWithDefaultLimiter(t *testing.T) {
 	c := New("trail", RegionClient{Region: "ap-northeast-1", API: fake})
 	c.Limiter = newTestLimiter(clk)
 	var backoffs []time.Duration
-	c.Sleep = func(ctx context.Context, d time.Duration) error { backoffs = append(backoffs, d); return clk.Sleep(ctx, d) }
+	c.Sleep = func(ctx context.Context, d time.Duration) error {
+		backoffs = append(backoffs, d)
+		return clk.Sleep(ctx, d)
+	}
 	if err := c.Collect(context.Background(), collect.Window{From: base, To: base.Add(24 * time.Hour)}, &captured{}); err != nil {
 		t.Fatal(err)
 	}

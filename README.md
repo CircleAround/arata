@@ -88,6 +88,7 @@ CI は [.github/workflows/test.yml](.github/workflows/test.yml): `go mod verify`
 - 依存は公開から 7 日待つ。Dependabot ([.github/dependabot.yml](.github/dependabot.yml)) は cooldown 7 日で提案し、CI は
   `go list -m -json all | go run ./tools/agegate -days 7` で indirect を含む全モジュールの公開時刻を確かめて、7 日未満なら落ちる。
   手で `go get` するときも 7 日以上前の版を選ぶ (`curl -s https://proxy.golang.org/<module>/@v/<version>.info` の `Time`)
+- 標準ライブラリで無理なく書けるものは依存にしない (CLI は標準の `flag`、レート制限は自前。SQLite は残す。ADR 0018)
 
 ゴールデンファイル (`internal/report/testdata`, `internal/scaffold/testdata`, `cmd/arata/testdata`) は `report.json` / `report.md` / 設定の雛形 / `doctor` / `profiles` の表の構造を固定している。
 構造を意図して変えたときは差分を確認してから `go test ./internal/report ./internal/scaffold ./cmd/arata -update` で更新する。
@@ -220,7 +221,7 @@ Logs Insights の集計クエリで日次集計 (IP 別の sign-in 失敗数な�
 ### ディレクトリ
 
 ```
-cmd/arata/              CLI (cobra)。main_test.go がコマンドレベルの e2e
+cmd/arata/              CLI (標準の flag の上の小さなコマンド層 cli.go)。main_test.go がコマンドレベルの e2e
 internal/config/        YAML 設定
 internal/scaffold/      設定の雛形 (config init) と雛形との差分
 internal/store/         Store インターフェース、SQLite + JSONL の dir バックエンド

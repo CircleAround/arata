@@ -9,7 +9,8 @@
 
 | 項目 | 決定 |
 |---|---|
-| 言語 | Go。単一静的バイナリ。SQLite は `modernc.org/sqlite` (純 Go、cgo 不要) で aarch64 オンプレと Lambda arm64 に同一ソースからクロスコンパイル |
+| 言語 | Go。単一静的バイナリ。SQLite は `modernc.org/sqlite` (純 Go、cgo 不要) で aarch64 オンプレと Lambda arm64 に同一ソースからクロスコンパイル。CLI は標準の `flag` の上の小さなコマンド層 |
+| 依存 | 決定: 標準ライブラリで無理なく書けるものは依存にしない。CLI は cobra をやめ標準の `flag` で書き (ヘルプ書式とエラー文言は cobra と同じ)、LookupEvents のレート制限は `golang.org/x/time/rate` をやめ自前の `IntervalLimiter` (2 req/s・バースト 1、時刻は差し替え可能) にした。決定: SQLite (`modernc.org/sqlite`) は残す。ADR 0018 |
 | 責務の境界 | エンジンは **収集・保存・差分判定・レポート生成** まで。通知・起動・LLM 要約は組み込み側 |
 | 認証 | 顧客ごとの読み取り専用ロールに Roles Anywhere で入る。エンジンは AWS SDK の標準認証チェーンに従うだけ (profile / 環境変数 / Lambda ロール) |
 | 共通化 | AWS 層のチェックは全顧客共通。アプリ層は「ログの形式プロファイル」とロググループの紐付けを設定で行う (2 章) |
@@ -261,7 +262,7 @@ arata run --profile daily
 ### 4-1. Go パッケージ構成
 
 ```
-cmd/arata/                 CLI (cobra)
+cmd/arata/                 CLI (標準の flag の上の小さなコマンド層 cli.go。ADR 0018)
 cmd/arata-lambda/          Lambda ハンドラ (同じ internal を呼ぶ。runtime provided.al2023, arm64)
 internal/config/              YAML 読み込み・検証・既定値
 internal/scaffold/            設定の雛形 (config init) と雛形との差分 (決定: config と checks の両方を使うので別パッケージ)

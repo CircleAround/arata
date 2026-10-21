@@ -7,7 +7,7 @@ import (
 )
 
 // IntervalLimiter はリクエストの間隔を Interval 以上に保つレート制限 (トークンバケットのバースト 1 と同じ挙動)。
-// 決定: golang.org/x/time/rate は使わない。使うのは「毎秒 n 回・バースト 1 の Wait」だけで、標準ライブラリで十数行に収まるため (設計書 1 章)。
+// 決定: golang.org/x/time/rate は使わない。使うのは「毎秒 n 回・バースト 1 の Wait」だけで、標準ライブラリで十数行に収まるため (設計書 1 章、ADR 0018)。
 // 時刻と待ちは Now / Sleep で差し替えられる。複数の goroutine から呼んでよい。
 type IntervalLimiter struct {
 	Interval time.Duration
