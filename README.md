@@ -32,7 +32,7 @@ arata を呼ばず、AWS の監査ロールもストアも使わない (出力�
 
 - 送り先と「静か」の判定は規則で固定する。`max_severity` が `urgent_severity` 以上か取れなかったソースがあれば緊急用、report.json が無い・古ければ「arata が実行されていない」と緊急用に送る
 - LLM は分類と説明だけ。重大度は report.json の値を表示し、LLM の出力から漏れた新規・変化・再発の finding は規則で末尾に足す。LLM が使えなければ原文を送る
-- LLM のプロバイダ: `bedrock` (Converse。`bedrock:InvokeModel` だけ要る) / `claude-cli` (`claude -p` をツール無し・空の一時ディレクトリで起動) / `none` (LLM を呼ばない)
+- LLM のプロバイダ: `bedrock` (Converse。`bedrock:InvokeModel` だけ要る) / `claude-cli` (`claude -p` をツール無し・ユーザー設定を読まず・空の一時ディレクトリで起動) / `none` (LLM を呼ばない)
 - Webhook の URL は設定ファイルに書かず、`slack.webhook_env` に書いた名前の環境変数で渡す。LLM に渡すデータは report.json だけ
 
 ```sh

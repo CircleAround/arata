@@ -28,9 +28,11 @@ type ClaudeCLI struct {
 // 決定:
 //   - ツールは使わせない (--tools "")。MCP サーバーも読まない (--strict-mcp-config。--mcp-config を渡さないので 0 個)。
 //   - セッションをディスクに残さない (--no-session-persistence)。
+//   - 設定は project だけを読む (--setting-sources project)。作業ディレクトリは空なので project 設定は無く、ユーザー設定の
+//     hooks・権限設定・プラグインを読ませないことになる。--bare は OAuth のログイン状態を読まなくなるので使わない。
 //   - 出力は --output-format json (1 つの JSON。本文は result)。プロンプト (report.json) は標準入力で渡す。
 func (c *ClaudeCLI) claudeArgs(system string) []string {
-	args := []string{"-p", "--output-format", "json", "--tools", "", "--strict-mcp-config", "--no-session-persistence", "--system-prompt", system}
+	args := []string{"-p", "--output-format", "json", "--tools", "", "--strict-mcp-config", "--no-session-persistence", "--setting-sources", "project", "--system-prompt", system}
 	if c.Model != "" {
 		args = append(args, "--model", c.Model)
 	}

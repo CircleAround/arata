@@ -99,7 +99,7 @@ LLM に求める出力:
 | provider | 呼び方 | 認証 |
 |---|---|---|
 | `bedrock` | `bedrockruntime` の Converse API。`model` (推論プロファイル ID) と `region` は設定で明示する | AWS SDK の標準認証チェーン (`profile` 指定可)。必要なのは `bedrock:InvokeModel` だけ |
-| `claude-cli` | `claude -p --output-format json` を子プロセスで起動し、プロンプトを標準入力で渡す。ツールは使わせない設定にし、作業ディレクトリは空の一時ディレクトリにする | `claude` 側のログイン状態 |
+| `claude-cli` | `claude -p --output-format json` を子プロセスで起動し、プロンプトを標準入力で渡す。ツールは使わせない設定にし、作業ディレクトリは空の一時ディレクトリにする。決定: `--setting-sources project` で設定は project だけを読む (空のディレクトリなので project 設定は無く、ユーザー設定の hooks・権限設定・プラグインを読ませない。`--bare` は OAuth のログイン状態を読まなくなるので使わない) | `claude` 側のログイン状態 |
 | `openai-api` (後続) | Chat Completions を `net/http` で呼ぶ | 環境変数の API キー |
 | `none` | LLM を呼ばない | - |
 
@@ -120,7 +120,7 @@ LLM に求める出力:
 - 期間レポート: system の文書は足さない。`docs/ai/report.md` の「期間レポート」の節で足りるため (8 章の未決を閉じる)。
   必ず載せる finding は events の new / changed / recurred。
 - system: 出力の契約 (3 章)、「追加の照会はできない。report.json だけで判断する」、続けて `docs/ai/report.md` を埋め込む。
-- `claude-cli`: `claude -p --output-format json --tools "" --strict-mcp-config --no-session-persistence --system-prompt <system> [--model <model>]`。
+- `claude-cli`: `claude -p --output-format json --tools "" --strict-mcp-config --no-session-persistence --setting-sources project --system-prompt <system> [--model <model>]`。
   ツールも MCP サーバーも使わせず、セッションをディスクに残さない。作業ディレクトリは空の一時ディレクトリ (終わったら消す)。
   子プロセスの環境変数は aratam のものから Webhook の環境変数 (`slack.webhook_env` / `urgent_webhook_env`) を除いて渡す。
   `--output-format json` の `is_error` が真なら失敗。実行ファイルは `llm.command` (空なら PATH の `claude`。cron の PATH が狭い場合に絶対パスで書く)。

@@ -59,7 +59,7 @@ func TestClaudeCLI(t *testing.T) {
 		t.Fatalf("%q %v", out, err)
 	}
 	args := strings.Split(strings.TrimSuffix(read(t, rec, "args"), "\x00"), "\x00")
-	want := []string{"-p", "--output-format", "json", "--tools", "", "--strict-mcp-config", "--no-session-persistence", "--system-prompt", "SYSTEM\n2 行目", "--model", "sonnet"}
+	want := []string{"-p", "--output-format", "json", "--tools", "", "--strict-mcp-config", "--no-session-persistence", "--setting-sources", "project", "--system-prompt", "SYSTEM\n2 行目", "--model", "sonnet"}
 	if strings.Join(args, "|") != strings.Join(want, "|") {
 		t.Fatalf("args %q", args)
 	}
