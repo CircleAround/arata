@@ -2,124 +2,29 @@
 package report
 
 import (
-	"encoding/json"
 	"sort"
 	"time"
 
 	"github.com/CircleAround/arata/internal/checks"
 	"github.com/CircleAround/arata/internal/collect"
+	"github.com/CircleAround/arata/internal/report/schema"
 	"github.com/CircleAround/arata/internal/store"
 )
 
-// Report は report.json の骨子。
-type Report struct {
-	Profile         string    `json:"profile"`
-	Window          Window    `json:"window"`
-	Name            string    `json:"name"`
-	RunID           string    `json:"run_id"`
-	GeneratedAt     string    `json:"generated_at"`
-	Summary         Summary   `json:"summary"`
-	Findings        Findings  `json:"findings"`
-	AlreadyReported []Finding `json:"already_reported"`
-	Info            []Finding `json:"info"`
-	Coverage        Coverage  `json:"coverage"`
-}
-
-// Window は対象期間。
-type Window struct {
-	From string `json:"from"`
-	To   string `json:"to"`
-}
-
-// Summary は通知の分岐に使う要約。
-type Summary struct {
-	New           int            `json:"new"`
-	Changed       int            `json:"changed"`
-	Recurred      int            `json:"recurred"`
-	Resolved      int            `json:"resolved"`
-	StillOpen     int            `json:"still_open"`
-	MaxSeverity   string         `json:"max_severity"`
-	CollectErrors []CollectError `json:"collect_errors"`
-}
-
-// CollectError は収集失敗 1 件。covered_from / covered_until は失敗するまでに取得できた期間 (取れていなければ空)。
-// CloudTrail LookupEvents は新しい順に返すので、取りこぼすのは covered_from より古い側。
-type CollectError struct {
-	Source string `json:"source"`
-	Code   string `json:"code"`
-	// Action は不足した IAM action (ACCESS_DENIED のとき)。
-	Action string `json:"action,omitempty"`
-	// Partial は一部の項目だけ取れなかった (取れた項目でチェックは走った) こと。
-	Partial      bool   `json:"partial,omitempty"`
-	Message      string `json:"message"`
-	CoveredFrom  string `json:"covered_from,omitempty"`
-	CoveredUntil string `json:"covered_until,omitempty"`
-}
-
-// SourceFailure は coverage.sources_failed の 1 件。
-type SourceFailure struct {
-	Source       string `json:"source"`
-	Code         string `json:"code"`
-	Action       string `json:"action,omitempty"`
-	Partial      bool   `json:"partial,omitempty"`
-	CoveredFrom  string `json:"covered_from,omitempty"`
-	CoveredUntil string `json:"covered_until,omitempty"`
-}
-
-// Findings は差分クラスごとの一覧。
-type Findings struct {
-	New       []Finding `json:"new"`
-	Changed   []Finding `json:"changed"`
-	Recurred  []Finding `json:"recurred"`
-	Resolved  []Finding `json:"resolved"`
-	StillOpen []Finding `json:"still_open"`
-}
-
-// Finding は finding 1 件の出力形。
-type Finding struct {
-	ID          string         `json:"id"`
-	Check       string         `json:"check"`
-	Key         string         `json:"key"`
-	Severity    string         `json:"severity"`
-	Summary     string         `json:"summary"`
-	Status      string         `json:"status"`
-	FirstSeen   string         `json:"first_seen"`
-	LastSeen    string         `json:"last_seen"`
-	LastChanged string         `json:"last_changed"`
-	ReportedAt  string         `json:"reported_at,omitempty"`
-	Data        map[string]any `json:"data"`
-}
-
-// Coverage は「取れていたか」を示す。必ず出す。
-type Coverage struct {
-	SourcesOK     []string        `json:"sources_ok"`
-	SourcesFailed []SourceFailure `json:"sources_failed"`
-	ChecksRun     []string        `json:"checks_run"`
-	ChecksSkipped []SkippedCheck  `json:"checks_skipped"`
-	// Formats は cloudwatch-logs ソースの解釈率 (設計書 2-2)。「取れていたか」の一部として必ず出す。
-	Formats []FormatCoverage `json:"formats"`
-}
-
-// FormatCoverage はソース 1 つの解釈率。match_rate は行が無ければ null。
-// code は FORMAT_MISMATCH (閾値未満。ソースは失敗扱い) / FORMAT_DRIFT (直近平均から急落。警告) / 空。
-type FormatCoverage struct {
-	Source        string   `json:"source"`
-	Format        string   `json:"format"`
-	LogGroup      string   `json:"log_group"`
-	Total         int64    `json:"total"`
-	Matched       int64    `json:"matched"`
-	MatchRate     *float64 `json:"match_rate"`
-	Expected      float64  `json:"expected"`
-	RecentAverage *float64 `json:"recent_average,omitempty"`
-	BytesScanned  float64  `json:"bytes_scanned"`
-	Code          string   `json:"code,omitempty"`
-}
-
-// SkippedCheck は走らなかったチェックと理由。
-type SkippedCheck struct {
-	Check  string `json:"check"`
-	Reason string `json:"reason"`
-}
+// report.json の型は、標準ライブラリだけに依存する schema パッケージに置く (aratam が SQLite や AWS SDK を持ち込まずに読めるように)。
+// 決定 (ADR 0018): 既存の呼び出しを変えないよう、ここでは型エイリアスで同じ名前を出す。
+type (
+	Report         = schema.Report
+	Window         = schema.Window
+	Summary        = schema.Summary
+	CollectError   = schema.CollectError
+	SourceFailure  = schema.SourceFailure
+	Findings       = schema.Findings
+	Finding        = schema.Finding
+	Coverage       = schema.Coverage
+	FormatCoverage = schema.FormatCoverage
+	SkippedCheck   = schema.SkippedCheck
+)
 
 // Input は Build への入力。
 type Input struct {
@@ -206,15 +111,6 @@ func Build(in Input) *Report {
 	return r
 }
 
-// JSON は整形済み JSON を返す。
-func (r *Report) JSON() ([]byte, error) {
-	b, err := json.MarshalIndent(r, "", "  ")
-	if err != nil {
-		return nil, err
-	}
-	return append(b, '\n'), nil
-}
-
 // failures は collect_errors から sources_failed を作る (同じ値を 2 か所に出す)。
 func failures(errs []CollectError) []SourceFailure {
 	out := []SourceFailure{}
@@ -265,10 +161,4 @@ func nonNil[T any](s []T) []T {
 }
 
 // Parse は JSON からレポートを復元する (report コマンドが保存済みレポートを読むため)。
-func Parse(b []byte) (*Report, error) {
-	var r Report
-	if err := json.Unmarshal(b, &r); err != nil {
-		return nil, err
-	}
-	return &r, nil
-}
+func Parse(b []byte) (*Report, error) { return schema.Parse(b) }

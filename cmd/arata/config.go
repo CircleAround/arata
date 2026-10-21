@@ -12,11 +12,12 @@ import (
 	"github.com/CircleAround/arata/internal/checks"
 	"github.com/CircleAround/arata/internal/engine"
 	"github.com/CircleAround/arata/internal/scaffold"
+	"github.com/CircleAround/arata/internal/subcmd"
 )
 
 // newConfigCmd は設定の雛形を扱う config コマンド (サブコマンド init)。
-func newConfigCmd(d *Deps, g *globalFlags) *command {
-	cmd := &command{
+func newConfigCmd(d *Deps, g *globalFlags) *subcmd.Command {
+	cmd := &subcmd.Command{
 		Use:   "config",
 		Short: "設定の雛形を書き出す / 雛形と比べる (config init)",
 	}
@@ -24,10 +25,10 @@ func newConfigCmd(d *Deps, g *globalFlags) *command {
 	return cmd
 }
 
-func newConfigInitCmd(d *Deps, g *globalFlags) *command {
+func newConfigInitCmd(d *Deps, g *globalFlags) *subcmd.Command {
 	var out, format string
 	var force, diff bool
-	cmd := &command{
+	cmd := &subcmd.Command{
 		Use:   "init",
 		Short: "推奨設定の雛形 (全プロファイル・全チェック・既定パラメータを明示) を書き出す",
 		Long: `推奨設定の雛形を YAML で書き出す。全プロファイル (hourly / daily / weekly)、全チェック、各チェックの既定パラメータを
@@ -37,7 +38,7 @@ func newConfigInitCmd(d *Deps, g *globalFlags) *command {
   arata config init --out -          雛形を標準出力に出す
   arata config init --diff           今の設定 (-c、省略時は ARATA_CONFIG か ./arata.yaml) とこの版の雛形の差分
                                      (どのプロファイルにも入っていないチェック、既定値と違うパラメータ、未知のキー) を表示する`,
-		Args: noArgs,
+		Args: subcmd.NoArgs,
 		Run: func(ctx context.Context, _ []string) error {
 			reg := checks.NewRegistry()
 			if diff {
@@ -97,12 +98,12 @@ func configDiff(d *Deps, g *globalFlags, reg *checks.Registry, format string) er
 	return configErr(d, fmt.Errorf("unknown format %q (text|json)", format))
 }
 
-func newProfilesCmd(d *Deps, g *globalFlags) *command {
+func newProfilesCmd(d *Deps, g *globalFlags) *subcmd.Command {
 	var format string
-	cmd := &command{
+	cmd := &subcmd.Command{
 		Use:   "profiles",
 		Short: "プロファイルごとに実際に効いているチェックとパラメータ (由来: overrides / checks: / 既定値) を表示する",
-		Args:  noArgs,
+		Args:  subcmd.NoArgs,
 		Run: func(ctx context.Context, _ []string) error {
 			cfg, err := loadConfig(d, g)
 			if err != nil {

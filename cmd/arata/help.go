@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/CircleAround/arata/docs/ai"
+	"github.com/CircleAround/arata/internal/subcmd"
 )
 
 // rootLong はルートのヘルプ。「とりあえず叩けば何をすればよいか分かる」ように、人向けの手順と AI 向けの入口を最初に出す。
@@ -29,13 +30,13 @@ AI (LLM) から使う場合は ` + "`arata help ai`" + ` を最初に読んで�
 
 // newAICmd は AI 向けの文書を出すトップレベルのコマンド。`arata help ai [topic]` も同じものを出す。
 // 決定: help の下に置くとコマンド一覧に出ないので、トップレベルの ai として一覧に見せる。
-func newAICmd(d *Deps) *command {
+func newAICmd(d *Deps) *subcmd.Command {
 	var format string
-	cmd := &command{
+	cmd := &subcmd.Command{
 		Use:   "ai [report|approve]",
 		Short: "AI (LLM) 向けの使い方 (arata help ai と同じ。最初に読む)",
 		Long:  "AI (LLM) 向けの使い方を出す。トピック: (なし) 全体像 / report report.json の読み方と要約の手順 / approve 承認判断の基準。\n--format json で {topic, title, sections: [{title, body}]} を返す。",
-		Args:  maximumNArgs(1),
+		Args:  subcmd.MaximumNArgs(1),
 		Run: func(ctx context.Context, args []string) error {
 			return writeAIDoc(d.Stdout, strings.Join(args, " "), format)
 		},
@@ -63,9 +64,9 @@ func writeAIDoc(w io.Writer, sub, format string) error {
 }
 
 // newHelpCmd は `arata help [command]`。`arata help ai [topic]` は ai コマンドと同じものを出す。それ以外はそのコマンドのヘルプ (見つからなければルート)。
-func newHelpCmd(d *Deps, root *command) *command {
+func newHelpCmd(d *Deps, root *subcmd.Command) *subcmd.Command {
 	var format string
-	cmd := &command{
+	cmd := &subcmd.Command{
 		Use:   "help [command]",
 		Short: "コマンドのヘルプ (arata help ai で AI 向けの使い方)",
 		Run: func(ctx context.Context, args []string) error {
@@ -75,11 +76,11 @@ func newHelpCmd(d *Deps, root *command) *command {
 				}
 				return writeAIDoc(d.Stdout, strings.Join(args[1:], " "), format)
 			}
-			target := root.findPath(args)
+			target := root.FindPath(args)
 			if target == nil {
 				target = root
 			}
-			target.writeHelp(d.Stdout)
+			target.WriteHelp(d.Stdout)
 			return nil
 		},
 	}

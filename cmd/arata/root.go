@@ -17,6 +17,7 @@ import (
 	"github.com/CircleAround/arata/internal/config"
 	"github.com/CircleAround/arata/internal/engine"
 	"github.com/CircleAround/arata/internal/report"
+	"github.com/CircleAround/arata/internal/subcmd"
 )
 
 // Deps は CLI の差し替え可能な依存。テストはフェイクの AWS クライアントと固定時計、出力バッファを渡す。
@@ -51,7 +52,7 @@ func Execute(args []string, d Deps) int {
 	// SIGINT / SIGTERM で context を止める。init はそこまでの進捗を記録して終わる (init --resume で再開)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := root.execute(ctx, args); err != nil {
+	if err := root.Execute(ctx, args); err != nil {
 		var xe *engine.ExitError
 		if errors.As(err, &xe) {
 			return xe.Exit
@@ -73,14 +74,14 @@ type globalFlags struct {
 }
 
 // NewRootCmd はルートコマンドを組み立てる。ヘルプとバージョンは d.Stdout に出し、エラーは Execute がログに出す。
-func NewRootCmd(d *Deps) *command {
+func NewRootCmd(d *Deps) *subcmd.Command {
 	g := &globalFlags{}
-	root := &command{
+	root := &subcmd.Command{
 		Use:     "arata",
 		Short:   "AWS のログを改め、前回から新しく発生したものを報せる監査エンジン",
 		Long:    rootLong,
 		Version: version,
-		stdout:  d.Stdout,
+		Stdout:  d.Stdout,
 	}
 	root.PersistentStringVarP(&g.config, "config", "c", "", "設定ファイル (YAML)。省略時は環境変数 "+envConfig+"、無ければ ./"+defaultConfigFile)
 	root.AddCommand(newConfigCmd(d, g), newProfilesCmd(d, g), newInitCmd(d, g), newDoctorCmd(d, g), newRunCmd(d, g), newCollectCmd(d, g), newEvaluateCmd(d, g), newReportCmd(d, g))
@@ -138,10 +139,10 @@ func openEngine(d *Deps, g *globalFlags) (*engine.Engine, *config.Config, error)
 	return e, cfg, nil
 }
 
-func newInitCmd(d *Deps, g *globalFlags) *command {
+func newInitCmd(d *Deps, g *globalFlags) *subcmd.Command {
 	var window string
 	var resume bool
-	cmd := &command{
+	cmd := &subcmd.Command{
 		Use:   "init",
 		Short: "ストアを作り、設定を検証し、ベースラインを収集する (findings は出さない)",
 		Long: `ストアを作り、ベースラインを収集する。findings は出さない。
@@ -182,9 +183,9 @@ LookupEvents は毎秒 2 リクエストが上限なので、7 日分で数時�
 	return cmd
 }
 
-func newDoctorCmd(d *Deps, g *globalFlags) *command {
+func newDoctorCmd(d *Deps, g *globalFlags) *subcmd.Command {
 	var window, format string
-	cmd := &command{
+	cmd := &subcmd.Command{
 		Use:   "doctor",
 		Short: "権限・ロググループ・形式プロファイルの解釈率を検査する (問題があれば終了コード 2)",
 		Long: `設定のソースごとに次を実際に問い合わせて検査し、表で出す。ストアは開かない。
@@ -237,7 +238,7 @@ type outputFlags struct {
 	format string
 }
 
-func (o *outputFlags) bind(cmd *command) {
+func (o *outputFlags) bind(cmd *subcmd.Command) {
 	cmd.StringVar(&o.out, "out", "", "report.json と report.md を書き出すディレクトリ (省略時は標準出力)")
 	cmd.StringVar(&o.format, "format", "json", "標準出力の形式 (json|md)")
 }
@@ -264,10 +265,10 @@ func (o *outputFlags) emit(d *Deps, rep *report.Report) error {
 	return &engine.ExitError{Code: engine.CodeConfigInvalid, Exit: engine.ExitConfig, Err: fmt.Errorf("unknown format %q (json|md)", o.format)}
 }
 
-func newRunCmd(d *Deps, g *globalFlags) *command {
+func newRunCmd(d *Deps, g *globalFlags) *subcmd.Command {
 	var profile string
 	o := &outputFlags{}
-	cmd := &command{
+	cmd := &subcmd.Command{
 		Use:   "run",
 		Short: "collect → evaluate → report を実行する",
 		Run: func(ctx context.Context, _ []string) error {
@@ -294,10 +295,10 @@ func newRunCmd(d *Deps, g *globalFlags) *command {
 	return cmd
 }
 
-func newCollectCmd(d *Deps, g *globalFlags) *command {
+func newCollectCmd(d *Deps, g *globalFlags) *subcmd.Command {
 	var window string
 	var sources []string
-	cmd := &command{
+	cmd := &subcmd.Command{
 		Use:   "collect",
 		Short: "収集だけを行いストアへ反映する",
 		Run: func(ctx context.Context, _ []string) error {
@@ -327,10 +328,10 @@ func newCollectCmd(d *Deps, g *globalFlags) *command {
 	return cmd
 }
 
-func newEvaluateCmd(d *Deps, g *globalFlags) *command {
+func newEvaluateCmd(d *Deps, g *globalFlags) *subcmd.Command {
 	var profile string
 	o := &outputFlags{}
-	cmd := &command{
+	cmd := &subcmd.Command{
 		Use:   "evaluate",
 		Short: "収集せずにチェックを走らせ、レポートを出す",
 		Run: func(ctx context.Context, _ []string) error {
@@ -351,10 +352,10 @@ func newEvaluateCmd(d *Deps, g *globalFlags) *command {
 	return cmd
 }
 
-func newReportCmd(d *Deps, g *globalFlags) *command {
+func newReportCmd(d *Deps, g *globalFlags) *subcmd.Command {
 	var profile, from, to, month string
 	o := &outputFlags{}
-	cmd := &command{
+	cmd := &subcmd.Command{
 		Use:   "report",
 		Short: "最後の run / evaluate のレポートを出す。--from / --to (または --month) で期間レポート",
 		Long: `期間を指定しなければ、プロファイルの最後の run / evaluate のレポートを再表示する。
