@@ -1,0 +1,19 @@
+# aratam の設定 (aratam config init が書き出した雛形)。暗黙の既定は持たないので、全項目をここで明示する。
+# 使い方: arata run ... --out <dir> の後に aratam notify --in <dir> を実行する (docs/aratam.md)。
+
+name: example                     # 通知に出す監査対象の名前 (report.json の name と違えば警告)
+max_age: 26h                      # report.json がこれより古ければ「実行されていない」と緊急用に通知する
+urgent_severity: high             # この重大度以上 (critical | high | medium | low) の新規・変化・再発は緊急用に送る
+on_quiet: short                   # 新規・変化・再発が無く、取れなかったソースも無いとき。short = 1 行だけ送る | silent = 送らない
+
+llm:
+  provider: none                  # bedrock | claude-cli | none (後続で openai-api)。none は LLM を呼ばず report.md を整形して送る
+  model: ""                       # bedrock: 推論プロファイル ID (必須)。claude-cli: 空なら claude の既定のモデル
+  region: ""                      # bedrock: リージョン (必須。例 us-east-1)
+  profile: ""                     # bedrock: AWS の名前付きプロファイル。空なら標準の認証チェーン
+  timeout: 120s                   # LLM 呼び出し 1 回の時間切れ。失敗時の再試行は 1 回まで
+
+slack:
+  webhook_env: ARATAM_SLACK_WEBHOOK                 # 通常用の Webhook URL を入れる環境変数の名前。URL は設定ファイルに書かない
+  urgent_webhook_env: ARATAM_SLACK_URGENT_WEBHOOK   # 緊急用。空にすると通常用に送り、冒頭に urgent_mention を付ける
+  urgent_mention: "<!channel>"                      # 緊急用を通常用に送るときのメンション (空なら付けない)

@@ -46,6 +46,23 @@ aratam notify --in /var/lib/arata/out/daily
 
 期間レポート (`"kind": "period"`) も同じ流れで扱う。違いは 3 の system 文書と、2 の振り分け (期間レポートは常に通常用) だけ。
 
+決定 (実装順 1):
+- 入力: `report.json` が JSON として読めない・`generated_at` が無いか RFC 3339 でない・知らない `kind` も「失敗した」とみなす。
+  ログと通知の code は `INPUT_MISSING` (無い・読めない) / `INPUT_INVALID` (解釈できない) / `INPUT_STALE` (古い)。未知のフィールドは無視する (arata が足したフィールドで止まらないように)。
+- 入力: `report.md` が無ければ `report.json` から arata と同じ関数 (`internal/report/schema` の `Markdown`) で作る。
+- 入力: 設定の `name` と report.json の `name` が違えば、標準エラーに `NAME_MISMATCH` を出し、通知の冒頭にも警告の行を足す (別の監査対象の出力を送っている取り違えに気付けるように)。
+- 二重送信の防止: `.aratam-notified` の中身は直近の 1 件の識別子だけ (入力ディレクトリは監査対象・プロファイルごとに分かれ、arata が毎回上書きするため)。
+  識別子は run の `run_id`。期間レポートは run_id を持たないので `period:<from>/<to>@<generated_at>` にする (作り直したら別の報告として送る)。
+  入力の問題 (終了コード 4) は記録しない (次の cron でもう一度知らせる)。`on_quiet: silent` で送らなかったときは記録する。
+- 二重送信の防止: `.aratam-notified` を書けなくても送信は済んでいるので終了コードは変えず、`MARK_FAILED` の警告だけ出す (次回は同じ報告を再送する)。
+- `--dry-run` は `.aratam-notified` を見る (通知済みなら送らない旨をログに出す。中身を見たいときは `--force`) が、書かない。Webhook の環境変数も要らない。
+- 期間レポートは件数が 0 でも「静か」とみなさず送る (月次などの定期の報告は、何も無かったことも伝える)。
+- メッセージ: Slack の mrkdwn の本文だけで送る (8 章の未決は「まずは本文だけ」で進める)。report.md は見出しを `*見出し*`、`**太字**` を `*太字*` に置き換えるだけで整形する。
+- メッセージ: report 由来の文字列は `&` `<` `>` をエスケープする。ログ由来の値 (User-Agent など) が `<!channel>` やリンクとして働かないようにするため。メンションは設定に書いたものだけを付ける。
+- メッセージ: 1 通は 3,800 文字までに切り詰める (Slack は text を 4,000 文字程度までにするよう求めている)。行の境目で切り、`…(長いため省略。全文は <dir>/report.md)` と出力ディレクトリのパスを添える。
+- 送信: 再送はしない (Slack が受け取ったのに応答が届かなかった場合の二重送信を避ける。失敗は終了コード 5 で cron 側に任せる)。
+  `net/http` のエラーは URL を含むので、中身だけを取り出してから返す (Webhook の URL をログに出さない)。
+
 ## 3. LLM との契約
 
 LLM に求める出力:
@@ -107,6 +124,16 @@ slack:
 
 - Webhook の URL は秘密なので設定ファイルに書かせない (環境変数の名前だけを書く)。
 
+決定 (実装順 1):
+- 必須: `name`, `max_age`, `urgent_severity` (critical | high | medium | low), `on_quiet`, `llm.provider`, `slack.webhook_env`。
+  `llm.timeout` は provider が `none` 以外なら必須、`bedrock` は `llm.model` と `llm.region` も必須。`claude-cli` の `model` は省略可 (claude 側の既定)。
+  `slack.urgent_webhook_env` と `slack.urgent_mention` は省略可。未知のキーは誤記とみなして設定エラーにする (arata と同じ)。
+- `*_env` は環境変数の名前 (`[A-Za-z_][A-Za-z0-9_]*`) でなければ設定エラー。URL を貼った誤りを弾き、エラーには値を出さない。
+- `urgent_webhook_env` を書いたのに環境変数が空なら、通常用に送り `urgent_mention` を付ける (`URGENT_WEBHOOK_UNSET` の警告を出す)。緊急の通知を落とさないため。
+  緊急用の Webhook があるときはメンションを付けない (チャンネル自体が緊急用のため)。
+- 雛形 (`config init`) の `llm.provider` は `none` にする。LLM の鍵を用意する前でも notify が動き、まず規則だけの通知で流れを確かめられるように。
+  `max_age` などの書式は arata の設定と同じ (`time.ParseDuration` と `d` = 日)。
+
 ## 5. CLI
 
 ```
@@ -124,19 +151,30 @@ aratam test-notify [-c aratam.yaml] # Slack に試験メッセージを 1 通送
 - 終了コード: 0 = 送った (または on_quiet=silent / 通知済みで送らなかった)、2 = 設定エラー、
   3 = LLM が使えず report.md で送った、4 = 入力が無い・古い (その旨は送った)、5 = 送信に失敗した。
 - 送信に失敗したら標準エラーに出して終了コード 5。cron 側の MAILTO などで拾える。
+- 決定: CLI は arata と同じ標準 `flag` の上のコマンド層 (`internal/subcmd`) を共有する。ヘルプの書式・フラグのエラー文言・未知のコマンドで終了コード 2 も arata と同じ。
+  標準エラーのログも arata と同じ JSON (`msg` と固定語彙の `code`)。
+- 決定: `--dry-run` の出力は 1 通ごとに `--- route: <normal|urgent> → <送る Webhook> ---` の行を付けて本文を出す。
+- 決定: `--llm` で `llm.provider` を上書きしたら、上書き後の設定で検証し直す (`--llm none` なら model などは要らない)。
 
 ## 6. パッケージ構成
 
 ```
 cmd/aratam/          # CLI
-internal/notify/     # 入力の検査、振り分け、組み立て、検証 (LLM とネットワークに依存しない。テストの中心)
+internal/notify/     # 設定、入力の検査、振り分け、組み立て、検証 (LLM とネットワークに依存しない。テストの中心)
 internal/llm/        # Summarizer と各プロバイダ (bedrock / claudecli)
 internal/slack/      # Incoming Webhook の送信 (net/http)
+internal/subcmd/     # arata と共有する、標準 flag の上のコマンド層
+internal/report/schema/  # arata と共有する report.json の型 (標準ライブラリだけに依存)
 docs/ai/             # arata と共有。aratam は report.md を system として埋め込む
 ```
 
 - テストは report.json のゴールデンと、LLM の応答の固定値 (正常・欠落あり・形が不正・時間切れ) で書く。実 LLM と実 Slack には接続しない。
 - `internal/report` の型を import して report.json を読む (形のずれをコンパイル時に検出する)。
+- 決定: report.json の型 (と JSON・Markdown・Parse) は、標準ライブラリだけに依存する `internal/report/schema` に置き、`internal/report` は型エイリアスで同じ名前を出す。
+  `internal/report` は組み立てのために checks / store を import しており、aratam がそれを import すると SQLite と監査用の AWS SDK のサービスがバイナリに入るため。
+- 決定: aratam が依存してよいパッケージを `cmd/aratam/deps_test.go` の許可リストで固定する (`go list -deps`)。SQLite・監査用の AWS SDK のサービス・
+  `internal/{store,checks,collect,engine,config}` は名指しで禁止する。
+- 決定: テストの report.json / report.md は arata のゴールデン (`internal/report/testdata`) をそのまま読む (コピーしない。arata の出力が変われば aratam のテストも落ちる)。
 
 ## 7. 実装順
 

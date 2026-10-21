@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// testTree は cli.go の解釈を確かめる小さなコマンド木。
+// testTree は subcmd の解釈を確かめる小さなコマンド木。
 func testTree(out *bytes.Buffer) (*Command, *string, map[string]any) {
 	got := map[string]any{}
 	var cfg string

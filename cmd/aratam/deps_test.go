@@ -1,0 +1,61 @@
+package main
+
+import (
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+)
+
+// aratam のバイナリに入る (標準ライブラリ以外の) パッケージを許可リストで固定する。
+// 決定 (ADR 0018): aratam は arata のストア・AWS の監査ロール・チェックを知らない。
+// SQLite や監査用の AWS SDK のサービスが import の連鎖で紛れ込まないよう、go list -deps で確かめる。
+var allowedDeps = []string{
+	"github.com/CircleAround/arata/cmd/aratam",
+	"github.com/CircleAround/arata/internal/notify",
+	"github.com/CircleAround/arata/internal/slack",
+	"github.com/CircleAround/arata/internal/subcmd",
+	"github.com/CircleAround/arata/internal/report/schema",
+	"gopkg.in/yaml.v3",
+}
+
+// 許可リストとは別に、名指しで入れてはならないもの (許可リストを広げるときの歯止め)。
+var forbiddenDeps = []string{
+	"modernc.org/sqlite",
+	"github.com/aws/aws-sdk-go-v2/service/cloudtrail",
+	"github.com/aws/aws-sdk-go-v2/service/iam",
+	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs",
+	"github.com/aws/aws-sdk-go-v2/service/guardduty",
+	"github.com/aws/aws-sdk-go-v2/service/accessanalyzer",
+	"github.com/aws/aws-sdk-go-v2/service/s3control",
+	"github.com/CircleAround/arata/internal/store",
+	"github.com/CircleAround/arata/internal/checks",
+	"github.com/CircleAround/arata/internal/collect",
+	"github.com/CircleAround/arata/internal/engine",
+	"github.com/CircleAround/arata/internal/config",
+}
+
+func TestDependenciesStaySeparateFromArata(t *testing.T) {
+	gobin := filepath.Join(runtime.GOROOT(), "bin", "go")
+	out, err := exec.Command(gobin, "list", "-deps", "-f", "{{if not .Standard}}{{.ImportPath}}{{end}}", ".").Output()
+	if err != nil {
+		t.Skipf("go list is not available: %v", err)
+	}
+	for _, p := range strings.Fields(string(out)) {
+		for _, f := range forbiddenDeps {
+			if p == f || strings.HasPrefix(p, f+"/") {
+				t.Errorf("aratam must not depend on %s", p)
+			}
+		}
+		ok := false
+		for _, a := range allowedDeps {
+			if p == a || strings.HasPrefix(p, a+"/") {
+				ok = true
+			}
+		}
+		if !ok {
+			t.Errorf("unexpected dependency %s (add it to allowedDeps only if aratam really needs it)", p)
+		}
+	}
+}

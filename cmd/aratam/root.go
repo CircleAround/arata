@@ -1,0 +1,291 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
+	"time"
+
+	"github.com/CircleAround/arata/internal/notify"
+	"github.com/CircleAround/arata/internal/slack"
+	"github.com/CircleAround/arata/internal/subcmd"
+)
+
+// Deps は CLI の差し替え可能な依存。テストは固定時計、出力バッファ、環境変数の表、httptest に向けた http.Client を渡す。
+type Deps struct {
+	Stdout io.Writer
+	Stderr io.Writer
+	// Getenv は環境変数 (ARATAM_CONFIG と Webhook の URL) の読み取り。
+	Getenv func(string) string
+	Now    func() time.Time
+	// HTTPClient は Slack への送信に使う。nil なら slack.New の既定。
+	HTTPClient *http.Client
+	Logger     *slog.Logger
+}
+
+// DefaultDeps は実行時の依存。
+func DefaultDeps() Deps {
+	return Deps{Stdout: os.Stdout, Stderr: os.Stderr, Getenv: os.Getenv, Now: time.Now}
+}
+
+// exitError は終了コードを運ぶ。ログは返す前に出しておく。
+type exitError struct{ code int }
+
+func (e *exitError) Error() string { return fmt.Sprintf("exit %d", e.code) }
+
+// Execute は引数で CLI を実行し終了コードを返す (aratam 設計書 5 章)。
+func Execute(args []string, d Deps) int {
+	if d.Stdout == nil {
+		d.Stdout = os.Stdout
+	}
+	if d.Stderr == nil {
+		d.Stderr = os.Stderr
+	}
+	if d.Getenv == nil {
+		d.Getenv = os.Getenv
+	}
+	if d.Now == nil {
+		d.Now = time.Now
+	}
+	if d.Logger == nil {
+		d.Logger = slog.New(slog.NewJSONHandler(d.Stderr, nil))
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := NewRootCmd(&d).Execute(ctx, args); err != nil {
+		var xe *exitError
+		if errors.As(err, &xe) {
+			return xe.code
+		}
+		// フラグ / 引数のエラーや予期しない失敗は設定エラー扱い
+		d.Logger.Error(err.Error(), "code", notify.CodeConfigInvalid)
+		return notify.ExitConfig
+	}
+	return notify.ExitOK
+}
+
+type globalFlags struct {
+	config string
+}
+
+const rootLong = `arata の出力 (report.json / report.md) を読み、要約して Slack に通知する。
+arata とは出力ディレクトリだけで連携する (arata を呼ばず、AWS の監査ロールもストアも使わない)。
+
+はじめに:
+  1. aratam config init                    設定の雛形を ./aratam.yaml に書き出す (name と slack の環境変数名を確認する)
+  2. aratam notify --in <dir> --dry-run    送らずに、送る内容を標準出力に出す
+  3. cron で arata run --out <dir> の後に aratam notify --in <dir> をつなぐ
+
+Webhook の URL は設定ファイルに書かず、slack.webhook_env に書いた名前の環境変数で渡す。`
+
+// NewRootCmd はルートコマンドを組み立てる。
+func NewRootCmd(d *Deps) *subcmd.Command {
+	g := &globalFlags{}
+	root := &subcmd.Command{
+		Use:     "aratam",
+		Short:   "arata の出力を要約して通知する",
+		Long:    rootLong,
+		Version: version,
+		Stdout:  d.Stdout,
+	}
+	root.PersistentStringVarP(&g.config, "config", "c", "", "設定ファイル (YAML)。省略時は環境変数 "+envConfig+"、無ければ ./"+defaultConfigFile)
+	root.AddCommand(newConfigCmd(d), newNotifyCmd(d, g))
+	return root
+}
+
+const (
+	envConfig         = "ARATAM_CONFIG"
+	defaultConfigFile = "aratam.yaml"
+)
+
+// configPath は設定ファイルの場所を決める。
+// 決定: -c > 環境変数 ARATAM_CONFIG > カレントディレクトリの ./aratam.yaml の順 (aratam 設計書 5 章。arata と同じ)。
+// 指定された (-c / ARATAM_CONFIG) ファイルが無いときは次へ落ちず、読み込みで設定エラーにする。
+func configPath(d *Deps, g *globalFlags) (string, error) {
+	if g.config != "" {
+		return g.config, nil
+	}
+	if p := d.Getenv(envConfig); p != "" {
+		return p, nil
+	}
+	if _, err := os.Stat(defaultConfigFile); err == nil {
+		return defaultConfigFile, nil
+	}
+	return "", configErr(d, fmt.Errorf("config file not found: tried -c/--config (not given), $%s (not set), ./%s (not found)", envConfig, defaultConfigFile))
+}
+
+func loadConfig(d *Deps, g *globalFlags) (*notify.Config, error) {
+	path, err := configPath(d, g)
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := notify.LoadConfig(path)
+	if err != nil {
+		return nil, configErr(d, err)
+	}
+	return cfg, nil
+}
+
+func configErr(d *Deps, err error) error {
+	d.Logger.Error(err.Error(), "code", notify.CodeConfigInvalid)
+	return &exitError{code: notify.ExitConfig}
+}
+
+func newConfigCmd(d *Deps) *subcmd.Command {
+	cmd := &subcmd.Command{Use: "config", Short: "設定の雛形を書き出す (config init)"}
+	var out string
+	var force bool
+	initCmd := &subcmd.Command{
+		Use:   "init",
+		Short: "全項目を明示した設定の雛形を書き出す",
+		Long: `全項目を明示した設定の雛形を YAML で書き出す。aratam は暗黙の既定を持たない。
+
+  aratam config init              ./aratam.yaml に書き出す (既存ファイルは --force が無ければ上書きしない)
+  aratam config init --out -      標準出力に出す`,
+		Args: subcmd.NoArgs,
+		Run: func(context.Context, []string) error {
+			body := notify.Scaffold()
+			if out == "-" {
+				_, err := d.Stdout.Write(body)
+				return err
+			}
+			if _, err := os.Stat(out); err == nil && !force {
+				return configErr(d, fmt.Errorf("%s already exists; use --force to overwrite", out))
+			} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return err
+			}
+			if err := os.MkdirAll(filepath.Dir(out), 0o750); err != nil {
+				return err
+			}
+			if err := os.WriteFile(out, body, 0o640); err != nil {
+				return err
+			}
+			cfgFlag := ""
+			if out != defaultConfigFile && out != "./"+defaultConfigFile {
+				cfgFlag = " -c " + out
+			}
+			fmt.Fprintf(d.Stdout, "%s を書き出しました。name と slack の環境変数名を確認してから aratam notify%s --in <arata の出力ディレクトリ> --dry-run で試してください。\n", out, cfgFlag)
+			return nil
+		},
+	}
+	initCmd.StringVar(&out, "out", defaultConfigFile, "書き出すファイル (- で標準出力)")
+	initCmd.BoolVar(&force, "force", false, "既存のファイルを上書きする")
+	cmd.AddCommand(initCmd)
+	return cmd
+}
+
+// webhooks は Webhook の URL を環境変数から読む。URL はログにも標準出力にも出さない。
+type webhooks struct {
+	normal, urgent string
+}
+
+// readWebhooks は設定に書いた名前の環境変数から URL を読む。
+// 決定: urgent_webhook_env を書いたのに環境変数が空なら、通常用に送り urgent_mention を付ける (警告を出す)。緊急の通知を落とさないため。
+func readWebhooks(d *Deps, cfg *notify.Config, require bool) (webhooks, error) {
+	w := webhooks{normal: d.Getenv(cfg.Slack.WebhookEnv)}
+	if w.normal == "" && require {
+		return w, configErr(d, fmt.Errorf("environment variable %s (slack.webhook_env) is not set", cfg.Slack.WebhookEnv))
+	}
+	if env := cfg.Slack.UrgentWebhookEnv; env != "" {
+		if w.urgent = d.Getenv(env); w.urgent == "" {
+			d.Logger.Warn(fmt.Sprintf("environment variable %s (slack.urgent_webhook_env) is not set; urgent notifications go to the normal webhook with urgent_mention", env), "code", "URGENT_WEBHOOK_UNSET")
+		}
+	}
+	return w, nil
+}
+
+// slackSender は送り先ごとの Webhook に送る。緊急用が無ければ通常用に送る。
+type slackSender struct {
+	client *slack.Client
+	hooks  webhooks
+}
+
+func (s *slackSender) Send(ctx context.Context, route notify.Route, text string) error {
+	url := s.hooks.normal
+	if route == notify.RouteUrgent && s.hooks.urgent != "" {
+		url = s.hooks.urgent
+	}
+	return s.client.Send(ctx, url, text)
+}
+
+// stdoutSender は --dry-run の送り先。送り先の種類を添えて標準出力に出す。
+type stdoutSender struct {
+	w     io.Writer
+	hooks webhooks
+}
+
+func (s *stdoutSender) Send(_ context.Context, route notify.Route, text string) error {
+	to := "normal webhook"
+	if route == notify.RouteUrgent {
+		to = "normal webhook (no urgent webhook)"
+		if s.hooks.urgent != "" {
+			to = "urgent webhook"
+		}
+	}
+	_, err := fmt.Fprintf(s.w, "--- route: %s → %s ---\n%s\n", route, to, text)
+	return err
+}
+
+func newNotifyCmd(d *Deps, g *globalFlags) *subcmd.Command {
+	var in, llm string
+	var dryRun, force bool
+	cmd := &subcmd.Command{
+		Use:   "notify",
+		Short: "arata の出力ディレクトリを読み、規則で振り分けて通知する",
+		Long: `arata の出力ディレクトリ (--in) の report.json を読み、規則で送り先を決めて Slack に送る。
+
+  - report.json が無い・読めない・max_age より古い → 「arata が実行されていない / 失敗した」と緊急用に送る (終了コード 4)
+  - max_severity が urgent_severity 以上、または取れなかったソースがある → 緊急用。それ以外は通常用
+  - 新規・変化・再発が無く、取れなかったソースも無い → on_quiet (short = 1 行 / silent = 送らない)
+  - 送ったら入力ディレクトリの .aratam-notified に run_id を書き、同じ run は二度送らない (--force で再送)
+
+終了コード: 0 = 送った (または送る必要が無かった)、2 = 設定エラー、3 = LLM が使えず report.md で送った、
+4 = 入力が無い・古い (その旨は送った)、5 = 送信に失敗した。`,
+		Args: subcmd.NoArgs,
+		Run: func(ctx context.Context, _ []string) error {
+			cfg, err := loadConfig(d, g)
+			if err != nil {
+				return err
+			}
+			if llm != "" {
+				cfg.LLM.Provider = llm
+				if err := cfg.Validate(); err != nil {
+					return configErr(d, fmt.Errorf("--llm: %w", err))
+				}
+			}
+			if cfg.LLM.Provider != notify.ProviderNone {
+				return configErr(d, fmt.Errorf("llm.provider %q is not available in this version yet; use provider: none (or --llm none)", cfg.LLM.Provider))
+			}
+			hooks, err := readWebhooks(d, cfg, !dryRun)
+			if err != nil {
+				return err
+			}
+			var sender notify.Sender = &slackSender{client: slack.New(d.HTTPClient), hooks: hooks}
+			if dryRun {
+				sender = &stdoutSender{w: d.Stdout, hooks: hooks}
+			}
+			res := notify.Run(ctx, notify.Options{
+				Dir: in, Now: d.Now(), Rules: cfg.Rules(hooks.urgent != ""),
+				Force: force, DryRun: dryRun, Sender: sender, Logger: d.Logger,
+			})
+			if res.Exit != notify.ExitOK {
+				return &exitError{code: res.Exit}
+			}
+			return nil
+		},
+	}
+	cmd.StringVar(&in, "in", "", "arata の出力ディレクトリ (arata run --out に渡したもの)")
+	cmd.MarkFlagRequired("in")
+	cmd.BoolVar(&dryRun, "dry-run", false, "送らずに標準出力へ出す (.aratam-notified も書かない)")
+	cmd.BoolVar(&force, "force", false, "通知済みの run でも送る")
+	cmd.StringVar(&llm, "llm", "", "llm.provider を上書きする (none で LLM を呼ばない)")
+	return cmd
+}
