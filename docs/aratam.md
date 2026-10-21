@@ -13,7 +13,7 @@ arata 設計書 9-1 章 (「report.json から通知までの LLM の仕事」) 
 | arata との関係 | **出力リソースを介してだけ連携する**。aratam は arata を呼ばず、arata のパス・AWS の監査ロール・ストアを知らない。組み合わせは cron / シェル側で行う |
 | 配置 | 同じリポジトリの `cmd/aratam`。リリースには arata と aratam のバイナリを並べる。report.json の形と `docs/ai` の版が arata とずれない |
 | 権限 | arata は AWS の読み取りロールだけ、aratam は LLM と通知の鍵だけを持つ。別の OS ユーザーで動かしてもよい |
-| LLM | `bedrock` と `claude-cli` (`claude -p`) に対応する。将来 `openai`。`none` (LLM を使わず report.md を整形して送る) も選べる |
+| LLM | `bedrock` と `claude-cli` (`claude -p`) に対応する。将来 `openai-api`。`none` (LLM を使わず report.md を整形して送る) も選べる |
 | 通知先 | Slack Incoming Webhook。通常用と緊急用の 2 本まで。SNS などは後続 |
 | 依存 | 標準の `net/http` で書く。例外は Bedrock で、AWS SDK (`service/bedrockruntime`) を使ってよい (arata が AWS SDK の core を既に持つため増分が小さい) |
 | 状態 | 持たない。二重送信の防止だけ、入力ディレクトリに `.aratam-notified` (通知済みの run_id) を書く |
@@ -23,7 +23,7 @@ arata 設計書 9-1 章 (「report.json から通知までの LLM の仕事」) 
 
 ```
 arata run -c config.yaml --profile daily --out /var/lib/arata/out/daily
-aratam notify --in /var/lib/arata/out/daily -c aratam.yaml
+aratam notify --in /var/lib/arata/out/daily
 ```
 
 `aratam notify` は次の順で動く。
@@ -76,7 +76,7 @@ LLM に求める出力:
 |---|---|---|
 | `bedrock` | `bedrockruntime` の Converse API。`model` (推論プロファイル ID) と `region` は設定で明示する | AWS SDK の標準認証チェーン (`profile` 指定可)。必要なのは `bedrock:InvokeModel` だけ |
 | `claude-cli` | `claude -p --output-format json` を子プロセスで起動し、プロンプトを標準入力で渡す。ツールは使わせない設定にし、作業ディレクトリは空の一時ディレクトリにする | `claude` 側のログイン状態 |
-| `openai` (後続) | Chat Completions を `net/http` で呼ぶ | 環境変数の API キー |
+| `openai-api` (後続) | Chat Completions を `net/http` で呼ぶ | 環境変数の API キー |
 | `none` | LLM を呼ばない | - |
 
 - 共通: `timeout` (既定 120s)。失敗時の再試行は 1 回まで。
@@ -93,7 +93,7 @@ urgent_severity: high             # この重大度以上は緊急用に送る
 on_quiet: short                   # short | silent
 
 llm:
-  provider: bedrock               # bedrock | claude-cli | none
+  provider: bedrock               # bedrock | claude-cli | none (後続で openai-api)
   model: <推論プロファイル ID>
   region: us-east-1
   # profile: aratam-llm
@@ -111,12 +111,16 @@ slack:
 
 ```
 aratam config init [--out aratam.yaml] [--force]
-aratam notify  --in <dir> -c aratam.yaml [--dry-run] [--force]
+aratam notify  --in <dir> [-c aratam.yaml] [--dry-run] [--force]
                # --dry-run は送らずに標準出力へ。LLM は呼ぶ (--llm none で呼ばない)
-aratam doctor  -c aratam.yaml     # LLM に短い問い合わせを 1 回、Webhook の環境変数の有無を確認 (送信はしない)
-aratam test-notify -c aratam.yaml # Slack に試験メッセージを 1 通送る
+aratam doctor  [-c aratam.yaml]   # LLM に短い問い合わせを 1 回、Webhook の環境変数の有無を確認 (送信はしない)
+aratam test-notify [-c aratam.yaml] # Slack に試験メッセージを 1 通送る
 ```
 
+- 決定: 設定ファイルのパスには既定を持つ。`-c` > 環境変数 `ARATAM_CONFIG` > カレントディレクトリの `aratam.yaml` の順に探す。
+  `config init` の書き出し先も既定は `./aratam.yaml` (既存ファイルは `--force` が無ければ上書きしない)。
+  `--in` は既定を持たない (監査対象・プロファイルごとに違うデータの場所で、取り違えると別の report を送ってしまうため)。
+- プロバイダ名は呼び方を表す (`claude-cli` / `openai-api`)。同じモデルを別の経路で呼ぶプロバイダを足しても名前が衝突しない。
 - 終了コード: 0 = 送った (または on_quiet=silent / 通知済みで送らなかった)、2 = 設定エラー、
   3 = LLM が使えず report.md で送った、4 = 入力が無い・古い (その旨は送った)、5 = 送信に失敗した。
 - 送信に失敗したら標準エラーに出して終了コード 5。cron 側の MAILTO などで拾える。
