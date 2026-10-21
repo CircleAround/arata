@@ -237,11 +237,11 @@ profiles:
 - 雛形のチェック一覧は Registry、パラメータの既定値は `config.DefaultChecks()`、保持期間は `config.DefaultRetention` から生成する (手書きの一覧とずれない)。
   雛形の出力はゴールデンで固定し、「雛形をそのまま Load して Validate が通る」「雛形の checks: が DefaultChecks と一致する」「全チェックがどれかのプロファイルに入る」をテストで保証する。
 - `default-<cadence>` の省略記法は手書きの設定のために残す (後方互換)。ただし版が上がって増えたチェックが黙って入るので、雛形では使わない。
-- `arata config init --diff -c config.yaml` は現在の設定と最新の雛形の差分を出す: どのプロファイルにも入っていないチェック (`unused_check`)、
+- `arata config init --diff` は現在の設定と最新の雛形の差分を出す: どのプロファイルにも入っていないチェック (`unused_check`)、
   プロファイルに書かれているがこの版に無いチェック (`unknown_check`)、雛形にあって設定に無いプロファイル (`missing_profile`)、
   `checks:` に書いた値がこの版の既定値と違うパラメータ (`param_changed`)、arata が知らないキー (`unknown_key`)。設定は Load せずに緩く読む (未知のキーで読めない設定にも使える)。
   `checks:` に書いていないパラメータは実行時にこの版の既定値が効くので差分にしない。overrides は意図した上書きなので比べない。
-- `arata profiles -c config.yaml [--format table|json]` は、プロファイルごとに実際に走るチェック (省略記法は展開済み、`via` に explicit / default-<cadence>) と、
+- `arata profiles [--format table|json]` は、プロファイルごとに実際に走るチェック (省略記法は展開済み、`via` に explicit / default-<cadence>) と、
   そのチェックのパラメータの値と由来 (`overrides` / `checks:` / 既定値) を出す。どのプロファイルにも入っていないチェックも示す。
 - どのプロファイルにも入っていないチェックがあれば、`run` / `evaluate` は標準エラーに WARN (`code: CHECK_UNUSED`、`checks` に名前) を出し、`doctor` は表に warn 行を出す。終了コードは変えない。
 - プロファイル内でチェックのパラメータを上書きできる (`profiles.<name>.overrides.<check>: {...}`)。書かなければ全体の `checks:` の値。
@@ -486,29 +486,33 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 - 件数・日付・中央値・閾値は Data に残し、Fingerprint には入れない (翌日も同じ IP が続けば still_open で沈黙し、窓が途切れてから再び現れたら recurred)。
 - 「初出」系 (`new_top_ip` / `new_rule`) は過去にデータのある日が min_baseline_days (既定 7) 未満の間は判定しない (導入直後に全部が初出になるのを防ぐ)。閾値超えは導入直後から判定する。
 - allowlist の `source_ips` に含まれる IP は 3 チェックとも対象外。
-- パス・メソッド・ステータス・閾値は設定の `checks:` で顧客ごとに変える (examples/config.yaml)。既定: sign-in は `POST` で `/users/sign_in`, `/login`, `/signin` へ 401 / 403 / 422、
+- パス・メソッド・ステータス・閾値は設定の `checks:` で顧客ごとに変える (examples/arata.yaml)。既定: sign-in は `POST` で `/users/sign_in`, `/login`, `/signin` へ 401 / 403 / 422、
   機密パスは `/.env`, `/.git/`, `/wp-login.php` などへの 403 / 404。`probe_paths.exclude_paths` で正規の管理画面などを外す。
 
 ## 8. CLI
 
 ```
-arata config init [--out c.yaml] [--force] | --diff -c c.yaml   # 推奨設定の雛形を書き出す / 雛形との差分 (3 章、ADR 0014)
-arata profiles  --config c.yaml [--format table|json]   # プロファイルごとに実際に効いているチェックとパラメータ、その由来
-arata init      --config c.yaml [--window 7d | --resume]   # ストア作成、設定検証、ベースライン収集 (findings は出さない)
-arata doctor    --config c.yaml                # 権限・ロググループ・形式プロファイルの解釈率を検査
-arata run       --config c.yaml --profile daily [--out dir]   # collect → evaluate → report → prune
-arata collect   --config c.yaml --window 24h [--source id]
-arata evaluate  --config c.yaml --profile daily
-arata report    --config c.yaml --from 2026-10-01 --to 2026-10-31 --format md|json [--template monthly]
+arata config init [--out FILE|-] [--force] | --diff   # 推奨設定の雛形を書き出す (既定 ./arata.yaml) / 雛形との差分 (3 章、ADR 0014)
+arata profiles  [--format table|json]   # プロファイルごとに実際に効いているチェックとパラメータ、その由来
+arata init      [--window 7d | --resume]   # ストア作成、設定検証、ベースライン収集 (findings は出さない)
+arata doctor                   # 権限・ロググループ・形式プロファイルの解釈率を検査
+arata run       --profile daily [--out dir]   # collect → evaluate → report → prune
+arata collect   --window 24h [--source id]
+arata evaluate  --profile daily
+arata report    --from 2026-10-01 --to 2026-10-31 --format md|json [--template monthly]
                 # 決定: --month 2026-10 を糖衣にし、--template は作らない。収集せずストアだけから作る (ADR 0016)
-arata review    --config c.yaml [--status open|acked]
+arata review    [--status open|acked]
 arata approve   <finding-id> --note "..." [--expires date] [--tag deploy] [--by name] [--commit] [--account | --arn-pattern glob]
 arata ack|snooze|resolve <finding-id>        # snooze は --until date
 arata help ai [report|approve] [--format json]   # LLM 向けの使い方 (arata ai と同じ)
-arata prune     --config c.yaml [--dry-run]
-arata rebuild   --config c.yaml                # raw JSONL から SQLite を再構築
+arata prune     [--dry-run]
+arata rebuild                  # raw JSONL から SQLite を再構築
 ```
 
+- 決定: 設定ファイルのパスには既定を持たせる。解決順は `-c` (`--config`) > 環境変数 `ARATA_CONFIG` > カレントディレクトリの `./arata.yaml`。
+  どれも無ければ探した場所を並べて `CONFIG_INVALID` (終了コード 2)。`-c` や `ARATA_CONFIG` で指したファイルが無いときは次へ落ちずに設定エラーにする
+  (指定の打ち間違いで別の設定が黙って使われるのを防ぐ)。`config init` の `--out` の既定も `./arata.yaml` (既存ファイルは `--force` が無ければ上書きしない。
+  標準出力へは `--out -`)。`run --out` などデータの出力先には既定を足さない。サンプルは `examples/arata.yaml`。aratam の設計とそろえる
 - 終了コード: 0 = 正常 (findings の有無に関係なく)、2 = 設定 / 権限エラー、3 = 収集の一部失敗 (レポートは出す)。
   組み込み側は終了コードと `report.json` の `summary.new_count` / `summary.max_severity` で通知を分岐する。
 - 出力は `report.json` (機械向け、LLM 要約の入力) と `report.md` (人向け)。Slack / Issue への投稿はしない。

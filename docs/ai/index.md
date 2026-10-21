@@ -33,15 +33,15 @@ LLM の役割は「危険の判定を代行する」ことではなく「人が�
 
 | コマンド | 用途 | LLM が実行してよいか |
 |---|---|---|
-| `arata config init [--out c.yaml]` | 推奨設定の雛形を書き出す (既存ファイルは `--force` 無しでは上書きしない) | 人の指示があれば |
-| `arata config init --diff -c c.yaml` | 今の設定とこの版の雛形の差分 (入っていないチェック、既定値と違う値、未知のキー) | よい (読み取りのみ) |
-| `arata profiles -c c.yaml [--format json]` | プロファイルごとに実際に走るチェックとパラメータ、その由来 (overrides / checks: / 既定値) | よい (読み取りのみ) |
-| `arata doctor -c c.yaml` | 権限・ロググループ・形式の解釈率を検査 | よい (読み取りのみ) |
-| `arata init -c c.yaml [--window 7d] [--resume]` | ベースライン収集 (findings は出さない) | 人の指示があれば |
-| `arata run -c c.yaml --profile daily --out DIR` | 収集 → 評価 → レポート | 組み込み側が定期実行する |
-| `arata report -c c.yaml --profile daily [--format md]` | 最後のレポートを再表示 | よい |
-| `arata report -c c.yaml --month 2026-10` / `--from D --to D` | ストアだけから期間レポート (収集しない) | よい |
-| `arata review -c c.yaml [--format json]` | 未対応 (open / acked) の一覧と approve の対象 | よい |
+| `arata config init [--out FILE]` | 推奨設定の雛形を書き出す (既定は `./arata.yaml`。`--out -` で標準出力。既存ファイルは `--force` 無しでは上書きしない) | 人の指示があれば |
+| `arata config init --diff` | 今の設定とこの版の雛形の差分 (入っていないチェック、既定値と違う値、未知のキー) | よい (読み取りのみ) |
+| `arata profiles [--format json]` | プロファイルごとに実際に走るチェックとパラメータ、その由来 (overrides / checks: / 既定値) | よい (読み取りのみ) |
+| `arata doctor` | 権限・ロググループ・形式の解釈率を検査 | よい (読み取りのみ) |
+| `arata init [--window 7d] [--resume]` | ベースライン収集 (findings は出さない) | 人の指示があれば |
+| `arata run --profile daily --out DIR` | 収集 → 評価 → レポート | 組み込み側が定期実行する |
+| `arata report --profile daily [--format md]` | 最後のレポートを再表示 | よい |
+| `arata report --month 2026-10` / `--from D --to D` | ストアだけから期間レポート (収集しない) | よい |
+| `arata review [--format json]` | 未対応 (open / acked) の一覧と approve の対象 | よい |
 | `arata approve <id> --note ... [--expires] [--tag] [--commit]` | allowlist に追記し finding を解消 | **しない** (人に提案する) |
 | `arata ack / snooze --until / resolve <id>` | finding の状態を変える | 人の指示があれば |
 

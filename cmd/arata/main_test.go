@@ -40,12 +40,13 @@ type cli struct {
 	stdout *bytes.Buffer
 	stderr *bytes.Buffer
 	nextID int
+	env    map[string]string // Getenv が返す環境変数 (テストを動かす環境の ARATA_CONFIG を見ない)
 }
 
 func newCLI(t *testing.T) *cli {
 	t.Helper()
 	dir := t.TempDir()
-	c := &cli{t: t, dir: dir, cfg: filepath.Join(dir, "config.yaml"), fake: &cloudtrailtest.Fake{}, logs: &cwlogstest.Fake{}, acct: &accounttest.Fake{}, now: time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC), stdout: &bytes.Buffer{}, stderr: &bytes.Buffer{}}
+	c := &cli{t: t, dir: dir, cfg: filepath.Join(dir, "config.yaml"), fake: &cloudtrailtest.Fake{}, logs: &cwlogstest.Fake{}, acct: &accounttest.Fake{}, now: time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC), stdout: &bytes.Buffer{}, stderr: &bytes.Buffer{}, env: map[string]string{}}
 	c.writeConfig(fmt.Sprintf(`
 name: acme
 store: dir://%s/store
@@ -80,7 +81,7 @@ func (c *cli) writeConfig(body string) {
 func (c *cli) run(args ...string) int {
 	c.stdout.Reset()
 	c.stderr.Reset()
-	d := Deps{Stdout: c.stdout, Stderr: c.stderr}
+	d := Deps{Stdout: c.stdout, Stderr: c.stderr, Getenv: func(k string) string { return c.env[k] }}
 	d.Engine = engine.Deps{
 		Limiter: noLimit{},
 		Now:     func() time.Time { return c.now },

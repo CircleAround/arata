@@ -24,11 +24,13 @@ type Deps struct {
 	Engine engine.Deps
 	Stdout io.Writer
 	Stderr io.Writer
+	// Getenv は環境変数 (ARATA_CONFIG) の読み取り。テストはテストを動かす環境に左右されないよう差し替える。
+	Getenv func(string) string
 }
 
 // DefaultDeps は実行時の依存 (実 AWS SDK、現在時刻、標準出力 / 標準エラー)。
 func DefaultDeps() Deps {
-	return Deps{Stdout: os.Stdout, Stderr: os.Stderr}
+	return Deps{Stdout: os.Stdout, Stderr: os.Stderr, Getenv: os.Getenv}
 }
 
 // Execute は引数で CLI を実行し終了コードを返す (設計書 8: 0 / 2 / 3)。
@@ -38,6 +40,9 @@ func Execute(args []string, d Deps) int {
 	}
 	if d.Stderr == nil {
 		d.Stderr = os.Stderr
+	}
+	if d.Getenv == nil {
+		d.Getenv = os.Getenv
 	}
 	if d.Engine.Logger == nil {
 		d.Engine.Logger = slog.New(slog.NewJSONHandler(d.Stderr, nil))
@@ -77,7 +82,7 @@ func NewRootCmd(d *Deps) *command {
 		Version: version,
 		stdout:  d.Stdout,
 	}
-	root.PersistentStringVarP(&g.config, "config", "c", "", "設定ファイル (YAML)")
+	root.PersistentStringVarP(&g.config, "config", "c", "", "設定ファイル (YAML)。省略時は環境変数 "+envConfig+"、無ければ ./"+defaultConfigFile)
 	root.AddCommand(newConfigCmd(d, g), newProfilesCmd(d, g), newInitCmd(d, g), newDoctorCmd(d, g), newRunCmd(d, g), newCollectCmd(d, g), newEvaluateCmd(d, g), newReportCmd(d, g))
 	root.AddCommand(reviewCommands(d, g)...)
 	root.AddCommand(newAICmd(d))
@@ -85,15 +90,36 @@ func NewRootCmd(d *Deps) *command {
 	return root
 }
 
+const (
+	envConfig         = "ARATA_CONFIG"
+	defaultConfigFile = "arata.yaml"
+)
+
+// configPath は設定ファイルの場所を決める。
+// 決定: -c > 環境変数 ARATA_CONFIG > カレントディレクトリの ./arata.yaml の順 (設計書 8 章)。
+// 指定された (-c / ARATA_CONFIG) ファイルが無いときは次へ落ちず、読み込みで設定エラーにする。どれも無ければ探した場所を並べて設定エラー。
+func configPath(d *Deps, g *globalFlags) (string, error) {
+	if g.config != "" {
+		return g.config, nil
+	}
+	if p := d.Getenv(envConfig); p != "" {
+		return p, nil
+	}
+	if _, err := os.Stat(defaultConfigFile); err == nil {
+		return defaultConfigFile, nil
+	}
+	return "", configErr(d, fmt.Errorf("config file not found: tried -c/--config (not given), $%s (not set), ./%s (not found)", envConfig, defaultConfigFile))
+}
+
 // loadConfig は設定を読む。設定エラーは CONFIG_INVALID (exit 2)。
 func loadConfig(d *Deps, g *globalFlags) (*config.Config, error) {
-	if g.config == "" {
-		d.Engine.Logger.Error("--config is required", "code", engine.CodeConfigInvalid)
-		return nil, &engine.ExitError{Code: engine.CodeConfigInvalid, Exit: engine.ExitConfig, Err: errors.New("--config is required")}
-	}
-	cfg, err := config.Load(g.config)
+	path, err := configPath(d, g)
 	if err != nil {
-		d.Engine.Logger.Error("invalid configuration", "code", engine.CodeConfigInvalid, "path", g.config, "error", err.Error())
+		return nil, err
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		d.Engine.Logger.Error("invalid configuration", "code", engine.CodeConfigInvalid, "path", path, "error", err.Error())
 		return nil, &engine.ExitError{Code: engine.CodeConfigInvalid, Exit: engine.ExitConfig, Err: err}
 	}
 	return cfg, nil

@@ -5,7 +5,7 @@
 - approve は allowlist.yaml を書き換え、以後その主体を報告しなくなる。**LLM は実行せず、人に提案するだけ**にする
 - 提案には次を書く: finding の `id`、承認の対象 (`arata review --format json` の `approve`)、承認してよい理由、期限を付けるか、タグ
 - 人が実行するコマンドの例を添えてよい:
-  `arata approve <id> -c c.yaml --note "<理由>" [--expires YYYY-MM-DD] [--tag deploy|ai] [--by <承認者>]`
+  `arata approve <id> --note "<理由>" [--expires YYYY-MM-DD] [--tag deploy|ai] [--by <承認者>]`
 - `--commit` を付けると allowlist.yaml だけを git commit する。push とレビューは人が行う
 
 ## 承認してよい主体の目安
