@@ -7,14 +7,18 @@ BIN := bin
 
 .PHONY: build build-local test lint vet fmt clean
 
-## build: linux/arm64 と linux/amd64 の静的バイナリを bin/ に作る
-build:
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o $(BIN)/arata-linux-arm64 ./cmd/arata
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o $(BIN)/arata-linux-amd64 ./cmd/arata
+CMDS := arata aratam
 
-## build-local: このホスト向けのバイナリを bin/arata に作る
+## build: arata と aratam の linux/arm64 と linux/amd64 の静的バイナリを bin/ に作る
+build:
+	for c in $(CMDS); do \
+		CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o $(BIN)/$$c-linux-arm64 ./cmd/$$c || exit 1; \
+		CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o $(BIN)/$$c-linux-amd64 ./cmd/$$c || exit 1; \
+	done
+
+## build-local: このホスト向けのバイナリを bin/arata と bin/aratam に作る
 build-local:
-	CGO_ENABLED=0 $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o $(BIN)/arata ./cmd/arata
+	for c in $(CMDS); do CGO_ENABLED=0 $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o $(BIN)/$$c ./cmd/$$c || exit 1; done
 
 ## test: 全テスト (ユニット + コマンドレベル e2e)
 test:

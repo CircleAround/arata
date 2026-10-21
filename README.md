@@ -4,6 +4,7 @@ AWS のログと設定を定期的に改め、**前回から新しく発生し�
 名前は「改め」と「新た」から。
 
 - 収集 → 保存 → 差分判定 → レポート生成までを担う。通知・起動・LLM による要約は組み込み側の仕事
+  (標準品として、出力を要約して Slack に通知する別コマンド `aratam` を同梱する。[下記](#通知-aratam))
 - Go 製の単一バイナリ。オンプレの cron でも AWS Lambda でも同じバイナリで動く
 - 顧客ごとの差は設定ファイル (ロググループと形式プロファイルの紐付け、既知リスト、閾値) に閉じ込める
 
@@ -24,9 +25,35 @@ AWS のログと設定を定期的に改め、**前回から新しく発生し�
 `arata help ai` を最初に読ませる (report の読み方は `arata help ai report`、承認判断は `arata help ai approve`、`--format json` も可)。
 内容はバイナリに埋め込まれていて、エンジンの版と常に揃う。
 
+## 通知 (aratam)
+
+`aratam` は arata の出力ディレクトリ (`report.json` / `report.md`) を読み、LLM で要約して Slack Incoming Webhook に送る別コマンド。
+arata を呼ばず、AWS の監査ロールもストアも使わない (出力ディレクトリだけで連携する。設計は [docs/aratam.md](docs/aratam.md)、経緯は ADR 0018)。
+
+- 送り先と「静か」の判定は規則で固定する。`max_severity` が `urgent_severity` 以上か取れなかったソースがあれば緊急用、report.json が無い・古ければ「arata が実行されていない」と緊急用に送る
+- LLM は分類と説明だけ。重大度は report.json の値を表示し、LLM の出力から漏れた新規・変化・再発の finding は規則で末尾に足す。LLM が使えなければ原文を送る
+- LLM のプロバイダ: `bedrock` (Converse。`bedrock:InvokeModel` だけ要る) / `claude-cli` (`claude -p` をツール無し・空の一時ディレクトリで起動) / `none` (LLM を呼ばない)
+- Webhook の URL は設定ファイルに書かず、`slack.webhook_env` に書いた名前の環境変数で渡す。LLM に渡すデータは report.json だけ
+
+```sh
+aratam config init                          # ./aratam.yaml (全項目を明示した雛形。provider は none)
+export ARATAM_SLACK_WEBHOOK='https://hooks.slack.com/services/...'
+aratam doctor                               # Webhook の環境変数と LLM の疎通 (送信はしない)
+aratam test-notify                          # Slack に試験メッセージを 1 通 (--urgent で緊急用)
+aratam notify --in /var/lib/arata/out/daily --dry-run   # 送らずに標準出力へ (LLM は呼ぶ。--llm none で呼ばない)
+```
+
+cron では arata の後につなぐ。同じ run は `.aratam-notified` で二重に送らない (`--force` で再送)。
+
+```cron
+0 9 * * * arata run -c /etc/arata/arata.yaml --profile daily --out /var/lib/arata/out/daily; aratam notify -c /etc/arata/aratam.yaml --in /var/lib/arata/out/daily
+```
+
+終了コード: 0 = 送った (または送る必要が無かった)、2 = 設定エラー、3 = LLM が使えず原文を送った、4 = 入力が無い・古い (その旨は送った)、5 = 送信に失敗した。
+
 ## 取得 (リリース版のバイナリ)
 
-`v*` タグを push すると GitHub Actions ([.github/workflows/release.yml](.github/workflows/release.yml)) が linux/arm64・amd64 の静的バイナリを作り、
+`v*` タグを push すると GitHub Actions ([.github/workflows/release.yml](.github/workflows/release.yml)) が arata と aratam の linux/arm64・amd64 の静的バイナリを作り、
 `SHA256SUMS` と共に [GitHub Releases](https://github.com/CircleAround/arata/releases) に添付する。
 
 ```sh
@@ -37,6 +64,7 @@ curl -sSLO "${BASE}/arata-linux-${ARCH}" -O "${BASE}/SHA256SUMS"
 sha256sum --ignore-missing -c SHA256SUMS   # arata-linux-${ARCH}: OK を確かめる
 install -m 0755 "arata-linux-${ARCH}" /usr/local/bin/arata
 arata --version
+# aratam も同じ手順 (aratam-linux-${ARCH})
 ```
 
 非公開リポジトリの間は `gh release download "${VERSION}" -R CircleAround/arata -p "arata-linux-${ARCH}" -p SHA256SUMS` で取得する。
@@ -76,8 +104,8 @@ amd64 なら `linux-amd64` に読み替える。チェックサムは https://go
 ```sh
 make test          # go test ./... (ユニット + コマンドレベルの e2e)
 make lint          # go vet + golangci-lint (入っていれば)
-make build         # bin/arata-linux-arm64 と bin/arata-linux-amd64 (CGO_ENABLED=0 の静的バイナリ)
-make build-local   # このホスト向けの bin/arata
+make build         # bin/{arata,aratam}-linux-{arm64,amd64} (CGO_ENABLED=0 の静的バイナリ)
+make build-local   # このホスト向けの bin/arata と bin/aratam
 ```
 
 CI は [.github/workflows/test.yml](.github/workflows/test.yml): `go mod verify` → age-gate → go vet → go test → govulncheck → make build。
@@ -238,7 +266,8 @@ internal/record/        正規化レコード (trail_event, principal_seen, metr
 internal/checks/        Check インターフェース、差分判定、各チェック (1 ファイル 1 チェック)
 internal/allowlist/     既知リストの読み込みと approve の追記
 internal/report/        report.json / report.md (型は schema/ に置き、aratam と共有)
-internal/notify/        aratam の設定・入力の検査・振り分け・組み立て
+internal/notify/        aratam の設定・入力の検査・振り分け・LLM 出力の検証と組み立て
+internal/llm/           aratam の LLM プロバイダ (claude-cli / bedrock)
 internal/slack/         Slack Incoming Webhook の送信
 internal/engine/        collect → evaluate → report の束ねと doctor (CLI と Lambda が共用)
 docs/ai/                arata help ai の文書 (embed でバイナリに入る)
