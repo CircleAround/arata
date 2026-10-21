@@ -1,13 +1,12 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"strings"
-
-	"github.com/spf13/cobra"
 
 	"github.com/CircleAround/arata/docs/ai"
 )
@@ -28,20 +27,19 @@ const rootLong = `arata は AWS のログと設定を定期的に改め、前回
 AI (LLM) から使う場合は ` + "`arata help ai`" + ` を最初に読んでください (report の読み方は ` + "`arata help ai report`" + `、承認判断は ` + "`arata help ai approve`" + `)。`
 
 // newAICmd は AI 向けの文書を出すトップレベルのコマンド。`arata help ai [topic]` も同じものを出す。
-// 決定: cobra の help の下に置くとコマンド一覧に出ないので、トップレベルの ai として一覧に見せる。
-func newAICmd(d *Deps) *cobra.Command {
+// 決定: help の下に置くとコマンド一覧に出ないので、トップレベルの ai として一覧に見せる。
+func newAICmd(d *Deps) *command {
 	var format string
-	cmd := &cobra.Command{
-		Use:       "ai [report|approve]",
-		Short:     "AI (LLM) 向けの使い方 (arata help ai と同じ。最初に読む)",
-		Long:      "AI (LLM) 向けの使い方を出す。トピック: (なし) 全体像 / report report.json の読み方と要約の手順 / approve 承認判断の基準。\n--format json で {topic, title, sections: [{title, body}]} を返す。",
-		Args:      cobra.MaximumNArgs(1),
-		ValidArgs: []string{"report", "approve"},
-		RunE: func(cmd *cobra.Command, args []string) error {
+	cmd := &command{
+		Use:   "ai [report|approve]",
+		Short: "AI (LLM) 向けの使い方 (arata help ai と同じ。最初に読む)",
+		Long:  "AI (LLM) 向けの使い方を出す。トピック: (なし) 全体像 / report report.json の読み方と要約の手順 / approve 承認判断の基準。\n--format json で {topic, title, sections: [{title, body}]} を返す。",
+		Args:  maximumNArgs(1),
+		Run: func(ctx context.Context, args []string) error {
 			return writeAIDoc(d.Stdout, strings.Join(args, " "), format)
 		},
 	}
-	cmd.Flags().StringVar(&format, "format", "md", "出力形式 (md|json)")
+	cmd.StringVar(&format, "format", "md", "出力形式 (md|json)")
 	return cmd
 }
 
@@ -63,27 +61,27 @@ func writeAIDoc(w io.Writer, sub, format string) error {
 	return fmt.Errorf("unknown format %q (md|json)", format)
 }
 
-// newHelpCmd は cobra の help を置き換え、`arata help ai [topic]` を ai コマンドに渡す。それ以外は通常の help。
-func newHelpCmd(d *Deps, root *cobra.Command) *cobra.Command {
+// newHelpCmd は `arata help [command]`。`arata help ai [topic]` は ai コマンドと同じものを出す。それ以外はそのコマンドのヘルプ (見つからなければルート)。
+func newHelpCmd(d *Deps, root *command) *command {
 	var format string
-	cmd := &cobra.Command{
+	cmd := &command{
 		Use:   "help [command]",
 		Short: "コマンドのヘルプ (arata help ai で AI 向けの使い方)",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		Run: func(ctx context.Context, args []string) error {
 			if len(args) > 0 && args[0] == "ai" {
 				if len(args) > 2 {
 					return errors.New("usage: arata help ai [report|approve]")
 				}
 				return writeAIDoc(d.Stdout, strings.Join(args[1:], " "), format)
 			}
-			target, _, err := root.Find(args)
-			if err != nil || target == nil {
+			target := root.findPath(args)
+			if target == nil {
 				target = root
 			}
-			target.InitDefaultHelpFlag()
-			return target.Help()
+			target.writeHelp(d.Stdout)
+			return nil
 		},
 	}
-	cmd.Flags().StringVar(&format, "format", "md", "help ai の出力形式 (md|json)")
+	cmd.StringVar(&format, "format", "md", "help ai の出力形式 (md|json)")
 	return cmd
 }

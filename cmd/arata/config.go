@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,16 +9,14 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/spf13/cobra"
-
 	"github.com/CircleAround/arata/internal/checks"
 	"github.com/CircleAround/arata/internal/engine"
 	"github.com/CircleAround/arata/internal/scaffold"
 )
 
 // newConfigCmd は設定の雛形を扱う config コマンド (サブコマンド init)。
-func newConfigCmd(d *Deps, g *globalFlags) *cobra.Command {
-	cmd := &cobra.Command{
+func newConfigCmd(d *Deps, g *globalFlags) *command {
+	cmd := &command{
 		Use:   "config",
 		Short: "設定の雛形を書き出す / 雛形と比べる (config init)",
 	}
@@ -25,10 +24,10 @@ func newConfigCmd(d *Deps, g *globalFlags) *cobra.Command {
 	return cmd
 }
 
-func newConfigInitCmd(d *Deps, g *globalFlags) *cobra.Command {
+func newConfigInitCmd(d *Deps, g *globalFlags) *command {
 	var out, format string
 	var force, diff bool
-	cmd := &cobra.Command{
+	cmd := &command{
 		Use:   "init",
 		Short: "推奨設定の雛形 (全プロファイル・全チェック・既定パラメータを明示) を書き出す",
 		Long: `推奨設定の雛形を YAML で書き出す。全プロファイル (hourly / daily / weekly)、全チェック、各チェックの既定パラメータを
@@ -37,8 +36,8 @@ func newConfigInitCmd(d *Deps, g *globalFlags) *cobra.Command {
   arata config init --out config.yaml          雛形を書き出す (既存ファイルは --force が無ければ上書きしない)
   arata config init --diff -c config.yaml      今の設定とこの版の雛形の差分 (どのプロファイルにも入っていないチェック、
                                                既定値と違うパラメータ、未知のキー) を表示する`,
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		Args: noArgs,
+		Run: func(ctx context.Context, _ []string) error {
 			reg := checks.NewRegistry()
 			if diff {
 				return configDiff(d, g, reg, format)
@@ -63,10 +62,10 @@ func newConfigInitCmd(d *Deps, g *globalFlags) *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&out, "out", "", "書き出すファイル (省略時は標準出力)")
-	cmd.Flags().BoolVar(&force, "force", false, "既存のファイルを上書きする")
-	cmd.Flags().BoolVar(&diff, "diff", false, "-c の設定とこの版の雛形の差分を表示する")
-	cmd.Flags().StringVar(&format, "format", "text", "--diff の出力形式 (text|json)")
+	cmd.StringVar(&out, "out", "", "書き出すファイル (省略時は標準出力)")
+	cmd.BoolVar(&force, "force", false, "既存のファイルを上書きする")
+	cmd.BoolVar(&diff, "diff", false, "-c の設定とこの版の雛形の差分を表示する")
+	cmd.StringVar(&format, "format", "text", "--diff の出力形式 (text|json)")
 	return cmd
 }
 
@@ -92,13 +91,13 @@ func configDiff(d *Deps, g *globalFlags, reg *checks.Registry, format string) er
 	return configErr(d, fmt.Errorf("unknown format %q (text|json)", format))
 }
 
-func newProfilesCmd(d *Deps, g *globalFlags) *cobra.Command {
+func newProfilesCmd(d *Deps, g *globalFlags) *command {
 	var format string
-	cmd := &cobra.Command{
+	cmd := &command{
 		Use:   "profiles",
 		Short: "プロファイルごとに実際に効いているチェックとパラメータ (由来: overrides / checks: / 既定値) を表示する",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		Args:  noArgs,
+		Run: func(ctx context.Context, _ []string) error {
 			cfg, err := loadConfig(d, g)
 			if err != nil {
 				return err
@@ -113,7 +112,7 @@ func newProfilesCmd(d *Deps, g *globalFlags) *cobra.Command {
 			return configErr(d, fmt.Errorf("unknown format %q (table|json)", format))
 		},
 	}
-	cmd.Flags().StringVar(&format, "format", "table", "出力形式 (table|json)")
+	cmd.StringVar(&format, "format", "table", "出力形式 (table|json)")
 	return cmd
 }
 

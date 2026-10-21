@@ -28,7 +28,7 @@ var update = flag.Bool("update", false, "ゴールデンファイルを更新す
 
 const acct = "123456789012"
 
-// cli はテスト用の CLI ハーネス。cobra の RootCmd を直接呼び、出力をバッファに取る。
+// cli はテスト用の CLI ハーネス。Execute を直接呼び、出力をバッファに取る。
 type cli struct {
 	t      *testing.T
 	dir    string

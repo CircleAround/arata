@@ -1,12 +1,11 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"text/tabwriter"
 	"time"
-
-	"github.com/spf13/cobra"
 
 	"github.com/CircleAround/arata/internal/engine"
 	"github.com/CircleAround/arata/internal/record"
@@ -15,19 +14,19 @@ import (
 
 // 人の判断による finding の操作 (設計書 6-2)。
 
-func newReviewCmd(d *Deps, g *globalFlags) *cobra.Command {
+func newReviewCmd(d *Deps, g *globalFlags) *command {
 	var statuses []string
 	var format string
-	cmd := &cobra.Command{
+	cmd := &command{
 		Use:   "review",
 		Short: "未対応 (open / acked) の finding を一覧する (対話なし。approve できるものは対象を示す)",
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		Run: func(ctx context.Context, _ []string) error {
 			e, _, err := openEngine(d, g)
 			if err != nil {
 				return err
 			}
 			defer e.Close()
-			items, err := e.Review(cmd.Context(), statuses)
+			items, err := e.Review(ctx, statuses)
 			if err != nil {
 				return err
 			}
@@ -58,14 +57,14 @@ func newReviewCmd(d *Deps, g *globalFlags) *cobra.Command {
 			return formatErr(format, "table|json")
 		},
 	}
-	cmd.Flags().StringSliceVar(&statuses, "status", nil, "対象の状態 (open,acked,snoozed,resolved。既定 open,acked)")
-	cmd.Flags().StringVar(&format, "format", "table", "出力形式 (table|json)")
+	cmd.StringSliceVar(&statuses, "status", "対象の状態 (open,acked,snoozed,resolved。既定 open,acked)")
+	cmd.StringVar(&format, "format", "table", "出力形式 (table|json)")
 	return cmd
 }
 
-func newApproveCmd(d *Deps, g *globalFlags) *cobra.Command {
+func newApproveCmd(d *Deps, g *globalFlags) *command {
 	o := engine.ApproveOptions{}
-	cmd := &cobra.Command{
+	cmd := &command{
 		Use:   "approve <finding-id>",
 		Short: "finding の主体を allowlist.yaml に追記し、finding を resolved にする (人が判断して実行する)",
 		Long: `finding の主体を allowlist.yaml の principals の末尾に追記する。ファイルの他の部分 (コメント・順序・空行) は変えない。
@@ -76,14 +75,14 @@ func newApproveCmd(d *Deps, g *globalFlags) *cobra.Command {
   - git への commit は人が行う。--commit を付けると allowlist.yaml だけを commit する
 
 LLM は approve を実行せず、人に提案するだけにすること (arata help ai approve)。`,
-		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		Args: exactArgs(1),
+		Run: func(ctx context.Context, args []string) error {
 			e, cfg, err := openEngine(d, g)
 			if err != nil {
 				return err
 			}
 			defer e.Close()
-			res, err := e.Approve(cmd.Context(), args[0], o)
+			res, err := e.Approve(ctx, args[0], o)
 			if res != nil {
 				fmt.Fprintf(d.Stdout, "%s に追記しました (%s):\n%s", cfg.Allowlist, res.Entry.Subject(), res.Added)
 				fmt.Fprintf(d.Stdout, "finding %s は resolved になりました。\n", res.Finding.ID)
@@ -102,23 +101,23 @@ LLM は approve を実行せず、人に提案するだけにすること (arata
 			return err
 		},
 	}
-	cmd.Flags().StringVar(&o.Note, "note", "", "承認の理由 (必須)")
-	cmd.Flags().StringVar(&o.Expires, "expires", "", "期限 (YYYY-MM-DD)。過ぎたら expired として再報告")
-	cmd.Flags().StringArrayVar(&o.Tags, "tag", nil, "タグ (deploy: IAM 変更を info に下げる / ai: 監査・AI 用の主体として利用を毎回 info に出す)")
-	cmd.Flags().StringVar(&o.By, "by", "", "承認者 (省略時は OS のユーザー名)")
-	cmd.Flags().BoolVar(&o.Commit, "commit", false, "allowlist.yaml を git commit する")
-	cmd.Flags().BoolVar(&o.Account, "account", false, "主体のアカウント全体を承認する (account:)")
-	cmd.Flags().StringVar(&o.ARNPattern, "arn-pattern", "", "主体ではなく glob で承認する (arn_pattern:)")
+	cmd.StringVar(&o.Note, "note", "", "承認の理由 (必須)")
+	cmd.StringVar(&o.Expires, "expires", "", "期限 (YYYY-MM-DD)。過ぎたら expired として再報告")
+	cmd.StringArrayVar(&o.Tags, "tag", "タグ (deploy: IAM 変更を info に下げる / ai: 監査・AI 用の主体として利用を毎回 info に出す)")
+	cmd.StringVar(&o.By, "by", "", "承認者 (省略時は OS のユーザー名)")
+	cmd.BoolVar(&o.Commit, "commit", false, "allowlist.yaml を git commit する")
+	cmd.BoolVar(&o.Account, "account", false, "主体のアカウント全体を承認する (account:)")
+	cmd.StringVar(&o.ARNPattern, "arn-pattern", "", "主体ではなく glob で承認する (arn_pattern:)")
 	return cmd
 }
 
-func newStatusCmd(d *Deps, g *globalFlags, use, status, short string) *cobra.Command {
+func newStatusCmd(d *Deps, g *globalFlags, use, status, short string) *command {
 	var until string
-	cmd := &cobra.Command{
+	cmd := &command{
 		Use:   use + " <finding-id>",
 		Short: short,
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		Args:  exactArgs(1),
+		Run: func(ctx context.Context, args []string) error {
 			var u time.Time
 			if status == store.FindingSnoozed {
 				t, err := time.Parse(record.DateLayout, until)
@@ -133,7 +132,7 @@ func newStatusCmd(d *Deps, g *globalFlags, use, status, short string) *cobra.Com
 				return err
 			}
 			defer e.Close()
-			f, err := e.SetStatus(cmd.Context(), args[0], status, u)
+			f, err := e.SetStatus(ctx, args[0], status, u)
 			if err != nil {
 				return err
 			}
@@ -146,8 +145,8 @@ func newStatusCmd(d *Deps, g *globalFlags, use, status, short string) *cobra.Com
 		},
 	}
 	if status == store.FindingSnoozed {
-		cmd.Flags().StringVar(&until, "until", "", "期日 (YYYY-MM-DD、その日の 0 時 UTC まで沈黙)")
-		_ = cmd.MarkFlagRequired("until")
+		cmd.StringVar(&until, "until", "", "期日 (YYYY-MM-DD、その日の 0 時 UTC まで沈黙)")
+		cmd.MarkFlagRequired("until")
 	}
 	return cmd
 }
@@ -156,8 +155,8 @@ func formatErr(format, want string) error {
 	return &engine.ExitError{Code: engine.CodeConfigInvalid, Exit: engine.ExitConfig, Err: fmt.Errorf("unknown format %q (%s)", format, want)}
 }
 
-func reviewCommands(d *Deps, g *globalFlags) []*cobra.Command {
-	return []*cobra.Command{
+func reviewCommands(d *Deps, g *globalFlags) []*command {
+	return []*command{
 		newReviewCmd(d, g),
 		newApproveCmd(d, g),
 		newStatusCmd(d, g, "ack", store.FindingAcked, "finding を acked にする (再報告しないが review の未対応一覧には残る)"),

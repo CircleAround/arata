@@ -20,7 +20,6 @@ Available Commands:
   ai          AI (LLM) 向けの使い方 (arata help ai と同じ。最初に読む)
   approve     finding の主体を allowlist.yaml に追記し、finding を resolved にする (人が判断して実行する)
   collect     収集だけを行いストアへ反映する
-  completion  Generate the autocompletion script for the specified shell
   config      設定の雛形を書き出す / 雛形と比べる (config init)
   doctor      権限・ロググループ・形式プロファイルの解釈率を検査する (問題があれば終了コード 2)
   evaluate    収集せずにチェックを走らせ、レポートを出す

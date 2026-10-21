@@ -14,8 +14,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/spf13/cobra"
-
 	"github.com/CircleAround/arata/internal/config"
 	"github.com/CircleAround/arata/internal/engine"
 	"github.com/CircleAround/arata/internal/report"
@@ -45,16 +43,10 @@ func Execute(args []string, d Deps) int {
 		d.Engine.Logger = slog.New(slog.NewJSONHandler(d.Stderr, nil))
 	}
 	root := NewRootCmd(&d)
-	if args == nil {
-		args = []string{} // nil だと cobra は os.Args を読む
-	}
-	root.SetArgs(args)
-	root.SetOut(d.Stdout)
-	root.SetErr(d.Stderr)
 	// SIGINT / SIGTERM で context を止める。init はそこまでの進捗を記録して終わる (init --resume で再開)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := root.ExecuteContext(ctx); err != nil {
+	if err := root.execute(ctx, args); err != nil {
 		var xe *engine.ExitError
 		if errors.As(err, &xe) {
 			return xe.Exit
@@ -62,7 +54,7 @@ func Execute(args []string, d Deps) int {
 		if errors.Is(err, errPartial) {
 			return engine.ExitPartial
 		}
-		// cobra のフラグ / 引数エラーや予期しない失敗は設定エラー扱い
+		// フラグ / 引数のエラーや予期しない失敗は設定エラー扱い
 		d.Engine.Logger.Error(err.Error(), "code", engine.CodeConfigInvalid)
 		return engine.ExitConfig
 	}
@@ -75,22 +67,21 @@ type globalFlags struct {
 	config string
 }
 
-// NewRootCmd は cobra のルートコマンドを組み立てる。
-func NewRootCmd(d *Deps) *cobra.Command {
+// NewRootCmd はルートコマンドを組み立てる。ヘルプとバージョンは d.Stdout に出し、エラーは Execute がログに出す。
+func NewRootCmd(d *Deps) *command {
 	g := &globalFlags{}
-	root := &cobra.Command{
-		Use:           "arata",
-		Short:         "AWS のログを改め、前回から新しく発生したものを報せる監査エンジン",
-		Long:          rootLong,
-		SilenceUsage:  true,
-		SilenceErrors: true,
-		Version:       version,
+	root := &command{
+		Use:     "arata",
+		Short:   "AWS のログを改め、前回から新しく発生したものを報せる監査エンジン",
+		Long:    rootLong,
+		Version: version,
+		stdout:  d.Stdout,
 	}
-	root.PersistentFlags().StringVarP(&g.config, "config", "c", "", "設定ファイル (YAML)")
+	root.PersistentStringVarP(&g.config, "config", "c", "", "設定ファイル (YAML)")
 	root.AddCommand(newConfigCmd(d, g), newProfilesCmd(d, g), newInitCmd(d, g), newDoctorCmd(d, g), newRunCmd(d, g), newCollectCmd(d, g), newEvaluateCmd(d, g), newReportCmd(d, g))
 	root.AddCommand(reviewCommands(d, g)...)
 	root.AddCommand(newAICmd(d))
-	root.SetHelpCommand(newHelpCmd(d, root))
+	root.AddCommand(newHelpCmd(d, root))
 	return root
 }
 
@@ -121,10 +112,10 @@ func openEngine(d *Deps, g *globalFlags) (*engine.Engine, *config.Config, error)
 	return e, cfg, nil
 }
 
-func newInitCmd(d *Deps, g *globalFlags) *cobra.Command {
+func newInitCmd(d *Deps, g *globalFlags) *command {
 	var window string
 	var resume bool
-	cmd := &cobra.Command{
+	cmd := &command{
 		Use:   "init",
 		Short: "ストアを作り、設定を検証し、ベースラインを収集する (findings は出さない)",
 		Long: `ストアを作り、ベースラインを収集する。findings は出さない。
@@ -132,7 +123,7 @@ func newInitCmd(d *Deps, g *globalFlags) *cobra.Command {
 窓 (--window、既定 7d) を UTC の日の境界で区切り、古い順に 1 日ずつ収集して進捗を記録する。
 LookupEvents は毎秒 2 リクエストが上限なので、7 日分で数時間かかることがある。
 途中で失敗・中断した場合は終了コード 3 で止まり、arata init --resume でその日の頭から再開できる (窓の終わりは再開時点まで延びる)。`,
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		Run: func(ctx context.Context, _ []string) error {
 			w, err := config.ParseDuration(window)
 			if err != nil {
 				d.Engine.Logger.Error("invalid --window", "code", engine.CodeConfigInvalid, "error", err.Error())
@@ -143,7 +134,7 @@ LookupEvents は毎秒 2 リクエストが上限なので、7 日分で数時�
 				return err
 			}
 			defer e.Close()
-			res, err := e.Init(cmd.Context(), engine.InitOptions{Window: w, Resume: resume})
+			res, err := e.Init(ctx, engine.InitOptions{Window: w, Resume: resume})
 			if err != nil {
 				return err
 			}
@@ -160,14 +151,14 @@ LookupEvents は毎秒 2 リクエストが上限なので、7 日分で数時�
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&window, "window", "7d", "ベースラインとして収集する期間 (例: 7d, 24h)。--resume では使わない")
-	cmd.Flags().BoolVar(&resume, "resume", false, "途中で止まった init を続きから再開する")
+	cmd.StringVar(&window, "window", "7d", "ベースラインとして収集する期間 (例: 7d, 24h)。--resume では使わない")
+	cmd.BoolVar(&resume, "resume", false, "途中で止まった init を続きから再開する")
 	return cmd
 }
 
-func newDoctorCmd(d *Deps, g *globalFlags) *cobra.Command {
+func newDoctorCmd(d *Deps, g *globalFlags) *command {
 	var window, format string
-	cmd := &cobra.Command{
+	cmd := &command{
 		Use:   "doctor",
 		Short: "権限・ロググループ・形式プロファイルの解釈率を検査する (問題があれば終了コード 2)",
 		Long: `設定のソースごとに次を実際に問い合わせて検査し、表で出す。ストアは開かない。
@@ -177,7 +168,7 @@ func newDoctorCmd(d *Deps, g *globalFlags) *cobra.Command {
   - match_rate  直近 100 行を形式プロファイルで解釈できた割合 (閾値未満なら FORMAT_MISMATCH)
   - queries     集計クエリのテンプレートを Logs Insights が受理するか (QUERY_INVALID。regex の方言違いもここで分かる)
   - check       必要なレコードを出すソースが無く skip されるチェック (warn)`,
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		Run: func(ctx context.Context, _ []string) error {
 			w, err := config.ParseDuration(window)
 			if err != nil {
 				d.Engine.Logger.Error("invalid --window", "code", engine.CodeConfigInvalid, "error", err.Error())
@@ -187,7 +178,7 @@ func newDoctorCmd(d *Deps, g *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			res := engine.Doctor(cmd.Context(), cfg, d.Engine, w)
+			res := engine.Doctor(ctx, cfg, d.Engine, w)
 			switch format {
 			case "table":
 				err = res.WriteTable(d.Stdout)
@@ -210,8 +201,8 @@ func newDoctorCmd(d *Deps, g *globalFlags) *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&window, "window", "24h", "解釈率のサンプル (直近 100 行) を探す期間")
-	cmd.Flags().StringVar(&format, "format", "table", "出力形式 (table|json)")
+	cmd.StringVar(&window, "window", "24h", "解釈率のサンプル (直近 100 行) を探す期間")
+	cmd.StringVar(&format, "format", "table", "出力形式 (table|json)")
 	return cmd
 }
 
@@ -220,9 +211,9 @@ type outputFlags struct {
 	format string
 }
 
-func (o *outputFlags) bind(cmd *cobra.Command) {
-	cmd.Flags().StringVar(&o.out, "out", "", "report.json と report.md を書き出すディレクトリ (省略時は標準出力)")
-	cmd.Flags().StringVar(&o.format, "format", "json", "標準出力の形式 (json|md)")
+func (o *outputFlags) bind(cmd *command) {
+	cmd.StringVar(&o.out, "out", "", "report.json と report.md を書き出すディレクトリ (省略時は標準出力)")
+	cmd.StringVar(&o.format, "format", "json", "標準出力の形式 (json|md)")
 }
 
 func (o *outputFlags) emit(d *Deps, rep *report.Report) error {
@@ -247,19 +238,19 @@ func (o *outputFlags) emit(d *Deps, rep *report.Report) error {
 	return &engine.ExitError{Code: engine.CodeConfigInvalid, Exit: engine.ExitConfig, Err: fmt.Errorf("unknown format %q (json|md)", o.format)}
 }
 
-func newRunCmd(d *Deps, g *globalFlags) *cobra.Command {
+func newRunCmd(d *Deps, g *globalFlags) *command {
 	var profile string
 	o := &outputFlags{}
-	cmd := &cobra.Command{
+	cmd := &command{
 		Use:   "run",
 		Short: "collect → evaluate → report を実行する",
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		Run: func(ctx context.Context, _ []string) error {
 			e, _, err := openEngine(d, g)
 			if err != nil {
 				return err
 			}
 			defer e.Close()
-			res, err := e.Run(cmd.Context(), profile)
+			res, err := e.Run(ctx, profile)
 			if err != nil {
 				return err
 			}
@@ -272,18 +263,18 @@ func newRunCmd(d *Deps, g *globalFlags) *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&profile, "profile", "daily", "プロファイル名 (profiles のキー)")
+	cmd.StringVar(&profile, "profile", "daily", "プロファイル名 (profiles のキー)")
 	o.bind(cmd)
 	return cmd
 }
 
-func newCollectCmd(d *Deps, g *globalFlags) *cobra.Command {
+func newCollectCmd(d *Deps, g *globalFlags) *command {
 	var window string
 	var sources []string
-	cmd := &cobra.Command{
+	cmd := &command{
 		Use:   "collect",
 		Short: "収集だけを行いストアへ反映する",
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		Run: func(ctx context.Context, _ []string) error {
 			w, err := config.ParseDuration(window)
 			if err != nil {
 				d.Engine.Logger.Error("invalid --window", "code", engine.CodeConfigInvalid, "error", err.Error())
@@ -294,7 +285,7 @@ func newCollectCmd(d *Deps, g *globalFlags) *cobra.Command {
 				return err
 			}
 			defer e.Close()
-			cr, err := e.CollectOnly(cmd.Context(), w, sources)
+			cr, err := e.CollectOnly(ctx, w, sources)
 			if err != nil {
 				return err
 			}
@@ -305,39 +296,39 @@ func newCollectCmd(d *Deps, g *globalFlags) *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&window, "window", "24h", "収集する期間 (例: 24h, 7d)")
-	cmd.Flags().StringArrayVar(&sources, "source", nil, "対象ソース ID (複数可。省略時は全部)")
+	cmd.StringVar(&window, "window", "24h", "収集する期間 (例: 24h, 7d)")
+	cmd.StringArrayVar(&sources, "source", "対象ソース ID (複数可。省略時は全部)")
 	return cmd
 }
 
-func newEvaluateCmd(d *Deps, g *globalFlags) *cobra.Command {
+func newEvaluateCmd(d *Deps, g *globalFlags) *command {
 	var profile string
 	o := &outputFlags{}
-	cmd := &cobra.Command{
+	cmd := &command{
 		Use:   "evaluate",
 		Short: "収集せずにチェックを走らせ、レポートを出す",
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		Run: func(ctx context.Context, _ []string) error {
 			e, _, err := openEngine(d, g)
 			if err != nil {
 				return err
 			}
 			defer e.Close()
-			res, err := e.EvaluateOnly(cmd.Context(), profile)
+			res, err := e.EvaluateOnly(ctx, profile)
 			if err != nil {
 				return err
 			}
 			return o.emit(d, res.Report)
 		},
 	}
-	cmd.Flags().StringVar(&profile, "profile", "daily", "プロファイル名 (profiles のキー)")
+	cmd.StringVar(&profile, "profile", "daily", "プロファイル名 (profiles のキー)")
 	o.bind(cmd)
 	return cmd
 }
 
-func newReportCmd(d *Deps, g *globalFlags) *cobra.Command {
+func newReportCmd(d *Deps, g *globalFlags) *command {
 	var profile, from, to, month string
 	o := &outputFlags{}
-	cmd := &cobra.Command{
+	cmd := &command{
 		Use:   "report",
 		Short: "最後の run / evaluate のレポートを出す。--from / --to (または --month) で期間レポート",
 		Long: `期間を指定しなければ、プロファイルの最後の run / evaluate のレポートを再表示する。
@@ -345,7 +336,7 @@ func newReportCmd(d *Deps, g *globalFlags) *cobra.Command {
 --from YYYY-MM-DD --to YYYY-MM-DD (UTC、両端を含む) を指定すると、ストアだけから期間レポートを作る (収集しない):
 期間内の new / recurred / changed / resolved の一覧、重大度別件数、新規主体、未対応の残存、アプリ層の日次推移、
 取れなかった run (partial / failed / RUN_MISSED)。--month 2026-10 はその月の初日〜末日の糖衣。`,
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		Run: func(ctx context.Context, _ []string) error {
 			if month != "" {
 				if from != "" || to != "" {
 					return configErr(d, fmt.Errorf("use either --month or --from/--to"))
@@ -364,7 +355,7 @@ func newReportCmd(d *Deps, g *globalFlags) *cobra.Command {
 			}
 			defer e.Close()
 			if from != "" {
-				rep, err := e.PeriodReport(cmd.Context(), from, to)
+				rep, err := e.PeriodReport(ctx, from, to)
 				if err != nil {
 					return err
 				}
@@ -384,10 +375,10 @@ func newReportCmd(d *Deps, g *globalFlags) *cobra.Command {
 			return o.emit(d, rep)
 		},
 	}
-	cmd.Flags().StringVar(&profile, "profile", "daily", "プロファイル名 (profiles のキー。期間レポートでは使わない)")
-	cmd.Flags().StringVar(&from, "from", "", "期間レポートの初日 (YYYY-MM-DD、UTC)")
-	cmd.Flags().StringVar(&to, "to", "", "期間レポートの末日 (YYYY-MM-DD、UTC、その日を含む)")
-	cmd.Flags().StringVar(&month, "month", "", "月次の期間レポート (YYYY-MM。--from/--to の糖衣)")
+	cmd.StringVar(&profile, "profile", "daily", "プロファイル名 (profiles のキー。期間レポートでは使わない)")
+	cmd.StringVar(&from, "from", "", "期間レポートの初日 (YYYY-MM-DD、UTC)")
+	cmd.StringVar(&to, "to", "", "期間レポートの末日 (YYYY-MM-DD、UTC、その日を含む)")
+	cmd.StringVar(&month, "month", "", "月次の期間レポート (YYYY-MM。--from/--to の糖衣)")
 	o.bind(cmd)
 	return cmd
 }
