@@ -5,14 +5,26 @@ on:
     branches: [main]
   pull_request:
 
+# 最小権限。Actions は SHA で固定し、版はコメントに書く (Dependabot が SHA とコメントを一緒に上げる。ADR 0017)。
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+      - name: go mod verify
+        run: go mod verify
+      - name: age-gate (依存は公開から 7 日以上)
+        run: go list -m -json all | go run ./tools/agegate -days 7
       - run: go vet ./...
       - run: go test ./...
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
       - run: make build

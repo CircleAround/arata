@@ -5,7 +5,13 @@ go 1.27.3
 require (
 	github.com/aws/aws-sdk-go-v2 v1.47.3
 	github.com/aws/aws-sdk-go-v2/config v1.33.9
-	github.com/aws/aws-sdk-go-v2/service/cloudtrail v1.65.5
+	github.com/aws/aws-sdk-go-v2/service/accessanalyzer v1.57.4
+	github.com/aws/aws-sdk-go-v2/service/cloudtrail v1.65.4
+	github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs v1.89.3
+	github.com/aws/aws-sdk-go-v2/service/guardduty v1.99.1
+	github.com/aws/aws-sdk-go-v2/service/iam v1.64.4
+	github.com/aws/aws-sdk-go-v2/service/s3control v1.79.4
+	github.com/aws/aws-sdk-go-v2/service/sts v1.51.4
 	github.com/aws/smithy-go v1.28.5
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/time v0.16.0
@@ -20,18 +26,12 @@ require (
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.5.6 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.8.6 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/v4a v1.5.6 // indirect
-	github.com/aws/aws-sdk-go-v2/service/accessanalyzer v1.57.5 // indirect
-	github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs v1.90.0 // indirect
-	github.com/aws/aws-sdk-go-v2/service/guardduty v1.101.0 // indirect
-	github.com/aws/aws-sdk-go-v2/service/iam v1.64.4 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.21 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.14.6 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.20.6 // indirect
-	github.com/aws/aws-sdk-go-v2/service/s3control v1.79.4 // indirect
 	github.com/aws/aws-sdk-go-v2/service/signin v1.10.4 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sso v1.38.4 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.43.4 // indirect
-	github.com/aws/aws-sdk-go-v2/service/sts v1.51.4 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect

@@ -1,0 +1,18 @@
+# 依存の更新 PR。公開から 7 日経った版だけを提案する (cooldown)。CI の age-gate (tools/agegate) と 2 段構え (ADR 0017)。
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      aws-sdk:
+        patterns: ["github.com/aws/*"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7

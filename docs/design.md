@@ -19,6 +19,7 @@
 | 任意期間レポート | `report --from --to` で月次・四半期・任意期間を生成 |
 | リポジトリの例 | 決定: リポジトリ (例・テスト・文書) に特定の顧客の情報を書かない。例は架空の値を使う (アカウント ID は `123456789012` / 外部 SaaS は `111122223333`) |
 | 設定の名前 | 決定: 設定のトップレベルキーは `customer` ではなく `name` (レポートに出す監査対象の名前)。`customer` は受託側の目線に寄りすぎており、自社アカウントを自社で監査する使い方もあるため中立な名前にした。利用者がいない段階の改名なので旧キーの互換は持たず、`customer` は未知のキーとして設定エラーになる |
+| サプライチェーン | 決定: GitHub Actions は 40 桁の SHA で固定し版をコメントに書く。全ワークフローに最小権限の `permissions:`、checkout は `persist-credentials: false`。依存は公開から 7 日待つ 2 段構え (提案: Dependabot の `cooldown`、強制: CI の `tools/agegate` が indirect を含む全モジュールの公開時刻を GOPROXY で確かめる)。CI で `go mod verify` と `govulncheck`。release は build provenance attestation (来歴証明) を付ける (公開リポジトリまたは Enterprise Cloud で有効。非公開の間は SHA256SUMS のみ)。ADR 0017 |
 
 ## 2. ログの種類とロググループの紐付け (質問 2 への回答)
 
@@ -274,6 +275,7 @@ internal/record/              正規化レコード型 (http_access, waf_action,
 internal/checks/              Check インターフェースと各チェック (1 ファイル 1 チェック)
 internal/allowlist/           既知リストの読み書き (approve / expire)
 internal/report/              JSON / Markdown 生成、期間集計 (period.go)
+tools/agegate/                CI 用の依存の age-gate (エンジンには入らない小さな main。決定: internal/ ではなく tools/ に置く。ADR 0017)
 docs/ai/*.md                  LLM 向けの使い方。embed でバイナリに入り `arata help ai [report|approve]` で出る (決定: skills/ の同梱は取りやめ。ADR 0012)
 deploy/iam/readonly-role.yaml 顧客に配る読み取りロール + Roles Anywhere 用信頼ポリシーの CloudFormation
 deploy/lambda/                Lambda 配備用 CDK or SAM テンプレート (S3 ストア、別アカウント推奨)
