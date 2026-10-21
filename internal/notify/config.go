@@ -31,6 +31,8 @@ type LLMConfig struct {
 	Region   string `yaml:"region"`
 	Profile  string `yaml:"profile"`
 	Timeout  string `yaml:"timeout"`
+	// Command は claude-cli の実行ファイル (空なら PATH から claude を探す。cron の PATH が狭いときに絶対パスで書く)。
+	Command string `yaml:"command"`
 }
 
 // SlackConfig は通知先。URL は秘密なので設定ファイルには環境変数の名前だけを書く。
@@ -76,7 +78,7 @@ func LoadConfig(path string) (*Config, error) {
 // 決定:
 //   - 必須: name, max_age, urgent_severity, on_quiet, llm.provider, slack.webhook_env。
 //     provider が none 以外なら llm.timeout も必須、bedrock なら llm.model と llm.region も必須 (設計書 3-1 で「設定で明示する」)。
-//     claude-cli の model は省略可 (claude 側の既定を使う)。
+//     claude-cli の model と command は省略可 (claude 側の既定のモデル、PATH の claude を使う)。
 //   - slack.urgent_webhook_env と slack.urgent_mention は省略可 (4 章)。
 //   - *_env は環境変数の名前でなければならない。URL を貼った誤りを弾き、そのときエラーに値を出さない (秘密を漏らさない)。
 func (c *Config) Validate() error {

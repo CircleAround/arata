@@ -12,6 +12,7 @@ llm:
   region: ""                      # bedrock: リージョン (必須。例 us-east-1)
   profile: ""                     # bedrock: AWS の名前付きプロファイル。空なら標準の認証チェーン
   timeout: 120s                   # LLM 呼び出し 1 回の時間切れ。失敗時の再試行は 1 回まで
+  command: ""                     # claude-cli: claude の実行ファイル。空なら PATH から探す (cron の PATH が狭いなら絶対パスで書く)
 
 slack:
   webhook_env: ARATAM_SLACK_WEBHOOK                 # 通常用の Webhook URL を入れる環境変数の名前。URL は設定ファイルに書かない

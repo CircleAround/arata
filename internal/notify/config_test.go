@@ -27,7 +27,7 @@ func TestScaffoldLoads(t *testing.T) {
 		c.Slack.WebhookEnv != "ARATAM_SLACK_WEBHOOK" || c.Slack.UrgentWebhookEnv != "ARATAM_SLACK_URGENT_WEBHOOK" || c.Slack.UrgentMention != "<!channel>" {
 		t.Fatalf("%+v", c)
 	}
-	for _, key := range []string{"name:", "max_age:", "urgent_severity:", "on_quiet:", "provider:", "model:", "region:", "profile:", "timeout:", "webhook_env:", "urgent_webhook_env:", "urgent_mention:"} {
+	for _, key := range []string{"name:", "max_age:", "urgent_severity:", "on_quiet:", "provider:", "model:", "region:", "profile:", "timeout:", "command:", "webhook_env:", "urgent_webhook_env:", "urgent_mention:"} {
 		if !strings.Contains(string(Scaffold()), "\n"+key) && !strings.Contains(string(Scaffold()), " "+key) {
 			t.Errorf("scaffold must state %s", key)
 		}

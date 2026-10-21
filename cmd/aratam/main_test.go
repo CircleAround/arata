@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -13,7 +14,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/CircleAround/arata/internal/llm"
 	"github.com/CircleAround/arata/internal/notify"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 )
 
 // cli はコマンドレベルの e2e の土台。実 Slack には接続せず、httptest の Webhook に送る。
@@ -24,6 +28,11 @@ type cli struct {
 	env            map[string]string
 	stdout, stderr *bytes.Buffer
 	hook           *hook
+	// rec は偽の claude が引数・標準入力・環境変数を記録するディレクトリ。claudeOut は偽の claude が返す出力 (--output-format json の形)。
+	rec       string
+	claudeOut string
+	fakeMode  string // "" = claudeOut を返す / "fail" = 終了コード 1 / "sleep" = 時間切れ
+	bedrock   *httptest.Server
 }
 
 // hook は Incoming Webhook の偽物。パスごとに受け取った text を記録する。
@@ -58,7 +67,18 @@ const (
 func newCLI(t *testing.T) *cli {
 	t.Helper()
 	dir := t.TempDir()
-	c := &cli{t: t, dir: dir, cfg: filepath.Join(dir, "aratam.yaml"), stdout: &bytes.Buffer{}, stderr: &bytes.Buffer{}, hook: newHook(t)}
+	c := &cli{t: t, dir: dir, cfg: filepath.Join(dir, "aratam.yaml"), stdout: &bytes.Buffer{}, stderr: &bytes.Buffer{}, hook: newHook(t), rec: filepath.Join(dir, "rec")}
+	// 実際の claude を起動しないよう、PATH には偽の claude だけを置く
+	bin := filepath.Join(dir, "bin")
+	for _, d := range []string{bin, c.rec} {
+		if err := os.Mkdir(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(fakeClaude), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
 	c.env = map[string]string{
 		"ARATAM_SLACK_WEBHOOK":        c.hook.srv.URL + normalPath,
 		"ARATAM_SLACK_URGENT_WEBHOOK": c.hook.srv.URL + urgentPath,
@@ -80,6 +100,25 @@ func (c *cli) run(args ...string) int {
 		Getenv:     func(k string) string { return c.env[k] },
 		Now:        func() time.Time { return time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC) },
 		HTTPClient: c.hook.srv.Client(),
+		Environ: func() []string {
+			// aratam のプロセスの環境変数のつもり。Webhook の URL は子プロセスに渡らないことを確かめる
+			out, _ := os.Create(filepath.Join(c.rec, "response"))
+			_, _ = io.WriteString(out, c.claudeOut)
+			out.Close()
+			return []string{"PATH=/usr/bin:/bin", "REC=" + c.rec, "FAKE_MODE=" + c.fakeMode,
+				"ARATAM_SLACK_WEBHOOK=" + c.env["ARATAM_SLACK_WEBHOOK"], "ARATAM_SLACK_URGENT_WEBHOOK=" + c.env["ARATAM_SLACK_URGENT_WEBHOOK"]}
+		},
+		NewBedrock: func(_ context.Context, region, _, model string) (notify.Summarizer, error) {
+			if c.bedrock == nil {
+				c.t.Fatal("bedrock is not faked")
+			}
+			return &llm.Bedrock{Model: model, Client: bedrockruntime.New(bedrockruntime.Options{
+				Region: region, BaseEndpoint: aws.String(c.bedrock.URL), HTTPClient: c.bedrock.Client(), RetryMaxAttempts: 1,
+				Credentials: aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) {
+					return aws.Credentials{AccessKeyID: "AKIDEXAMPLE", SecretAccessKey: "example"}, nil
+				}),
+			})}, nil
+		},
 	})
 	for _, out := range []string{c.stdout.String(), c.stderr.String()} {
 		if strings.Contains(out, "secret") || strings.Contains(out, c.hook.srv.URL) {
@@ -210,15 +249,15 @@ func TestNotifyExitCodes(t *testing.T) {
 	}
 }
 
-// この版では LLM のプロバイダはまだ使えない。--llm none で上書きすれば動く。
+// --llm none は設定のプロバイダを上書きし、LLM を呼ばない。
 func TestNotifyLLMOverride(t *testing.T) {
 	c := newCLI(t)
 	c.setConfig("provider: none", "provider: claude-cli")
-	if code := c.run("notify", "-c", c.cfg, "--in", c.inputDir(), "--dry-run"); code != 2 || !strings.Contains(c.stderr.String(), "not available in this version yet") {
-		t.Fatalf("exit %d %s", code, c.stderr)
-	}
 	if code := c.run("notify", "-c", c.cfg, "--in", c.inputDir(), "--dry-run", "--llm", "none"); code != 0 {
 		t.Fatalf("--llm none: exit %d %s", code, c.stderr)
+	}
+	if _, err := os.Stat(filepath.Join(c.rec, "stdin")); err == nil {
+		t.Fatal("--llm none must not call claude")
 	}
 	if code := c.run("notify", "-c", c.cfg, "--in", c.inputDir(), "--dry-run", "--llm", "gpt"); code != 2 || !strings.Contains(c.stderr.String(), "--llm: llm.provider must be one of") {
 		t.Fatalf("--llm gpt: exit %d %s", code, c.stderr)
