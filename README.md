@@ -227,7 +227,9 @@ Logs Insights の集計クエリで日次集計 (IP 別の sign-in 失敗数な�
 ### ディレクトリ
 
 ```
-cmd/arata/              CLI (標準の flag の上の小さなコマンド層 cli.go)。main_test.go がコマンドレベルの e2e
+cmd/arata/              CLI。main_test.go がコマンドレベルの e2e
+cmd/aratam/             arata の出力を要約して通知するコマンド (docs/aratam.md)
+internal/subcmd/        標準の flag の上の小さなコマンド層 (arata と aratam が共有)
 internal/config/        YAML 設定
 internal/scaffold/      設定の雛形 (config init) と雛形との差分
 internal/store/         Store インターフェース、SQLite + JSONL の dir バックエンド
@@ -235,7 +237,9 @@ internal/collect/       Collector インターフェース、cloudtrail/ (Lookup
 internal/record/        正規化レコード (trail_event, principal_seen, metric)
 internal/checks/        Check インターフェース、差分判定、各チェック (1 ファイル 1 チェック)
 internal/allowlist/     既知リストの読み込みと approve の追記
-internal/report/        report.json / report.md
+internal/report/        report.json / report.md (型は schema/ に置き、aratam と共有)
+internal/notify/        aratam の設定・入力の検査・振り分け・組み立て
+internal/slack/         Slack Incoming Webhook の送信
 internal/engine/        collect → evaluate → report の束ねと doctor (CLI と Lambda が共用)
 docs/ai/                arata help ai の文書 (embed でバイナリに入る)
 examples/               設定サンプル

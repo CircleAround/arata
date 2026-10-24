@@ -1,0 +1,161 @@
+package notify
+
+import (
+	"bytes"
+	_ "embed"
+	"errors"
+	"fmt"
+	"os"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"gopkg.in/yaml.v3"
+)
+
+// Config は aratam.yaml (aratam 設計書 4 章)。arata と同じく暗黙の既定を持たず、`aratam config init` の雛形で全項目を明示する。
+type Config struct {
+	Name           string      `yaml:"name"`
+	MaxAge         string      `yaml:"max_age"`
+	UrgentSeverity string      `yaml:"urgent_severity"`
+	OnQuiet        string      `yaml:"on_quiet"`
+	LLM            LLMConfig   `yaml:"llm"`
+	Slack          SlackConfig `yaml:"slack"`
+}
+
+// LLMConfig は要約に使う LLM。
+type LLMConfig struct {
+	Provider string `yaml:"provider"`
+	Model    string `yaml:"model"`
+	Region   string `yaml:"region"`
+	Profile  string `yaml:"profile"`
+	Timeout  string `yaml:"timeout"`
+}
+
+// SlackConfig は通知先。URL は秘密なので設定ファイルには環境変数の名前だけを書く。
+type SlackConfig struct {
+	WebhookEnv       string `yaml:"webhook_env"`
+	UrgentWebhookEnv string `yaml:"urgent_webhook_env"`
+	UrgentMention    string `yaml:"urgent_mention"`
+}
+
+// プロバイダ名 (呼び方を表す。aratam 設計書 5 章)。
+const (
+	ProviderBedrock   = "bedrock"
+	ProviderClaudeCLI = "claude-cli"
+	ProviderOpenAIAPI = "openai-api"
+	ProviderNone      = "none"
+)
+
+// 重大度の順位 (arata の checks と同じ)。aratam は checks を import しない (ストアや AWS SDK を持ち込まないため)。
+var severityRank = map[string]int{"critical": 5, "high": 4, "medium": 3, "low": 2, "info": 1}
+
+var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// LoadConfig は設定を読み、検証する。未知のキーは誤記とみなしてエラーにする。
+func LoadConfig(path string) (*Config, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var c Config
+	dec := yaml.NewDecoder(bytes.NewReader(b))
+	dec.KnownFields(true)
+	if err := dec.Decode(&c); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	if err := c.Validate(); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return &c, nil
+}
+
+// Validate は設定を検証する。llm の項目は provider に応じて要るものだけを見る (--llm none で上書きした後にも呼ぶ)。
+//
+// 決定:
+//   - 必須: name, max_age, urgent_severity, on_quiet, llm.provider, slack.webhook_env。
+//     provider が none 以外なら llm.timeout も必須、bedrock なら llm.model と llm.region も必須 (設計書 3-1 で「設定で明示する」)。
+//     claude-cli の model は省略可 (claude 側の既定を使う)。
+//   - slack.urgent_webhook_env と slack.urgent_mention は省略可 (4 章)。
+//   - *_env は環境変数の名前でなければならない。URL を貼った誤りを弾き、そのときエラーに値を出さない (秘密を漏らさない)。
+func (c *Config) Validate() error {
+	var errs []error
+	req := func(name, v string) {
+		if strings.TrimSpace(v) == "" {
+			errs = append(errs, fmt.Errorf("%s is required", name))
+		}
+	}
+	req("name", c.Name)
+	if _, err := ParseDuration(c.MaxAge); err != nil {
+		errs = append(errs, fmt.Errorf("max_age: %w", err))
+	}
+	if r := severityRank[c.UrgentSeverity]; r < severityRank["low"] {
+		errs = append(errs, fmt.Errorf("urgent_severity must be one of critical, high, medium, low (got %q)", c.UrgentSeverity))
+	}
+	if c.OnQuiet != "short" && c.OnQuiet != "silent" {
+		errs = append(errs, fmt.Errorf("on_quiet must be short or silent (got %q)", c.OnQuiet))
+	}
+	switch c.LLM.Provider {
+	case ProviderNone:
+	case ProviderBedrock, ProviderClaudeCLI:
+		if _, err := ParseDuration(c.LLM.Timeout); err != nil {
+			errs = append(errs, fmt.Errorf("llm.timeout: %w", err))
+		}
+		if c.LLM.Provider == ProviderBedrock {
+			req("llm.model", c.LLM.Model)
+			req("llm.region", c.LLM.Region)
+		}
+	case ProviderOpenAIAPI:
+		errs = append(errs, fmt.Errorf("llm.provider %q is not supported yet (bedrock, claude-cli, none)", c.LLM.Provider))
+	default:
+		errs = append(errs, fmt.Errorf("llm.provider must be one of bedrock, claude-cli, none (got %q)", c.LLM.Provider))
+	}
+	req("slack.webhook_env", c.Slack.WebhookEnv)
+	for _, f := range []struct{ name, v string }{{"slack.webhook_env", c.Slack.WebhookEnv}, {"slack.urgent_webhook_env", c.Slack.UrgentWebhookEnv}} {
+		if f.v != "" && !envName.MatchString(f.v) {
+			errs = append(errs, fmt.Errorf("%s must be the name of an environment variable (do not put the webhook URL in the config file)", f.name))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// Rules は設定から規則の部分を取り出す。urgentMention は緊急用の Webhook が無く通常用へ送るときだけ付ける (4 章)。
+func (c *Config) Rules(urgentWebhookSet bool) Rules {
+	maxAge, _ := ParseDuration(c.MaxAge)
+	r := Rules{Name: c.Name, MaxAge: maxAge, UrgentSeverity: c.UrgentSeverity, OnQuiet: c.OnQuiet}
+	if !urgentWebhookSet {
+		r.UrgentMention = c.Slack.UrgentMention
+	}
+	return r
+}
+
+// ParseDuration は time.ParseDuration に `d` (日) を加えた形式を解釈する。正の値だけを受ける (arata の設定と同じ書式)。
+func ParseDuration(s string) (time.Duration, error) {
+	if s == "" {
+		return 0, errors.New("empty duration")
+	}
+	var d time.Duration
+	if n, ok := strings.CutSuffix(s, "d"); ok {
+		days, err := strconv.Atoi(n)
+		if err != nil {
+			return 0, fmt.Errorf("invalid duration %q", s)
+		}
+		d = time.Duration(days) * 24 * time.Hour
+	} else {
+		var err error
+		if d, err = time.ParseDuration(s); err != nil {
+			return 0, fmt.Errorf("invalid duration %q", s)
+		}
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("duration must be positive: %q", s)
+	}
+	return d, nil
+}
+
+//go:embed scaffold.yaml
+var scaffold []byte
+
+// Scaffold は `aratam config init` が書き出す雛形 (全項目を明示する)。
+func Scaffold() []byte { return append([]byte(nil), scaffold...) }

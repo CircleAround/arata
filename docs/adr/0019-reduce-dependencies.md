@@ -14,7 +14,7 @@ ADR 0017 で依存の取り込み方 (7 日待機・SHA 固定・govulncheck) �
 
 ## 決定
 
-- **CLI は標準の `flag` の上に書いた小さなコマンド層** (`cmd/arata/cli.go`) にする。ヘルプの書式とエラーの文言は cobra / pflag と同じにし、
+- **CLI は標準の `flag` の上に書いた小さなコマンド層** (`cmd/arata/cli.go`。後に aratam と共有するため `internal/subcmd` に移した) にする。ヘルプの書式とエラーの文言は cobra / pflag と同じにし、
   ルートのヘルプのゴールデンとコマンドレベルの e2e で挙動を固定する。フラグと位置引数が混ざってよい (`approve <id> --note x`)
 - **LookupEvents のレート制限は自前の `IntervalLimiter`** (`internal/collect/cloudtrail/ratelimit.go`)。前回の枠から `1s/n` 空けるだけの
   トークンバケット (バースト 1) と同じ挙動で、時刻と待ちは差し替えてテストする。スロットル時の指数バックオフ (適応リトライ) は従来どおり
@@ -31,6 +31,6 @@ ADR 0017 で依存の取り込み方 (7 日待機・SHA 固定・govulncheck) �
 
 - go.mod の require が 4 つ減る (直接 2: cobra・x/time、間接 2: pflag・mousetrap)
 - 引き受けるコスト: cobra が自動で足していた `completion` コマンド (シェル補完スクリプトの生成) は無くなる
-- 引き受けるコスト: コマンド層の不具合は自分で直す。ヘルプ書式とエラー文言は `cmd/arata/cli_test.go` で固定する
+- 引き受けるコスト: コマンド層の不具合は自分で直す。ヘルプ書式とエラー文言は `cmd/arata/cli_test.go` (現 `internal/subcmd/subcmd_test.go`) で固定する
 - サブコマンドを束ねるだけのコマンドに未知のサブコマンドを渡すと (`arata config bogus`)、ヘルプを出して終了コード 0 ではなく、
   未知のコマンドとして終了コード 2 にした (定期実行の打ち間違いを成功扱いにしないため)

@@ -47,12 +47,14 @@ const (
 	CodeConfigInvalid = "CONFIG_INVALID"
 	// CodeCheckUnused はどのプロファイルにも入っていないチェックがある (警告。設定の雛形と照らして入れ忘れを疑う)。
 	CodeCheckUnused = "CHECK_UNUSED"
+	// CodeReportNotFound は report で再表示するレポートが無い (そのプロファイルの run がまだ無い)。
+	CodeReportNotFound = "REPORT_NOT_FOUND"
 )
 
 // Codes は標準エラーの JSON 行ログに現れ得る code の固定語彙。テストで保証する。
 var Codes = []string{
 	collect.CodeFormatMismatch, collect.CodeFormatDrift, collect.CodeLogGroupMissing, collect.CodeAccessDenied, collect.CodeQueryLimit, collect.CodeQueryInvalid,
-	CodeStoreLocked, CodeStoreCorrupt, CodeRunMissed, collect.CodeCollectFailed, CodeConfigInvalid, CodeCheckUnused,
+	CodeStoreLocked, CodeStoreCorrupt, CodeRunMissed, collect.CodeCollectFailed, CodeConfigInvalid, CodeCheckUnused, CodeReportNotFound,
 }
 
 // 終了コード (設計書 8 章)。

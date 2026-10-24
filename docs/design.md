@@ -262,7 +262,8 @@ arata run --profile daily
 ### 4-1. Go パッケージ構成
 
 ```
-cmd/arata/                 CLI (標準の flag の上の小さなコマンド層 cli.go。ADR 0019)
+cmd/arata/                 CLI (標準の flag の上の小さなコマンド層 internal/subcmd。ADR 0019。決定: aratam と共有するため internal/ に移した)
+cmd/aratam/                LLM 要約と通知 (arata の出力だけを読む別コマンド。docs/aratam.md、ADR 0018)
 cmd/arata-lambda/          Lambda ハンドラ (同じ internal を呼ぶ。runtime provided.al2023, arm64)
 internal/config/              YAML 読み込み・検証・既定値
 internal/scaffold/            設定の雛形 (config init) と雛形との差分 (決定: config と checks の両方を使うので別パッケージ)
@@ -275,7 +276,7 @@ internal/collect/             Collector インターフェース
 internal/record/              正規化レコード型 (http_access, waf_action, trail_event, principal_seen, metric, posture_item)
 internal/checks/              Check インターフェースと各チェック (1 ファイル 1 チェック)
 internal/allowlist/           既知リストの読み書き (approve / expire)
-internal/report/              JSON / Markdown 生成、期間集計 (period.go)
+internal/report/              JSON / Markdown 生成、期間集計 (period.go)。決定: report.json の型は標準ライブラリだけに依存する report/schema に置く (aratam と共有。ADR 0018)
 tools/agegate/                CI 用の依存の age-gate (エンジンには入らない小さな main。決定: internal/ ではなく tools/ に置く。ADR 0017)
 docs/ai/*.md                  LLM 向けの使い方。embed でバイナリに入り `arata help ai [report|approve]` で出る (決定: skills/ の同梱は取りやめ。ADR 0012)
 deploy/iam/readonly-role.yaml 顧客に配る読み取りロール + Roles Anywhere 用信頼ポリシーの CloudFormation
@@ -501,6 +502,7 @@ arata collect   --window 24h [--source id]
 arata evaluate  --profile daily
 arata report    --from 2026-10-01 --to 2026-10-31 --format md|json [--template monthly]
                 # 決定: --month 2026-10 を糖衣にし、--template は作らない。収集せずストアだけから作る (ADR 0016)
+                # 決定: 期間を指定せず、そのプロファイルの run がまだ無ければ REPORT_NOT_FOUND を 1 行出して終了コード 2 (--out のディレクトリも作らない)
 arata review    [--status open|acked]
 arata approve   <finding-id> --note "..." [--expires date] [--tag deploy] [--by name] [--commit] [--account | --arn-pattern glob]
 arata ack|snooze|resolve <finding-id>        # snooze は --until date

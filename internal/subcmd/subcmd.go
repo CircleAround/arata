@@ -1,4 +1,5 @@
-package main
+// Package subcmd は標準の flag だけで書いた小さなサブコマンド層。arata と aratam が共有する。
+package subcmd
 
 import (
 	"context"
@@ -12,26 +13,27 @@ import (
 	"unicode"
 )
 
-// 標準の flag だけで書いた小さなサブコマンド層。
 // 決定: cobra (と pflag / mousetrap) は使わない。使っていたのはサブコマンド・--x / -x の短縮形・ヘルプ表示・引数の数の検査だけで、
 // 標準の flag で無理なく書けるため (設計書 1 章、ADR 0019)。ヘルプの書式は cobra と同じにして、ルートのヘルプのゴールデンを保つ。
 
-// command は 1 つのサブコマンド。Run が nil のものはサブコマンドを束ねるだけで、引数なしならヘルプを出す。
-type command struct {
+// Command は 1 つのサブコマンド。Run が nil のものはサブコマンドを束ねるだけで、引数なしならヘルプを出す。
+type Command struct {
 	Use   string // 先頭の語がコマンド名。残りは使い方の表示に使う (例: "approve <finding-id>")
 	Short string
 	Long  string
-	Args  func(c *command, args []string) error
+	Args  func(c *Command, args []string) error
 	Run   func(ctx context.Context, args []string) error
 
 	Version string // ルートだけ。空でなければ -v, --version を足す
 
-	parent     *command
-	subs       []*command
+	// Stdout はヘルプとバージョンの出力先。nil なら親のものを使う (どこにも無ければ捨てる)。
+	Stdout io.Writer
+
+	parent     *Command
+	subs       []*Command
 	flags      []*flagSpec // このコマンドのフラグ (登録順。表示は名前順)
 	persistent []*flagSpec // 子孫にも効くフラグ
 	required   []string
-	stdout     io.Writer
 }
 
 type flagSpec struct {
@@ -40,29 +42,29 @@ type flagSpec struct {
 	defaultText             string // 空ならヘルプに (default ...) を出さない
 }
 
-func (c *command) name() string {
+func (c *Command) name() string {
 	n, _, _ := strings.Cut(c.Use, " ")
 	return n
 }
 
-func (c *command) path() string {
+func (c *Command) path() string {
 	if c.parent == nil {
 		return c.name()
 	}
 	return c.parent.path() + " " + c.name()
 }
 
-func (c *command) AddCommand(cmds ...*command) {
+func (c *Command) AddCommand(cmds ...*Command) {
 	for _, s := range cmds {
 		s.parent = c
 		c.subs = append(c.subs, s)
 	}
 }
 
-func (c *command) out() io.Writer {
+func (c *Command) out() io.Writer {
 	for x := c; x != nil; x = x.parent {
-		if x.stdout != nil {
-			return x.stdout
+		if x.Stdout != nil {
+			return x.Stdout
 		}
 	}
 	return io.Discard
@@ -70,37 +72,37 @@ func (c *command) out() io.Writer {
 
 // --- フラグの登録 ---
 
-func (c *command) StringVar(p *string, name, def, usage string) {
+func (c *Command) StringVar(p *string, name, def, usage string) {
 	c.StringVarP(p, name, "", def, usage)
 }
 
-func (c *command) StringVarP(p *string, name, short, def, usage string) {
+func (c *Command) StringVarP(p *string, name, short, def, usage string) {
 	*p = def
 	c.flags = append(c.flags, &flagSpec{name: name, short: short, typ: "string", usage: usage, value: (*stringValue)(p), defaultText: quoteIfSet(def)})
 }
 
 // PersistentStringVarP は子孫のコマンドでも使える文字列フラグ (例: -c, --config)。
-func (c *command) PersistentStringVarP(p *string, name, short, def, usage string) {
+func (c *Command) PersistentStringVarP(p *string, name, short, def, usage string) {
 	c.StringVarP(p, name, short, def, usage)
 	c.persistent = append(c.persistent, c.flags[len(c.flags)-1])
 }
 
-func (c *command) BoolVar(p *bool, name string, def bool, usage string) {
+func (c *Command) BoolVar(p *bool, name string, def bool, usage string) {
 	*p = def
 	c.flags = append(c.flags, &flagSpec{name: name, typ: "bool", usage: usage, value: (*boolValue)(p)})
 }
 
 // StringArrayVar は繰り返し指定できるフラグ (--tag a --tag b)。カンマでは分けない。
-func (c *command) StringArrayVar(p *[]string, name string, usage string) {
+func (c *Command) StringArrayVar(p *[]string, name string, usage string) {
 	c.flags = append(c.flags, &flagSpec{name: name, typ: "stringArray", usage: usage, value: &listValue{p: p}})
 }
 
 // StringSliceVar は繰り返し指定でき、値をカンマで分けるフラグ (--status open,acked)。
-func (c *command) StringSliceVar(p *[]string, name string, usage string) {
+func (c *Command) StringSliceVar(p *[]string, name string, usage string) {
 	c.flags = append(c.flags, &flagSpec{name: name, typ: "strings", usage: usage, value: &listValue{p: p, split: true}})
 }
 
-func (c *command) MarkFlagRequired(name string) {
+func (c *Command) MarkFlagRequired(name string) {
 	c.required = append(c.required, name)
 }
 
@@ -148,15 +150,15 @@ func (l *listValue) String() string {
 
 // --- 引数の検査 (cobra と同じ文言) ---
 
-func noArgs(c *command, args []string) error {
+func NoArgs(c *Command, args []string) error {
 	if len(args) > 0 {
 		return fmt.Errorf("unknown command %q for %q", args[0], c.path())
 	}
 	return nil
 }
 
-func exactArgs(n int) func(*command, []string) error {
-	return func(_ *command, args []string) error {
+func ExactArgs(n int) func(*Command, []string) error {
+	return func(_ *Command, args []string) error {
 		if len(args) != n {
 			return fmt.Errorf("accepts %d arg(s), received %d", n, len(args))
 		}
@@ -164,8 +166,8 @@ func exactArgs(n int) func(*command, []string) error {
 	}
 }
 
-func maximumNArgs(n int) func(*command, []string) error {
-	return func(_ *command, args []string) error {
+func MaximumNArgs(n int) func(*Command, []string) error {
+	return func(_ *Command, args []string) error {
 		if len(args) > n {
 			return fmt.Errorf("accepts at most %d arg(s), received %d", n, len(args))
 		}
@@ -176,7 +178,7 @@ func maximumNArgs(n int) func(*command, []string) error {
 // --- 実行 ---
 
 // inheritedFlags は祖先の persistent フラグ。
-func (c *command) inheritedFlags() []*flagSpec {
+func (c *Command) inheritedFlags() []*flagSpec {
 	var out []*flagSpec
 	for x := c.parent; x != nil; x = x.parent {
 		out = append(out, x.persistent...)
@@ -184,8 +186,8 @@ func (c *command) inheritedFlags() []*flagSpec {
 	return out
 }
 
-// execute は args を解釈してサブコマンドへ降り、実行する。
-func (c *command) execute(ctx context.Context, args []string) error {
+// Execute は args を解釈してサブコマンドへ降り、実行する。
+func (c *Command) Execute(ctx context.Context, args []string) error {
 	var help, version bool
 	specs := append(append([]*flagSpec{}, c.flags...), c.inheritedFlags()...)
 	fs := flag.NewFlagSet(c.path(), flag.ContinueOnError)
@@ -231,7 +233,7 @@ func (c *command) execute(ctx context.Context, args []string) error {
 	}
 
 	if help {
-		c.writeHelp(c.out())
+		c.WriteHelp(c.out())
 		return nil
 	}
 	if version {
@@ -241,11 +243,11 @@ func (c *command) execute(ctx context.Context, args []string) error {
 	if len(c.subs) > 0 {
 		if len(positional) == 0 {
 			if c.Run == nil {
-				c.writeHelp(c.out())
+				c.WriteHelp(c.out())
 				return nil
 			}
 		} else if sub := c.find(positional[0]); sub != nil {
-			return sub.execute(ctx, positional[1:])
+			return sub.Execute(ctx, positional[1:])
 		} else if c.Run == nil {
 			return fmt.Errorf("unknown command %q for %q", positional[0], c.path())
 		}
@@ -296,7 +298,7 @@ func flagError(err error) error {
 // invalidValue は flag の値エラー (bool とそれ以外で文言が違う)。
 var invalidValue = regexp.MustCompile(`^invalid (?:boolean )?value ("(?:[^"\\]|\\.)*") for (?:flag )?-(\S+): (.*)$`)
 
-func (c *command) find(name string) *command {
+func (c *Command) find(name string) *Command {
 	for _, s := range c.subs {
 		if s.name() == name {
 			return s
@@ -305,8 +307,8 @@ func (c *command) find(name string) *command {
 	return nil
 }
 
-// findPath は help [command...] の対象を探す。見つからなければ nil。
-func (c *command) findPath(names []string) *command {
+// FindPath は help [command...] の対象を探す。見つからなければ nil。
+func (c *Command) FindPath(names []string) *Command {
 	x := c
 	for _, n := range names {
 		if x = x.find(n); x == nil {
@@ -318,7 +320,7 @@ func (c *command) findPath(names []string) *command {
 
 // --- ヘルプ (cobra の既定テンプレートと同じ書式) ---
 
-func (c *command) writeHelp(w io.Writer) {
+func (c *Command) WriteHelp(w io.Writer) {
 	var b strings.Builder
 	text := c.Long
 	if text == "" {
@@ -334,7 +336,7 @@ func (c *command) writeHelp(w io.Writer) {
 	}
 	if len(c.subs) > 0 {
 		b.WriteString("\n  " + c.path() + " [command]")
-		subs := append([]*command{}, c.subs...)
+		subs := append([]*Command{}, c.subs...)
 		sort.Slice(subs, func(i, j int) bool { return subs[i].name() < subs[j].name() })
 		pad := 11
 		for _, s := range subs {
@@ -363,7 +365,7 @@ func (c *command) writeHelp(w io.Writer) {
 	_, _ = io.WriteString(w, b.String())
 }
 
-func (c *command) useLine() string {
+func (c *Command) useLine() string {
 	use := c.Use
 	if c.parent != nil {
 		use = c.parent.path() + " " + use

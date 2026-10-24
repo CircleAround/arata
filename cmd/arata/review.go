@@ -10,14 +10,15 @@ import (
 	"github.com/CircleAround/arata/internal/engine"
 	"github.com/CircleAround/arata/internal/record"
 	"github.com/CircleAround/arata/internal/store"
+	"github.com/CircleAround/arata/internal/subcmd"
 )
 
 // 人の判断による finding の操作 (設計書 6-2)。
 
-func newReviewCmd(d *Deps, g *globalFlags) *command {
+func newReviewCmd(d *Deps, g *globalFlags) *subcmd.Command {
 	var statuses []string
 	var format string
-	cmd := &command{
+	cmd := &subcmd.Command{
 		Use:   "review",
 		Short: "未対応 (open / acked) の finding を一覧する (対話なし。approve できるものは対象を示す)",
 		Run: func(ctx context.Context, _ []string) error {
@@ -62,9 +63,9 @@ func newReviewCmd(d *Deps, g *globalFlags) *command {
 	return cmd
 }
 
-func newApproveCmd(d *Deps, g *globalFlags) *command {
+func newApproveCmd(d *Deps, g *globalFlags) *subcmd.Command {
 	o := engine.ApproveOptions{}
-	cmd := &command{
+	cmd := &subcmd.Command{
 		Use:   "approve <finding-id>",
 		Short: "finding の主体を allowlist.yaml に追記し、finding を resolved にする (人が判断して実行する)",
 		Long: `finding の主体を allowlist.yaml の principals の末尾に追記する。ファイルの他の部分 (コメント・順序・空行) は変えない。
@@ -75,7 +76,7 @@ func newApproveCmd(d *Deps, g *globalFlags) *command {
   - git への commit は人が行う。--commit を付けると allowlist.yaml だけを commit する
 
 LLM は approve を実行せず、人に提案するだけにすること (arata help ai approve)。`,
-		Args: exactArgs(1),
+		Args: subcmd.ExactArgs(1),
 		Run: func(ctx context.Context, args []string) error {
 			e, cfg, err := openEngine(d, g)
 			if err != nil {
@@ -111,12 +112,12 @@ LLM は approve を実行せず、人に提案するだけにすること (arata
 	return cmd
 }
 
-func newStatusCmd(d *Deps, g *globalFlags, use, status, short string) *command {
+func newStatusCmd(d *Deps, g *globalFlags, use, status, short string) *subcmd.Command {
 	var until string
-	cmd := &command{
+	cmd := &subcmd.Command{
 		Use:   use + " <finding-id>",
 		Short: short,
-		Args:  exactArgs(1),
+		Args:  subcmd.ExactArgs(1),
 		Run: func(ctx context.Context, args []string) error {
 			var u time.Time
 			if status == store.FindingSnoozed {
@@ -155,8 +156,8 @@ func formatErr(format, want string) error {
 	return &engine.ExitError{Code: engine.CodeConfigInvalid, Exit: engine.ExitConfig, Err: fmt.Errorf("unknown format %q (%s)", format, want)}
 }
 
-func reviewCommands(d *Deps, g *globalFlags) []*command {
-	return []*command{
+func reviewCommands(d *Deps, g *globalFlags) []*subcmd.Command {
+	return []*subcmd.Command{
 		newReviewCmd(d, g),
 		newApproveCmd(d, g),
 		newStatusCmd(d, g, "ack", store.FindingAcked, "finding を acked にする (再報告しないが review の未対応一覧には残る)"),

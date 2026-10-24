@@ -69,6 +69,7 @@ LLM の役割は「危険の判定を代行する」ことではなく「人が�
 | `COLLECT_FAILED` | 上記に分類できない収集エラー | ネットワークなどを確認して再実行 |
 | `CONFIG_INVALID` | 設定ファイルの読み込み・検証エラー | エラーメッセージに従い設定を直す |
 | `CHECK_UNUSED` | どのプロファイルにも入っていないチェックがある (警告。`checks` に名前) | 入れ忘れなら profiles に足す。`arata config init --diff` で雛形と比べる。意図して外したなら人に確認するだけでよい |
+| `REPORT_NOT_FOUND` | `arata report --profile X` で、そのプロファイルの run がまだ無い (終了コード 2) | 先に `arata run --profile X` を実行する。プロファイル名の打ち間違いも疑う |
 
 `RUN_MISSED` と終了コードは LLM を経由せず組み込み側が直接通知する規則になっている。
 
