@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/CircleAround/arata/internal/llm"
 	"github.com/CircleAround/arata/internal/notify"
 	"github.com/CircleAround/arata/internal/slack"
 	"github.com/CircleAround/arata/internal/subcmd"
@@ -29,11 +30,15 @@ type Deps struct {
 	// HTTPClient は Slack への送信に使う。nil なら slack.New の既定。
 	HTTPClient *http.Client
 	Logger     *slog.Logger
+	// Environ は claude-cli の子プロセスに渡す環境変数の元 (Webhook の環境変数は除いてから渡す)。
+	Environ func() []string
+	// NewBedrock は bedrock プロバイダを作る。テストは httptest に向けたものに差し替える。
+	NewBedrock func(ctx context.Context, region, profile, model string) (notify.Summarizer, error)
 }
 
 // DefaultDeps は実行時の依存。
 func DefaultDeps() Deps {
-	return Deps{Stdout: os.Stdout, Stderr: os.Stderr, Getenv: os.Getenv, Now: time.Now}
+	return Deps{Stdout: os.Stdout, Stderr: os.Stderr, Getenv: os.Getenv, Now: time.Now, Environ: os.Environ}
 }
 
 // exitError は終了コードを運ぶ。ログは返す前に出しておく。
@@ -54,6 +59,14 @@ func Execute(args []string, d Deps) int {
 	}
 	if d.Now == nil {
 		d.Now = time.Now
+	}
+	if d.Environ == nil {
+		d.Environ = os.Environ
+	}
+	if d.NewBedrock == nil {
+		d.NewBedrock = func(ctx context.Context, region, profile, model string) (notify.Summarizer, error) {
+			return llm.NewBedrock(ctx, region, profile, model)
+		}
 	}
 	if d.Logger == nil {
 		d.Logger = slog.New(slog.NewJSONHandler(d.Stderr, nil))
@@ -80,9 +93,11 @@ const rootLong = `arata の出力 (report.json / report.md) を読み、要約�
 arata とは出力ディレクトリだけで連携する (arata を呼ばず、AWS の監査ロールもストアも使わない)。
 
 はじめに:
-  1. aratam config init                    設定の雛形を ./aratam.yaml に書き出す (name と slack の環境変数名を確認する)
-  2. aratam notify --in <dir> --dry-run    送らずに、送る内容を標準出力に出す
-  3. cron で arata run --out <dir> の後に aratam notify --in <dir> をつなぐ
+  1. aratam config init                    設定の雛形を ./aratam.yaml に書き出す (name・llm・slack を確認する)
+  2. aratam doctor                         Webhook の環境変数と LLM の疎通を確かめる (送信はしない)
+  3. aratam test-notify                    Slack に試験メッセージを 1 通送る
+  4. aratam notify --in <dir> --dry-run    送らずに、送る内容を標準出力に出す
+  5. cron で arata run --out <dir> の後に aratam notify --in <dir> をつなぐ
 
 Webhook の URL は設定ファイルに書かず、slack.webhook_env に書いた名前の環境変数で渡す。`
 
@@ -97,7 +112,7 @@ func NewRootCmd(d *Deps) *subcmd.Command {
 		Stdout:  d.Stdout,
 	}
 	root.PersistentStringVarP(&g.config, "config", "c", "", "設定ファイル (YAML)。省略時は環境変数 "+envConfig+"、無ければ ./"+defaultConfigFile)
-	root.AddCommand(newConfigCmd(d), newNotifyCmd(d, g))
+	root.AddCommand(newConfigCmd(d), newNotifyCmd(d, g), newDoctorCmd(d, g), newTestNotifyCmd(d, g))
 	return root
 }
 
@@ -235,7 +250,7 @@ func (s *stdoutSender) Send(_ context.Context, route notify.Route, text string) 
 }
 
 func newNotifyCmd(d *Deps, g *globalFlags) *subcmd.Command {
-	var in, llm string
+	var in, llmFlag string
 	var dryRun, force bool
 	cmd := &subcmd.Command{
 		Use:   "notify",
@@ -255,19 +270,21 @@ func newNotifyCmd(d *Deps, g *globalFlags) *subcmd.Command {
 			if err != nil {
 				return err
 			}
-			if llm != "" {
-				cfg.LLM.Provider = llm
+			if llmFlag != "" {
+				cfg.LLM.Provider = llmFlag
 				if err := cfg.Validate(); err != nil {
 					return configErr(d, fmt.Errorf("--llm: %w", err))
 				}
-			}
-			if cfg.LLM.Provider != notify.ProviderNone {
-				return configErr(d, fmt.Errorf("llm.provider %q is not available in this version yet; use provider: none (or --llm none)", cfg.LLM.Provider))
 			}
 			hooks, err := readWebhooks(d, cfg, !dryRun)
 			if err != nil {
 				return err
 			}
+			summarizer, err := newSummarizer(ctx, d, cfg)
+			if err != nil {
+				return err
+			}
+			timeout, _ := notify.ParseDuration(cfg.LLM.Timeout)
 			var sender notify.Sender = &slackSender{client: slack.New(d.HTTPClient), hooks: hooks}
 			if dryRun {
 				sender = &stdoutSender{w: d.Stdout, hooks: hooks}
@@ -275,6 +292,7 @@ func newNotifyCmd(d *Deps, g *globalFlags) *subcmd.Command {
 			res := notify.Run(ctx, notify.Options{
 				Dir: in, Now: d.Now(), Rules: cfg.Rules(hooks.urgent != ""),
 				Force: force, DryRun: dryRun, Sender: sender, Logger: d.Logger,
+				Summarizer: summarizer, LLMTimeout: timeout,
 			})
 			if res.Exit != notify.ExitOK {
 				return &exitError{code: res.Exit}
@@ -286,6 +304,23 @@ func newNotifyCmd(d *Deps, g *globalFlags) *subcmd.Command {
 	cmd.MarkFlagRequired("in")
 	cmd.BoolVar(&dryRun, "dry-run", false, "送らずに標準出力へ出す (.aratam-notified も書かない)")
 	cmd.BoolVar(&force, "force", false, "通知済みの run でも送る")
-	cmd.StringVar(&llm, "llm", "", "llm.provider を上書きする (none で LLM を呼ばない)")
+	cmd.StringVar(&llmFlag, "llm", "", "llm.provider を上書きする (none で LLM を呼ばない)")
 	return cmd
+}
+
+// newSummarizer は設定のプロバイダを作る。provider: none なら nil (LLM を呼ばない)。
+func newSummarizer(ctx context.Context, d *Deps, cfg *notify.Config) (notify.Summarizer, error) {
+	switch cfg.LLM.Provider {
+	case notify.ProviderClaudeCLI:
+		// 決定: 子プロセスには aratam の環境変数を渡すが、Webhook の URL を入れた環境変数は除く (LLM に渡すのは report.json だけ)
+		env := llm.FilterEnv(d.Environ(), cfg.Slack.WebhookEnv, cfg.Slack.UrgentWebhookEnv)
+		return &llm.ClaudeCLI{Command: cfg.LLM.Command, Model: cfg.LLM.Model, Env: env}, nil
+	case notify.ProviderBedrock:
+		s, err := d.NewBedrock(ctx, cfg.LLM.Region, cfg.LLM.Profile, cfg.LLM.Model)
+		if err != nil {
+			return nil, configErr(d, err)
+		}
+		return s, nil
+	}
+	return nil, nil
 }

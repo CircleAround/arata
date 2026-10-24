@@ -66,7 +66,8 @@ aratam notify --in /var/lib/arata/out/daily
   件数 0 の区分は出さない。カバレッジは問題 (取れなかったソース・解釈率の code・スキップしたチェック) があるときだけ出す。末尾に `全文: <dir>/report.md` を添える。
   期間レポートは report.md から件数 0 の節 (`## 見出し (0)`) を除き、見出しを `*見出し*`、`**太字**` を `*太字*` に置き換えて送る。
 - メッセージ: report 由来の文字列は `&` `<` `>` をエスケープする。ログ由来の値 (User-Agent など) が `<!channel>` やリンクとして働かないようにするため。メンションは設定に書いたものだけを付ける。
-- メッセージ: 1 通は 3,800 文字までに切り詰める (Slack は text を 4,000 文字程度までにするよう求めている)。行の境目で切り、`…(長いため省略)` と report.md のパスを添える。
+- メッセージ: 1 通は 3,800 文字までに切り詰める (Slack は text を 4,000 文字程度までにするよう求めている)。
+  文字数は Unicode のコードポイント数 (Go の rune 数) で数え、バイト数では数えない (Slack の上限も文字数)。理由文などの上限を含め、切り詰めはすべて文字単位で行う。行の境目で切り、`…(長いため省略)` と report.md のパスを添える。
 - 送信: 再送はしない (Slack が受け取ったのに応答が届かなかった場合の二重送信を避ける。失敗は終了コード 5 で cron 側に任せる)。
   `net/http` のエラーは URL を含むので、中身だけを取り出してから返す (Webhook の URL をログに出さない)。
 
@@ -99,12 +100,37 @@ LLM に求める出力:
 | provider | 呼び方 | 認証 |
 |---|---|---|
 | `bedrock` | `bedrockruntime` の Converse API。`model` (推論プロファイル ID) と `region` は設定で明示する | AWS SDK の標準認証チェーン (`profile` 指定可)。必要なのは `bedrock:InvokeModel` だけ |
-| `claude-cli` | `claude -p --output-format json` を子プロセスで起動し、プロンプトを標準入力で渡す。ツールは使わせない設定にし、作業ディレクトリは空の一時ディレクトリにする | `claude` 側のログイン状態 |
+| `claude-cli` | `claude -p --output-format json` を子プロセスで起動し、プロンプトを標準入力で渡す。ツールは使わせない設定にし、作業ディレクトリは空の一時ディレクトリにする。決定: `--setting-sources project` で設定は project だけを読む (空のディレクトリなので project 設定は無く、ユーザー設定の hooks・権限設定・プラグインを読ませない。`--bare` は OAuth のログイン状態を読まなくなるので使わない) | `claude` 側のログイン状態 |
 | `openai-api` (後続) | Chat Completions を `net/http` で呼ぶ | 環境変数の API キー |
 | `none` | LLM を呼ばない | - |
 
 - 共通: `timeout` (既定 120s)。失敗時の再試行は 1 回まで。
 - インターフェースは `Summarize(ctx, system, reportJSON) (raw []byte, err error)` の 1 つ。JSON の検証と組み立ては共通部分で行い、プロバイダごとに書かない。
+
+決定 (実装順 2〜3):
+- 再試行: エラー・時間切れに加え、形が合わない出力も 1 回だけ再試行する (2 回目は契約どおりに返すことが多いため)。`timeout` は 1 回ごとにかける。
+  再試行は `LLM_RETRY`、最終的な失敗は `LLM_FAILED` (標準エラー) で、原文を送って終了コード 3。
+- 出力の検証: 前後の文やコードフェンスが付いていたら最初の `{` から最後の `}` までを取り出す。`headline` が空なら形が不正。
+  report.json に無い `finding_id`、`class` が action / confirm / info 以外の item、同じ `finding_id` の 2 件目以降は捨てる
+  (捨てた finding が new / changed / recurred なら「要約に含まれていなかった指摘 (規則で追加)」として末尾に足される)。
+  incidents は知らない ID を除き、ID が残らなければ捨てる。approve_suggestions も知らない ID のものを捨てる。
+  知っている ID なら still_open などを分類してもよい (表示は report.json の区分を添える)。
+- 組み立て: 1 行目の名前と期間、件数の行、取れなかったソース (期間レポートは取れなかった run)、漏れた finding は report.json から規則で書き、
+  LLM の文字列は headline・reason・incidents・approve の理由だけ。どれもエスケープし、改行は空白にする (書式を崩させない)。
+  LLM の文字列は組み立て側でも上限で切る (reason・approve の理由は 200 字、incidents の summary は 240 字、末尾に …)。
+  system でも reason は 1〜2 文 (120 字程度)、incidents は 200 字程度とし、重大度や `data.xxx=` の値を繰り返させない (aratam が別に表示するため)。
+- 切り詰め: 3,800 文字に収まらなければ優先度で削る。情報の理由文 → 情報の行 (「*情報* N 件 (長いため省略)」だけ残す) → 確認依頼の理由文 の順。
+  見出し・要対処・インシデント候補・承認の提案・漏れた finding・取れなかったものは削らない。それでも収まらなければ分類の部分を末尾から切る
+  (インシデント候補と承認の提案は必ず残す)。
+- 期間レポート: system の文書は足さない。`docs/ai/report.md` の「期間レポート」の節で足りるため (8 章の未決を閉じる)。
+  必ず載せる finding は events の new / changed / recurred。
+- system: 出力の契約 (3 章)、「追加の照会はできない。report.json だけで判断する」、続けて `docs/ai/report.md` を埋め込む。
+- `claude-cli`: `claude -p --output-format json --tools "" --strict-mcp-config --no-session-persistence --setting-sources project --system-prompt <system> [--model <model>]`。
+  ツールも MCP サーバーも使わせず、セッションをディスクに残さない。作業ディレクトリは空の一時ディレクトリ (終わったら消す)。
+  子プロセスの環境変数は aratam のものから Webhook の環境変数 (`slack.webhook_env` / `urgent_webhook_env`) を除いて渡す。
+  `--output-format json` の `is_error` が真なら失敗。実行ファイルは `llm.command` (空なら PATH の `claude`。cron の PATH が狭い場合に絶対パスで書く)。
+- `bedrock`: SDK の自動再試行は切る (RetryMaxAttempts 1。再試行は共通部分で 1 回までと決めているため重ねない)。温度 0、maxTokens 4096。
+  stopReason が max_tokens なら失敗 (途中で切れた JSON を検証に回さない)。
 
 ## 4. 設定
 
@@ -122,6 +148,7 @@ llm:
   region: us-east-1
   # profile: aratam-llm
   timeout: 120s
+  # command: /usr/local/bin/claude   # claude-cli の実行ファイル (決定: 実装順 2 で追加。空なら PATH の claude)
 
 slack:
   webhook_env: ARATAM_SLACK_WEBHOOK            # 通常用。URL は設定ファイルに書かず環境変数で渡す
@@ -162,6 +189,11 @@ aratam test-notify [-c aratam.yaml] # Slack に試験メッセージを 1 通送
   標準エラーのログも arata と同じ JSON (`msg` と固定語彙の `code`)。
 - 決定: `--dry-run` の出力は 1 通ごとに `--- route: <normal|urgent> → <送る Webhook> ---` の行を付けて本文を出す。
 - 決定: `--llm` で `llm.provider` を上書きしたら、上書き後の設定で検証し直す (`--llm none` なら model などは要らない)。
+- 決定 (`doctor`): config / webhook / llm を表 (STATUS ITEM DETAIL) で出す。Webhook は環境変数の有無だけで URL は表示しない。
+  通常用が無ければ ng (`WEBHOOK_UNSET`)、緊急用の名前を書いたのに無ければ warn (`URGENT_WEBHOOK_UNSET`)。
+  LLM は「疎通確認です。ok とだけ返してください。」を 1 回送り (report のデータは渡さない。再試行しない)、失敗や claude の実行ファイルが無ければ ng (`LLM_UNAVAILABLE`)。
+  ng が 1 つでもあれば終了コード 2、ng / warn の行は標準エラーにも code 付きで出す。
+- 決定 (`test-notify`): 既定は通常用、`--urgent` で緊急用に送る (緊急用が無ければ notify と同じく通常用にメンション付き)。送信に失敗したら終了コード 5。
 
 ## 6. パッケージ構成
 
@@ -193,5 +225,5 @@ docs/ai/             # arata と共有。aratam は report.md を system とし�
 ## 8. 未決事項
 
 - Slack の書式を Block Kit にするか mrkdwn の本文だけにするか (まずは本文だけ)
-- 期間レポート用の system 文書を `docs/ai` に足すか、report.md の節で足りるか
+- ~~期間レポート用の system 文書を `docs/ai` に足すか、report.md の節で足りるか~~ (決定: report.md の節で足りる。3-1 章)
 - 同じ run の hourly と daily で通知をまとめるか (まずは別々に送る)

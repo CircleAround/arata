@@ -17,7 +17,22 @@ var allowedDeps = []string{
 	"github.com/CircleAround/arata/internal/slack",
 	"github.com/CircleAround/arata/internal/subcmd",
 	"github.com/CircleAround/arata/internal/report/schema",
+	"github.com/CircleAround/arata/internal/llm",
+	"github.com/CircleAround/arata/docs/ai", // LLM の system に埋め込む文書 (標準ライブラリだけに依存)
 	"gopkg.in/yaml.v3",
+	// bedrock プロバイダ (aratam 設計書 1 章で AWS SDK を使ってよいとしたもの)。Converse と、標準の認証チェーンが使う STS / SSO だけ
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime",
+	"github.com/aws/aws-sdk-go-v2/config",
+	"github.com/aws/aws-sdk-go-v2/credentials",
+	"github.com/aws/aws-sdk-go-v2/feature/ec2/imds",
+	"github.com/aws/aws-sdk-go-v2/aws",
+	"github.com/aws/aws-sdk-go-v2/internal",
+	"github.com/aws/aws-sdk-go-v2/service/internal",
+	"github.com/aws/aws-sdk-go-v2/service/sts",
+	"github.com/aws/aws-sdk-go-v2/service/sso",
+	"github.com/aws/aws-sdk-go-v2/service/ssooidc",
+	"github.com/aws/aws-sdk-go-v2/service/signin",
+	"github.com/aws/smithy-go",
 }
 
 // 許可リストとは別に、名指しで入れてはならないもの (許可リストを広げるときの歯止め)。

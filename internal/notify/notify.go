@@ -26,7 +26,12 @@ const (
 	CodeAlreadyNotified = "ALREADY_NOTIFIED"
 	CodeNameMismatch    = "NAME_MISMATCH"
 	CodeMarkFailed      = "MARK_FAILED"
+	CodeLLMRetry        = "LLM_RETRY"
+	CodeLLMFailed       = "LLM_FAILED"
 )
+
+// FallbackNotice は LLM が使えず原文を送るときに冒頭へ書く注記。
+const FallbackNotice = "要約に失敗したため原文を送ります"
 
 // Route は送り先。
 type Route string
@@ -52,6 +57,12 @@ type Sender interface {
 	Send(ctx context.Context, route Route, text string) error
 }
 
+// Summarizer は LLM のプロバイダ (aratam 設計書 3-1)。system と report.json を渡し、LLM の出力をそのまま返す。
+// JSON の検証と組み立てはプロバイダごとに書かず、ここ (ParseSummary / SummaryText) で行う。
+type Summarizer interface {
+	Summarize(ctx context.Context, system string, reportJSON []byte) ([]byte, error)
+}
+
 // Options は Run への入力。
 type Options struct {
 	Dir    string
@@ -61,6 +72,10 @@ type Options struct {
 	DryRun bool // .aratam-notified を書かない (Sender は呼び出し側が標準出力に向ける)
 	Sender Sender
 	Logger *slog.Logger
+	// Summarizer は nil なら LLM を使わない (provider: none)。
+	Summarizer Summarizer
+	// LLMTimeout は LLM 呼び出し 1 回の時間切れ (再試行は 1 回まで)。
+	LLMTimeout time.Duration
 }
 
 // Result は Run の結果。
@@ -126,6 +141,7 @@ func Run(ctx context.Context, o Options) Result {
 	}
 
 	d := Decide(in, o.Rules)
+	exit := ExitOK
 	var text string
 	switch {
 	case d.Quiet && o.Rules.OnQuiet == "silent":
@@ -133,14 +149,51 @@ func Run(ctx context.Context, o Options) Result {
 		return Result{Exit: ExitOK, Route: d.Route}
 	case d.Quiet:
 		text = QuietText(in, d, o.Rules, warnings)
-	default:
+	case o.Summarizer == nil:
 		text = ReportText(in, d, o.Rules, warnings, "")
+	default:
+		if s, err := summarize(ctx, o, log, in); err != nil {
+			log.Error("LLM の要約に失敗したため原文を送ります", "code", CodeLLMFailed, "error", err.Error())
+			text = ReportText(in, d, o.Rules, warnings, FallbackNotice)
+			exit = ExitFallback
+		} else {
+			text = SummaryText(in, d, o.Rules, warnings, s)
+		}
 	}
 	if !send(ctx, o, log, d.Route, text) {
 		return Result{Exit: ExitSend, Route: d.Route}
 	}
 	mark(o, log, key)
-	return Result{Exit: ExitOK, Route: d.Route, Sent: true}
+	return Result{Exit: exit, Route: d.Route, Sent: true}
+}
+
+// summarize は LLM に要約させ、出力を検証する。失敗 (エラー・時間切れ・形が合わない) なら 1 回だけ再試行する。
+// 決定: 形が合わない出力も再試行の対象にする (同じ入力でも 2 回目は契約どおりに返すことが多いため)。
+func summarize(ctx context.Context, o Options, log *slog.Logger, in *Input) (*Summary, error) {
+	system := SystemPrompt(in.Kind)
+	var last error
+	for attempt := 1; attempt <= 2; attempt++ {
+		cctx, cancel := context.WithTimeout(ctx, o.LLMTimeout)
+		raw, err := o.Summarizer.Summarize(cctx, system, in.JSON)
+		if errors.Is(cctx.Err(), context.DeadlineExceeded) {
+			err = fmt.Errorf("timed out after %s: %w", o.LLMTimeout, context.DeadlineExceeded)
+		}
+		cancel()
+		if err == nil {
+			var s *Summary
+			if s, err = ParseSummary(raw, in); err == nil {
+				return s, nil
+			}
+		}
+		last = err
+		if ctx.Err() != nil {
+			break
+		}
+		if attempt == 1 {
+			log.Warn("LLM の要約に失敗したので再試行します", "code", CodeLLMRetry, "error", err.Error())
+		}
+	}
+	return nil, last
 }
 
 func send(ctx context.Context, o Options, log *slog.Logger, route Route, text string) bool {

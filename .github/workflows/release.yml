@@ -1,6 +1,6 @@
 name: release
 
-# v* タグの push で linux/arm64 と linux/amd64 の静的バイナリを作り、SHA256SUMS と共に GitHub Releases に添付する。
+# v* タグの push で arata と aratam の linux/arm64 と linux/amd64 の静的バイナリを作り、SHA256SUMS と共に GitHub Releases に添付する。
 # 公開リポジトリでは build provenance attestation (来歴証明) も付ける。非公開の間は SHA256SUMS のみ (ADR 0017)。
 on:
   push:
@@ -32,10 +32,12 @@ jobs:
       - name: checksums
         working-directory: bin
         run: |
-          sha256sum arata-linux-arm64 arata-linux-amd64 > SHA256SUMS
+          sha256sum arata-linux-arm64 arata-linux-amd64 aratam-linux-arm64 aratam-linux-amd64 > SHA256SUMS
           cat SHA256SUMS
       - name: smoke test (arm64 runner)
-        run: bin/arata-linux-arm64 --version | grep -F "${GITHUB_REF_NAME}"
+        run: |
+          bin/arata-linux-arm64 --version | grep -F "${GITHUB_REF_NAME}"
+          bin/aratam-linux-arm64 --version | grep -F "${GITHUB_REF_NAME}"
       - name: attest build provenance
         # 非公開リポジトリの attestation は Enterprise Cloud が要る。非公開の間はスキップしてリリースを止めない。
         if: github.event.repository.visibility == 'public'
@@ -44,10 +46,12 @@ jobs:
           subject-path: |
             bin/arata-linux-arm64
             bin/arata-linux-amd64
+            bin/aratam-linux-arm64
+            bin/aratam-linux-amd64
       - name: publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${GITHUB_REF_NAME}" \
-            bin/arata-linux-arm64 bin/arata-linux-amd64 bin/SHA256SUMS \
+            bin/arata-linux-arm64 bin/arata-linux-amd64 bin/aratam-linux-arm64 bin/aratam-linux-amd64 bin/SHA256SUMS \
             --title "${GITHUB_REF_NAME}" --generate-notes --verify-tag
