@@ -5,11 +5,11 @@ go 1.27.3
 require (
 	github.com/aws/aws-sdk-go-v2 v1.47.3
 	github.com/aws/aws-sdk-go-v2/config v1.33.9
-	github.com/aws/aws-sdk-go-v2/service/accessanalyzer v1.57.4
-	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.63.4
-	github.com/aws/aws-sdk-go-v2/service/cloudtrail v1.65.4
-	github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs v1.89.3
-	github.com/aws/aws-sdk-go-v2/service/guardduty v1.99.1
+	github.com/aws/aws-sdk-go-v2/service/accessanalyzer v1.57.5
+	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.63.5
+	github.com/aws/aws-sdk-go-v2/service/cloudtrail v1.65.5
+	github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs v1.90.0
+	github.com/aws/aws-sdk-go-v2/service/guardduty v1.101.0
 	github.com/aws/aws-sdk-go-v2/service/iam v1.64.4
 	github.com/aws/aws-sdk-go-v2/service/s3control v1.79.4
 	github.com/aws/aws-sdk-go-v2/service/sts v1.51.4
