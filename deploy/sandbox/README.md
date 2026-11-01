@@ -24,7 +24,8 @@
 
 ## 必要なもの
 
-- **Node 24** (`.node-version` の版。24.22.1 以上、25 未満)。TypeScript は Node の型除去でそのまま動かす (ts-node などは使わない)
+- **Node 24** (`.node-version` の版。24.22.1 以上、25 未満)。TypeScript は Node の型除去でそのまま動かす (ts-node などは使わない)。
+  範囲外の Node では `pnpm install` がエラーで止まる (`pnpm-workspace.yaml` の `engineStrict: true`)
 - pnpm 10 (`package.json` の `packageManager` の版。`corepack enable` で揃う)
 - aws CLI v2 (シナリオと arata の profile 用)
 - 開発用アカウントで CloudFormation・IAM・CloudWatch Logs・Secrets Manager (と任意の GuardDuty・Access Analyzer・Bedrock) を作れる認証情報
