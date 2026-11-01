@@ -116,7 +116,9 @@ scenarios/03-iam-changes.sh cleanup          # 03 を使ったときだけ (ス�
 pnpm cdk destroy -c config=$HOME/arata-sandbox/config.json
 ```
 
-- スタックの全リソースは `DeletionPolicy: Delete` (テストで固定)。ロググループ・試験ユーザー・シークレット・detector も消える
+- スタックのリソースは `DeletionPolicy` / `UpdateReplacePolicy` に Retain / Snapshot を持たない (テストで固定)。明示しているのは
+  ロググループとシークレット (CDK の既定が Retain のため `Delete` にした) だけで、他 (IAM のロール・ユーザー・アクセスキー、detector、アナライザーなど) は
+  CloudFormation の既定で削除される。ロググループ・試験ユーザー・シークレット・detector も消える
 - 生成したパスワードのシークレットは名前を自動で付けるので、削除の猶予期間中に再 deploy しても衝突しない
 - `CDKToolkit` (bootstrap) は残る。もう使わないなら CloudFormation から消し、資材用の S3 バケットを空にして消す
 

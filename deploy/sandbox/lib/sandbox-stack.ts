@@ -1,6 +1,6 @@
 // sandbox = arata の試験用に条件を整えた、開発用 AWS アカウント上の環境。
 // arata の各チェックに中身が出る状態 (MFA の無いユーザー、外部アカウントから引き受けられるロール、nginx のロググループなど) を作る。
-// 置くものには実権限を付けない (漏れても何もできない)。cdk destroy で全部消える (RemovalPolicy は Delete)。
+// 置くものには実権限を付けない (漏れても何もできない)。cdk destroy で全部消える (Retain / Snapshot を持たない。CDK の既定が Retain のロググループとシークレットだけ明示で DESTROY)。
 import { fileURLToPath } from 'node:url';
 import { App, CfnOutput, RemovalPolicy, SecretValue, Stack, Tags, type StackProps } from 'aws-cdk-lib';
 import { CfnInclude } from 'aws-cdk-lib/cloudformation-include';

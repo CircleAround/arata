@@ -19,7 +19,7 @@ arata の自動テストは AWS を偽物 (固定値のクライアント・`htt
 
 - **sandbox は AWS CDK (TypeScript) で作る** (`deploy/sandbox/`)。読み取り専用ロール、nginx のロググループ、試験用 IAM ユーザー、
   外部アカウントから引き受けられるロール、任意で GuardDuty・IAM Access Analyzer・Bedrock の application inference profile を作り、
-  `cdk destroy` で全部消える (全リソース `DeletionPolicy: Delete` をテストで固定)
+  `cdk destroy` で全部消える (Retain / Snapshot を持たないことをテストで固定。明示していないものは CloudFormation の既定で削除される)
 - 置くものには実権限を付けない。試験用ユーザーと外部用ロールはポリシーを持たない (漏れても何もできない。テストで固定)。
   パスワードは Secrets Manager で生成して動的参照で渡し、アクセスキーの秘密値はどこからも参照しない
 - 設定はリポジトリの外の JSON を `cdk deploy -c config=<path>` で渡す。未知のキー・型の誤り・不足は deploy の前にまとめて報告する。
@@ -38,7 +38,8 @@ arata の自動テストは AWS を偽物 (固定値のクライアント・`htt
   依存は `aws-cdk-lib`・`constructs`・`aws-cdk`・`typescript`・`@types/node` だけ。テストは Node 標準の `node:test`、実行は Node の型除去で、
   jest・ts-node は使わない
 - CloudFormation の検証の警告をエラーにする (`@aws-cdk/core:validateAgainstDefaultRules`)。deploy して初めて分かる誤り (IAM の説明に使えない文字など) を synth で止める。
-  cdk の CLI のテレメトリ・notices・バージョン報告は止める
+  cdk の CLI のテレメトリ・notices・バージョン報告は止める。`cdk.json` には `cdk init` と同じ推奨の feature flag を入れ (古い既定の挙動に依らず、CDK を上げたときに挙動が変わらないように)、
+  テストも同じ context で合成する
 
 ## 検討した選択肢
 

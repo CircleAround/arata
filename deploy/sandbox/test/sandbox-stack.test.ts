@@ -9,10 +9,17 @@ import { SandboxStack, buildSandbox } from '../lib/sandbox-stack.ts';
 
 const examplePath = fileURLToPath(new URL('../config.example.json', import.meta.url));
 
-// cdk.json と同じく、CloudFormation の検証の警告をエラーにする (deploy して初めて分かる誤りを synth で止める)
+// cdk.json の context (推奨の feature flag と、CloudFormation の検証の警告をエラーにする設定) で合成し、cdk synth と同じ結果にする
+const cdkContext = JSON.parse(readFileSync(new URL('../cdk.json', import.meta.url), 'utf8')).context as Record<string, unknown>;
+
 function newApp(): App {
-  return new App({ context: { '@aws-cdk/core:validateAgainstDefaultRules': true } });
+  return new App({ context: cdkContext });
 }
+
+test('cdk.json: 検証の警告をエラーにし、推奨の feature flag を入れている', () => {
+  assert.equal(cdkContext['@aws-cdk/core:validateAgainstDefaultRules'], true);
+  assert.ok(Object.keys(cdkContext).filter((k) => k.startsWith('@aws-cdk')).length > 50, 'cdk init と同じ推奨のフラグ');
+});
 
 function example(): Record<string, any> {
   return JSON.parse(readFileSync(examplePath, 'utf8'));
@@ -128,7 +135,7 @@ test('外部アカウントから AssumeRole される役のロールは権限�
   assert.deepEqual(role.Properties.AssumeRolePolicyDocument.Statement, [
     {
       Effect: 'Allow',
-      Principal: { AWS: { 'Fn::Join': ['', ['arn:', { Ref: 'AWS::Partition' }, ':iam::111122223333:root']] } },
+      Principal: { AWS: 'arn:aws:iam::111122223333:root' },
       Action: 'sts:AssumeRole',
       Condition: { StringEquals: { 'sts:ExternalId': 'example-external-id' } },
     },
