@@ -23,7 +23,9 @@ LLM 向けの使い方は `go run ./cmd/arata help ai` (バイナリに埋め込
 - テストは **実 AWS・実 LLM・実 Slack・実 `claude` に接続しない**。`httptest`、偽の実行ファイル、固定値で差し替える。
   テストが PATH の本物の `claude` を起動しないことを必ず確かめる (過去に 1 度起きた)
 - Go は `$HOME/.local/go/bin` の公式 tarball (README「開発」)。cgo は使わない (単一静的バイナリ。ADR 0002)
-- `go test ./...` / `go vet ./...` / `gofmt -l .` を通してから push する。CI は `go mod verify`・age-gate・govulncheck・ビルドも回す
+- `go test ./...` / `go vet ./...` / `gofmt -l $(git ls-files '*.go')` を通してから push する。CI は `go mod verify`・age-gate・govulncheck・ビルドも回す
+  (`gofmt -l .` は `deploy/sandbox/node_modules` の中の Go の雛形まで読んで失敗するので、git 管理のファイルだけを見る)
+- `deploy/sandbox` (CDK、TypeScript) を変えたら `pnpm test` / `pnpm typecheck` / `pnpm synth` も通す (deploy はしない。ADR 0020)
 - 書き込み系の操作 (リリース作成、タグ push、設定変更) は目的と副作用を一言説明してから行う
 
 ### 依存とサプライチェーン (ADR 0017・0019)
@@ -83,3 +85,4 @@ go run ./cmd/arata help ai                               # LLM 向けの使い�
   `internal/allowlist` 既知リスト / `internal/scaffold` 雛形 / `internal/notify`・`internal/llm`・`internal/slack` aratam
 - `docs/ai/*.md` はバイナリに埋め込まれる。変えたらテストのゴールデンも変わる
 - `tools/agegate` CI 用。`examples/` は架空の値の設定例
+- `deploy/iam/readonly-role.yaml` 顧客に配る読み取り専用ロール (素の CFN) / `deploy/sandbox` 試験環境 (CDK、pnpm、Node 24。Go とは独立。ADR 0020)

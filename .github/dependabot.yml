@@ -16,3 +16,13 @@ updates:
       interval: weekly
     cooldown:
       default-days: 7
+  # deploy/sandbox (CDK)。pnpm-lock.yaml を更新する。pnpm 側の minimumReleaseAge と 2 段構え (ADR 0020)
+  - package-ecosystem: npm
+    directory: /deploy/sandbox
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      aws-cdk:
+        patterns: ["aws-cdk", "aws-cdk-lib", "constructs"]

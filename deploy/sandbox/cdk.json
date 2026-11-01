@@ -1,0 +1,9 @@
+{
+  "app": "node bin/sandbox.ts",
+  "notices": false,
+  "versionReporting": false,
+  "context": {
+    "cli-telemetry": false,
+    "@aws-cdk/core:validateAgainstDefaultRules": true
+  }
+}

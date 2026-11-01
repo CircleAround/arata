@@ -1,0 +1,7 @@
+node_modules/
+cdk.out/
+cdk.context.json
+# 実際の設定はリポジトリの外に置く (アカウント ID などを入れない)。誤って置いた場合の保険
+config.json
+config.*.json
+!config.example.json

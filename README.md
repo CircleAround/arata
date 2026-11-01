@@ -272,4 +272,6 @@ internal/slack/         Slack Incoming Webhook の送信
 internal/engine/        collect → evaluate → report の束ねと doctor (CLI と Lambda が共用)
 docs/ai/                arata help ai の文書 (embed でバイナリに入る)
 examples/               設定サンプル
+deploy/iam/              顧客に配る読み取り専用ロール (素の CloudFormation)
+deploy/sandbox/          試験環境 (sandbox。開発用アカウントに CDK で作る。deploy/sandbox/README.md、ADR 0020)
 ```

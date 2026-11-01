@@ -1,0 +1,143 @@
+# arata 用の読み取り専用ロール (監査対象のアカウントに置く)。
+#
+# - 権限は arata の collector が呼ぶ API だけ (README「週次チェック」の表、設計書 8 章、`arata doctor` の表の最後)。
+#   書き込み系は iam:GenerateCredentialReport (認証情報レポートの生成) だけ。拒否しても 4 時間以内のレポートがあれば arata はそれを使う
+# - 信頼する主体はパラメータ。AWS の主体 (TrustedPrincipalArn) と IAM Roles Anywhere (RolesAnywhereTrustAnchorArn) の
+#   どちらか、または両方を指定する。どちらも空ならスタックを作らせない (Rules)
+# - CDK を使わずに配れるよう素の CloudFormation にしている。開発用の sandbox (deploy/sandbox) はこのファイルを CfnInclude で取り込む
+#   (定義は 1 か所。ADR 0020)。action の過不足は internal/engine/readonly_role_test.go が Go の collector と突き合わせて確かめる
+#
+# 例:
+#   aws cloudformation deploy --stack-name arata-readonly --template-file readonly-role.yaml \
+#     --capabilities CAPABILITY_NAMED_IAM \
+#     --parameter-overrides TrustedPrincipalArn=arn:aws:iam::123456789012:role/arata-runner
+AWSTemplateFormatVersion: '2010-09-09'
+Description: arata read-only audit role
+
+Parameters:
+  RoleName:
+    Type: String
+    Default: arata-readonly
+    AllowedPattern: '[\w+=,.@-]{1,64}'
+    Description: 作るロールの名前
+  TrustedPrincipalArn:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^arn:aws[a-z-]*:(iam|sts)::\d{12}:.+$'
+    Description: AssumeRole を許す AWS の主体の ARN (例 arn:aws:iam::123456789012:role/arata-runner)。空なら許さない
+  ExternalId:
+    Type: String
+    Default: ''
+    Description: TrustedPrincipalArn からの AssumeRole に要求する ExternalId。空なら要求しない
+  RolesAnywhereTrustAnchorArn:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^arn:aws[a-z-]*:rolesanywhere:[a-z0-9-]+:\d{12}:trust-anchor/.+$'
+    Description: IAM Roles Anywhere のトラストアンカーの ARN。空なら Roles Anywhere からは引き受けさせない
+
+Conditions:
+  HasTrustedPrincipal: !Not [!Equals [!Ref TrustedPrincipalArn, '']]
+  HasExternalId: !Not [!Equals [!Ref ExternalId, '']]
+  HasRolesAnywhere: !Not [!Equals [!Ref RolesAnywhereTrustAnchorArn, '']]
+
+Rules:
+  RequireTrust:
+    Assertions:
+      - Assert: !Or
+          - !Not [!Equals [!Ref TrustedPrincipalArn, '']]
+          - !Not [!Equals [!Ref RolesAnywhereTrustAnchorArn, '']]
+        AssertDescription: TrustedPrincipalArn と RolesAnywhereTrustAnchorArn のどちらかを指定してください
+
+Resources:
+  Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref RoleName
+      Description: arata read-only audit role (GenerateCredentialReport is the only write action)
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - !If
+            - HasTrustedPrincipal
+            - Effect: Allow
+              Principal:
+                AWS: !Ref TrustedPrincipalArn
+              Action: sts:AssumeRole
+              Condition: !If
+                - HasExternalId
+                - StringEquals:
+                    sts:ExternalId: !Ref ExternalId
+                - !Ref AWS::NoValue
+            - !Ref AWS::NoValue
+          - !If
+            - HasRolesAnywhere
+            - Effect: Allow
+              Principal:
+                Service: rolesanywhere.amazonaws.com
+              Action:
+                - sts:AssumeRole
+                - sts:TagSession
+                - sts:SetSourceIdentity
+              Condition:
+                ArnEquals:
+                  aws:SourceArn: !Ref RolesAnywhereTrustAnchorArn
+            - !Ref AWS::NoValue
+      Policies:
+        - PolicyName: arata-readonly
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # cloudtrail-lookup
+              - Sid: CloudTrailLookup
+                Effect: Allow
+                Action:
+                  - cloudtrail:LookupEvents
+                Resource: '*'
+              # cloudwatch-logs (Logs Insights の集計クエリ。doctor の解釈率の確認も同じ action)
+              - Sid: CloudWatchLogsInsights
+                Effect: Allow
+                Action:
+                  - logs:DescribeLogGroups
+                  - logs:StartQuery
+                  - logs:GetQueryResults
+                  - logs:StopQuery
+                Resource: '*'
+              # iam-credential-report。GenerateCredentialReport は書き込み系 (レポートの生成のみ)
+              - Sid: CredentialReport
+                Effect: Allow
+                Action:
+                  - iam:GenerateCredentialReport
+                  - iam:GetCredentialReport
+                Resource: '*'
+              # guardduty / posture
+              - Sid: GuardDuty
+                Effect: Allow
+                Action:
+                  - guardduty:ListDetectors
+                  - guardduty:GetDetector
+                  - guardduty:ListFindings
+                  - guardduty:GetFindings
+                Resource: '*'
+              # access-analyzer
+              - Sid: AccessAnalyzer
+                Effect: Allow
+                Action:
+                  - access-analyzer:ListAnalyzers
+                  - access-analyzer:ListFindings
+                Resource: '*'
+              # posture
+              - Sid: Posture
+                Effect: Allow
+                Action:
+                  - cloudtrail:DescribeTrails
+                  - cloudtrail:GetTrailStatus
+                  - iam:GetAccountSummary
+                  - iam:GetAccountPasswordPolicy
+                  - s3:GetAccountPublicAccessBlock
+                Resource: '*'
+
+Outputs:
+  RoleArn:
+    Description: arata の設定 (AWS の profile の role_arn など) に書くロールの ARN
+    Value: !GetAtt Role.Arn

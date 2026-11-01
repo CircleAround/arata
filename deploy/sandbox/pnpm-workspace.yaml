@@ -1,0 +1,2 @@
+# 依存は公開から 7 日 (10080 分) 経った版だけを解決する。Dependabot の cooldown と 2 段構え (ADR 0017・0020)。
+minimumReleaseAge: 10080
