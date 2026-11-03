@@ -102,6 +102,7 @@
     ],
     "sources_failed": [],
     "checks_run": [
+      "access_denied",
       "ai_path_usage",
       "iam_changes",
       "new_principal",

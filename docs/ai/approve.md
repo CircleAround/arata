@@ -52,7 +52,8 @@ CloudTrail ではその主体が「外部アカウント NNN」(`arn:aws:iam::NN
 
 ## approve ではなく ack / snooze / resolve にするもの
 
-- 主体の承認ではない finding (root_usage、login_bruteforce、probe_paths、waf_block_trend など) は approve できない
+- 主体の承認ではない finding (root_usage、access_denied、login_bruteforce、probe_paths、waf_block_trend など) は approve できない
+- access_denied は allowlist で承認しても止まらない (承認済みの主体でも拒否の急増は報告する)。原因が分かっていて止めたいとき (権限の足りないバッチの修正待ちなど) は ack か snooze を提案する
 - `ack`: 確認したが allowlist に入れたくないもの。再報告しないが未対応一覧に残る
 - `snooze --until YYYY-MM-DD`: 対処の予定が決まっているもの。期日以降に再び観測されたら新規として再報告される
 - `resolve`: 対処が終わったもの。再び観測されたら新規として報告される

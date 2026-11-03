@@ -156,7 +156,7 @@ func TestEvents(t *testing.T) {
 	evs := []record.TrailEvent{
 		{EventID: "e1", Time: ts, Source: "trail", Name: "ConsoleLogin", EventSource: "signin.amazonaws.com", PrincipalARN: "arn:aws:iam::1:root", PrincipalKind: record.PrincipalRoot, IP: "203.0.113.1", Region: "us-east-1", Data: map[string]any{"mfa": "Yes"}},
 		{EventID: "e2", Time: ts.Add(time.Minute), Source: "trail", Name: "AttachUserPolicy", EventSource: "iam.amazonaws.com", PrincipalARN: "arn:aws:iam::1:user/a", PrincipalKind: record.PrincipalUser, Resource: "arn:aws:iam::1:user/b"},
-		{EventID: "e3", Time: ts.Add(2 * time.Minute), Source: "trail", Name: "GetUser", EventSource: "iam.amazonaws.com", PrincipalARN: "arn:aws:iam::1:user/a", PrincipalKind: record.PrincipalUser, ReadOnly: true},
+		{EventID: "e3", Time: ts.Add(2 * time.Minute), Source: "trail", Name: "GetUser", EventSource: "iam.amazonaws.com", PrincipalARN: "arn:aws:iam::1:user/a", PrincipalKind: record.PrincipalUser, ReadOnly: true, ErrorCode: "AccessDenied"},
 		{EventID: "e4", Time: ts.Add(48 * time.Hour), Source: "trail", Name: "AssumeRole", EventSource: "sts.amazonaws.com", PrincipalARN: "arn:aws:iam::1:user/a", PrincipalKind: record.PrincipalUser},
 	}
 	for _, e := range evs {
@@ -179,6 +179,7 @@ func TestEvents(t *testing.T) {
 		{"by source write only", EventFilter{EventSources: []string{"iam.amazonaws.com"}, WriteOnly: true}, []string{"e2"}},
 		{"by name", EventFilter{Names: []string{"GetUser", "ConsoleLogin"}}, []string{"e1", "e3"}},
 		{"by prefix", EventFilter{NamePrefixes: []string{"Attach"}}, []string{"e2"}},
+		{"by error code", EventFilter{ErrorCodes: []string{"AccessDenied", "UnauthorizedOperation"}}, []string{"e3"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

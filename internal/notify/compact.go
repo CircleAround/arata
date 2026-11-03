@@ -24,6 +24,7 @@ var keyFields = map[string][]string{
 	"access_analyzer":     {"resource", "is_public"},
 	"credential_hygiene":  {"key", "last_used", "days_unused"},
 	"ai_path_usage":       {"ip", "last_seen"},
+	"access_denied":       {"apis", "ips", "allowlist_status"},
 }
 
 var defaultKeyFields = []string{"count", "ips"}

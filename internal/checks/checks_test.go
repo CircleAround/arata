@@ -156,9 +156,46 @@ func TestChecks(t *testing.T) {
 	}
 }
 
+// 拒否されたイベント (access_denied のために events に残す) が増えても、ほかのイベント型チェックの結果は変わらない。
+func TestDeniedEventsDoNotAffectOtherChecks(t *testing.T) {
+	st, al, w := fixture(t)
+	ctx := context.Background()
+	others := []Check{RootUsage{}, UnknownAssumeRole{}, IAMChanges{}}
+	before := map[string]string{}
+	for _, c := range others {
+		obs, err := c.Evaluate(ctx, st, w, al)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before[c.Name()] = fmt.Sprintf("%+v", obs)
+	}
+	in := now.Add(-2 * time.Hour)
+	for i, api := range []string{"iam.amazonaws.com:ListUsers", "iam.amazonaws.com:GetAccountAuthorizationDetails", "s3.amazonaws.com:ListBuckets", "ec2.amazonaws.com:DescribeInstances", "secretsmanager.amazonaws.com:ListSecrets", "sts.amazonaws.com:GetCallerIdentity"} {
+		src, name, _ := strings.Cut(api, ":")
+		code := "AccessDenied"
+		if src == "ec2.amazonaws.com" {
+			code = "Client.UnauthorizedOperation"
+		}
+		e := record.TrailEvent{EventID: fmt.Sprintf("denied%d", i), Time: in, Source: "trail", Name: name, EventSource: src, PrincipalARN: "arn:aws:iam::1:user/unknown",
+			PrincipalKind: record.PrincipalUser, IP: "198.51.100.1", ErrorCode: code, ReadOnly: true}
+		if err := st.InsertEvent(ctx, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range others {
+		obs, err := c.Evaluate(ctx, st, w, al)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := fmt.Sprintf("%+v", obs); got != before[c.Name()] {
+			t.Fatalf("%s changed:\n before %s\n after  %s", c.Name(), before[c.Name()], got)
+		}
+	}
+}
+
 func TestRegistry(t *testing.T) {
 	r := NewRegistry()
-	if strings.Join(r.Names(), ",") != "root_usage,unknown_assume_role,new_principal,iam_changes,login_bruteforce,probe_paths,waf_block_trend,ai_path_usage,credential_hygiene,guardduty_findings,posture,access_analyzer" {
+	if strings.Join(r.Names(), ",") != "root_usage,unknown_assume_role,new_principal,iam_changes,access_denied,login_bruteforce,probe_paths,waf_block_trend,ai_path_usage,credential_hygiene,guardduty_findings,posture,access_analyzer" {
 		t.Fatalf("%v", r.Names())
 	}
 	for _, n := range r.Names() {
@@ -169,7 +206,7 @@ func TestRegistry(t *testing.T) {
 		}
 	}
 	d := r.Defaults()
-	if strings.Join(d["daily"], ",") != "ai_path_usage,iam_changes,login_bruteforce,new_principal,probe_paths,waf_block_trend" || strings.Join(d["hourly"], ",") != "root_usage,unknown_assume_role" ||
+	if strings.Join(d["daily"], ",") != "access_denied,ai_path_usage,iam_changes,login_bruteforce,new_principal,probe_paths,waf_block_trend" || strings.Join(d["hourly"], ",") != "root_usage,unknown_assume_role" ||
 		strings.Join(d["weekly"], ",") != "access_analyzer,credential_hygiene,guardduty_findings,posture" {
 		t.Fatalf("%v", d)
 	}

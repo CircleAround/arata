@@ -14,7 +14,7 @@ AWS のログと設定を定期的に改め、**前回から新しく発生し�
 
 - ソース: `cloudtrail-lookup` (CloudTrail LookupEvents)、`cloudwatch-logs` (Logs Insights の集計クエリ。形式プロファイル `nginx_access` / `alb_access` / `wafv2` / `json` / `regex`)、
   アカウント単位の状態 `iam-credential-report` / `guardduty` / `access-analyzer` / `posture`
-- チェック: `root_usage`, `unknown_assume_role`, `new_principal`, `iam_changes`, `login_bruteforce`, `probe_paths`, `waf_block_trend`, `ai_path_usage` (daily)、
+- チェック: `root_usage`, `unknown_assume_role`, `new_principal`, `iam_changes`, `access_denied`, `login_bruteforce`, `probe_paths`, `waf_block_trend`, `ai_path_usage` (daily)、
   `credential_hygiene`, `guardduty_findings`, `posture`, `access_analyzer` (weekly)
 - ストア: `dir://` (JSONL 原本 + SQLite)
 - CLI: `config init` (推奨設定の雛形と `--diff`) / `profiles` (効いているチェックとパラメータ) / `init` (日単位の分割と `--resume`) / `doctor` / `run` / `collect` / `evaluate` / `report` (`--from --to` / `--month` で期間レポート) / `review` / `approve` / `ack` / `snooze` / `resolve` / `help ai`

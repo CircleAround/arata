@@ -98,6 +98,8 @@ type EventFilter struct {
 	EventSources   []string
 	PrincipalKinds []record.PrincipalKind
 	WriteOnly      bool // read_only=false のみ
+	// ErrorCodes は error_code がこの集合に入るもの (完全一致)。拒否された呼び出し (access_denied) に使う。
+	ErrorCodes []string
 	// LateFrom と CollectedSince が両方あれば、[LateFrom, from) のうち collected_at >= CollectedSince のもの
 	// (再走査で遅れて届いたイベント。ADR 0013) も返す。
 	LateFrom       time.Time

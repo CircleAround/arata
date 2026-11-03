@@ -66,8 +66,8 @@ sources:
 
 # 周期ごとの窓と有効チェック。実行されるのはここに書いたチェックだけ (arata profiles で確かめる)。
 # `default-<cadence>` はその周期のチェック全部に展開される (版が上がって増えたチェックも黙って入る。雛形では使わない)。
-# チェック: root_usage (hourly), unknown_assume_role (hourly), new_principal (daily), iam_changes (daily), ai_path_usage (daily),
-#           login_bruteforce / probe_paths (daily, http_access), waf_block_trend (daily, waf_action),
+# チェック: root_usage (hourly), unknown_assume_role (hourly), new_principal (daily), iam_changes (daily), access_denied (daily),
+#           ai_path_usage (daily), login_bruteforce / probe_paths (daily, http_access), waf_block_trend (daily, waf_action),
 #           credential_hygiene / guardduty_findings / posture / access_analyzer (weekly)
 # hourly に http_access / waf_action を使うチェックを入れなければ hourly では Logs Insights を回さない
 profiles:
@@ -102,6 +102,11 @@ checks:
     top_n: 5                                   # BLOCK 件数の Top IP の入れ替わりを見る数
     min_count: 10
     new_rule_min_count: 1
+  access_denied:                               # 拒否された API 呼び出し (主体ごと。平常帯はその主体自身の過去)
+    error_codes: [AccessDenied, AccessDeniedException, UnauthorizedOperation, Client.UnauthorizedOperation]
+    min_distinct_apis: 5                       # 拒否された API の種類がこれ以上で medium (列挙の兆候)
+    high_distinct_apis: 20                     # これ以上で high
+    min_count: 50                              # 件数の条件の下限 (medium 止まり)
 
 # 保持期間 (省略時の既定値)。prune は後続 Step。
 retention:
