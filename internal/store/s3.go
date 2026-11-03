@@ -78,6 +78,8 @@ type S3 struct {
 	objects map[string]s3Object // 取得した raw と reports (ストアのディレクトリからの相対パス)
 	dbETag  string
 	done    bool
+	// rawOrphaned は S3 に SQLite が無いのに raw があった。
+	rawOrphaned bool
 }
 
 var _ Store = (*S3)(nil)
@@ -128,8 +130,20 @@ func openS3(ctx context.Context, api S3API, loc S3Location, work string) (*S3, e
 		return nil, err
 	}
 	s.Dir.beforeAppend = s.fetchRaw
+	if obj.etag == "" {
+		prefix := loc.Key("raw/")
+		out, err := api.ListObjectsV2(ctx, &s3.ListObjectsV2Input{Bucket: &loc.Bucket, Prefix: &prefix, MaxKeys: aws.Int32(1)})
+		if err != nil {
+			s.Dir.Close()
+			return nil, unavailable(ctx, "list", prefix, err)
+		}
+		s.rawOrphaned = len(out.Contents) > 0
+	}
 	return s, nil
 }
+
+// RawWithoutDatabase は開始時に S3 に SQLite が無く raw があったか (SQLite が失われた疑い。初回は raw も無い)。
+func (s *S3) RawWithoutDatabase() bool { return s.rawOrphaned }
 
 // fetchRaw は raw のファイルに初めて追記する前に、S3 の今の内容を取得する。
 func (s *S3) fetchRaw(ctx context.Context, rel string) error {

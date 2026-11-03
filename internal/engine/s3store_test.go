@@ -263,3 +263,51 @@ func TestDoctorLastRunToReadsS3(t *testing.T) {
 		t.Fatalf("last run: %v %v", to, ok)
 	}
 }
+
+// SQLite が消えて raw だけ残っているのに黙って空から始めない (全部が新規として報告され、原因に気づきにくい)。
+func TestS3WarnsWhenDatabaseIsLost(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t)
+	f := useS3(t, h)
+	addRootLogin(h, "r1")
+	e, err := Open(h.cfg, h.deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Run(ctx, "daily"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	e.Close()
+	if strings.Contains(h.stderr.String(), "rebuild --from-scratch") {
+		t.Fatalf("the first run of a new store must not warn: %s", h.stderr)
+	}
+
+	f.Delete("acme/audit.sqlite.gz")
+	e, err = Open(h.cfg, h.deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close()
+	if !strings.Contains(strings.Join(h.logCodes(t), ","), CodeStoreCorrupt) || !strings.Contains(h.stderr.String(), "arata rebuild --from-scratch") {
+		t.Fatalf("must warn and point to rebuild: %s", h.stderr)
+	}
+}
+
+// S3 への問い合わせの途中の中断は、権限・通信の失敗 (STORE_UNAVAILABLE) でも破損 (STORE_CORRUPT) でもない。
+func TestS3OpenInterrupted(t *testing.T) {
+	h := newHarness(t)
+	useS3(t, h)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := OpenContext(ctx, h.cfg, h.deps)
+	var xe *ExitError
+	if !errors.Is(err, context.Canceled) || errors.As(err, &xe) {
+		t.Fatalf("want a plain context.Canceled, got %v", err)
+	}
+	if codes := h.logCodes(t); len(codes) != 0 {
+		t.Fatalf("no error code here: %v", codes)
+	}
+}

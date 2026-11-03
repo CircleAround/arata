@@ -53,8 +53,10 @@ const (
 	CodeStoreConflict = "STORE_CONFLICT"
 	// CodeStoreUnavailable は s3:// のストアに問い合わせられない (権限・通信)。破損ではないので rebuild はしない。
 	CodeStoreUnavailable = "STORE_UNAVAILABLE"
-	CodeRunMissed        = "RUN_MISSED"
-	CodeConfigInvalid    = "CONFIG_INVALID"
+	// CodeInterrupted は SIGINT / SIGTERM で止まった (設定の誤りではない。もう一度実行する)。
+	CodeInterrupted   = "INTERRUPTED"
+	CodeRunMissed     = "RUN_MISSED"
+	CodeConfigInvalid = "CONFIG_INVALID"
 	// CodeCheckUnused はどのプロファイルにも入っていないチェックがある (警告。設定の雛形と照らして入れ忘れを疑う)。
 	CodeCheckUnused = "CHECK_UNUSED"
 	// CodeReportNotFound は report で再表示するレポートが無い (そのプロファイルの run がまだ無い)。
@@ -64,7 +66,7 @@ const (
 // Codes は標準エラーの JSON 行ログに現れ得る code の固定語彙。テストで保証する。
 var Codes = []string{
 	collect.CodeFormatMismatch, collect.CodeFormatDrift, collect.CodeLogGroupMissing, collect.CodeAccessDenied, collect.CodeQueryLimit, collect.CodeQueryInvalid,
-	CodeStoreLocked, CodeStoreCorrupt, CodeStoreConflict, CodeStoreUnavailable, CodeRunMissed, collect.CodeCollectFailed, CodeConfigInvalid, CodeCheckUnused, CodeReportNotFound,
+	CodeStoreLocked, CodeStoreCorrupt, CodeStoreConflict, CodeStoreUnavailable, CodeInterrupted, CodeRunMissed, collect.CodeCollectFailed, CodeConfigInvalid, CodeCheckUnused, CodeReportNotFound,
 }
 
 // 終了コード (設計書 8 章)。
@@ -250,6 +252,10 @@ func OpenContext(ctx context.Context, cfg *config.Config, deps Deps) (*Engine, e
 	deps.fill(cfg)
 	st, err := openStore(ctx, cfg, deps)
 	if err != nil {
+		// 中断はここでは分類しない (CLI が INTERRUPTED にする)
+		if errors.Is(err, context.Canceled) {
+			return nil, err
+		}
 		if errors.Is(err, store.ErrLocked) {
 			deps.Logger.Error("store is locked by another process", "code", CodeStoreLocked, "dir", cfg.Store.String())
 			return nil, &ExitError{Code: CodeStoreLocked, Exit: ExitConfig, Err: err}
@@ -265,6 +271,11 @@ func OpenContext(ctx context.Context, cfg *config.Config, deps Deps) (*Engine, e
 		st.Close()
 		deps.Logger.Error("invalid allowlist", "code", CodeConfigInvalid, "path", cfg.Allowlist, "error", err.Error())
 		return nil, &ExitError{Code: CodeConfigInvalid, Exit: ExitConfig, Err: err}
+	}
+	// 決定: raw があるのに SQLite が無いのは消えた可能性が高い。止めはしないが (この実行が空の SQLite を作る)、全部が新規として報告される原因が分かるように知らせる
+	if s, ok := st.(*store.S3); ok && s.RawWithoutDatabase() {
+		deps.Logger.Warn("the S3 store has raw files but no database; it may have been lost, so this run starts empty and reports everything as new", "code", CodeStoreCorrupt, "store", cfg.Store.String(),
+			"action", "stop and run arata rebuild --from-scratch to rebuild it from raw (or restore the previous version if the bucket has versioning)")
 	}
 	return &Engine{cfg: cfg, deps: deps, st: st, al: al, log: deps.Logger}, nil
 }
@@ -284,9 +295,9 @@ func s3Location(cfg *config.Config) store.S3Location {
 	return store.S3Location{Bucket: cfg.Store.Bucket, Prefix: cfg.Store.Prefix}
 }
 
-// isStoreUnavailable は S3 に問い合わせられなかった (中断を含む) か。破損と区別する。
+// isStoreUnavailable は S3 に問い合わせられなかった (期限切れを含む) か。破損と区別する。中断 (context.Canceled) は含めない。
 func isStoreUnavailable(err error) bool {
-	return errors.Is(err, store.ErrS3Unavailable) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+	return errors.Is(err, store.ErrS3Unavailable) || errors.Is(err, context.DeadlineExceeded)
 }
 
 func storeUnavailable(deps Deps, cfg *config.Config, err error) error {

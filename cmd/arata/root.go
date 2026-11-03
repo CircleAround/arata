@@ -27,6 +27,8 @@ type Deps struct {
 	Stderr io.Writer
 	// Getenv は環境変数 (ARATA_CONFIG) の読み取り。テストはテストを動かす環境に左右されないよう差し替える。
 	Getenv func(string) string
+	// s3Store は読み込んだ設定のストアが s3:// か (中断の案内に使う)。
+	s3Store bool
 }
 
 // DefaultDeps は実行時の依存 (実 AWS SDK、現在時刻、標準出力 / 標準エラー)。
@@ -36,6 +38,13 @@ func DefaultDeps() Deps {
 
 // Execute は引数で CLI を実行し終了コードを返す (設計書 8: 0 / 2 / 3)。
 func Execute(args []string, d Deps) int {
+	// SIGINT / SIGTERM で context を止める。init はそこまでの進捗を記録して終わる (init --resume で再開)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return execute(ctx, args, d)
+}
+
+func execute(ctx context.Context, args []string, d Deps) int {
 	if d.Stdout == nil {
 		d.Stdout = os.Stdout
 	}
@@ -49,9 +58,6 @@ func Execute(args []string, d Deps) int {
 		d.Engine.Logger = slog.New(slog.NewJSONHandler(d.Stderr, nil))
 	}
 	root := NewRootCmd(&d)
-	// SIGINT / SIGTERM で context を止める。init はそこまでの進捗を記録して終わる (init --resume で再開)
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	if err := root.Execute(ctx, args); err != nil {
 		var xe *engine.ExitError
 		if errors.As(err, &xe) {
@@ -60,11 +66,23 @@ func Execute(args []string, d Deps) int {
 		if errors.Is(err, errPartial) {
 			return engine.ExitPartial
 		}
+		// 決定: 中断はエラーの型ではなく ctx で見る (SQLite の実行中の中断は context.Canceled を包まないことがある)
+		if ctx.Err() != nil {
+			d.Engine.Logger.Error(interruptedMessage(&d), "code", engine.CodeInterrupted, "error", err.Error())
+			return engine.ExitConfig
+		}
 		// フラグ / 引数のエラーや予期しない失敗は設定エラー扱い
 		d.Engine.Logger.Error(err.Error(), "code", engine.CodeConfigInvalid)
 		return engine.ExitConfig
 	}
 	return engine.ExitOK
+}
+
+func interruptedMessage(d *Deps) string {
+	if d.s3Store {
+		return "interrupted: the results were not saved to the S3 store; run the same command again"
+	}
+	return "interrupted: run the same command again"
 }
 
 var errPartial = errors.New("collection partially failed")
@@ -123,6 +141,7 @@ func loadConfig(d *Deps, g *globalFlags) (*config.Config, error) {
 		d.Engine.Logger.Error("invalid configuration", "code", engine.CodeConfigInvalid, "path", path, "error", err.Error())
 		return nil, &engine.ExitError{Code: engine.CodeConfigInvalid, Exit: engine.ExitConfig, Err: err}
 	}
+	d.s3Store = cfg.Store.Scheme == "s3"
 	return cfg, nil
 }
 

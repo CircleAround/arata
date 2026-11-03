@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -180,5 +181,72 @@ func TestS3StoreDoctor(t *testing.T) {
 	}
 	if len(f.Requests("PUT")) != 0 {
 		t.Fatalf("doctor must not write")
+	}
+}
+
+func (c *cli) lastLog() map[string]any {
+	c.t.Helper()
+	l := c.logLines()
+	if len(l) == 0 {
+		c.t.Fatalf("no log lines")
+	}
+	return l[len(l)-1]
+}
+
+// 中断は設定の誤りではない。INTERRUPTED と、S3 に保存していないこと・再実行の案内を出す。
+func TestS3StoreInterrupted(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(c *cli, cancel context.CancelFunc)
+	}{
+		{"before the store is opened", func(c *cli, cancel context.CancelFunc) { cancel() }},
+		{"during collection", func(c *cli, cancel context.CancelFunc) { c.onCollect = cancel }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, f := newS3CLI(t)
+			if code := c.run("run", "--config", c.cfg, "--profile", "daily"); code != 0 {
+				t.Fatalf("run: exit %d\n%s", code, c.stderr)
+			}
+			before := f.Snapshot()
+			c.now = c.now.Add(24 * time.Hour)
+			c.rootLogin("r1")
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			c.ctx = ctx
+			tc.setup(c, cancel)
+			code := c.run("run", "--config", c.cfg, "--profile", "daily", "--out", filepath.Join(c.dir, "out"))
+			if code != 2 {
+				t.Fatalf("exit %d\n%s", code, c.stderr)
+			}
+			last := c.lastLog()
+			msg, _ := last["msg"].(string)
+			if last["code"] != "INTERRUPTED" || !strings.Contains(msg, "not saved to the S3 store") || !strings.Contains(msg, "run the same command again") {
+				t.Fatalf("last log: %v\n%s", last, c.stderr)
+			}
+			if strings.Contains(c.stderr.String(), "CONFIG_INVALID") {
+				t.Fatalf("an interruption is not a configuration error:\n%s", c.stderr)
+			}
+			if !reflect.DeepEqual(f.Snapshot(), before) {
+				t.Fatalf("S3 must not change")
+			}
+			c.assertCodesInVocabulary()
+		})
+	}
+}
+
+// dir:// でも中断は設定の誤りにしない。S3 の話はしない。
+func TestDirStoreInterrupted(t *testing.T) {
+	c := newCLI(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c.ctx = ctx
+	c.onCollect = cancel
+	if code := c.run("run", "--config", c.cfg, "--profile", "daily"); code != 2 {
+		t.Fatalf("exit %d\n%s", code, c.stderr)
+	}
+	last := c.lastLog()
+	msg, _ := last["msg"].(string)
+	if last["code"] != "INTERRUPTED" || strings.Contains(msg, "S3") {
+		t.Fatalf("last log: %v", last)
 	}
 }

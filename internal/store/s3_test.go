@@ -517,3 +517,42 @@ func TestS3ConflictIsDetectedBeforeRaw(t *testing.T) {
 		t.Fatalf("the loser must not upload raw")
 	}
 }
+
+// raw があるのに SQLite が無いのは消えた可能性が高い。初回 (raw も無い) と区別する。
+func TestS3RawWithoutDatabase(t *testing.T) {
+	ctx := context.Background()
+	f, api := storetest.NewFakeS3(t, bucket)
+	s, err := store.OpenS3(ctx, api, loc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if s.RawWithoutDatabase() {
+		t.Fatalf("a new store has neither")
+	}
+	write(t, s, trail("e1", day1))
+	if err := s.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	s, err = store.OpenS3(ctx, api, loc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if s.RawWithoutDatabase() {
+		t.Fatalf("both exist")
+	}
+	s.Close()
+
+	f.Delete(dbKey)
+	s, err = store.OpenS3(ctx, api, loc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if !s.RawWithoutDatabase() {
+		t.Fatalf("the database was lost")
+	}
+}

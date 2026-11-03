@@ -18,8 +18,10 @@ SQLite はローカルのファイルとしてしか安全に動かない。JSON
   - 開始時に SQLite と `reports/` を取得し、それぞれの ETag を覚える
   - raw は **日のファイルに初めて追記するときに取得する** (`Dir.AppendRaw` の内部のフック)。窓から日を予測して先に取ることはしない
   - 権限・通信の失敗は `STORE_UNAVAILABLE` で止める。「無い」(404) とだけ区別して空のストアで始める (取り違えると全部が new として報告され、rebuild を促す `STORE_CORRUPT` も誤りになる)
+  - SQLite が無いのに raw があれば、消えた可能性が高いので `STORE_CORRUPT` の警告で `arata rebuild --from-scratch` を案内する (全部が new になる原因に気づけるように。止めはしない)
 - **確定**: `Engine.Commit(ctx)` を書き込み系のコマンドが成功したときだけ呼ぶ。呼ばずに `Close` すれば何も送らない。`dir://` の `Commit` は何もしない
   - 失敗・中断 (ctx)・パニックと、読むだけの `report` / `review` は同じ仕組みでアップロードされない
+  - 中断は `INTERRUPTED` (終了コード 2) で、S3 に保存していないことと再実行を案内する。`CONFIG_INVALID` にしない (`dir://` でも同じ)。判定はエラーの型ではなく ctx で行う
   - `run` / `evaluate` は Commit してから report を出す。`STORE_CONFLICT` のときは report を出さず、確定していない結果を aratam が通知しない
   - `run` の partial (終了コード 3) は確定した結果なので Commit する
   - `init` は中断・部分失敗でも Commit する (中断された ctx を外す)。init は進捗を書いて `--resume` で再開する作りで、捨てると数時間分の収集を失うため。Commit に失敗したら、収集が失われたことと再実行の手順を出す

@@ -238,6 +238,7 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
 | `QUERY_INVALID` | クエリ / 設定の不備 (Insights の構文エラー、不正な時間範囲など)。決定: 上限 (`QUERY_LIMIT`) とは区別する |
 | `STORE_LOCKED` / `STORE_CORRUPT` | ストアの排他失敗 / SQLite 破損 (rebuild を促す。`arata rebuild` で既存の SQLite が読めないときもこれで、`--from-scratch` を案内する) |
 | `STORE_CONFLICT` / `STORE_UNAVAILABLE` | 決定: `s3://` のストアを別の実行が先に書いた / S3 に問い合わせられない (権限・通信。破損ではない)。どちらも終了コード 2 (5-5、ADR 0034) |
+| `INTERRUPTED` | 決定: SIGINT / SIGTERM で止まった (終了コード 2。設定の誤りとは区別する。`dir://` でも同じ。init は除く: 進捗を確定して終了コード 3) |
 | `RUN_MISSED` | 前回実行から profile の周期の 2 倍以上空いた (起動側の障害) |
 | `COLLECT_FAILED` | 決定: 上記に分類できない収集エラー (ネットワーク断など) |
 | `CONFIG_INVALID` | 決定: 設定ファイルの読み込み・検証エラー (終了コード 2) |
@@ -489,6 +490,7 @@ retention:
 - 決定: `run` の partial は Commit する。`init` は中断・部分失敗でも Commit する (`--resume` のため)。Commit に失敗したら、その実行の収集が失われたことと再実行の手順を出す
 - 決定: `run` / `evaluate` は Commit してからレポートを出す。衝突したら `--out` に何も書かないので、aratam が入力の問題として知らせる (`docs/aratam.md` 2 章)
 - 決定: S3 に問い合わせられない (権限・通信) ときは `STORE_UNAVAILABLE`。404 だけを「まだ無い」と扱う
+- 決定: S3 に SQLite が無いのに raw があれば、消えた可能性が高いので `STORE_CORRUPT` の警告で `arata rebuild --from-scratch` を案内する。止めはしない (気づかず定時に回る環境で、失敗の連続より実行を優先する)。この実行が空の SQLite を作るので、次の実行からは警告が出ない
 - 決定: raw だけが先に進む (SQLite の書き込みが失敗する) ことは受け入れる。次の run は古い SQLite から同じ窓を引き直すので SQLite では二重に数えない。
   rebuild でも events・metrics・スナップショットは同じ結果で、`principal_ips.count` だけが増え得る (判定に使わない。ADR 0011・0034)
 - 決定: `rebuild` は raw を全部取得して作り直し、SQLite だけを条件付きで置き換える。`.bak` は残さない (世代はバケットのバージョニング)
