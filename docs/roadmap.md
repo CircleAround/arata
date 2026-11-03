@@ -1,33 +1,30 @@
-# ロードマップと引き継ぎ (2026-11-03 時点)
+# ロードマップと引き継ぎ (2026-11-03 時点、v0.3.0 リリース後)
 
 ここは「今どこまでできていて、次に何をするか」をまとめる文書。仕様は `design.md` / `aratam.md`、判断の経緯は `adr/`。
 更新は PR ごとに行い、終わった項目は消す (履歴は git に残る)。
 
-## 1. 現状
+## 1. 現状 (v0.3.0)
 
-- arata: 設計書 10 章の Step 1〜3 まで実装済み (CloudTrail / CloudWatch Logs / 週次のアカウント状態、allowlist と承認、
-  期間レポート、`config init` と `profiles`、doctor)。v0.2.0 以降に、拒否された API 呼び出しの急増を見る `access_denied` (ADR 0021) と、
-  拒否された IAM 操作を「試行 (拒否)」と表示する `iam_changes` の修正、作成直後のロググループで init が止まる不具合の修正が入った
-- aratam: `docs/aratam.md` 7 章の実装順 1〜4 まで実装済み。v0.2.0 で初めてリリースした
+- arata: 設計書 10 章の Step 1〜3 に加え、次のチェックを実装済み。すべて sandbox (`deploy/sandbox`、ADR 0020) で本物の AWS を相手に、
+  `scenarios/01〜10` どおりに出ることを確認した
+  - `access_denied` (拒否された API の急増。ADR 0021)、`expected_denied` と ack / snooze 中の重大度の上昇の再報告 (ADR 0022)
+  - `waf_review` (WAF の改善提案と COUNT のルールの状況。ADR 0023)
+  - `defense_evasion` (監査・検知の無効化) と `public_exposure` (公開設定の変更。ADR 0026)
+  - `principal_new_source` (既知の主体の初めての送信元・リージョン) と `secret_access` (秘匿値の読み取りの異常。ADR 0027)
+  - チェックごとの対処手順 (`arata help ai playbook <check>`。ADR 0025)
+- aratam: WAF の改善提案の 2 通目、利用者の事情 (`llm.context_file`。ADR 0024)、出たチェックの対処手順を LLM に渡す
 - サプライチェーン対策 (ADR 0017) と依存削減 (ADR 0019) は適用済み
-- 試験環境 sandbox (`deploy/sandbox`、CDK。ADR 0020) を開発用アカウントに deploy し、`scenarios/01〜05` を一巡した。
-  login_bruteforce / probe_paths / iam_changes / unknown_assume_role / new_principal / guardduty_findings / access_analyzer /
-  credential_hygiene / posture / access_denied がシナリオどおりに出ること、posture の不備を直すと次の weekly で「解消」になることを、本物の AWS で確認済み
-- 監査・検知の無効化 `defense_evasion` と公開設定の変更 `public_exposure` (ADR 0026) を実装した。sandbox の `scenarios/07`・`08` での確認はこれから
-- 既知の主体の初めての送信元・リージョン `principal_new_source` と秘匿値の読み取りの異常 `secret_access` (ADR 0027) を実装した。
-  sandbox の `scenarios/09`・`10` での確認はこれから (09 は CloudTrail を収集し終えた日が 15 日以上要る)
 - 未確認: aratam の Slack への実送信と `bedrock`、`report --month`
 
 ## 2. すぐにやること
 
-1. **access_denied の運用調整** (進行中): 想定済みの拒否を「主体 × API」で除外する allowlist の `expected_denied` と、
-   ack / snooze 中でも重大度が上がったら再報告する仕組み (全チェック共通)。ack すると主体の悪化 (medium → high) まで隠れる穴を塞ぐ
-2. **WAF の修正提案** (arata 側を実装、ADR 0023。aratam の Slack の節が残り): 定期の監査のついでに WAF ログと WebACL の設定を集計し、aratam の LLM が修正案 (誤検知の除外、
-   すり抜けている攻撃へのルール、レート制限、カウントモードのルールの評価) を Slack 通知に含める。PR までの自動化は対象外。
-   提案は「カウントモードで様子を見る → ブロック」の段階を前提にし、ヘッダー・クエリなどの生の値は通知に出さない
-3. **v0.3.0 のリリース**: 1 と 2 の結果を見て中身を決める
-4. **aratam の実送信試験**: 試験用チャンネルの Incoming Webhook で `aratam doctor` → `test-notify` → `notify` を 1 回ずつ。
+1. **段階 D**: `unused_region_activity` (使っていないリージョンでの書き込み) と `cost_anomaly` (AWS Cost Anomaly Detection を読む。費用の急増だけ)
+2. **段階 E**: `endpoint_abuse` (会員登録・パスワード再設定・メッセージ送信などへの分散した連打)。主役は短い時間幅の画面全体の件数と、
+   同じ User-Agent が多数の IP にまたがること。結果は遮断の提案にせず件数の異常として伝える。利用者側のふだんの件数が分かってから閾値を決める
+3. **aratam の実送信試験**: 試験用チャンネルの Incoming Webhook で `aratam doctor` → `test-notify` → `notify` を 1 回ずつ。
    `bedrock` は sandbox の `bedrock.enabled` で推論プロファイルを作り、`doctor` で応答を確かめる
+4. **小さな残り**: 自アカウントの root を「外部アカウント」と表示しない守り (CloudTrail の recipientAccountId を使う)、
+   「本日報告済み」の欄が still_open のとき Data を更新しない件 (expected_denied を足した直後に古い件数が見える)
 
 ## 3. 残項目 (優先度順の案。利用者側の意見を反映)
 
@@ -64,3 +61,6 @@
   (始まりは古くてもよい)。フェイクだけでは気づけなかったもので、sandbox で見つかった
 - CloudTrail の errorCode は API の応答と書き方が違うことがある (応答が `AccessDeniedException` でも記録は `AccessDenied` など)
 - sandbox を deploy すると、CDK の bootstrap と deploy 自体が unknown_assume_role / iam_changes として出る (scenarios/README の抑え方を参照)
+- 「導入直後は報告しない」の判定は「データのある日」ではなく「収集し終えた日」で数える。操作の少ないアカウントでは、データのある日がいつまでも足りない (ADR 0027)
+- WAF の `ListResourcesForWebACL` は資源の種類ごとに別サービスの権限を要求し、エラー文も統一されていない。文言で判定しない (ADR 0023)
+- 一般的なコスト削減は arata に入れない (別の製品の候補。月次・手動実行)。費用の急増だけをセキュリティの兆候として見る
