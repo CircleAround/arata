@@ -1,7 +1,10 @@
 package account_test
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -126,4 +129,65 @@ func keysOf(m map[string]record.SnapshotItem) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// ListResourcesForWebACL は資源の種類ごとにサービス側の権限も要る (COGNITO_USER_POOL → cognito-idp:ListResourcesForWebACL)。
+// 呼べない種類はその種類だけ「不明」にし、ソース全体は失敗にしない (守っている資源は提案の補助なので)。sandbox で起きた失敗の再現。
+func TestWAFConfigResourceTypeDenied(t *testing.T) {
+	acl := accounttest.WebACL(waftypes.ScopeRegional, "ap-northeast-1", "prod-waf")
+	f := &accounttest.Fake{WAF: &accounttest.WAF{
+		WebACLs:   map[string][]waftypes.WebACL{"REGIONAL|ap-northeast-1": {acl}},
+		Resources: map[string]map[waftypes.ResourceType][]string{*acl.ARN: {waftypes.ResourceTypeApiGateway: {"arn:aws:apigateway:ap-northeast-1::/restapis/abc/stages/prod"}}},
+		ResourceTypeErrs: map[waftypes.ResourceType]error{
+			waftypes.ResourceTypeCognitioUserPool:       accounttest.DeniedCognito,
+			waftypes.ResourceTypeAppRunnerService:       accounttest.DeniedCognito,
+			waftypes.ResourceTypeVerifiedAccessInstance: accounttest.APIError{Code: "WAFInvalidParameterException"},
+		},
+	}}
+	var logs bytes.Buffer
+	c := account.NewWAFConfig("waf_config", f.Clients("us-east-1"), f.Clients("ap-northeast-1"))
+	c.SetLogger(slog.New(slog.NewJSONHandler(&logs, nil)))
+	s, err := collectWith(t, c)
+	if err != nil {
+		t.Fatalf("a denied resource type must not fail the source: %v", err)
+	}
+	a := s.byKey()["acl|REGIONAL|ap-northeast-1|prod-waf"]
+	if a.String("resources") != "arn:aws:apigateway:ap-northeast-1::/restapis/abc/stages/prod" ||
+		a.String("resources_unknown") != "APP_RUNNER_SERVICE: ACCESS_DENIED,COGNITO_USER_POOL: ACCESS_DENIED,VERIFIED_ACCESS_INSTANCE: WAFInvalidParameterException" {
+		t.Fatalf("acl: %+v", a.Data)
+	}
+	if !strings.Contains(logs.String(), `"level":"WARN"`) || !strings.Contains(logs.String(), "COGNITO_USER_POOL") {
+		t.Fatalf("logs: %s", logs.String())
+	}
+	// doctor: 実際に呼ぶ種類ごとに試し、呼べない種類は warn (権限を足さない前提なので ng にしない)
+	res := c.Probe(context.Background())
+	got := map[string]string{}
+	for _, r := range res {
+		if r.Action != account.ActionListResourcesForWebACL {
+			continue
+		}
+		v := "ok"
+		if r.Err != nil {
+			v = "err"
+		}
+		if r.Warn != "" {
+			v = "warn"
+		}
+		got[r.Detail] = v
+	}
+	if got["prod-waf COGNITO_USER_POOL"] != "warn" || got["prod-waf API_GATEWAY"] != "ok" || got["prod-waf VERIFIED_ACCESS_INSTANCE"] != "warn" || len(got) != len(waftypes.ResourceType("").Values()) {
+		t.Fatalf("probe: %v", got)
+	}
+}
+
+// wafv2:ListResourcesForWebACL 自体が拒否されたら (読み取りロールの更新漏れ)、従来どおりソースの失敗 (ACCESS_DENIED) にする。
+func TestWAFConfigListResourcesItselfDenied(t *testing.T) {
+	acl := accounttest.WebACL(waftypes.ScopeRegional, "ap-northeast-1", "prod-waf")
+	f := &accounttest.Fake{WAF: &accounttest.WAF{WebACLs: map[string][]waftypes.WebACL{"REGIONAL|ap-northeast-1": {acl}}},
+		Errs: map[string]error{account.ActionListResourcesForWebACL: accounttest.APIError{Code: "AccessDeniedException",
+			Message: "User: arn:aws:sts::123456789012:assumed-role/arata-readonly/s is not authorized to perform: wafv2:ListResourcesForWebACL"}}}
+	_, err := collectWith(t, account.NewWAFConfig("waf_config", f.Clients("us-east-1"), f.Clients("ap-northeast-1")))
+	if ce := collect.Classify("", "", err); ce.Code != collect.CodeAccessDenied || ce.Action != account.ActionListResourcesForWebACL {
+		t.Fatalf("%v", err)
+	}
 }

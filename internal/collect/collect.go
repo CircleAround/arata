@@ -168,10 +168,12 @@ type PartialReporter interface {
 }
 
 // ProbeResult は doctor の権限検査 1 件 (action ごと)。Err が nil なら許可されている。
+// Warn は「許可されているが、この項目は取れない」(収集はその項目だけ不明として続ける) ことの理由。doctor は warn の行にする。
 type ProbeResult struct {
 	Action string
 	Detail string
 	Err    error
+	Warn   string
 }
 
 // Prober は doctor の権限検査を、副作用の無い読み取り API だけで行う collector が満たす。

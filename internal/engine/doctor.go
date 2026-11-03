@@ -184,6 +184,10 @@ func (d *doctor) probe(ctx context.Context, src config.Source) {
 			d.addErr(src, "permission", wrapAction(fmt.Errorf("%s: %w", detail, r.Err), r.Action))
 			continue
 		}
+		if r.Warn != "" {
+			d.add(src, "permission", DoctorWarn, "", detail+": "+r.Warn)
+			continue
+		}
 		d.add(src, "permission", DoctorOK, "", detail)
 	}
 }

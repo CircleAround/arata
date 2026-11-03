@@ -120,6 +120,10 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
 - `waf-config` (アカウント単位のソース): `ListWebACLs` / `GetWebACL` / `GetLoggingConfiguration` / `ListResourcesForWebACL` で WebACL 1 件
   (`acl|<scope>|<region>|<WebACL>`) とルール 1 件ずつ (`rule|<scope>|<region>|<WebACL>|<ルール>`) を `snapshot_items` (kind `waf_config`) に置く。
   REGIONAL は `regions` (既定 aws.region)、CLOUDFRONT は regions に関係なく us-east-1 のクライアントで引く。`ListResourcesForWebACL` は CloudFront に使えないので REGIONAL だけ、資源の種類ごとに呼ぶ。
+  決定: ListResourcesForWebACL は種類ごとに資源のサービス側の権限も要る (COGNITO_USER_POOL → `cognito-idp:ListResourcesForWebACL`。sandbox の本物の AWS で拒否されて判明)。
+  守っている資源は提案の補助なので、読み取りロールに各サービスの権限は足さず (最小権限)、呼べない種類はその種類だけ WebACL の `resources_unknown` (`<種類>: <code>`) に残して WARN を出し、ソースは失敗にしない。
+  拒否の文言が wafv2 以外の action を名指しするときだけをサービス側の権限不足とみなす (`wafv2:ListResourcesForWebACL` 自体の拒否や文言から分からない拒否はソースの失敗のまま)。
+  その種類がリージョンで使えない (`WAFInvalidParameterException` など) も不明にする。doctor は実際に呼ぶ種類ごとに試し、呼べない種類は warn にする。
   Statement の全体は保存せず、action (BLOCK / ALLOW / COUNT など、グループは OverrideAction の NONE / COUNT)・種類 (`managed_group` / `rule_group` / `rate_based` / `regular`)・
   マネージドの名前・グループの中で COUNT にしたルール (`RuleActionOverrides` と古い `ExcludedRules`)・レート制限の値・評価窓・集約・scope-down の URI 条件だけを持つ。
   scope-down は UriPath の ByteMatch (STARTS_WITH / EXACTLY) とその And だけを解釈し、他を含めば `rate_scope_parsed: false`。WebACL が 1 つも無ければ Unavailable (waf_review は skip)

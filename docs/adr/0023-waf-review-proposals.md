@@ -18,7 +18,8 @@ arata は LLM を使わず (ADR 0001)、aratam は判定を LLM に任せない 
   - wafv2 の `cloudwatch-logs` ソースの日次集計 (daily) に、ルールごとの件数・正規化パスごとの BLOCK と異なり IP・許可された探索・カウントモードの一致・1 IP あたり 5 分の件数の分布を足す。
     ヘッダー・クエリ・Cookie・User-Agent・本文は引かない。パスは Go 側で正規化 (クエリを落とし、数字・UUID の区間を `:id`) してから (パス, IP) で異なり IP を数える
   - 新しいソース種類 `waf-config` (ListWebACLs / GetWebACL / GetLoggingConfiguration / ListResourcesForWebACL。REGIONAL は regions、CLOUDFRONT は us-east-1) で
-    WebACL とルールの要約を `snapshot_items` に置く (ADR 0015)。Statement の全体は保存しない。読み取りロールに wafv2 の 4 つを足す
+    WebACL とルールの要約を `snapshot_items` に置く (ADR 0015)。Statement の全体は保存しない。読み取りロールに wafv2 の 4 つを足す。
+    ListResourcesForWebACL は資源の種類ごとにサービス側の権限 (例 `cognito-idp:ListResourcesForWebACL`) も要るが、それは足さず、呼べない種類は「不明」として記録して続ける
 - weekly のチェック `waf_review` が、保存済みの日次集計と設定から 6 種類の候補 (誤検知の疑い・BLOCK に上げてよいカウントルール・すり抜けている探索・レート制限の不足 / 値の見直し・
   使われていないルール) を作り、report.json の新しい節 `proposals` に出す。**finding ではない** (差分判定に乗せず、毎週その時点の候補を出す)。
   重大な候補 (正規の画面で多数の IP が BLOCK された誤検知の疑い) だけ low の finding にもする
@@ -45,6 +46,9 @@ arata は LLM を使わず (ADR 0001)、aratam は判定を LLM に任せない 
 - **`parse @message` の正規表現で止めたグループの中のルール名を取る**: 却下。最初に一致するのは前にある COUNT のグループの `terminatingRule` のことがある (sandbox の実ログで確認)
 - **`labels` (例 `awswaf:managed:aws:known-bad-inputs:Log4JRCE_Header`) で一致したルールを取る**: 見送り。位置に頼らない利点はあるが、大文字小文字が ruleId と違い、
   COUNT と BLOCK を見分けられない
+- **ListResourcesForWebACL のためにサービス側の読み取り権限 (cognito-idp・apprunner・ec2 など) を読み取りロールに足す**: 却下。守っている資源は提案の補助で、
+  監査ロールに資源ごとのサービスの権限を足す理由が弱い (最小権限)。呼べない種類は不明として残し、doctor は warn にする
+- **呼ぶ種類を、追加の権限が要らないものに絞る**: 見送り。どの種類が追加の権限を要るかは文書と実環境で確かめきれていない。全種類を呼び、拒否された種類だけを不明にすれば、確かめた結果に依らない
 - **scope-down を全部解釈してレート制限の受け持ちを決める**: 見送り。Statement の木は任意に深い。UriPath の ByteMatch とその And だけを解釈し、他は「判断できない」として提案しない
 
 ## 結果 (良い点・引き受けるコスト)

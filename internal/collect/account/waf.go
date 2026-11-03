@@ -2,6 +2,7 @@ package account
 
 import (
 	"context"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -33,7 +34,7 @@ const (
 //     レート制限の値と評価窓・scope-down の URI パスの条件) だけを持つ。IP セットや正規表現の中身は持たない
 //   - scope-down は UriPath の ByteMatch (STARTS_WITH / EXACTLY) とその And だけを解釈する。それ以外を含めば rate_scope_parsed=false
 //     (waf_review は「どのパスを受け持つか分からない」として、レート制限が無いという候補を出さない)
-//   - ListResourcesForWebACL は CloudFront に使えないので REGIONAL だけ、資源の種類ごとに呼ぶ
+//   - ListResourcesForWebACL は CloudFront に使えないので REGIONAL だけ、資源の種類ごとに呼ぶ。サービス側の権限が無い種類は不明 (resources_unknown)
 //   - WebACL が 1 つも無ければ Unavailable を返し、waf_review は skip される
 type WAFConfig struct {
 	base
@@ -152,22 +153,49 @@ func (c *WAFConfig) aclData(ctx context.Context, sc wafScope, acl *waftypes.WebA
 		return nil, c.fail(ActionGetLoggingConfiguration, err)
 	}
 	if sc.scope == waftypes.ScopeRegional {
-		var res []string
+		var res, unknown []string
 		for _, rt := range waftypes.ResourceType("").Values() {
 			out, err := sc.api.ListResourcesForWebACL(ctx, &wafv2.ListResourcesForWebACLInput{WebACLArn: acl.ARN, ResourceType: rt})
 			if err != nil {
-				// その種類の資源がこのリージョンで使えない (WAFInvalidParameterException など) なら飛ばす。拒否だけは失敗にする
-				if ce := c.fail(ActionListResourcesForWebACL, err); ce.Code == collect.CodeAccessDenied {
-					return nil, ce
+				code, ok := resourceTypeProblem(err)
+				if !ok {
+					return nil, c.fail(ActionListResourcesForWebACL, err)
 				}
+				unknown = append(unknown, string(rt)+": "+code)
+				c.Logger.Warn("cannot list resources of this type for the web ACL; treating them as unknown", "source", c.id, "web_acl", aws.ToString(acl.Name),
+					"region", sc.region, "resource_type", string(rt), "code", code, "error", err.Error())
 				continue
 			}
 			res = append(res, out.ResourceArns...)
 		}
 		sort.Strings(res)
-		d["resources"] = strings.Join(res, ",")
+		sort.Strings(unknown)
+		d["resources"], d["resources_unknown"] = strings.Join(res, ","), strings.Join(unknown, ",")
 	}
 	return d, nil
+}
+
+var otherServiceDenied = regexp.MustCompile(`not authorized to perform: ([a-z0-9-]+):`)
+
+// resourceTypeProblem は ListResourcesForWebACL の資源の種類 1 つのエラーが「その種類だけ不明にして続ける」ものかを返す。
+//
+// 決定 (ADR 0023): ListResourcesForWebACL は資源の種類ごとに、WAF の権限に加えて資源のサービス側の権限も要る
+// (COGNITO_USER_POOL → cognito-idp:ListResourcesForWebACL。sandbox で確認)。守っている資源は提案の補助なので、読み取りロールに
+// 各サービスの権限は足さず (最小権限)、呼べない種類は不明として記録する (resources_unknown)。拒否の文言が wafv2 以外の action を
+// 名指しするときだけを「サービス側の権限が無い」とみなす。wafv2:ListResourcesForWebACL 自体の拒否や、文言から分からない拒否は従来どおり失敗にする。
+// その種類がこのリージョンで使えない (WAFInvalidParameterException など) も不明にする。
+func resourceTypeProblem(err error) (string, bool) {
+	ce := collect.Classify("", ActionListResourcesForWebACL, err)
+	if ce.Code != collect.CodeAccessDenied {
+		if code := collect.APICode(err); code != "" {
+			return code, true
+		}
+		return ce.Code, true
+	}
+	if m := otherServiceDenied.FindStringSubmatch(err.Error()); m != nil && m[1] != "wafv2" {
+		return ce.Code, true
+	}
+	return "", false
 }
 
 // destinationName はログの送り先の ARN を短くする (CloudWatch Logs ならロググループ名)。
@@ -302,8 +330,17 @@ func (c *WAFConfig) Probe(ctx context.Context) []collect.ProbeResult {
 	}
 	out = append(out, collect.ProbeResult{Action: ActionGetLoggingConfiguration, Detail: detail, Err: err})
 	if first.scope == waftypes.ScopeRegional {
-		_, err = first.api.ListResourcesForWebACL(ctx, &wafv2.ListResourcesForWebACLInput{WebACLArn: acl.ARN, ResourceType: waftypes.ResourceTypeApplicationLoadBalancer})
-		out = append(out, collect.ProbeResult{Action: ActionListResourcesForWebACL, Detail: detail, Err: err})
+		// 実際に呼ぶ種類ごとに試す。サービス側の権限が無い・使えない種類は warn (収集はその種類だけ不明にして続ける)
+		for _, rt := range waftypes.ResourceType("").Values() {
+			_, err = first.api.ListResourcesForWebACL(ctx, &wafv2.ListResourcesForWebACLInput{WebACLArn: acl.ARN, ResourceType: rt})
+			r := collect.ProbeResult{Action: ActionListResourcesForWebACL, Detail: detail + " " + string(rt), Err: err}
+			if err != nil {
+				if code, ok := resourceTypeProblem(err); ok {
+					r.Err, r.Warn = nil, "この種類の守っている資源は不明として扱う ("+code+": "+err.Error()+")"
+				}
+			}
+			out = append(out, r)
+		}
 	}
 	return out
 }

@@ -27,12 +27,22 @@ import (
 	"github.com/CircleAround/arata/internal/collect/account"
 )
 
-// APIError は smithy.APIError のフェイク。
-type APIError struct{ Code string }
+// APIError は smithy.APIError のフェイク。Message が空なら Code を返す。
+type APIError struct{ Code, Message string }
 
-func (e APIError) Error() string                 { return e.Code }
-func (e APIError) ErrorCode() string             { return e.Code }
-func (e APIError) ErrorMessage() string          { return e.Code }
+func (e APIError) Error() string {
+	if e.Message != "" {
+		return e.Code + ": " + e.Message
+	}
+	return e.Code
+}
+func (e APIError) ErrorCode() string { return e.Code }
+func (e APIError) ErrorMessage() string {
+	if e.Message != "" {
+		return e.Message
+	}
+	return e.Code
+}
 func (e APIError) ErrorFault() smithy.ErrorFault { return smithy.FaultClient }
 
 // Denied は AccessDenied のエラー。
@@ -329,7 +339,13 @@ type WAF struct {
 	Logging map[string][]string
 	// Resources は WebACL の ARN → 資源の種類 → 関連付けた資源の ARN。
 	Resources map[string]map[waftypes.ResourceType][]string
+	// ResourceTypeErrs は資源の種類 → ListResourcesForWebACL のエラー。本物は種類ごとに資源のサービス側の権限も要る
+	// (COGNITO_USER_POOL は cognito-idp:ListResourcesForWebACL。読み取りロールに無いので AccessDeniedException になる。sandbox で確認)。
+	ResourceTypeErrs map[waftypes.ResourceType]error
 }
+
+// DeniedCognito は読み取りロールで COGNITO_USER_POOL を問い合わせたときの本物のエラー (サービス側の権限が無い)。
+var DeniedCognito = APIError{Code: "AccessDeniedException", Message: "User: arn:aws:sts::123456789012:assumed-role/arata-readonly/s is not authorized to perform: cognito-idp:ListResourcesForWebACL because no identity-based policy allows the cognito-idp:ListResourcesForWebACL action"}
 
 type wafFake struct {
 	*Fake
@@ -386,6 +402,9 @@ func (f wafFake) GetLoggingConfiguration(_ context.Context, in *wafv2.GetLogging
 
 func (f wafFake) ListResourcesForWebACL(_ context.Context, in *wafv2.ListResourcesForWebACLInput, _ ...func(*wafv2.Options)) (*wafv2.ListResourcesForWebACLOutput, error) {
 	if err := f.call(account.ActionListResourcesForWebACL); err != nil {
+		return nil, err
+	}
+	if err := f.WAF.ResourceTypeErrs[in.ResourceType]; err != nil {
 		return nil, err
 	}
 	return &wafv2.ListResourcesForWebACLOutput{ResourceArns: f.WAF.Resources[aws.ToString(in.WebACLArn)][in.ResourceType]}, nil

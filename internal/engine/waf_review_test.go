@@ -31,7 +31,9 @@ func TestWAFReviewRun(t *testing.T) {
 	h.acct.WAF = &accounttest.WAF{WebACLs: map[string][]waftypes.WebACL{
 		"REGIONAL|ap-northeast-1": {accounttest.WebACL(waftypes.ScopeRegional, "ap-northeast-1", "prod-waf")},
 		"CLOUDFRONT|us-east-1":    {accounttest.WebACL(waftypes.ScopeCloudfront, "us-east-1", "cdn-waf")},
-	}}
+	},
+		// 本物の読み取りロールでは COGNITO_USER_POOL の種類が拒否される (sandbox で起きた)。それでも weekly は成功し waf_review が走る
+		ResourceTypeErrs: map[waftypes.ResourceType]error{waftypes.ResourceTypeCognitioUserPool: accounttest.DeniedCognito}}
 	day := "2026-10-21 00:00:00.000"
 	h.logs.On("as lines_total", linesRows("2026-10-21", 1000, 1000))
 	h.logs.On("as waf_allow_probe", cwlogstest.Response{Rows: []map[string]string{
