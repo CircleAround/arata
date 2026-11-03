@@ -173,6 +173,7 @@ type Store interface {
 	SetFindingStatus(ctx context.Context, id, status string, snoozeUntil, at time.Time) error
 	MarkReported(ctx context.Context, ids []string, at time.Time) error
 	// ReplaceSnapshot は (kind, source) のスナップショットを items で丸ごと置き換える (空なら空にする)。
+	// 置き換えたら raw に印 (record.SnapshotReplaced) を追記する (rebuild 用。ADR 0033)。項目そのものの raw への追記は呼び出し側 (AppendRaw)。
 	ReplaceSnapshot(ctx context.Context, kind record.Kind, source string, items []record.SnapshotItem, at time.Time) error
 	// AddFindingEvents は状態遷移を追記する。
 	AddFindingEvents(ctx context.Context, evs []FindingEvent) error

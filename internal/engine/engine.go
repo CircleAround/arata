@@ -237,6 +237,39 @@ func Open(cfg *config.Config, deps Deps) (*Engine, error) {
 	return &Engine{cfg: cfg, deps: deps, st: st, al: al, log: deps.Logger}, nil
 }
 
+// Rebuild は raw JSONL から audit.sqlite を作り直す (ADR 0033)。ソースの順は設定に従う。
+// ロック失敗は STORE_LOCKED、既存の SQLite が無い・読めないときは STORE_CORRUPT (exit 2。--from-scratch を案内する)。
+func Rebuild(ctx context.Context, cfg *config.Config, deps Deps, o store.RebuildOptions) (*store.RebuildResult, error) {
+	deps.fill(cfg)
+	o.SourceOrder = nil
+	for _, src := range cfg.Sources {
+		o.SourceOrder = append(o.SourceOrder, src.ID)
+	}
+	if o.FromScratch {
+		if err := os.MkdirAll(cfg.Store.Dir, 0o750); err != nil {
+			return nil, err
+		}
+	}
+	res, err := store.Rebuild(ctx, cfg.Store.Dir, o)
+	if err == nil {
+		return res, nil
+	}
+	switch {
+	case errors.Is(err, store.ErrLocked):
+		deps.Logger.Error("store is locked by another process", "code", CodeStoreLocked, "dir", cfg.Store.Dir)
+		return nil, &ExitError{Code: CodeStoreLocked, Exit: ExitConfig, Err: err}
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		deps.Logger.Error("rebuild interrupted; the store is unchanged", "dir", cfg.Store.Dir, "error", err.Error())
+		return nil, err
+	case errors.Is(err, store.ErrNoDatabase) || !o.FromScratch:
+		deps.Logger.Error("cannot read the existing database to carry over runs, findings and principal status", "code", CodeStoreCorrupt, "dir", cfg.Store.Dir, "error", err.Error(),
+			"action", "arata rebuild --from-scratch builds it from raw only (findings start empty; every open finding is reported again as new on the next run)")
+		return nil, &ExitError{Code: CodeStoreCorrupt, Exit: ExitConfig, Err: err}
+	}
+	deps.Logger.Error("rebuild failed; the store is unchanged", "code", CodeStoreCorrupt, "dir", cfg.Store.Dir, "error", err.Error())
+	return nil, &ExitError{Code: CodeStoreCorrupt, Exit: ExitConfig, Err: err}
+}
+
 // Close はストアを閉じる。
 func (e *Engine) Close() error { return e.st.Close() }
 
@@ -338,6 +371,10 @@ func (e *Engine) Collect(ctx context.Context, w collect.Window, o CollectOptions
 					if checks.IsSecretRead(v) {
 						res.SecretReadEvents++
 					}
+					rec = v
+				case record.PrincipalSeen:
+					// rebuild が (arn, ip) の行を最初に作った記録を決めるのに使う (ADR 0033)
+					v.CollectedAt = w.CollectedAt
 					rec = v
 				case record.SnapshotItem:
 					snapshots[v.Kind] = append(snapshots[v.Kind], v)

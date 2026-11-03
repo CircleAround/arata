@@ -37,6 +37,20 @@ func Open(dir string) (*Dir, error) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, fmt.Errorf("store: %w", err)
 	}
+	lock, err := lockDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	s, err := openDir(dir, lock)
+	if err != nil {
+		unlock(lock)
+		return nil, err
+	}
+	return s, nil
+}
+
+// lockDir は <dir>/audit.lock の排他ロックを取る。別プロセスが持っていれば ErrLocked。
+func lockDir(dir string) (*os.File, error) {
 	lock, err := os.OpenFile(filepath.Join(dir, "audit.lock"), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("store: %w", err)
@@ -48,19 +62,40 @@ func Open(dir string) (*Dir, error) {
 		}
 		return nil, fmt.Errorf("store: lock: %w", err)
 	}
-	dsn := "file:" + filepath.Join(dir, "audit.sqlite") + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
+	return lock, nil
+}
+
+func unlock(lock *os.File) error {
+	_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	return lock.Close()
+}
+
+// openDir はロック済みのディレクトリの audit.sqlite を開いてマイグレーションを適用する (失敗してもロックは呼び出し側が持つ)。
+func openDir(dir string, lock *os.File) (*Dir, error) {
+	db, err := openDB(filepath.Join(dir, dbFile), "WAL")
+	if err != nil {
+		return nil, err
+	}
+	s := &Dir{dir: dir, db: db}
+	if err := s.migrate(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	s.lock = lock
+	return s, nil
+}
+
+const dbFile = "audit.sqlite"
+
+// openDB は SQLite のファイルを開く (接続は 1 本)。
+func openDB(path, journal string) (*sql.DB, error) {
+	dsn := "file:" + path + "?_pragma=journal_mode(" + journal + ")&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
-		lock.Close()
 		return nil, fmt.Errorf("store: %w", err)
 	}
 	db.SetMaxOpenConns(1)
-	s := &Dir{dir: dir, db: db, lock: lock}
-	if err := s.migrate(); err != nil {
-		s.Close()
-		return nil, err
-	}
-	return s, nil
+	return db, nil
 }
 
 func (s *Dir) migrate() error {
@@ -113,8 +148,7 @@ func (s *Dir) Close() error {
 		s.db = nil
 	}
 	if s.lock != nil {
-		_ = syscall.Flock(int(s.lock.Fd()), syscall.LOCK_UN)
-		if err := s.lock.Close(); err != nil && first == nil {
+		if err := unlock(s.lock); err != nil && first == nil {
 			first = err
 		}
 		s.lock = nil
@@ -567,7 +601,11 @@ func (s *Dir) ReplaceSnapshot(ctx context.Context, kind record.Kind, source stri
 			return wrap(err)
 		}
 	}
-	return wrap(tx.Commit())
+	if err := tx.Commit(); err != nil {
+		return wrap(err)
+	}
+	// 置き換えたことを raw に残す (0 件の置き換えと、失敗した収集の項目を rebuild が見分ける。ADR 0033)
+	return s.AppendRaw(ctx, source, record.SnapshotReplaced{SnapshotKind: kind, Source: source, Time: at, Count: len(items)})
 }
 
 func (s *Dir) Snapshot(ctx context.Context, kind record.Kind) ([]record.SnapshotItem, error) {

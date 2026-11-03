@@ -1,6 +1,7 @@
 package record
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -86,5 +87,42 @@ func TestSourcePrefix(t *testing.T) {
 	arn, v, ok := SplitActivityKey(k)
 	if !ok || arn != "arn:aws:iam::123456789012:user/alice" || v != "198.51.100.0/24" {
 		t.Fatalf("split: %q %q %v", arn, v, ok)
+	}
+}
+
+// rebuild 用の拡張 (ADR 0033): principal_seen の collected_at と、スナップショットを置き換えた印。
+func TestRebuildFieldsRoundTrip(t *testing.T) {
+	at := time.Date(2026, 10, 21, 9, 0, 0, 123, time.UTC)
+	b, err := Marshal(PrincipalSeen{Time: at, Source: "trail", ARN: "arn:aws:iam::123456789012:user/alice", Kind: PrincipalUser, IP: "203.0.113.1", Count: 1, CollectedAt: at})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := Unmarshal(b)
+	if err != nil || !r.(PrincipalSeen).CollectedAt.Equal(at) {
+		t.Fatalf("principal_seen collected_at: %+v %v", r, err)
+	}
+	// 以前の版で書いた行 (collected_at なし) はゼロ値で読める
+	old := []byte(`{"kind":"principal_seen","time":"2026-10-21T09:00:00Z","data":{"time":"2026-10-21T09:00:00Z","first_time":"2026-10-21T08:00:00Z","source":"trail","arn":"arn:aws:iam::123456789012:user/alice","kind":"user","count":2}}`)
+	r, err = Unmarshal(old)
+	if err != nil || !r.(PrincipalSeen).CollectedAt.IsZero() || r.(PrincipalSeen).Count != 2 {
+		t.Fatalf("old principal_seen: %+v %v", r, err)
+	}
+	b, err = Marshal(SnapshotReplaced{SnapshotKind: KindGuardDuty, Source: "gd", Time: at, Count: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"kind":"snapshot_replaced"`) {
+		t.Fatalf("envelope kind: %s", b)
+	}
+	r, err = Unmarshal(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, ok := r.(SnapshotReplaced)
+	if !ok || m.SnapshotKind != KindGuardDuty || m.Source != "gd" || !m.Time.Equal(at) || m.Count != 0 || !m.RecordTime().Equal(at) {
+		t.Fatalf("snapshot_replaced: %+v", r)
+	}
+	if SnapshotKinds[KindSnapshotReplaced] {
+		t.Fatal("the marker is not a snapshot kind")
 	}
 }
