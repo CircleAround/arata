@@ -48,3 +48,4 @@
 | [0022](0022-expected-denied-and-escalation.md) | 想定済みの拒否は allowlist の `expected_denied` で主体 × API の単位で除き、ack / snooze 中でも重大度が上がれば再報告する | 採用 |
 | [0023](0023-waf-review-proposals.md) | WAF の修正提案の候補は arata が規則で作り、report.json の `proposals` に出す (WebACL の設定は `waf-config` のスナップショット) | 採用 |
 | [0024](0024-aratam-waf-proposals.md) | aratam は WAF の修正提案の候補を 2 通目として通常用に送り、LLM には候補だけを渡して書き起こさせる (アプリの事情は `llm.context_file`) | 採用 |
+| [0025](0025-check-playbooks.md) | チェックごとの対処手順 (playbook) を `docs/ai/playbooks/<check>.md` としてバイナリに埋め込み、全チェックに必須にする | 採用 |
