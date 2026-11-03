@@ -126,6 +126,8 @@ type FormatStats struct {
 	Expected float64
 	// BytesScanned はこの収集で Insights がスキャンした量 (課金の目安)。
 	BytesScanned float64
+	// OutOfRange は問い合わせ範囲がロググループの作成前 / 保持期間外で、問い合わせずに「データなし」とした理由 (空なら問い合わせた)。
+	OutOfRange string
 }
 
 // Rate は matched / total。total が 0 なら ok=false (行が無く判定できない)。

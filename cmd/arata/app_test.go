@@ -161,6 +161,33 @@ func TestDoctor(t *testing.T) {
 	})
 }
 
+// TestNewLogGroup は作ったばかりのロググループをソースにしたとき、init・doctor・run が止まらないことを確かめる。
+// Insights は問い合わせの終わりが作成時刻より前の範囲を MalformedQueryException で拒否する (フェイクも同じ)。
+func TestNewLogGroup(t *testing.T) {
+	c := newCLI(t)
+	c.appConfig("")
+	c.logs.Now = func() time.Time { return c.now }
+	c.logs.Groups = map[string]cwlogstest.Group{
+		"/app/nginx": {Created: c.now.Add(-time.Hour), RetentionDays: 7},
+		"/app/rails": {Created: c.now.AddDate(0, -1, 0), RetentionDays: 7},
+	}
+	c.logs.On("sort @timestamp desc", doctorRows(10, 0))
+	if code := c.run("init", "--config", c.cfg, "--window", "3d"); code != 0 {
+		t.Fatalf("init exit %d: %s", code, c.stderr)
+	}
+	if code := c.run("doctor", "--config", c.cfg); code != 0 {
+		t.Fatalf("doctor exit %d: %s", code, c.stderr)
+	}
+	c.now = c.now.Add(24 * time.Hour)
+	if code := c.run("run", "--config", c.cfg, "--profile", "daily"); code != 0 {
+		t.Fatalf("run exit %d: %s", code, c.stderr)
+	}
+	// appConfig は daily だけなので doctor の CHECK_UNUSED (warn) だけが出る
+	if codes := strings.Join(c.codes(), ","); codes != "CHECK_UNUSED" {
+		t.Fatalf("codes: %v", codes)
+	}
+}
+
 // TestAppLayerRun は Logs Insights の集計から login_bruteforce が新規として報告され、翌日は鳴らないことを確かめる。
 func TestAppLayerRun(t *testing.T) {
 	c := newCLI(t)

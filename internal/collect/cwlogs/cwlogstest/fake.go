@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	cwl "github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
@@ -48,13 +49,34 @@ type Fake struct {
 	// Started は StartQuery に渡された入力 (順番どおり)。
 	Started []*cwl.StartQueryInput
 	Stopped []string
-	// LogGroups は DescribeLogGroups が返すロググループ名。
+	// LogGroups は DescribeLogGroups が返すロググループ名 (作成時刻・保持期間なし)。
 	LogGroups []string
+	// Groups は作成時刻と保持期間を持つロググループ。DescribeLogGroups が返し、StartQuery は本物と同じく
+	// 問い合わせの終わりが作成時刻より前、または保持期間より古いものを MalformedQueryException で拒否する。
+	Groups map[string]Group
+	// Now は保持期間の判定に使う今 (nil なら time.Now)。
+	Now func() time.Time
 	// DescribeErr / StartErr / ResultsErr は全呼び出しで返すエラー。
 	DescribeErr error
 	StartErr    error
 	ResultsErr  error
 	nextID      int
+}
+
+// Group はロググループの作成時刻と保持期間 (RetentionDays が 0 なら無期限)。
+type Group struct {
+	Created       time.Time
+	RetentionDays int32
+}
+
+// OutOfRangeMessage は範囲外の StartQuery を拒否するときの本物のメッセージ。
+const OutOfRangeMessage = "Query's end date and time is either before the log groups creation time or exceeds the log groups log retention settings"
+
+func (f *Fake) now() time.Time {
+	if f.Now != nil {
+		return f.Now()
+	}
+	return time.Now()
 }
 
 // On はクエリ文字列に contains を含むクエリへの応答を登録する。後から登録したものが優先。
@@ -89,6 +111,13 @@ func (f *Fake) StartQuery(_ context.Context, in *cwl.StartQueryInput, _ ...func(
 	defer f.mu.Unlock()
 	if f.StartErr != nil {
 		return nil, f.StartErr
+	}
+	if g, ok := f.Groups[aws.ToString(in.LogGroupName)]; ok {
+		end := time.Unix(aws.ToInt64(in.EndTime), 0)
+		expired := g.RetentionDays > 0 && end.Before(f.now().Add(-time.Duration(g.RetentionDays)*24*time.Hour))
+		if end.Before(g.Created) || expired {
+			return nil, APIError{Code: "MalformedQueryException", Message: OutOfRangeMessage}
+		}
 	}
 	q := aws.ToString(in.QueryString)
 	var resp Response
@@ -171,15 +200,34 @@ func (f *Fake) DescribeLogGroups(_ context.Context, in *cwl.DescribeLogGroupsInp
 			out.LogGroups = append(out.LogGroups, types.LogGroup{LogGroupName: aws.String(name)})
 		}
 	}
+	for name, g := range f.Groups {
+		if strings.HasPrefix(name, aws.ToString(in.LogGroupNamePrefix)) {
+			lg := types.LogGroup{LogGroupName: aws.String(name), CreationTime: aws.Int64(g.Created.UnixMilli())}
+			if g.RetentionDays > 0 {
+				lg.RetentionInDays = aws.Int32(g.RetentionDays)
+			}
+			out.LogGroups = append(out.LogGroups, lg)
+		}
+	}
 	return out, nil
 }
 
 // APIError は smithy.APIError を満たす最小のエラー。
-type APIError struct{ Code string }
+type APIError struct{ Code, Message string }
 
-func (e APIError) Error() string                 { return e.Code }
-func (e APIError) ErrorCode() string             { return e.Code }
-func (e APIError) ErrorMessage() string          { return e.Code }
+func (e APIError) Error() string {
+	if e.Message == "" {
+		return e.Code
+	}
+	return e.Code + ": " + e.Message
+}
+func (e APIError) ErrorCode() string { return e.Code }
+func (e APIError) ErrorMessage() string {
+	if e.Message == "" {
+		return e.Code
+	}
+	return e.Message
+}
 func (e APIError) ErrorFault() smithy.ErrorFault { return smithy.FaultClient }
 
 var _ smithy.APIError = APIError{}

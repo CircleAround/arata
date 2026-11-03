@@ -337,3 +337,101 @@ func TestCollectRescanCrossesDay(t *testing.T) {
 		t.Fatalf("query must start at the day start of ScanFrom: %v", time.Unix(got, 0).UTC())
 	}
 }
+
+// Logs Insights は問い合わせの終わりがロググループの作成時刻より前、または保持期間より古いと MalformedQueryException で拒否する。
+// 範囲が丸ごと外れる日は問い合わせずに「データなし」とする。
+func TestCollectBeforeLogGroupCreation(t *testing.T) {
+	created := time.Date(2026, 10, 21, 8, 0, 0, 0, time.UTC)
+	newFake := func() *cwlogstest.Fake {
+		f := &cwlogstest.Fake{Groups: map[string]cwlogstest.Group{"/app/nginx": {Created: created}}, Now: func() time.Time { return now }}
+		f.On("as lines_total", linesResp("2026-10-21", "10", "10"))
+		return f
+	}
+	day := func(d int) collect.Window {
+		return collect.Window{From: time.Date(2026, 10, d, 0, 0, 0, 0, time.UTC), To: time.Date(2026, 10, d+1, 0, 0, 0, 0, time.UTC)}
+	}
+
+	// 作成より前の日: 問い合わせず、エラーにもしない
+	f := newFake()
+	c := newCollector(t, nginxSource(), f)
+	sink := &sinkRecorder{}
+	if err := c.Collect(context.Background(), day(19), sink); err != nil {
+		t.Fatalf("day before creation must not fail: %v", err)
+	}
+	if len(f.Started) != 0 || len(sink.recs) != 0 {
+		t.Fatalf("no queries and no metrics: %d %d", len(f.Started), len(sink.recs))
+	}
+	if st := c.FormatStats(); st.OutOfRange != OutOfRangeBeforeCreation || st.Total != 0 {
+		t.Fatalf("stats: %+v", st)
+	}
+
+	// 作成をまたぐ窓: 始まりを作成時刻に寄せて問い合わせる
+	f = newFake()
+	c = newCollector(t, nginxSource(), f)
+	if err := c.Collect(context.Background(), collect.Window{From: time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC), To: now}, &sinkRecorder{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Started) == 0 || aws.ToInt64(f.Started[0].StartTime) != created.Unix() || aws.ToInt64(f.Started[0].EndTime) != now.Unix()-1 {
+		t.Fatalf("query range: %+v", f.Started)
+	}
+	if st := c.FormatStats(); st.OutOfRange != "" {
+		t.Fatalf("stats: %+v", st)
+	}
+
+	// 作成時刻ちょうどに終わる窓 (EndTime = 作成の 1 秒前) も範囲外
+	f = newFake()
+	c = newCollector(t, nginxSource(), f)
+	if err := c.Collect(context.Background(), collect.Window{From: created.Add(-time.Hour), To: created}, &sinkRecorder{}); err != nil || len(f.Started) != 0 {
+		t.Fatalf("window ending at creation: %v %d", err, len(f.Started))
+	}
+}
+
+func TestCollectBeyondRetention(t *testing.T) {
+	f := &cwlogstest.Fake{Groups: map[string]cwlogstest.Group{"/app/nginx": {Created: now.AddDate(-1, 0, 0), RetentionDays: 1}}, Now: func() time.Time { return now }}
+	f.On("as lines_total", linesResp("2026-10-20", "10", "10"))
+	c := newCollector(t, nginxSource(), f)
+	c.Now = func() time.Time { return now }
+	// 終わりが保持期間 (今 - 1 日) より古い
+	if err := c.Collect(context.Background(), collect.Window{From: now.Add(-72 * time.Hour), To: now.Add(-48 * time.Hour)}, &sinkRecorder{}); err != nil {
+		t.Fatalf("expired range must not fail: %v", err)
+	}
+	if len(f.Started) != 0 || c.FormatStats().OutOfRange != OutOfRangeRetention {
+		t.Fatalf("expired range must be skipped: %d %+v", len(f.Started), c.FormatStats())
+	}
+	// 終わりが保持期間内なら、始まりが保持期間より前でも切り詰めない (日次集計を一部だけの値で置き換えないため)
+	if err := c.Collect(context.Background(), collect.Window{From: now.Add(-25 * time.Hour), To: now}, &sinkRecorder{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Started) == 0 || aws.ToInt64(f.Started[0].StartTime) != time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC).Unix() {
+		t.Fatalf("start must stay at the day start: %+v", f.Started)
+	}
+}
+
+func TestQueryOutOfRange(t *testing.T) {
+	created := now.Add(-30 * time.Second)
+	f := &cwlogstest.Fake{Groups: map[string]cwlogstest.Group{"/app/nginx": {Created: created}}, Now: func() time.Time { return now }}
+	c := newCollector(t, nginxSource(), f)
+	if _, err := c.Query(context.Background(), "fields @message", now.Add(-time.Hour), now.Add(-time.Minute)); !errors.Is(err, ErrOutOfRange) {
+		t.Fatalf("query: %v", err)
+	}
+	if err := c.Validate(context.Background(), "fields @message", now.Add(-2*time.Minute), now.Add(-time.Minute)); !errors.Is(err, ErrOutOfRange) {
+		t.Fatalf("validate: %v", err)
+	}
+	if len(f.Started) != 0 {
+		t.Fatalf("must not start queries: %d", len(f.Started))
+	}
+}
+
+// DescribeLogGroups が使えない / グループが見つからないときは、範囲を判定せず今までどおり問い合わせる。
+func TestCollectWithoutLogGroupInfo(t *testing.T) {
+	for _, f := range []*cwlogstest.Fake{{DescribeErr: cwlogstest.APIError{Code: "AccessDeniedException"}}, {}} {
+		f.On("as lines_total", linesResp("2026-10-21", "10", "10"))
+		c := newCollector(t, nginxSource(), f)
+		if err := c.Collect(context.Background(), collect.Window{From: now.Add(-time.Hour), To: now}, &sinkRecorder{}); err != nil {
+			t.Fatal(err)
+		}
+		if len(f.Started) == 0 {
+			t.Fatal("must query as before")
+		}
+	}
+}

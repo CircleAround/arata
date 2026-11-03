@@ -84,6 +84,14 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
 - `QUERY_LIMIT` になるのは次のとき: 同時実行上限 (`LimitExceededException`) を 5 回待って再試行しても通らない / Insights 側のタイムアウト /
   完了待ちが 15 分を超えた (StopQuery する) / ソースの `max_scan_gb` (1 回の収集でのスキャン量。既定 0 = 無制限) を超えた (実行中なら StopQuery、以後のクエリは流さない)。
   集計クエリは窓に重なる UTC 日の 0 時から引くので (3 章)、1 回のスキャンは最大で窓 + 24h 分になる。`max_scan_gb` はこれを見込んで決める。
+- 決定 (問い合わせ範囲とロググループの寿命): Logs Insights は、問い合わせの**終わり**がロググループの作成時刻より前、または保持期間 (今 − `retentionInDays`) より古いと
+  `MalformedQueryException` で拒否する。始まりが作成前・保持期間外でも、終わりが範囲内なら受理される (2026-11 に実 AWS で確認。「終わりが作成後かつ保持期間外」は未確認だが、文言から拒否される前提で扱う)。
+  そこで collector は DescribeLogGroups の `creationTime` と `retentionInDays` を 1 回引き、終わりだけで判定する。外れていれば問い合わせず「データなし」とし (エラーにしない)、
+  INFO ログと、init では run の stats の `logs_out_of_range` (ソース → 日付) に残す。report.json のスキーマは変えない (daily などの run は終わりが今なので該当しない)。
+  始まりは作成時刻までは寄せる (作成前のデータは無く結果は同じ)。保持期間の境界には寄せない: 日次集計は後の値で置き換えるので (5-2)、日の頭を寄せると完全な日の値を一部だけの値で上書きし得る。
+  判定は Collect・FORMAT_MISMATCH のサンプル・doctor の構文検査と解釈率のすべての問い合わせに効く。DescribeLogGroups が失敗したとき・グループが見つからないときは WARN を出して従来どおり問い合わせる
+  (グループが無ければ StartQuery の `LOG_GROUP_MISSING`)。飛ばした日は metrics を持たないので、`min_baseline_days` の「データのある過去日」に数えない。
+  経緯: 作ったばかりのロググループで `init` すると最初の日が `QUERY_INVALID` で止まった (フェイクがこの挙動を知らず見逃した。cwlogstest は作成時刻と保持期間を持ち、範囲外を同じ例外で拒否する)。
 
 決定 (アカウント単位のソース。Step 3、ADR 0015): 週次チェック用に、窓に依らない「今の状態」を取る source.kind を 4 つ置く。
 
