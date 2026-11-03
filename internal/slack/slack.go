@@ -27,11 +27,17 @@ func New(hc *http.Client) *Client {
 	return &Client{http: hc}
 }
 
-// Send は text を webhookURL へ 1 通送る。
+// Send は text だけを webhookURL へ 1 通送る。
 // 決定: Webhook の URL は秘密なので、返すエラーに URL を含めない (net/http のエラーは URL を含むため、中身だけを取り出す)。
 // 再送はしない (Slack が受け取ったのに応答が届かなかった場合に二重に送らないため)。
 func (c *Client) Send(ctx context.Context, webhookURL, text string) error {
-	body, err := json.Marshal(map[string]string{"text": text})
+	return c.Post(ctx, webhookURL, map[string]string{"text": text})
+}
+
+// Post は payload (text と blocks など。Incoming Webhook が受け付ける形) を JSON にして webhookURL へ 1 通送る。
+// URL をエラーに含めないこと・再送しないことは Send と同じ。
+func (c *Client) Post(ctx context.Context, webhookURL string, payload any) error {
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}

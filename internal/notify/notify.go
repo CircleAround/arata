@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"time"
 )
 
@@ -54,7 +55,7 @@ type Rules struct {
 
 // Sender は送信先。aratam は Slack の Webhook、--dry-run は標準出力。
 type Sender interface {
-	Send(ctx context.Context, route Route, text string) error
+	Send(ctx context.Context, route Route, m Message) error
 }
 
 // Summarizer は LLM のプロバイダ (aratam 設計書 3-1)。system と report.json を渡し、LLM の出力をそのまま返す。
@@ -78,6 +79,8 @@ type Options struct {
 	LLMTimeout time.Duration
 	// Context は利用者が書いた「この監査対象の前提」(llm.context_file の中身)。LLM の system に足すだけで、規則の判定には使わない。
 	Context string
+	// Format は slack.format (blocks | text)。空なら text (v0.3.0 までの mrkdwn の本文。設定では必須にしている)。
+	Format string
 }
 
 // Result は Run の結果。
@@ -124,7 +127,11 @@ func Run(ctx context.Context, o Options) Result {
 			ie = &InputError{Code: CodeInputMissing, Reason: err.Error()}
 		}
 		log.Error("arata の出力が無いか古い", "code", ie.Code, "reason", ie.Reason)
-		if !send(ctx, o, log, RouteUrgent, InputProblemText(o.Dir, ie, o.Rules)) {
+		m := Message{Text: InputProblemText(o.Dir, ie, o.Rules)}
+		if o.Format == FormatBlocks {
+			m = InputProblemBlocks(o.Dir, ie, o.Rules)
+		}
+		if !send(ctx, o, log, RouteUrgent, m) {
 			return Result{Exit: ExitSend, Route: RouteUrgent}
 		}
 		return Result{Exit: ExitInput, Route: RouteUrgent, Sent: true}
@@ -147,30 +154,46 @@ func Run(ctx context.Context, o Options) Result {
 	// 決定 (ADR 0024): WAF の改善提案 (proposals) は 2 通目として常に通常用に送る。on_quiet: silent でも提案は送る (週 1 回の改善提案のまとめ)
 	hasProposals := in.Run != nil && len(in.Run.Proposals) > 0
 	llmOK := o.Summarizer != nil
-	var text string
+	blocks := o.Format == FormatBlocks
+	var msg Message
 	switch {
 	case d.Quiet && o.Rules.OnQuiet == "silent":
 		if !hasProposals {
 			mark(o, log, key)
 			return Result{Exit: ExitOK, Route: d.Route}
 		}
+	case d.Quiet && blocks:
+		msg = QuietBlocks(in, d, o.Rules, warnings)
 	case d.Quiet:
-		text = QuietText(in, d, o.Rules, warnings)
+		msg = Message{Text: QuietText(in, d, o.Rules, warnings)}
+	case o.Summarizer == nil && blocks:
+		msg = RunBlocks(in, d, o.Rules, warnings, nil, "")
 	case o.Summarizer == nil:
-		text = ReportText(in, d, o.Rules, warnings, "")
+		msg = Message{Text: ReportText(in, d, o.Rules, warnings, "")}
+	case blocks:
+		// 決定 (ADR 0029): blocks では LLM は要約と「→」だけを書く。失敗したら原文ではなく、規則だけの Block Kit を送る (終了コード 3 は同じ)
+		if n, err := summarizeBlocks(ctx, o, log, in); err != nil {
+			log.Error("LLM の要約に失敗したため規則で組み立てて送ります", "code", CodeLLMFailed, "error", err.Error())
+			msg = RunBlocks(in, d, o.Rules, warnings, nil, BlocksFallbackNotice)
+			exit = ExitFallback
+			llmOK = false
+		} else {
+			msg = RunBlocks(in, d, o.Rules, warnings, n, "")
+		}
 	default:
 		if s, err := summarize(ctx, o, log, in); err != nil {
 			log.Error("LLM の要約に失敗したため原文を送ります", "code", CodeLLMFailed, "error", err.Error())
-			text = ReportText(in, d, o.Rules, warnings, FallbackNotice)
+			msg = Message{Text: ReportText(in, d, o.Rules, warnings, FallbackNotice)}
 			exit = ExitFallback
 			llmOK = false // 決定: 要約が失敗したら提案の書き起こしは呼ばない (LLM が使えない見込みが高い)
 		} else {
-			text = SummaryText(in, d, o.Rules, warnings, s)
+			msg = Message{Text: SummaryText(in, d, o.Rules, warnings, s)}
 		}
 	}
+	text := msg.Text
 	res := Result{Exit: exit, Route: d.Route}
 	if text != "" {
-		if !send(ctx, o, log, d.Route, text) {
+		if !send(ctx, o, log, d.Route, msg) {
 			return Result{Exit: ExitSend, Route: d.Route}
 		}
 		res.Sent = true
@@ -191,7 +214,20 @@ func Run(ctx context.Context, o Options) Result {
 			notice = ProposalsFallbackNotice
 		}
 	}
-	if !send(ctx, o, log, RouteNormal, ProposalsText(in, warnings, writeups, notice)) {
+	pm := Message{Text: ProposalsText(in, warnings, writeups, notice)}
+	if blocks {
+		// 決定 (ADR 0029): Slack には短い形だけを載せ、何を・なぜ・進め方・設定例の全文は入力ディレクトリの waf-proposals.md に書く。
+		// --dry-run では書かない (パスだけ出す)。書けなくても通知は続け、report.md を案内する
+		file := filepath.Join(o.Dir, ProposalsMD)
+		if o.DryRun {
+			log.Info("--dry-run のため "+ProposalsMD+" は書きません", "path", file)
+		} else if _, err := writeProposalsFile(o.Dir, ProposalsMarkdown(in, writeups, notice)); err != nil {
+			log.Warn(ProposalsMD+" を書けませんでした (通知は続けます)", "code", CodeProposalsFileFailed, "error", err.Error())
+			file = ""
+		}
+		pm = ProposalsBlocks(in, warnings, writeups, notice, file)
+	}
+	if !send(ctx, o, log, RouteNormal, pm) {
 		res.Exit = ExitSend
 		return res
 	}
@@ -236,6 +272,19 @@ func summarize(ctx context.Context, o Options, log *slog.Logger, in *Input) (*Su
 	return s, err
 }
 
+// summarizeBlocks は blocks の契約で LLM に要約と「→」を書かせる (再試行は 1 回まで)。
+func summarizeBlocks(ctx context.Context, o Options, log *slog.Logger, in *Input) (*BlockNotes, error) {
+	top, _ := splitUrgent(in, o.Rules.UrgentSeverity)
+	var n *BlockNotes
+	system := BlocksSystemPrompt(in.Kind, o.Context, playbooksPrompt(orderedChecks(in), log), top)
+	err := callLLM(ctx, o, log, system, in.JSON, func(raw []byte) error {
+		var err error
+		n, err = ParseBlockNotes(raw, top)
+		return err
+	})
+	return n, err
+}
+
 // callLLM は LLM を呼び、parse で検証する。失敗 (エラー・時間切れ・形が合わない) なら 1 回だけ再試行する。timeout は 1 回ごと。
 func callLLM(ctx context.Context, o Options, log *slog.Logger, system string, input []byte, parse func([]byte) error) error {
 	var last error
@@ -262,8 +311,8 @@ func callLLM(ctx context.Context, o Options, log *slog.Logger, system string, in
 	return last
 }
 
-func send(ctx context.Context, o Options, log *slog.Logger, route Route, text string) bool {
-	if err := o.Sender.Send(ctx, route, text); err != nil {
+func send(ctx context.Context, o Options, log *slog.Logger, route Route, m Message) bool {
+	if err := o.Sender.Send(ctx, route, m); err != nil {
 		log.Error("通知の送信に失敗しました", "code", CodeSendFailed, "route", string(route), "error", err.Error())
 		return false
 	}

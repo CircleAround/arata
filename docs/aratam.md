@@ -15,8 +15,9 @@ arata 設計書 9-1 章 (「report.json から通知までの LLM の仕事」) 
 | 権限 | arata は AWS の読み取りロールだけ、aratam は LLM と通知の鍵だけを持つ。別の OS ユーザーで動かしてもよい |
 | LLM | `bedrock` と `claude-cli` (`claude -p`) に対応する。将来 `openai-api`。`none` (LLM を使わず report.md を整形して送る) も選べる |
 | 通知先 | Slack Incoming Webhook。通常用と緊急用の 2 本まで。SNS などは後続 |
+| 書式 | Block Kit (`slack.format: blocks`。3-4 章、ADR 0029)。`text` で v0.3.0 までの mrkdwn の本文も選べる |
 | 依存 | 標準の `net/http` で書く。例外は Bedrock で、AWS SDK (`service/bedrockruntime`) を使ってよい (arata が AWS SDK の core を既に持つため増分が小さい) |
-| 状態 | 持たない。二重送信の防止だけ、入力ディレクトリに `.aratam-notified` (通知済みの run_id) を書く |
+| 状態 | 持たない。二重送信の防止だけ、入力ディレクトリに `.aratam-notified` (通知済みの run_id) を書く。ほかに書くのは WAF の提案の全文 `waf-proposals.md` だけ (3-4 章) |
 | 判定 | LLM に判定させない。重大度の下限・必ず載せる finding・失敗時のフォールバックは aratam の規則で固定する (2 章) |
 
 ## 2. 処理の流れ
@@ -40,7 +41,7 @@ aratam notify --in /var/lib/arata/out/daily
    - system には、その run に出たチェックの対処手順 (playbook。3-3 章) も入れる。
    - 出力は決まった JSON (3 章) に限る。形が合わない、時間切れ、エラー → 4 へ。
 4. **組み立てと検証** (LLM を使わない)
-   - LLM が返した分類と説明を、aratam が決まった書式で Slack のメッセージに組み立てる。
+   - LLM が返した分類と説明を、aratam が決まった書式で Slack のメッセージに組み立てる (`slack.format: blocks` のときは 3-4 章の構成と契約)。
    - new / changed / recurred の finding が LLM の出力から漏れていたら、規則で組み立てた行として末尾に足す (LLM が finding を消す経路を作らない)。
    - LLM が使えなかったときは report.md を送る (Slack の上限に合わせて切り詰め、出力ディレクトリのパスを添える)。冒頭に「要約に失敗したため原文を送ります」と書く。
 5. **送信** → 成功したら `.aratam-notified` に run_id を書く。
@@ -60,6 +61,7 @@ aratam notify --in /var/lib/arata/out/daily
 - `--dry-run` は `.aratam-notified` を見る (通知済みなら送らない旨をログに出す。中身を見たいときは `--force`) が、書かない。Webhook の環境変数も要らない。
 - 期間レポートは件数が 0 でも「静か」とみなさず送る (月次などの定期の報告は、何も無かったことも伝える)。
 - メッセージ: Slack の mrkdwn の本文だけで送る (8 章の未決は「まずは本文だけ」で進める)。
+  → 決定 (ADR 0029): Block Kit にした (3-4 章)。ここから下のメッセージの決定は `slack.format: text` のときのもの。
 - メッセージ (`none` と LLM が使えなかったときの原文): run は report.md をそのまま送らず、report.json から短い形を作る。
   finding 1 件は「重大度・概要・チェック名」の行と「チェックごとの主要キー · id (初出)」の行の 2 行にする
   (report.md は data の全キーを列挙するので 1 件が 10 行を超え、Slack では読めない)。主要キーの対応表は `internal/notify/compact.go` の `keyFields`
@@ -195,6 +197,87 @@ LLM に求める出力:
 - system の並び: 出力の契約 → `docs/ai/report.md` → 対処手順 → 利用者の前提。
 - 振り分け・重大度・finding 欠落の補完・LLM 失敗時の原文送信は、playbook の有無に関わらず規則のまま (2 章)。
 
+### 3-4. Block Kit (slack.format: blocks)
+
+経緯は ADR 0029。組み立ては `internal/notify/blocks.go`、型と上限は `message.go`。
+
+- 構成:
+
+  ```
+  [メンション・注記・警告]                 (section。緊急用を通常用に送るとき・NAME_MISMATCH・LLM の失敗)
+  🚨 arata daily — acme                    (header。絵文字は最大重大度: critical 🚨 / high 🔴 / medium 🟠 / low 🟡 / info ⚪)
+  *期間* … | *新規* 🚨 critical 1 ・ 🟠 medium 2 | 変化 1 件 ・ 再発 1 件 | 解消 1 件 ・ 未対応 0 件 | 本日報告済み N 件 | 情報 N 件 (件数のみ)
+                                           (fields。1 つの欄に 1 行で書き、ラベルと値を 2 段に分けない。0 件の変化・再発、報告済み、情報は出さない)
+  要約 1〜2 文                             (LLM。none は規則)
+  ⚠️ 取れていないもの                       (取れなかったソース・解釈率の警告・スキップ。期間レポートは取れなかった run)
+  ── まず対応                               (new / changed / recurred のうち urgent_severity 以上。1 件ずつ)
+  🚨 *<summary>* (再発)
+  → <何をするか>
+  ── 確認推奨                           (それ未満。同じチェックは 1 項目)
+  🟠 *MFA の無いコンソールユーザー* 5 人
+  `alice` `bob` …
+  全文と対処手順: `arata review` ・ `arata help ai playbook <check>` | WAF の改善提案は別のメッセージ | <dir>/report.md   (context)
+  ```
+
+- 通知用の text (プッシュ通知・検索): `arata daily (acme): 新規 3 件、最大 critical`。メンションは blocks の先頭の section に書く
+- まとめ方 (規則): (チェック、または チェック/key の種類 = key の最初の `|` より前) ごとの対応表 `groupRules`。
+  見出し・単位・並べる値を決める (例: `credential_hygiene/no_mfa` = 「MFA の無いコンソールユーザー N 人」+ user、`credential_hygiene/unused_key` = 「使われていないアクセスキー N 本」+ user と days_unused、
+  `new_principal`・`principal_new_source`・`secret_access`・`access_denied` = ARN の末尾 (外部アカウントは ID を添える)、`login_bruteforce`・`probe_paths` = IP と回数)。
+  - 決定: 並べる値は IAM ユーザー名・ARN の末尾・IP・ルール名まで (個人を特定できる値を出さない)。10 個まで (ほか N)。期間レポートの events は data を持たないので key から取る
+  - 決定: 対応表に無いチェック (guardduty_findings・iam_changes など、1 件ごとに中身が違うもの) と、1 件だけのグループは summary で 1 件ずつ。項目の並びは重大度の高い順
+  - 変化・再発は名前や見出しの後に `(変化)` `(再発)` を付ける
+  - `endpoint_abuse` (ADR 0030): 画面の集中 (key = 画面名) は「*画面への分散した集中* — `signup` 25 IP / 10 分」、「A のあと B」(key = `from>to`) は「*「A のあと B」の連鎖*」に分けてまとめる。
+    summary が長いので 1 件でもこの形にし、確認推奨でも playbook どおりの「→ その時間幅の登録・送信をアプリの運営者が確認し、保留・承認待ちの運用へ回す (遮断はしない)」を添える
+- 「→」(規則): playbook の「対処の選択肢」の先頭の項目を、太字・コマンドを含む括弧・末尾の補足の括弧を除き、最初の文まで (80 字まで)。
+  決定: 条件の括弧 (「封じ込め (侵害の疑い)」) は残す (条件を落とすと過剰な対処を勧めることになる)。playbook が無ければ「`arata review` で詳細を確認する」
+- 要約 (規則。provider: none と LLM の失敗時): 「まず対応 N 件 (最も重いのは「…」)、確認推奨 M 件。」/「確認推奨 M 件。high 以上の指摘はありません。」/「新規・変化・再発の指摘はありません。」
+- LLM の契約 (blocks):
+
+  ```json
+  {"summary": "全体の要約 1〜2 文", "next": [{"finding_id": "「まず対応」の id", "action": "人が次にすること 1 文"}]}
+  ```
+
+  - system: 出力の契約、「まず対応」の finding (id・チェック・重大度・summary を規則で列挙)、縛り (重大度を変えない・実行しない・個人を特定できる値を書かない・report.json だけで判断する)、
+    続けて `docs/ai/report.md`、対処手順 (3-3 章)、利用者の前提。入力は report.json だけ (text と同じ)
+  - 検査: 前後の文・コードフェンスは取り除く。summary が空なら形が不正 (1 回だけ再試行)。知らない ID・「まず対応」以外の ID・重複・空の action は捨て、規則の「→」で補う。
+    summary は 200 字、action は 80 字で切る。どれもエスケープし、改行は空白にする
+  - 縮退: 失敗したら規則だけの Block Kit を送り、先頭に「要約に失敗したため規則で組み立てました」。終了コード 3。提案の書き起こしは呼ばない (2 章と同じ)
+- 上限 (Slack): blocks 50 個、section の text 3,000 字、header 150 字、fields 10 個・各 2,000 字、context の要素 2,000 字。
+  決定: 入らない項目は後ろから「ほか N 件は `arata review` で確認してください」に縮める (「まず対応」を優先して残す。件数は落とさない)。長い文字列は行の境目で切って … を付ける
+- WAF の改善提案 (2 通目。`internal/notify/proposals_blocks.go`): 俯瞰できる短い形にし、全文は別のファイルに書き出す。
+
+  ```
+  🛡️ WAF の改善提案 — acme                                  (header)
+  10/20 09:00 〜 10/21 09:00 (UTC) ・ 提案 5 件 ・ 観察 3 件 | arata の規則による候補…   (context)
+  ──
+  🛡️ *探索パスが WAF を通過* — 14 件 / 7 日・2 パス           (section 1 行目: 種類の日本語 + 主な数字)
+  設定ファイルや管理画面を探す通信が WAF を素通りしている (7 日で 14 件)   (section 2 行目: なぜ困るか。規則の固定文 + 数字)
+  → WebACL `prod-waf` に、`/.env`・`/.git/config` を URI で照合するルールを COUNT で追加し、1〜2 週間、正規の通信が一致しないかを見る
+                                                              (section 3 行目: 次の一手。140 字まで)
+  /.env 13・/.git/config 1                                    (context: 根拠 1 行)
+  ──
+  *観察* / *COUNT のルール*                                    (1 ルール 1 行。「`名前` 140 件・怪しい 100%・7/7 日」、一致なしは「一致なし: `a` `b`」の 1 行)
+  設定例と詳しい説明: `<dir>/waf-proposals.md` | 対処手順: `arata help ai playbook waf_review`   (context)
+  ```
+
+  - 決定 (試験チャンネルで「文章が長く俯瞰しにくい」という意見を受けて): 規則の長い summary、LLM の何を・なぜ・進め方・設定例は Slack に出さない (report.json / report.md と waf-proposals.md にある)
+  - 主な数字と根拠は種類ごとの規則 (`proposalNumbers`)。「→」は LLM の `next` (書き起こしの契約に足した 1 行。BLOCK に強める記述の検査は他の項目と同じで、捨てたら項目ごと規則に戻る)、
+    無ければ規則 (`ruleNext`。種類ごとのテンプレートに WebACL 名・ルール名・上位のパス・limit などの evidence の値を埋め込む)
+  - 決定 (試験チャンネルで「→ 探索パスのルールを COUNT で追加して様子を見る」は具体性がないという意見を受けて): 「→」には必ず
+    どこに (WebACL 名・ルール名)・何を (対象のパス・条件の種類 (URI の照合・scope-down など))・どうする (COUNT で追加して何日・何を見る / 対象から外す など) を書く。
+    上限は 140 字 (80 字では抜け落ちた)。LLM の system でも「様子を見る・検討する だけで終わる抽象的な言い回しを避け、具体的な対象と確認方法を書く」と求め、例を示す
+  - なぜ困るか (`proposalWhy`): 種類ごとの固定文 + 数字 (例: challenge_on_app_path =「正規の画面で多くの人が Challenge を解かされている (解かれた 80%)」)。1 件は見出し / なぜ / → / 根拠 の 4 行まで
+  - **`waf-proposals.md` の書き出し (notify の副作用)**: slack.format: blocks で提案があるとき、入力ディレクトリ (`--in`) に書く (一時ファイルから置き換え、0640)。
+    提案ごとの種類・対象・概要・根拠・次の一手・何を・なぜ・進め方・設定例の全文と、観察・COUNT のルールの状況。`--dry-run` では書かない (パスは出す)。
+    書けなければ WARN `PROPOSALS_FILE_FAILED` を出し、context は report.md を案内する (通知は続ける。終了コードは変えない)
+  - 提案が入らなければ「ほか N 件の提案は waf-proposals.md」。観察・Challenge / CAPTCHA の状況・COUNT のルールは合わせて 10 行まで
+  - ADR 0028 の種類: `challenge_on_app_path` = 「正規の画面に Challenge / CAPTCHA — `ルール` が GET /x で Challenge 160 件 / 7 日・解かれた 80%」、
+    「→ このパスを `ルール` の対象から外す (scope-down) か条件を絞る」(BLOCK に変えることは勧めない)。
+    `challenge_impact` (observation) は「*Challenge / CAPTCHA*」の節に 1 ルール 1 行 (「`ルール` Challenge 900 件・解かれた 5%・GET 以外 40」。割合は解釈しない)
+- 静か (`on_quiet: short`): header `✅ arata <profile> — <name>` と 1 行。入力の問題: header `⚠️ arata の出力が無いか古い — <name>`、理由・code・入力のパス
+- `--dry-run`: `--format text` (既定) は人が読む簡易表示 (`[通知] <text>`、header は `# `、divider は `---`、context は `(小) `、fields は ` | ` でつなぐ)。
+  `--format json` は Webhook に送る payload そのもの。`--format` は `--dry-run` のときだけ指定できる
+
 ## 4. 設定
 
 arata と同じく暗黙の既定を持たない。`aratam config init` で全項目を明示した雛形を出す。
@@ -218,6 +301,7 @@ slack:
   webhook_env: ARATAM_SLACK_WEBHOOK            # 通常用。URL は設定ファイルに書かず環境変数で渡す
   urgent_webhook_env: ARATAM_SLACK_URGENT_WEBHOOK   # 省略時は通常用に送り、冒頭にメンションを付ける
   urgent_mention: "<!channel>"
+  format: blocks                  # blocks (Block Kit) | text (mrkdwn の本文。v0.3.0 までの書式)
 ```
 
 - Webhook の URL は秘密なので設定ファイルに書かせない (環境変数の名前だけを書く)。
@@ -226,6 +310,7 @@ slack:
 - 必須: `name`, `max_age`, `urgent_severity` (critical | high | medium | low), `on_quiet`, `llm.provider`, `slack.webhook_env`。
   `llm.timeout` は provider が `none` 以外なら必須、`bedrock` は `llm.model` と `llm.region` も必須。`claude-cli` の `model` は省略可 (claude 側の既定)。
   `slack.urgent_webhook_env` と `slack.urgent_mention` は省略可。未知のキーは誤記とみなして設定エラーにする (arata と同じ)。
+- `slack.format` (ADR 0029): `blocks` | `text`。必須 (暗黙の既定を持たない)。v0.3.0 の設定には無いので、エラー文に「v0.4.0 から必須。従来どおりなら `slack.format: text`」と書く。
 - `*_env` は環境変数の名前 (`[A-Za-z_][A-Za-z0-9_]*`) でなければ設定エラー。URL を貼った誤りを弾き、エラーには値を出さない。
 - `urgent_webhook_env` を書いたのに環境変数が空なら、通常用に送り `urgent_mention` を付ける (`URGENT_WEBHOOK_UNSET` の警告を出す)。緊急の通知を落とさないため。
   緊急用の Webhook があるときはメンションを付けない (チャンネル自体が緊急用のため)。
@@ -242,8 +327,8 @@ slack:
 
 ```
 aratam config init [--out aratam.yaml] [--force]
-aratam notify  --in <dir> [-c aratam.yaml] [--dry-run] [--force]
-               # --dry-run は送らずに標準出力へ。LLM は呼ぶ (--llm none で呼ばない)
+aratam notify  --in <dir> [-c aratam.yaml] [--dry-run [--format text|json]] [--force]
+               # --dry-run は送らずに標準出力へ。LLM は呼ぶ (--llm none で呼ばない)。--format json は送る payload そのもの
 aratam doctor  [-c aratam.yaml]   # LLM に短い問い合わせを 1 回、Webhook の環境変数の有無を確認 (送信はしない)
 aratam test-notify [-c aratam.yaml] # Slack に試験メッセージを 1 通送る
 ```
@@ -295,6 +380,6 @@ docs/ai/             # arata と共有。aratam は report.md を system とし�
 
 ## 8. 未決事項
 
-- Slack の書式を Block Kit にするか mrkdwn の本文だけにするか (まずは本文だけ)
+- ~~Slack の書式を Block Kit にするか mrkdwn の本文だけにするか~~ (決定: Block Kit。`slack.format: text` で本文も選べる。3-4 章、ADR 0029)
 - ~~期間レポート用の system 文書を `docs/ai` に足すか、report.md の節で足りるか~~ (決定: report.md の節で足りる。3-1 章)
 - 同じ run の hourly と daily で通知をまとめるか (まずは別々に送る)

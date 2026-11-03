@@ -1,0 +1,24 @@
+[通知] arata daily (acme): 新規 3 件、最大 critical
+<!channel>
+# 🚨 arata daily — acme
+*期間* 10/20 09:00 〜 10/21 09:00 (UTC) | *新規* 🚨 critical 1 ・ 🟠 medium 2 | 変化 1 件 ・ 再発 1 件 | 解消 1 件 ・ 未対応 1 件 | 本日報告済み 1 件 | 情報 1 件 (件数のみ)
+ルートの利用が 2 件 &lt;!here&gt;。引き受けの変化も 1 件。
+⚠️ *取れていないもの* (結果が欠けている可能性があります)
+*取れなかったソース*
+• trail-us: `QUERY_LIMIT` 取れた期間 2026-10-20T20:00:00Z 〜 2026-10-21T09:00:00Z
+*形式の解釈率の警告*
+• app (json): 解釈率 0.50、閾値 0.40 `FORMAT_DRIFT`
+*スキップしたチェック*: login_bruteforce (no http_access source)
+---
+*まず対応*
+🚨 *summary of arn:aws:iam::1:root|203.0.113.1*
+→ ルートの利用者を確かめ、心当たりが無ければパスワードを変える
+🚨 *summary of arn:aws:iam::1:root|192.0.2.1* (再発)
+→ 封じ込め (侵害の疑い): ルートのパスワードを変える、ルートのアクセスキーがあれば無効化・削除する
+🔴 *summary of a-&gt;b* (変化)
+→ 封じ込め (侵害の疑い): ロールの信頼ポリシーから不審な主体を外す
+---
+*確認推奨*
+🟠 *summary of 198.51.100.7*
+🟠 *summary of arn:aws:iam::1:user/x*
+(小) 全文と対処手順: `arata review` ・ `arata help ai playbook <check>` | <dir>/report.md

@@ -40,12 +40,12 @@ type sendFailOn struct {
 	n, calls int
 }
 
-func (f *sendFailOn) Send(ctx context.Context, r Route, text string) error {
+func (f *sendFailOn) Send(ctx context.Context, r Route, m Message) error {
 	f.calls++
 	if f.calls == f.n {
 		return errors.New("slack: 500")
 	}
-	return f.fakeSender.Send(ctx, r, text)
+	return f.fakeSender.Send(ctx, r, m)
 }
 
 // provider: none: 本文は今までどおり (緊急用) に送り、提案は通常用に 2 通目として送る。

@@ -19,3 +19,4 @@ slack:
   webhook_env: ARATAM_SLACK_WEBHOOK                 # 通常用の Webhook URL を入れる環境変数の名前。URL は設定ファイルに書かない
   urgent_webhook_env: ARATAM_SLACK_URGENT_WEBHOOK   # 緊急用。空にすると通常用に送り、冒頭に urgent_mention を付ける
   urgent_mention: "<!channel>"                      # 緊急用を通常用に送るときのメンション (空なら付けない)
+  format: blocks                                    # blocks = Block Kit (見出し・件数・まず対応・まとめて確認) | text = mrkdwn の本文だけ (v0.3.0 までの書式)

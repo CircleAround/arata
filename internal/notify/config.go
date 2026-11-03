@@ -48,6 +48,8 @@ type SlackConfig struct {
 	WebhookEnv       string `yaml:"webhook_env"`
 	UrgentWebhookEnv string `yaml:"urgent_webhook_env"`
 	UrgentMention    string `yaml:"urgent_mention"`
+	// Format は通知の書式。blocks = Block Kit / text = mrkdwn の本文だけ (v0.3.0 までの書式)。ADR 0029
+	Format string `yaml:"format"`
 }
 
 // プロバイダ名 (呼び方を表す。aratam 設計書 5 章)。
@@ -168,6 +170,14 @@ func (c *Config) Validate() error {
 		errs = append(errs, fmt.Errorf("llm.provider must be one of bedrock, claude-cli, none (got %q)", c.LLM.Provider))
 	}
 	req("slack.webhook_env", c.Slack.WebhookEnv)
+	// 決定 (ADR 0029): slack.format は必須 (暗黙の既定を持たない。ADR 0014)。v0.3.0 の設定には無いので、更新の手順をエラーに書く
+	switch c.Slack.Format {
+	case FormatBlocks, FormatText:
+	case "":
+		errs = append(errs, errors.New("slack.format is required since v0.4.0: write `slack.format: blocks` for Block Kit, or `slack.format: text` to keep the previous mrkdwn body"))
+	default:
+		errs = append(errs, fmt.Errorf("slack.format must be blocks or text (got %q)", c.Slack.Format))
+	}
 	for _, f := range []struct{ name, v string }{{"slack.webhook_env", c.Slack.WebhookEnv}, {"slack.urgent_webhook_env", c.Slack.UrgentWebhookEnv}} {
 		if f.v != "" && !envName.MatchString(f.v) {
 			errs = append(errs, fmt.Errorf("%s must be the name of an environment variable (do not put the webhook URL in the config file)", f.name))

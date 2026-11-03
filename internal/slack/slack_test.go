@@ -72,3 +72,21 @@ func TestSendHonorsContext(t *testing.T) {
 		t.Fatalf("want deadline exceeded, got %v", err)
 	}
 }
+
+// Post は payload (text と blocks) をそのまま JSON で送る (Block Kit)。
+func TestPostSendsPayload(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &got)
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer srv.Close()
+	payload := map[string]any{"text": "通知", "blocks": []map[string]any{{"type": "divider"}}}
+	if err := New(srv.Client()).Post(context.Background(), srv.URL+"/services/T000/B000/XXXX", payload); err != nil {
+		t.Fatal(err)
+	}
+	if got["text"] != "通知" || len(got["blocks"].([]any)) != 1 {
+		t.Fatalf("%v", got)
+	}
+}
