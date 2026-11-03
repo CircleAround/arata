@@ -282,7 +282,7 @@ From = min(now - window, 前回の window_to) として、cron の遅延・欠�
 
 ```yaml
 profiles:
-  hourly: { window: 1h,  checks: [root_usage, trail_tampering, unknown_assume_role, secret_access_unknown, guardduty_high] }
+  hourly: { window: 1h,  checks: [root_usage, unknown_assume_role, secret_access_unknown, guardduty_high] }
   daily:  { window: 24h, checks: [default-daily] }            # Cadence=daily のチェック全部
   weekly: { window: 7d,  checks: [default-weekly] }
 ```
@@ -399,7 +399,7 @@ S3 の条件付き書き込みでロック)。SQLite ファイルは数十 MB �
 | `runs` | id, profile, window_from, window_to, started_at, status, stats | 実行履歴。欠損 (走らなかった日) の検出にも使う |
 | `principals` | arn, kind (user/role/assumed-role/root), first_seen, last_seen, status (unknown/approved/expired/baseline) | 主体の初出判定。決定: `init` のベースライン収集で初出した主体は `baseline` とし new_principal の対象外。evaluate 時に allowlist から approved / expired を同期する |
 | `principal_ips` | arn, ip, country, first_seen, last_seen, count | 主体 × IP の初出判定。決定: count は各 run の窓 [From, To) の件数の和 (再走査の重なり区間は行を初めて作るときだけ数える。3 章) |
-| `events` | time, source, name, principal_arn, ip, region, resource, data | 「注目イベント」のみ (ルート利用、IAM 変更など)。全 CloudTrail は保存しない。決定: 注目の判定は collector 側 (`cloudtrail.DefaultNotable`) で行い、ルート利用・AssumeRole*・IAM / CloudTrail / GuardDuty / Organizations の書き込み・秘匿値取得・SSM セッション・公開設定変更を残す。決定: 拒否された呼び出し (errorCode が `checks.access_denied.error_codes` に入るもの) も読み取りを含めて残す (access_denied の元。コードは設定から `cloudtrail.NotableWith` に渡す。ADR 0021)。`event_id` で重複を排除する (複数リージョンを引いた場合の二重も同じ仕組みで防ぐ。collector 側でも同一 Collect 内の event_id は 1 回だけ数える)。決定: `collected_at` (最初に収集した run の時刻) を持ち、再走査で遅れて届いたイベントを見分ける (3 章、ADR 0013) |
+| `events` | time, source, name, principal_arn, ip, region, resource, data | 「注目イベント」のみ (ルート利用、IAM 変更など)。全 CloudTrail は保存しない。決定: 注目の判定は collector 側 (`cloudtrail.DefaultNotable`) で行い、ルート利用・AssumeRole*・IAM / CloudTrail / GuardDuty / Access Analyzer / Organizations の書き込み・秘匿値取得・SSM セッション・公開設定変更を残す。決定: defense_evasion / public_exposure が見る操作 (ログの削除・保持期間、フローログの削除、Config・Security Hub の停止、WAF のログ設定、S3 のバケットポリシーの削除・ライフサイクル、スナップショットの共有、Lambda の AddPermission など) だけを足し、全書き込みは足さない。一覧はチェック側 (`checks.DefenseEvasionAPIs` / `PublicExposureAPIs`) にあり、collector のテストで突き合わせる。該当する操作だけ requestParameters から判定に要る値を `data` に取り出す (ポリシー全文は残さない。ADR 0026)。決定: 拒否された呼び出し (errorCode が `checks.access_denied.error_codes` に入るもの) も読み取りを含めて残す (access_denied の元。コードは設定から `cloudtrail.NotableWith` に渡す。ADR 0021)。`event_id` で重複を排除する (複数リージョンを引いた場合の二重も同じ仕組みで防ぐ。collector 側でも同一 Collect 内の event_id は 1 回だけ数える)。決定: `collected_at` (最初に収集した run の時刻) を持ち、再走査で遅れて届いたイベントを見分ける (3 章、ADR 0013) |
 | `metrics` | date, source, metric, key, value | 日次集計 (`sign_in_failures` by ip、`admin_404` by ip、`waf_block` by rule)。平常帯の計算元。決定: 集計元のレコード種類 `from` 列を追加。主キーは (date, source, metric, key) で、後から来た値で**置き換える** (3 章の決定により後の値ほど完全)。raw JSONL には追記されるので rebuild は行順に適用すれば同じ結果になる。日は UTC |
 | `findings` | id, check, key, severity, first_seen, last_seen, last_changed, status (open/resolved/acked/snoozed), reported_at, fingerprint, data, suppressed_severity | 差分判定の中核。決定: `fingerprint` 列を追加 (4-2)。決定: `suppressed_severity` (ack / snooze したときの重大度。open / resolved では空) を追加 (schema 5、ADR 0022)。移行では既存の acked / snoozed の行に今の severity を入れる |
 | `posture` | check, resource, value, first_seen, last_changed | 姿勢チェックの現在値。決定: 作らず `snapshot_items` にまとめた (ADR 0015) |
@@ -508,7 +508,7 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 | チェック | 周期 | 必要レコード | 判定 | 重大度 |
 |---|---|---|---|---|
 | root_usage | hourly | trail_event | Root の利用 | critical |
-| trail_tampering | hourly | trail_event | StopLogging / DeleteTrail / UpdateTrail / DeleteDetector / 監査ロールの変更 | critical |
+| defense_evasion (決定: 当初の trail_tampering を置き換え。daily) | daily | trail_event | 監査・検知の仕組み (CloudTrail・GuardDuty・Access Analyzer・ログ・フローログ・Config・Security Hub・WAF のログ・証跡の宛先バケット) を止める・弱める操作の成功。決定: ADR 0026 | critical / high (deploy タグなら 1 段下げる) |
 | unknown_assume_role | hourly | trail_event | 呼び出し元 ARN が allowlist に無い AssumeRole。決定: AWS サービス主体 (EC2 / Lambda がインスタンスロールを引き受けるもの) は対象外 | high |
 | secret_access_unknown | hourly | trail_event | 主体 × シークレットの組が allowlist に無い GetSecretValue / GetParameter(decrypt) | high |
 | guardduty_findings | hourly (High) / daily (他)。決定: Step 3 は weekly のみ (state) | guardduty | finding ID 初出、count 増加 | severity 準拠 |
@@ -518,7 +518,7 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 | new_principal | daily | principal_seen | allowlist にも principals にも無い主体。決定: principals.status が unknown / expired の主体を毎回観測する (承認されるまで still_open として残る)。root は root_usage が扱うので対象外 | medium |
 | new_source_ip | daily | principal_seen | 主体 × IP (国) の初出 | low (国外なら medium) |
 | foreign_region | daily | trail_event | ap-northeast-1 以外のイベント | medium |
-| network_exposure | daily | trail_event | SG 0.0.0.0/0 開放、RDS PubliclyAccessible | high |
+| public_exposure (決定: 当初の network_exposure を置き換え) | daily | trail_event | SG の 0.0.0.0/0・::/0 開放、S3 の公開 (ポリシー・ACL・Public Access Block)、RDS PubliclyAccessible、スナップショット / AMI の公開共有、Lambda の Principal `*`。決定: ADR 0026 | high / medium / low (deploy タグでも下げない) |
 | ssm_session | daily | trail_event | StartSession の主体が allowlist 外、または深夜帯 | medium |
 | login_bruteforce | daily | http_access | sign-in 失敗の IP 別件数が平常帯 (14 日中央値 × 係数) 超え、Top IP 初出 | medium |
 | probe_paths | daily | http_access | 機密パス探索の 403/404 が平常帯超え | low |
@@ -562,6 +562,49 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 - 決定: error_codes は保存 (events) の条件なので overrides では変えられない。後から足したコードは、足す前の拒否が保存されていないので平常帯 0 から始まる
 - 決定 (ADR 0022): 想定済みの拒否 (allowlist の `expected_denied`。窓の終わりの時点で期限内の項目) は数える前に除く。窓にも平常帯の過去分にも同じく適用する (平常帯に残すと、ふだんの想定内の拒否で平常帯が膨らみ想定外の拒否を吸収するため)。窓で除いた件数は Data の `expected_denied_excluded`
 - サービス主体と root は対象外。allowlist で承認済みでも対象 (想定内の拒否は `expected_denied` で除く。主体ごと止めるなら ack / snooze だが、重大度が上がれば再報告される)。Data: principal, principal_kind, allowlist_status, external_account, count, distinct_apis, expected_denied_excluded, apis (件数の多い順に最大 10 個、`iam:ListUsers × 3`), error_codes, ips, first_time, last_time, baseline_median_count, baseline_median_distinct, threshold (`breadth` / `volume`)
+
+決定 (defense_evasion / public_exposure。ADR 0026):
+
+| チェック | Mode | Key | Fingerprint | 判定 |
+|---|---|---|---|---|
+| defense_evasion | event | `<サービス>:<操作>\|<主体 ARN>\|<対象>` | 重大度 + IP 集合 + 対象 + 理由 | 下の表の操作が成功した (errorCode なし) |
+| public_exposure | event | `<サービス>:<操作>\|<資源>\|<開いた中身>` (例 `ec2:AuthorizeSecurityGroupIngress\|sg-0abc\|tcp/22 0.0.0.0/0`) | 重大度 + IP 集合 + 資源 + 開いた中身 | 下の表の変更が成功した。同じ資源を同じように開いた呼び出しは主体をまとめて 1 件 (Data の principals) |
+
+| defense_evasion の操作 | 報告する条件 | 重大度 |
+|---|---|---|
+| cloudtrail: StopLogging / DeleteTrail | 常に | critical |
+| cloudtrail: UpdateTrail | isMultiRegionTrail=false / enableLogFileValidation=false / s3BucketName の指定 (それ以外の変更は報告しない) | high |
+| cloudtrail: PutEventSelectors | 管理イベントを減らす (基本形: includeManagementEvents=false・readWriteType が All 以外・excludeManagementEventSources。高度な形: Management のセレクタが無い・他の項目で絞る)。データイベントの追加だけなら報告しない | high |
+| cloudtrail: PutInsightSelectors | 空にした | high |
+| guardduty: DeleteDetector / Disassociate* / DeletePublishingDestination | 常に | high |
+| guardduty: UpdateDetector | enable=false か features のどれかが DISABLED | high |
+| guardduty: CreateFilter / UpdateFilter | action=ARCHIVE (自動アーカイブ) | high |
+| access-analyzer: DeleteAnalyzer / CreateArchiveRule | 常に | high |
+| logs: DeleteLogGroup / DeleteSubscriptionFilter | 常に | high (監査対象のロググループなら critical) |
+| logs: PutRetentionPolicy | retentionInDays < `min_log_retention_days` (既定 90) | 同上。監査対象で arata の平常帯の日数 (login_bruteforce / probe_paths の baseline_days の大きい方) より短ければ Data に `shorter_than_baseline_days` |
+| logs: DeleteLogStream | 監査対象のロググループだけ (アプリのストリームの整理はノイズ) | critical |
+| ec2: DeleteFlowLogs / config: Stop・DeleteConfigurationRecorder・DeleteDeliveryChannel / securityhub: DisableSecurityHub・BatchDisableStandards / wafv2: DeleteLoggingConfiguration | 常に | high |
+| wafv2: PutLoggingConfiguration | LoggingFilter がある (記録を減らせる) | high |
+| s3: DeleteBucketPolicy / PutBucketLifecycle | 証跡の宛先バケット (設定の `trail_buckets` と保存済みの CreateTrail / UpdateTrail の宛先) だけ | high |
+
+- 決定: CloudTrail には前の値が残らないので、「弱めた」かは要求の内容だけで判断し、判断できない変更は報告しない (状態は weekly の posture が見る)。保持期間は前の値の代わりに下限と比べる
+- 決定: 監査対象のロググループは cloudwatch-logs のソースの log_group から自動で作る (`Config.AuditLogGroups`。checks: のパラメータにしない。Registry に `SetAuditLogGroups` で渡す)
+- 決定: allowlist で `tags: [deploy]` の承認済み主体なら 1 段下げる (critical → high、high → medium)。info にはしない。Data に `known_deploy_principal`
+
+| public_exposure の変更 | 条件 | 重大度 |
+|---|---|---|
+| ec2: AuthorizeSecurityGroupIngress | 0.0.0.0/0・::/0 の ingress で、ポート範囲が `sensitive_ports` (既定 22, 3389, 3306, 5432, 1433, 1521, 6379, 11211, 27017, 9200, 5601, 2375) に重なるか全ポート (protocol -1・0-65535) | high |
+| 同上 | その他のポート・ICMP | low |
+| ec2: ModifySecurityGroupRules | 同上。記録に向き (ingress / egress) が無いので 1 段下げ、Data に `direction_unknown` (既定の egress の編集を high にしないため) | medium / low |
+| s3: PutBucketPolicy | Principal `*` / AWS `*` の Allow で、送信元・組織・アカウントで絞る条件キー (aws:SourceIp・SourceVpce・SourceVpc・PrincipalOrgID・PrincipalOrgPaths・PrincipalAccount・PrincipalArn・SourceAccount・SourceArn・SourceOrgID・SourceOrgPaths) が無い。aws:SecureTransport だけの条件は公開とみなす | high |
+| s3: PutBucketAcl | AllUsers / AuthenticatedUsers への付与 (ACL の本文・x-amz-grant-* のヘッダー)、既定 ACL の public-read / public-read-write / authenticated-read | high |
+| s3: Put(Account)PublicAccessBlock / Delete(Account)PublicAccessBlock | いずれかの項目が false (省略は false) / 削除 | high |
+| rds: ModifyDBInstance / CreateDBInstance / ModifyDBCluster | publiclyAccessible=true | high |
+| ec2: ModifySnapshotAttribute / ModifyImageAttribute、rds: ModifyDBSnapshotAttribute / ModifyDBClusterSnapshotAttribute | `all` (全員) の追加。特定アカウントへの共有は対象外 | high |
+| lambda: AddPermission* (eventName に API の版が付く) | principal `*` で、functionUrlAuthType=NONE か送信元の条件 (sourceArn・sourceAccount・principalOrgID) が無い | medium |
+
+- 決定: deploy タグでも下げない (公開は意図していても毎回見るべき)。止めたいときは ack (重大度が上がれば再報告される)
+- 決定: 2 つとも成功した呼び出しだけを見る (失敗は access_denied)。注目イベントの追加で既存のチェック・principal_seen の結果が変わらないことをテストで固定する
 
 決定 (週次チェックと ai_path_usage。Step 3、ADR 0015):
 
