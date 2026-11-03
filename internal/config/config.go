@@ -81,7 +81,7 @@ type Source struct {
 
 // DefaultIngestDelay は kind ごとの ingest_delay の既定。
 // 決定: CloudTrail は記録まで通常 5〜15 分かかるので上限の 15m、CloudWatch Logs は取り込みの数分の遅延を見て 5m。
-var DefaultIngestDelay = map[string]time.Duration{KindCloudTrailLookup: 15 * time.Minute, KindCloudWatchLogs: 5 * time.Minute}
+var DefaultIngestDelay = map[string]time.Duration{KindCloudTrailLookup: 15 * time.Minute, KindCloudTrailUnusedRegions: 15 * time.Minute, KindCloudWatchLogs: 5 * time.Minute}
 
 // Profile は周期ごとの窓とチェック集合。
 type Profile struct {
@@ -134,14 +134,20 @@ const (
 	KindPosture          = "posture"
 	// KindWAFConfig は WAFv2 の WebACL の設定。REGIONAL は regions、CLOUDFRONT は us-east-1 を引く (ADR 0023)。
 	KindWAFConfig = "waf-config"
+	// KindCloudTrailUnusedRegions は、アカウントで有効なリージョン (account:ListRegions) のうち cloudtrail-lookup の regions に無い
+	// リージョン (ふだん使わないリージョン) の書き込みを LookupEvents で引く (unused_region_activity。ADR 0032)。regions は書かない (実行時に決める)。
+	KindCloudTrailUnusedRegions = "cloudtrail-unused-regions"
+	// KindCostAnomaly は AWS Cost Anomaly Detection の異常 (ce:GetAnomalies) のスナップショット。Cost Explorer の API は us-east-1 だけ (ADR 0032)。
+	KindCostAnomaly = "cost-anomaly"
 )
 
 // SupportedKinds は受け付ける source.kind。
 var SupportedKinds = map[string]bool{KindCloudTrailLookup: true, KindCloudWatchLogs: true,
-	KindCredentialReport: true, KindGuardDuty: true, KindAccessAnalyzer: true, KindPosture: true, KindWAFConfig: true}
+	KindCredentialReport: true, KindGuardDuty: true, KindAccessAnalyzer: true, KindPosture: true, KindWAFConfig: true,
+	KindCloudTrailUnusedRegions: true, KindCostAnomaly: true}
 
 // SnapshotSourceKinds はスナップショットを取る source.kind (regions の既定は aws.region だけ、ingest_delay は使わない)。
-var SnapshotSourceKinds = map[string]bool{KindCredentialReport: true, KindGuardDuty: true, KindAccessAnalyzer: true, KindPosture: true, KindWAFConfig: true}
+var SnapshotSourceKinds = map[string]bool{KindCredentialReport: true, KindGuardDuty: true, KindAccessAnalyzer: true, KindPosture: true, KindWAFConfig: true, KindCostAnomaly: true}
 
 // Load は設定を読み、既定値を埋め、検証する。
 func Load(path string) (*Config, error) {
@@ -187,7 +193,19 @@ func (c *Config) applyDefaults() error {
 		if s.RegionRaw != "" {
 			s.Regions = []string{s.RegionRaw}
 		}
-		if len(s.Regions) == 0 {
+		switch s.Kind {
+		case KindCloudTrailUnusedRegions:
+			// 決定 (ADR 0032): 対象のリージョンは実行時に「有効なリージョン − cloudtrail-lookup の regions」で決める。書かせない
+			if len(s.Regions) > 0 {
+				return fmt.Errorf("config: source %s: %s does not take regions (it scans the enabled regions that are not in the cloudtrail-lookup regions)", s.ID, s.Kind)
+			}
+		case KindCostAnomaly:
+			if len(s.Regions) > 0 && (len(s.Regions) != 1 || s.Regions[0] != GlobalRegion) {
+				return fmt.Errorf("config: source %s: %s: the Cost Explorer API is only in %s (omit regions)", s.ID, s.Kind, GlobalRegion)
+			}
+			s.Regions = []string{GlobalRegion}
+		}
+		if len(s.Regions) == 0 && s.Kind != KindCloudTrailUnusedRegions {
 			if s.Kind == KindCloudWatchLogs || SnapshotSourceKinds[s.Kind] {
 				// ロググループ・GuardDuty・アナライザーはリージョンに属するので既定は aws.region だけ (IAM と S3 のアカウント設定はグローバル)
 				s.Regions = []string{c.AWS.Region}
@@ -304,6 +322,9 @@ func (c *Config) Validate() error {
 			}
 		}
 	}
+	if err := c.validateUnusedRegions(); err != nil {
+		return err
+	}
 	if err := c.Checks.validate(); err != nil {
 		return fmt.Errorf("config: checks: %w", err)
 	}
@@ -326,6 +347,49 @@ func (c *Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+// validateUnusedRegions は cloudtrail-unused-regions のソースに cloudtrail-lookup のソースがあるかを確かめる。
+func (c *Config) validateUnusedRegions() error {
+	for _, s := range c.Sources {
+		if s.Kind == KindCloudTrailUnusedRegions && len(c.ActiveRegions()) == 0 {
+			return fmt.Errorf("config: source %s: %s は cloudtrail-lookup の regions を「ふだん使うリージョン」として使う (それ以外の有効なリージョンを引く)。cloudtrail-lookup のソースを足す", s.ID, s.Kind)
+		}
+	}
+	return nil
+}
+
+// UnusedRegionSources は cloudtrail-unused-regions のソースの ID (設定順)。そのイベントは unused_region_activity だけが見る (ADR 0032)。
+func (c *Config) UnusedRegionSources() []string {
+	var out []string
+	for _, s := range c.Sources {
+		if s.Kind == KindCloudTrailUnusedRegions {
+			out = append(out, s.ID)
+		}
+	}
+	return out
+}
+
+// HasSourceKind は kind のソースがあるか。
+func (c *Config) HasSourceKind(kind string) bool {
+	for _, s := range c.Sources {
+		if s.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
+// ActiveRegions はふだん使うリージョン (cloudtrail-lookup のソースの regions の和。重複除去、設定順)。
+// cloudtrail-unused-regions はアカウントで有効なリージョンからこれを除いたリージョンを引く (ADR 0032)。
+func (c *Config) ActiveRegions() []string {
+	var out []string
+	for _, s := range c.Sources {
+		if s.Kind == KindCloudTrailLookup {
+			out = append(out, s.Regions...)
+		}
+	}
+	return dedup(out)
 }
 
 // validateEndpointSources は endpoint_abuse の endpoints[].sources が http_access を出す cloudwatch-logs のソースかを確かめる。

@@ -11,6 +11,8 @@
   - `waf_review` (WAF の改善提案と COUNT のルールの状況。ADR 0023)
   - `defense_evasion` (監査・検知の無効化) と `public_exposure` (公開設定の変更。ADR 0026)
   - `principal_new_source` (既知の主体の初めての送信元・リージョン) と `secret_access` (秘匿値の読み取りの異常。ADR 0027)
+  - `unused_region_activity` (ふだん使わないリージョンでの書き込み) と `cost_anomaly` (Cost Anomaly Detection の異常を予想に対する割合で。ADR 0032)。
+    sandbox ではシナリオ 12 と doctor (権限・モニターの検出) で確かめる (異常の発生は試験できないので cost_anomaly の判定はテストのフェイクで固定)
   - チェックごとの対処手順 (`arata help ai playbook <check>`。ADR 0025)
 - aratam: WAF の改善提案の 2 通目、利用者の事情 (`llm.context_file`。ADR 0024)、出たチェックの対処手順を LLM に渡す
 - サプライチェーン対策 (ADR 0017) と依存削減 (ADR 0019) は適用済み
@@ -18,12 +20,11 @@
 
 ## 2. すぐにやること
 
-1. **段階 D**: `unused_region_activity` (使っていないリージョンでの書き込み) と `cost_anomaly` (AWS Cost Anomaly Detection を読む。費用の急増だけ)
-2. **段階 E**: `endpoint_abuse` (会員登録・パスワード再設定・メッセージ送信などへの分散した連打)。主役は短い時間幅の画面全体の件数と、
+1. **段階 E**: `endpoint_abuse` (会員登録・パスワード再設定・メッセージ送信などへの分散した連打)。主役は短い時間幅の画面全体の件数と、
    同じ User-Agent が多数の IP にまたがること。結果は遮断の提案にせず件数の異常として伝える。利用者側のふだんの件数が分かってから閾値を決める
-3. **aratam の実送信試験**: 試験用チャンネルの Incoming Webhook で `aratam doctor` → `test-notify` → `notify` を 1 回ずつ。
+2. **aratam の実送信試験**: 試験用チャンネルの Incoming Webhook で `aratam doctor` → `test-notify` → `notify` を 1 回ずつ。
    `bedrock` は sandbox の `bedrock.enabled` で推論プロファイルを作り、`doctor` で応答を確かめる
-4. **小さな残り**: 自アカウントの root を「外部アカウント」と表示しない守り (CloudTrail の recipientAccountId を使う)、
+3. **小さな残り**: 自アカウントの root を「外部アカウント」と表示しない守り (CloudTrail の recipientAccountId を使う)、
    「本日報告済み」の欄が still_open のとき Data を更新しない件 (expected_denied を足した直後に古い件数が見える)
 
 ## 3. 残項目 (優先度順の案。利用者側の意見を反映)
@@ -47,7 +48,7 @@
 ## 4. 未決の判断 (利用者側に確認する)
 
 - リポジトリを公開するか。公開すると Release の来歴証明が自動で有効になる。公開前に `git log` と PR / Release の本文に顧客情報が無いことを再確認する
-- Slack の書式 (mrkdwn の本文だけで続けるか Block Kit にするか)
+- ~~Slack の書式 (mrkdwn の本文だけで続けるか Block Kit にするか)~~ (決定: Block Kit。`slack.format: text` で従来の本文も選べる。ADR 0029)
 - hourly と daily の通知をまとめるか (今は別々)
 - `aratam` の `--in` に既定を持たせない方針を維持するか (`docs/aratam.md` 5 章の決定)
 

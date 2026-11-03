@@ -176,6 +176,22 @@ test('secretAccess は必須で、enabled は真偽値 (暗黙の既定を持た
   assert.equal(parseConfig(on).secretAccess.enabled, true);
 });
 
+test('costAnomaly は必須で、enabled は真偽値 (暗黙の既定を持たない)', () => {
+  assert.equal(parseConfig(example()).costAnomaly.enabled, false, 'config.example.json は false (アカウントに既にモニターがあることがある)');
+
+  const missing = example();
+  delete missing.costAnomaly;
+  assert.ok(errorsOf(() => parseConfig(missing)).some((p) => p.startsWith('costAnomaly:') && p.includes('必須')));
+
+  const wrongType = example();
+  wrongType.costAnomaly = { enabled: 'yes' };
+  assert.ok(errorsOf(() => parseConfig(wrongType)).some((p) => p.startsWith('costAnomaly.enabled:') && p.includes('真偽値')));
+
+  const on = example();
+  on.costAnomaly = { enabled: true };
+  assert.equal(parseConfig(on).costAnomaly.enabled, true);
+});
+
 test('waf.challenge / waf.captcha は真偽値で、既定は false。waf.enabled が false のまま true にすると誤り (効かないため)', () => {
   const ex = parseConfig(example());
   assert.equal(ex.waf.challenge, false);

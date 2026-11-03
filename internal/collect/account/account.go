@@ -14,7 +14,9 @@ import (
 	"time"
 
 	aa "github.com/aws/aws-sdk-go-v2/service/accessanalyzer"
+	acc "github.com/aws/aws-sdk-go-v2/service/account"
 	ct "github.com/aws/aws-sdk-go-v2/service/cloudtrail"
+	ce "github.com/aws/aws-sdk-go-v2/service/costexplorer"
 	gd "github.com/aws/aws-sdk-go-v2/service/guardduty"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/s3control"
@@ -44,6 +46,10 @@ const (
 	ActionGetWebACL                = "wafv2:GetWebACL"
 	ActionGetLoggingConfiguration  = "wafv2:GetLoggingConfiguration"
 	ActionListResourcesForWebACL   = "wafv2:ListResourcesForWebACL"
+	ActionListRegions              = "account:ListRegions"
+	ActionLookupEvents             = "cloudtrail:LookupEvents"
+	ActionGetAnomalyMonitors       = "ce:GetAnomalyMonitors"
+	ActionGetAnomalies             = "ce:GetAnomalies"
 )
 
 // RequiredActions は source.kind ごとに読み取りロールへ付ける action (doctor の表の最後に出す)。
@@ -53,6 +59,9 @@ var RequiredActions = map[string][]string{
 	KindAccessAnalyzer:   {ActionListAnalyzers, ActionListAAFindings},
 	KindPosture:          {ActionDescribeTrails, ActionGetTrailStatus, ActionListDetectors, ActionGetDetector, ActionGetAccountSummary, ActionGetPasswordPolicy, ActionGetPublicAccessBlock},
 	KindWAFConfig:        {ActionListWebACLs, ActionGetWebACL, ActionGetLoggingConfiguration, ActionListResourcesForWebACL},
+	// cloudtrail-unused-regions の collector は internal/collect/cloudtrail にあるが、action はここにまとめる (doctor と読み取りロールの突き合わせ)
+	KindUnusedRegions: {ActionListRegions, ActionLookupEvents},
+	KindCostAnomaly:   {ActionGetAnomalyMonitors, ActionGetAnomalies},
 }
 
 // source.kind (config と同じ文字列)。
@@ -62,6 +71,8 @@ const (
 	KindAccessAnalyzer   = "access-analyzer"
 	KindPosture          = "posture"
 	KindWAFConfig        = "waf-config"
+	KindUnusedRegions    = "cloudtrail-unused-regions"
+	KindCostAnomaly      = "cost-anomaly"
 )
 
 // IAMAPI は IAM クライアントのうち使う部分。
@@ -110,6 +121,17 @@ type WAFV2API interface {
 	ListResourcesForWebACL(ctx context.Context, in *wafv2.ListResourcesForWebACLInput, optFns ...func(*wafv2.Options)) (*wafv2.ListResourcesForWebACLOutput, error)
 }
 
+// AccountAPI は Account Management のうち使う部分 (有効なリージョンの一覧。cloudtrail-unused-regions)。
+type AccountAPI interface {
+	ListRegions(ctx context.Context, in *acc.ListRegionsInput, optFns ...func(*acc.Options)) (*acc.ListRegionsOutput, error)
+}
+
+// CostExplorerAPI は Cost Explorer のうち使う部分 (Cost Anomaly Detection の読み取りだけ)。
+type CostExplorerAPI interface {
+	GetAnomalyMonitors(ctx context.Context, in *ce.GetAnomalyMonitorsInput, optFns ...func(*ce.Options)) (*ce.GetAnomalyMonitorsOutput, error)
+	GetAnomalies(ctx context.Context, in *ce.GetAnomaliesInput, optFns ...func(*ce.Options)) (*ce.GetAnomaliesOutput, error)
+}
+
 // Clients はリージョン 1 つ分の SDK クライアントの束。テストではフェイクを入れる。
 type Clients struct {
 	Region         string
@@ -120,6 +142,8 @@ type Clients struct {
 	S3Control      S3ControlAPI
 	STS            STSAPI
 	WAFV2          WAFV2API
+	Account        AccountAPI
+	CostExplorer   CostExplorerAPI
 }
 
 // base は collector の共通部。

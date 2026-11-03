@@ -59,12 +59,12 @@ func TestGenerateLoads(t *testing.T) {
 			t.Errorf("check %s is in no profile", n)
 		}
 	}
-	// CloudTrail と週次用のアカウント単位のソースを有効にし、cloudwatch-logs はコメントの例だけ
+	// CloudTrail (ふだん使わないリージョンを含む) と週次用のアカウント単位のソースを有効にし、cost-anomaly (有料) と cloudwatch-logs はコメントの例だけ
 	var kinds []string
 	for _, s := range cfg.Sources {
 		kinds = append(kinds, s.Kind)
 	}
-	if strings.Join(kinds, ",") != "cloudtrail-lookup,iam-credential-report,guardduty,access-analyzer,posture" {
+	if strings.Join(kinds, ",") != "cloudtrail-lookup,cloudtrail-unused-regions,iam-credential-report,guardduty,access-analyzer,posture" {
 		t.Fatalf("sources: %v", kinds)
 	}
 }

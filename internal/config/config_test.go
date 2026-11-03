@@ -370,7 +370,7 @@ func TestProfileOverrides(t *testing.T) {
 }
 
 func TestParamChecks(t *testing.T) {
-	if got := strings.Join(ParamChecks(), ","); got != "login_bruteforce,probe_paths,waf_block_trend,waf_review,access_denied,defense_evasion,public_exposure,principal_new_source,secret_access,endpoint_abuse,credential_hygiene,posture" {
+	if got := strings.Join(ParamChecks(), ","); got != "login_bruteforce,probe_paths,waf_block_trend,waf_review,access_denied,defense_evasion,public_exposure,principal_new_source,secret_access,endpoint_abuse,unused_region_activity,cost_anomaly,credential_hygiene,posture" {
 		t.Fatalf("got %s", got)
 	}
 }
@@ -629,5 +629,58 @@ func TestWAFReviewChallengeConfig(t *testing.T) {
 		if _, err := Load(write(t, minimal+"checks:\n"+bad)); err == nil || !strings.Contains(err.Error(), "challenge") {
 			t.Fatalf("%q: %v", bad, err)
 		}
+	}
+}
+
+// P-D: 使っていないリージョンの書き込み (unused_region_activity) と費用の異常 (cost_anomaly) のソースと設定 (ADR 0032)。
+func TestUnusedRegionAndCostAnomalySources(t *testing.T) {
+	body := strings.Replace(minimal, "profiles:", "  - id: unused\n    kind: cloudtrail-unused-regions\n  - id: cost\n    kind: cost-anomaly\nprofiles:", 1)
+	cfg, err := Load(write(t, body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	unused, cost := cfg.Sources[1], cfg.Sources[2]
+	// 未使用リージョンは実行時に ListRegions で決める (regions は持たない)。再走査は cloudtrail-lookup と同じ 15m
+	if len(unused.Regions) != 0 || unused.IngestDelay != 15*time.Minute {
+		t.Fatalf("unused-regions source: %+v", unused)
+	}
+	// Cost Explorer の API は us-east-1 だけ
+	if strings.Join(cost.Regions, ",") != "us-east-1" || cost.IngestDelay != 0 {
+		t.Fatalf("cost-anomaly source: %+v", cost)
+	}
+	// ふだん使うリージョン = cloudtrail-lookup の regions の和
+	if got := strings.Join(cfg.ActiveRegions(), ","); got != "ap-northeast-1,us-east-1" {
+		t.Fatalf("active regions: %q", got)
+	}
+	ur, ca := cfg.Checks.UnusedRegionActivity, cfg.Checks.CostAnomaly
+	if !contains(ur.ComputeAPIs, "ec2:RunInstances") || !contains(ur.ComputeAPIs, "lambda:CreateFunction") || !contains(ur.IgnoreEventSources, "iam.amazonaws.com") {
+		t.Fatalf("unused_region_activity defaults: %+v", ur)
+	}
+	if ca != (CostAnomaly{LookbackDays: 7, MinImpactUSD: 10, MediumImpactRatio: 0.5, HighImpactRatio: 1.0}) {
+		t.Fatalf("cost_anomaly defaults: %+v", ca)
+	}
+
+	// cloudtrail-lookup が無ければ「ふだん使うリージョン」が分からないので設定の誤り
+	noTrail := "name: acme\nstore: dir:///var/lib/arata/acme\nsources:\n  - id: unused\n    kind: cloudtrail-unused-regions\nprofiles:\n  daily:\n    window: 24h\n    checks: [unused_region_activity]\n"
+	if _, err := Load(write(t, noTrail)); err == nil || !strings.Contains(err.Error(), "cloudtrail-lookup の regions") {
+		t.Fatalf("unused-regions without cloudtrail-lookup: %v", err)
+	}
+	for _, b := range []string{
+		strings.Replace(minimal, "profiles:", "  - id: unused\n    kind: cloudtrail-unused-regions\n    regions: [eu-west-1]\nprofiles:", 1),
+		strings.Replace(minimal, "profiles:", "  - id: cost\n    kind: cost-anomaly\n    regions: [ap-northeast-1]\nprofiles:", 1),
+		minimal + "checks:\n  cost_anomaly:\n    medium_impact_ratio: 2\n    high_impact_ratio: 1\n",
+		minimal + "checks:\n  cost_anomaly:\n    min_impact_usd: -1\n",
+		minimal + "checks:\n  cost_anomaly:\n    lookback_days: 100\n",
+		minimal + "checks:\n  unused_region_activity:\n    compute_apis: [RunInstances]\n",
+		minimal + "checks:\n  unused_region_activity:\n    ignore_event_sources: [\"\"]\n",
+	} {
+		if _, err := Load(write(t, b)); err == nil {
+			t.Fatalf("expected error for %q", b)
+		}
+	}
+	// 収集の条件 (GetAnomalies の範囲と下限) は overrides で変えられない
+	ov := minimal + "    overrides:\n      cost_anomaly:\n        lookback_days: 3\n"
+	if _, err := Load(write(t, ov)); err == nil {
+		t.Fatal("lookback_days must not be overridable")
 	}
 }

@@ -24,10 +24,10 @@ func TestScaffoldLoads(t *testing.T) {
 		t.Fatal(err)
 	}
 	if c.Name != "example" || c.MaxAge != "26h" || c.UrgentSeverity != "high" || c.OnQuiet != "short" || c.LLM.Provider != ProviderNone || c.LLM.Timeout != "120s" ||
-		c.Slack.WebhookEnv != "ARATAM_SLACK_WEBHOOK" || c.Slack.UrgentWebhookEnv != "ARATAM_SLACK_URGENT_WEBHOOK" || c.Slack.UrgentMention != "<!channel>" {
+		c.Slack.WebhookEnv != "ARATAM_SLACK_WEBHOOK" || c.Slack.UrgentWebhookEnv != "ARATAM_SLACK_URGENT_WEBHOOK" || c.Slack.UrgentMention != "<!channel>" || c.Slack.Format != FormatBlocks {
 		t.Fatalf("%+v", c)
 	}
-	for _, key := range []string{"name:", "max_age:", "urgent_severity:", "on_quiet:", "provider:", "model:", "region:", "profile:", "timeout:", "command:", "context_file:", "webhook_env:", "urgent_webhook_env:", "urgent_mention:"} {
+	for _, key := range []string{"name:", "max_age:", "urgent_severity:", "on_quiet:", "provider:", "model:", "region:", "profile:", "timeout:", "command:", "context_file:", "webhook_env:", "urgent_webhook_env:", "urgent_mention:", "format:"} {
 		if !strings.Contains(string(Scaffold()), "\n"+key) && !strings.Contains(string(Scaffold()), " "+key) {
 			t.Errorf("scaffold must state %s", key)
 		}
@@ -57,6 +57,10 @@ func TestConfigErrors(t *testing.T) {
 		{"bedrock は region が要る", "provider: none", "provider: bedrock", "llm.region is required"},
 		{"claude-cli は model 省略可", "provider: none", "provider: claude-cli", ""},
 		{"webhook_env 無し", "webhook_env: ARATAM_SLACK_WEBHOOK", "webhook_env: \"\"", "slack.webhook_env is required"},
+		{"format 無し (v0.3.0 からの更新)", "format: blocks", "format: \"\"", "slack.format is required since v0.4.0"},
+		{"format 無しは text で従来どおりと案内", "format: blocks", "format: \"\"", "slack.format: text"},
+		{"format 不正", "format: blocks", "format: html", "slack.format must be blocks or text"},
+		{"format text", "format: blocks", "format: text", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

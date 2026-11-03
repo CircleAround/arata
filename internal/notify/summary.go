@@ -45,9 +45,9 @@ var classes = []struct{ key, label string }{{"action", "要対処"}, {"confirm",
 
 // findingRef は report.json の finding 1 件 (表示に使う値は LLM の出力ではなくこちらから取る)。
 type findingRef struct {
-	id, check, severity, summary, diff string
-	required                           bool            // new / changed / recurred (LLM の出力から漏れたら規則で足す)
-	finding                            *schema.Finding // data を持つもの (期間レポートの events は持たない)
+	id, check, key, severity, summary, diff string
+	required                                bool            // new / changed / recurred (LLM の出力から漏れたら規則で足す)
+	finding                                 *schema.Finding // data を持つもの (期間レポートの events は持たない)
 }
 
 // findingIndex は report.json の finding を出現順に並べる。
@@ -56,12 +56,12 @@ func findingIndex(in *Input) ([]findingRef, map[string]findingRef) {
 	add := func(diff string, required bool, fs []schema.Finding) {
 		for i := range fs {
 			f := &fs[i]
-			list = append(list, findingRef{id: f.ID, check: f.Check, severity: f.Severity, summary: f.Summary, diff: diff, required: required, finding: f})
+			list = append(list, findingRef{id: f.ID, check: f.Check, key: f.Key, severity: f.Severity, summary: f.Summary, diff: diff, required: required, finding: f})
 		}
 	}
 	addEvents := func(diff string, required bool, es []schema.EventRow) {
 		for _, e := range es {
-			list = append(list, findingRef{id: e.FindingID, check: e.Check, severity: e.Severity, summary: e.Summary, diff: diff, required: required})
+			list = append(list, findingRef{id: e.FindingID, check: e.Check, key: e.Key, severity: e.Severity, summary: e.Summary, diff: diff, required: required})
 		}
 	}
 	if r := in.Run; r != nil {

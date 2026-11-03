@@ -97,7 +97,8 @@ func NewRegistryFor(c config.Checks) *Registry {
 		DefenseEvasion{Config: c.DefenseEvasion, LogBaselineDays: max(c.LoginBruteforce.Baseline.BaselineDays, c.ProbePaths.Baseline.BaselineDays)},
 		PublicExposure{Config: c.PublicExposure},
 		PrincipalNewSource{Config: c.PrincipalNewSource, AccessDenied: c.AccessDenied}, SecretAccess{Config: c.SecretAccess},
-		LoginBruteforce{Config: c.LoginBruteforce}, ProbePaths{Config: c.ProbePaths}, EndpointAbuse{Config: c.EndpointAbuse}, WAFBlockTrend{Config: c.WAFBlockTrend}, AIPathUsage{},
+		LoginBruteforce{Config: c.LoginBruteforce}, ProbePaths{Config: c.ProbePaths}, EndpointAbuse{Config: c.EndpointAbuse},
+		UnusedRegionActivity{Config: c.UnusedRegionActivity}, CostAnomaly{Config: c.CostAnomaly}, WAFBlockTrend{Config: c.WAFBlockTrend}, AIPathUsage{},
 		CredentialHygiene{Config: c.CredentialHygiene}, GuardDutyFindings{}, Posture{Config: c.Posture}, AccessAnalyzer{},
 		WAFReview{Config: c.WAFReview, SignInPaths: c.LoginBruteforce.Paths, ProbePaths: c.ProbePaths.Paths}} {
 		r.Register(ch)
@@ -110,6 +111,14 @@ func NewRegistryFor(c config.Checks) *Registry {
 func (r *Registry) SetAuditLogGroups(groups []string) {
 	if c, ok := r.byName["defense_evasion"].(DefenseEvasion); ok {
 		c.AuditLogGroups = append([]string(nil), groups...)
+		r.byName[c.Name()] = c
+	}
+}
+
+// SetUnusedRegionSources は unused_region_activity に cloudtrail-unused-regions のソースの ID (config.Config.UnusedRegionSources) を渡す。
+func (r *Registry) SetUnusedRegionSources(ids []string) {
+	if c, ok := r.byName["unused_region_activity"].(UnusedRegionActivity); ok {
+		c.Sources = append([]string(nil), ids...)
 		r.byName[c.Name()] = c
 	}
 }

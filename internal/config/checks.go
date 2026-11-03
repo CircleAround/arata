@@ -24,6 +24,9 @@ type Checks struct {
 	SecretAccess       SecretAccess       `yaml:"secret_access"`
 	// EndpointAbuse は画面 (会員登録・メッセージ送信など) への多数の IP からの集中と「A のあと B」の連鎖を見る daily のチェック (ADR 0030)。
 	EndpointAbuse EndpointAbuse `yaml:"endpoint_abuse"`
+	// UnusedRegionActivity と CostAnomaly はふだん使わないリージョンでの書き込みと費用の急増を見る daily のチェック (ADR 0032)。
+	UnusedRegionActivity UnusedRegionActivity `yaml:"unused_region_activity"`
+	CostAnomaly          CostAnomaly          `yaml:"cost_anomaly"`
 	// 以下は週次チェック (Step 3)。
 	CredentialHygiene CredentialHygiene `yaml:"credential_hygiene"`
 	Posture           Posture           `yaml:"posture"`
@@ -178,6 +181,73 @@ type SecretAccess struct {
 	Factor float64 `yaml:"factor"`
 	// MinDistinct は一括読み出しとみなす異なる秘匿値の数の下限 (これを超えたら)。
 	MinDistinct int `yaml:"min_distinct"`
+}
+
+// UnusedRegionActivity は unused_region_activity (ふだん使わないリージョンでの書き込み) の設定 (ADR 0032)。
+// 対象のリージョンは cloudtrail-unused-regions のソースが実行時に決める (有効なリージョン − cloudtrail-lookup の regions)。
+type UnusedRegionActivity struct {
+	// ComputeAPIs は計算資源の作成とみなす操作 (IAM の action の形 `<サービス>:<操作>`)。成功すれば critical、失敗 (試行) でも medium。
+	// Lambda の eventName に付く API の版 (CreateFunction20150331) は吸収する。
+	ComputeAPIs []string `yaml:"compute_apis"`
+	// IgnoreEventSources は数えない eventSource。グローバルサービス (記録は us-east-1) の書き込みを、us-east-1 を
+	// cloudtrail-lookup の regions に入れていない環境で未使用リージョンの書き込みと誤らないため。
+	IgnoreEventSources []string `yaml:"ignore_event_sources"`
+}
+
+// CostAnomaly は cost_anomaly (AWS Cost Anomaly Detection の異常) の設定 (ADR 0032)。
+// lookback_days と min_impact_usd は GetAnomalies の問い合わせの条件 (overrides では変えられない)。
+// 決定: 重大度は固定の金額ではなく予想に対する増加の割合で決める (同じ 100 USD でも月 50 USD の環境と月 5 万 USD の環境では意味が違う)。
+// 金額は小さすぎる異常 (1 USD → 5 USD で +400%) を除く下限にだけ使う。
+type CostAnomaly struct {
+	// LookbackDays は直近何日に終わった (続いている) 異常を引くか (GetAnomalies の DateInterval)。
+	LookbackDays int `yaml:"lookback_days"`
+	// MinImpactUSD は報告する総影響額 (TotalImpact、USD) の下限。これ未満は割合が大きくても報告しない。問い合わせの絞り込みにも使う (ページ数 = 費用を減らす)。
+	MinImpactUSD float64 `yaml:"min_impact_usd"`
+	// MediumImpactRatio は medium にする予想に対する増加の割合 (影響額 / 予想額。0.5 = 予想の 1.5 倍以上)。
+	MediumImpactRatio float64 `yaml:"medium_impact_ratio"`
+	// HighImpactRatio は high にする増加の割合 (1.0 = 予想の 2 倍以上)。
+	HighImpactRatio float64 `yaml:"high_impact_ratio"`
+}
+
+// DefaultComputeAPIs は compute_apis の既定 (仮想通貨の採掘などに使われる計算資源の作成)。
+var DefaultComputeAPIs = []string{
+	"ec2:RunInstances", "ec2:RequestSpotInstances", "ec2:RequestSpotFleet", "ec2:CreateFleet",
+	"lambda:CreateFunction",
+	"ecs:CreateCluster", "ecs:RunTask", "ecs:CreateService",
+	"eks:CreateCluster", "eks:CreateNodegroup",
+	"batch:CreateComputeEnvironment",
+	"sagemaker:CreateNotebookInstance", "sagemaker:CreateTrainingJob",
+	"lightsail:CreateInstances",
+	"autoscaling:CreateAutoScalingGroup",
+}
+
+// DefaultIgnoreEventSources は ignore_event_sources の既定 (グローバルサービスで、記録が us-east-1 に入るもの)。
+var DefaultIgnoreEventSources = []string{
+	"iam.amazonaws.com", "sts.amazonaws.com", "signin.amazonaws.com", "organizations.amazonaws.com",
+	"support.amazonaws.com", "health.amazonaws.com", "ce.amazonaws.com",
+}
+
+var computeAPI = regexp.MustCompile(`^[a-z0-9-]+:[A-Za-z0-9]+$`)
+
+func (u UnusedRegionActivity) validate() error {
+	for _, a := range u.ComputeAPIs {
+		if !computeAPI.MatchString(a) {
+			return fmt.Errorf("compute_apis: %q must be <service>:<Operation> (e.g. ec2:RunInstances)", a)
+		}
+	}
+	for _, e := range u.IgnoreEventSources {
+		if e == "" {
+			return fmt.Errorf("ignore_event_sources must not contain an empty string")
+		}
+	}
+	return nil
+}
+
+func (c CostAnomaly) validate() error {
+	if c.LookbackDays < 1 || c.LookbackDays > 90 || c.MinImpactUSD <= 0 || c.MediumImpactRatio <= 0 || c.HighImpactRatio < c.MediumImpactRatio {
+		return fmt.Errorf("1 <= lookback_days <= 90, min_impact_usd > 0, 0 < medium_impact_ratio <= high_impact_ratio")
+	}
+	return nil
 }
 
 // EndpointAbuse は endpoint_abuse の設定 (ADR 0030)。endpoints / window / follow_ups / exclude_paths は日次集計の条件
@@ -415,6 +485,17 @@ func (c *Checks) applyDefaults() {
 	setInt(&ns.MinBaselineDays, (ns.BaselineDays+1)/2)
 	setInt(&ns.MinWrites, 5)
 	c.EndpointAbuse.applyDefaults()
+	if len(c.UnusedRegionActivity.ComputeAPIs) == 0 {
+		c.UnusedRegionActivity.ComputeAPIs = DefaultComputeAPIs
+	}
+	if len(c.UnusedRegionActivity.IgnoreEventSources) == 0 {
+		c.UnusedRegionActivity.IgnoreEventSources = DefaultIgnoreEventSources
+	}
+	ca := &c.CostAnomaly
+	setInt(&ca.LookbackDays, 7)
+	setFloat(&ca.MinImpactUSD, 10)
+	setFloat(&ca.MediumImpactRatio, 0.5)
+	setFloat(&ca.HighImpactRatio, 1.0)
 	sa := &c.SecretAccess
 	setInt(&sa.BaselineDays, 14)
 	setInt(&sa.MinBaselineDays, (sa.BaselineDays+1)/2)
@@ -511,6 +592,12 @@ func (c *Checks) validate() error {
 	}
 	if err := c.EndpointAbuse.validate(); err != nil {
 		return fmt.Errorf("endpoint_abuse: %w", err)
+	}
+	if err := c.UnusedRegionActivity.validate(); err != nil {
+		return fmt.Errorf("unused_region_activity: %w", err)
+	}
+	if err := c.CostAnomaly.validate(); err != nil {
+		return fmt.Errorf("cost_anomaly: %w", err)
 	}
 	if c.CredentialHygiene.UnusedDays < 1 {
 		return fmt.Errorf("credential_hygiene: unused_days >= 1")

@@ -32,6 +32,7 @@ var rules = Rules{Name: "acme", MaxAge: 26 * time.Hour, UrgentSeverity: "high", 
 type sent struct {
 	route Route
 	text  string
+	msg   Message
 }
 
 type fakeSender struct {
@@ -39,11 +40,11 @@ type fakeSender struct {
 	err error
 }
 
-func (f *fakeSender) Send(_ context.Context, r Route, text string) error {
+func (f *fakeSender) Send(_ context.Context, r Route, m Message) error {
 	if f.err != nil {
 		return f.err
 	}
-	f.got = append(f.got, sent{r, text})
+	f.got = append(f.got, sent{r, m.Text, m})
 	return nil
 }
 
@@ -221,7 +222,7 @@ func TestRunQuiet(t *testing.T) {
 	s := &fakeSender{}
 	if res, _ := run(t, dir, s); res.Exit != ExitOK || len(s.got) != 1 || s.got[0].route != RouteNormal ||
 		s.got[0].text != "*arata daily (acme)* 2026-10-20T09:00:00Z 〜 2026-10-21T09:00:00Z: 新規なし (変化・再発なし、取得の失敗なし。未対応 4 件)" {
-		t.Fatalf("short: %+v %q", res, s.got)
+		t.Fatalf("short: %+v %v", res, s.got)
 	}
 
 	dir = inputDir(t, quietReport(t), "")

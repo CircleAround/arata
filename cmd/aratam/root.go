@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -116,6 +117,12 @@ func NewRootCmd(d *Deps) *subcmd.Command {
 	return root
 }
 
+// --dry-run の出力の形。
+const (
+	dryRunText = "text"
+	dryRunJSON = "json"
+)
+
 const (
 	envConfig         = "ARATAM_CONFIG"
 	defaultConfigFile = "aratam.yaml"
@@ -223,21 +230,23 @@ type slackSender struct {
 	hooks  webhooks
 }
 
-func (s *slackSender) Send(ctx context.Context, route notify.Route, text string) error {
+func (s *slackSender) Send(ctx context.Context, route notify.Route, m notify.Message) error {
 	url := s.hooks.normal
 	if route == notify.RouteUrgent && s.hooks.urgent != "" {
 		url = s.hooks.urgent
 	}
-	return s.client.Send(ctx, url, text)
+	return s.client.Post(ctx, url, m)
 }
 
 // stdoutSender は --dry-run の送り先。送り先の種類を添えて標準出力に出す。
+// 決定 (ADR 0029): format が text なら人が読む簡易表示 (Block Kit は見出し・区切りを記号にしたもの)、json なら Webhook に送る payload そのもの。
 type stdoutSender struct {
-	w     io.Writer
-	hooks webhooks
+	w      io.Writer
+	hooks  webhooks
+	format string
 }
 
-func (s *stdoutSender) Send(_ context.Context, route notify.Route, text string) error {
+func (s *stdoutSender) Send(_ context.Context, route notify.Route, m notify.Message) error {
 	to := "normal webhook"
 	if route == notify.RouteUrgent {
 		to = "normal webhook (no urgent webhook)"
@@ -245,12 +254,20 @@ func (s *stdoutSender) Send(_ context.Context, route notify.Route, text string) 
 			to = "urgent webhook"
 		}
 	}
-	_, err := fmt.Fprintf(s.w, "--- route: %s → %s ---\n%s\n", route, to, text)
+	body := notify.PlainText(m)
+	if s.format == dryRunJSON {
+		b, err := json.MarshalIndent(m, "", "  ")
+		if err != nil {
+			return err
+		}
+		body = string(b)
+	}
+	_, err := fmt.Fprintf(s.w, "--- route: %s → %s ---\n%s\n", route, to, body)
 	return err
 }
 
 func newNotifyCmd(d *Deps, g *globalFlags) *subcmd.Command {
-	var in, llmFlag string
+	var in, llmFlag, format string
 	var dryRun, force bool
 	cmd := &subcmd.Command{
 		Use:   "notify",
@@ -261,12 +278,22 @@ func newNotifyCmd(d *Deps, g *globalFlags) *subcmd.Command {
   - max_severity が urgent_severity 以上、または取れなかったソースがある → 緊急用。それ以外は通常用
   - 新規・変化・再発が無く、取れなかったソースも無い → on_quiet (short = 1 行 / silent = 送らない)
   - 送ったら入力ディレクトリの .aratam-notified に run_id を書き、同じ run は二度送らない (--force で再送)
-  - report.json に WAF の修正提案の候補 (proposals) があれば、「WAF の改善提案」を 2 通目として通常用に送る (on_quiet: silent でも送る)
+  - report.json に WAF の修正提案の候補 (proposals) があれば、「WAF の改善提案」を 2 通目として通常用に送る (on_quiet: silent でも送る)。
+    slack.format: blocks では、提案の全文 (設定例を含む) を入力ディレクトリの waf-proposals.md に書く (--dry-run では書かない)
 
 終了コード: 0 = 送った (または送る必要が無かった)、2 = 設定エラー、3 = LLM が使えず report.md で送った、
-4 = 入力が無い・古い (その旨は送った)、5 = 送信に失敗した。`,
+4 = 入力が無い・古い (その旨は送った)、5 = 送信に失敗した。
+
+書式は slack.format (blocks = Block Kit / text = mrkdwn の本文)。--dry-run の出力は --format text (既定。人が読む簡易表示) か
+--format json (Webhook に送る payload そのもの)。`,
 		Args: subcmd.NoArgs,
 		Run: func(ctx context.Context, _ []string) error {
+			if format != dryRunText && format != dryRunJSON {
+				return configErr(d, fmt.Errorf("--format must be text or json (got %q)", format))
+			}
+			if format != dryRunText && !dryRun {
+				return configErr(d, errors.New("--format is for --dry-run only"))
+			}
 			cfg, err := loadConfig(d, g)
 			if err != nil {
 				return err
@@ -297,12 +324,12 @@ func newNotifyCmd(d *Deps, g *globalFlags) *subcmd.Command {
 			}
 			var sender notify.Sender = &slackSender{client: slack.New(d.HTTPClient), hooks: hooks}
 			if dryRun {
-				sender = &stdoutSender{w: d.Stdout, hooks: hooks}
+				sender = &stdoutSender{w: d.Stdout, hooks: hooks, format: format}
 			}
 			res := notify.Run(ctx, notify.Options{
 				Dir: in, Now: d.Now(), Rules: cfg.Rules(hooks.urgent != ""),
 				Force: force, DryRun: dryRun, Sender: sender, Logger: d.Logger,
-				Summarizer: summarizer, LLMTimeout: timeout, Context: contextText,
+				Summarizer: summarizer, LLMTimeout: timeout, Context: contextText, Format: cfg.Slack.Format,
 			})
 			if res.Exit != notify.ExitOK {
 				return &exitError{code: res.Exit}
@@ -315,6 +342,7 @@ func newNotifyCmd(d *Deps, g *globalFlags) *subcmd.Command {
 	cmd.BoolVar(&dryRun, "dry-run", false, "送らずに標準出力へ出す (.aratam-notified も書かない)")
 	cmd.BoolVar(&force, "force", false, "通知済みの run でも送る")
 	cmd.StringVar(&llmFlag, "llm", "", "llm.provider を上書きする (none で LLM を呼ばない)")
+	cmd.StringVar(&format, "format", dryRunText, "--dry-run の出力: text (人が読む簡易表示) | json (送る payload)")
 	return cmd
 }
 

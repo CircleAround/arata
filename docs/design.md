@@ -425,7 +425,7 @@ S3 の条件付き書き込みでロック)。SQLite ファイルは数十 MB �
 | `runs` | id, profile, window_from, window_to, started_at, status, stats | 実行履歴。欠損 (走らなかった日) の検出にも使う |
 | `principals` | arn, kind (user/role/assumed-role/root), first_seen, last_seen, status (unknown/approved/expired/baseline) | 主体の初出判定。決定: `init` のベースライン収集で初出した主体は `baseline` とし new_principal の対象外。evaluate 時に allowlist から approved / expired を同期する |
 | `principal_ips` | arn, ip, country, first_seen, last_seen, count | 主体 × IP の初出判定。決定: count は各 run の窓 [From, To) の件数の和 (再走査の重なり区間は行を初めて作るときだけ数える。3 章) |
-| `events` | time, source, name, principal_arn, ip, region, resource, data | 「注目イベント」のみ (ルート利用、IAM 変更など)。全 CloudTrail は保存しない。決定: 注目の判定は collector 側 (`cloudtrail.DefaultNotable`) で行い、ルート利用・AssumeRole*・IAM / CloudTrail / GuardDuty / Access Analyzer / Organizations の書き込み・秘匿値取得・SSM セッション・公開設定変更を残す。決定: defense_evasion / public_exposure が見る操作 (ログの削除・保持期間、フローログの削除、Config・Security Hub の停止、WAF のログ設定、S3 のバケットポリシーの削除・ライフサイクル、スナップショットの共有、Lambda の AddPermission など) だけを足し、全書き込みは足さない。一覧はチェック側 (`checks.DefenseEvasionAPIs` / `PublicExposureAPIs`) にあり、collector のテストで突き合わせる。該当する操作だけ requestParameters から判定に要る値を `data` に取り出す (ポリシー全文は残さない。ADR 0026)。決定: 拒否された呼び出し (errorCode が `checks.access_denied.error_codes` に入るもの) も読み取りを含めて残す (access_denied の元。コードは設定から `cloudtrail.NotableWith` に渡す。ADR 0021)。決定 (ADR 0027): 秘匿値の読み取り (GetSecretValue・BatchGetSecretValue・GetParameter(s)・GetParametersByPath) は名前 / ARN・パス・`recursive`・`with_decryption` (常に残す。無いのは以前の版で集めたもの) だけを `data` に取り出す (値は CloudTrail に入らない)。BatchGetSecretValue も注目イベントに足した (一覧は `checks.SecretReadAPIs`)。`event_id` で重複を排除する (複数リージョンを引いた場合の二重も同じ仕組みで防ぐ。collector 側でも同一 Collect 内の event_id は 1 回だけ数える)。決定: `collected_at` (最初に収集した run の時刻) を持ち、再走査で遅れて届いたイベントを見分ける (3 章、ADR 0013) |
+| `events` | time, source, name, principal_arn, ip, region, resource, data | 「注目イベント」のみ (ルート利用、IAM 変更など)。全 CloudTrail は保存しない。決定: 注目の判定は collector 側 (`cloudtrail.DefaultNotable`) で行い、ルート利用・AssumeRole*・IAM / CloudTrail / GuardDuty / Access Analyzer / Organizations の書き込み・秘匿値取得・SSM セッション・公開設定変更を残す。決定: defense_evasion / public_exposure が見る操作 (ログの削除・保持期間、フローログの削除、Config・Security Hub の停止、WAF のログ設定、S3 のバケットポリシーの削除・ライフサイクル、スナップショットの共有、Lambda の AddPermission など) だけを足し、全書き込みは足さない。一覧はチェック側 (`checks.DefenseEvasionAPIs` / `PublicExposureAPIs`) にあり、collector のテストで突き合わせる。該当する操作だけ requestParameters から判定に要る値を `data` に取り出す (ポリシー全文は残さない。ADR 0026)。決定: 拒否された呼び出し (errorCode が `checks.access_denied.error_codes` に入るもの) も読み取りを含めて残す (access_denied の元。コードは設定から `cloudtrail.NotableWith` に渡す。ADR 0021)。決定 (ADR 0027): 秘匿値の読み取り (GetSecretValue・BatchGetSecretValue・GetParameter(s)・GetParametersByPath) は名前 / ARN・パス・`recursive`・`with_decryption` (常に残す。無いのは以前の版で集めたもの) だけを `data` に取り出す (値は CloudTrail に入らない)。BatchGetSecretValue も注目イベントに足した (一覧は `checks.SecretReadAPIs`)。`event_id` で重複を排除する (複数リージョンを引いた場合の二重も同じ仕組みで防ぐ。collector 側でも同一 Collect 内の event_id は 1 回だけ数える)。決定: `collected_at` (最初に収集した run の時刻) を持ち、再走査で遅れて届いたイベントを見分ける (3 章、ADR 0013)。決定 (ADR 0032): `cloudtrail-unused-regions` のソースは、ふだん使わないリージョンの AWS のサービス以外の主体の書き込みを (失敗を含めて) すべて残す (使っていないリージョンでは 0〜数件)。source 列がそのソースの ID で、unused_region_activity だけが見る (他のチェックの Query は除く) |
 | `metrics` | date, source, metric, key, value | 日次集計 (`sign_in_failures` by ip、`admin_404` by ip、`waf_block` by rule)。平常帯の計算元。決定: 集計元のレコード種類 `from` 列を追加。主キーは (date, source, metric, key) で、後から来た値で**置き換える** (3 章の決定により後の値ほど完全)。raw JSONL には追記されるので rebuild は行順に適用すれば同じ結果になる。日は UTC。決定 (ADR 0027): cloudtrail collector も主体の活動の日次集計を出す: `principal_source` (key `<主体 ARN>\|<送信元の /24・/48>`)、`principal_source_writes` (同じ key の成功した書き込み)、`principal_write_region` (key `<主体 ARN>\|<リージョン>` の成功した書き込み)。対象は IAM ユーザーとロール (のセッション)、送信元は IP のときだけ。cloudtrail は日の頭から引き直さないので、置き換えの規則のため値は「その日を最後に引いた run が見た件数」(下限) になる。判定は「その日に有ったか」と下限値にだけ使う。期間レポートの推移表には出さない。Yields に metric は足さない (http_access / waf_action のチェックの skip 判定を変えないため)。行数の見積もり: 1 日あたり (主体数 × その日の送信元の数) × 2 + (主体数 × 書き込みのリージョン数)。主体 50・送信元 2 なら 1 日 250 行、400 日で 10 万行 (数十 MB 未満)。Lambda などサービスが引き受けるロールは送信元が多く、数十のロールが 1 日数十の /24 を使う環境では年 100 万行に近づく。多ければ prune を入れるときに `principal_*` の保持を baseline_days の数倍 (例 90 日) に短くする (判定は 30 日しか見ない)。決定 (ADR 0030): cloudwatch-logs の http_access のソースは endpoint_abuse の画面ごとに `endpoint_abuse_count` / `endpoint_abuse_ips` (key `<画面>\|<HH:MM>`。時間幅の始まり、UTC)、`endpoint_abuse_ua_ips` (key `<画面>\|<HH:MM>\|<UA のハッシュ>`。その幅で最も多くの IP にまたがった UA 1 つ、2 IP 以上のときだけ)、`endpoint_abuse_follow` (key `<from>><to>\|<HH:MM>`。1 以上のときだけ) を出す。IP と UA の原文は保存しない。行数の見積もり: 1 日あたり最大で画面数 × 144 (10 分幅) × 3 + 連鎖数 × 144。画面 3・連鎖 1 で 1 日最大 1,440 行、400 日で 58 万行 (実際は来訪のある幅だけなのでずっと少ない) |
 | `findings` | id, check, key, severity, first_seen, last_seen, last_changed, status (open/resolved/acked/snoozed), reported_at, fingerprint, data, suppressed_severity | 差分判定の中核。決定: `fingerprint` 列を追加 (4-2)。決定: `suppressed_severity` (ack / snooze したときの重大度。open / resolved では空) を追加 (schema 5、ADR 0022)。移行では既存の acked / snoozed の行に今の severity を入れる |
 | `posture` | check, resource, value, first_seen, last_changed | 姿勢チェックの現在値。決定: 作らず `snapshot_items` にまとめた (ADR 0015) |
@@ -548,7 +548,8 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 | console_login | daily | trail_event | 失敗が閾値超え、MFA 無し成功 | medium / high |
 | new_principal | daily | principal_seen | allowlist にも principals にも無い主体。決定: principals.status が unknown / expired の主体を毎回観測する (承認されるまで still_open として残る)。root は root_usage が扱うので対象外 | medium |
 | principal_new_source (決定: 当初の new_source_ip を置き換え。国の判定はしない) | daily | trail_event, principal_seen (+ 主体の活動の日次集計) | 既知の主体の初めての送信元 (/24・/48)・書き込みのリージョン。決定: ADR 0027 | low / medium / high |
-| foreign_region | daily | trail_event | ap-northeast-1 以外のイベント | medium |
+| unused_region_activity (決定: 当初の foreign_region を置き換え) | daily | unused_region_event (`cloudtrail-unused-regions`) | ふだん使わないリージョン (有効なリージョン − cloudtrail-lookup の regions) での書き込み。決定: ADR 0032 | critical / high / medium |
+| cost_anomaly | daily | cost_anomaly (`cost-anomaly`) | AWS Cost Anomaly Detection の異常を予想に対する増加の割合で。決定: ADR 0032 | high / medium |
 | public_exposure (決定: 当初の network_exposure を置き換え) | daily | trail_event | SG の 0.0.0.0/0・::/0 開放、S3 の公開 (ポリシー・ACL・Public Access Block)、RDS PubliclyAccessible、スナップショット / AMI の公開共有、Lambda の Principal `*`。決定: ADR 0026 | high / medium / low (deploy タグでも下げない) |
 | ssm_session | daily | trail_event | StartSession の主体が allowlist 外、または深夜帯 | medium |
 | login_bruteforce | daily | http_access | sign-in 失敗の IP 別件数が平常帯 (14 日中央値 × 係数) 超え、Top IP 初出 | medium |
@@ -689,6 +690,25 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 - 決定: 保存量 (秘匿値の読み取りとして出した trail_event の数) を run の stats の `secret_read_events` に残す。GetParameter はアプリの起動ごとに呼ばれて多い
 - 2 つとも追加の権限は要らない (`cloudtrail:LookupEvents` だけ)。日次集計と秘匿値の取り出しで既存のチェックの結果が変わらないことをテストで固定する
 
+決定 (unused_region_activity / cost_anomaly。ADR 0032):
+
+| チェック | Mode | Key | Fingerprint | 判定 |
+|---|---|---|---|---|
+| unused_region_activity | event | `<リージョン>\|<主体 ARN>` | 重大度 + 操作 (`<サービス>:<操作>`) の集合 | `cloudtrail-unused-regions` のソースのイベントのうち、サービスの主体と `ignore_event_sources` を除いた書き込み。成功すれば high、`compute_apis` (計算資源の作成) なら critical。計算資源の作成の失敗 (試行) は medium、他の失敗は報告しない。deploy タグの承認済み主体なら 1 段下げる |
+| cost_anomaly | event | 異常の ID | 重大度 | 直近 `lookback_days` (7) 日に終わった異常で、影響額が `min_impact_usd` (10 USD) 以上。予想に対する増加の割合 (TotalImpactPercentage、無ければ影響額 / 予想額) が `medium_impact_ratio` (0.5) 以上で medium、`high_impact_ratio` (1.0) 以上で high。予想額が無ければ medium。Feedback が NO / PLANNED_ACTIVITY のものは報告しない |
+
+- 決定: ふだん使わないリージョンは毎回 `account:ListRegions` (ENABLED / ENABLED_BY_DEFAULT) から全 cloudtrail-lookup の `regions` を除いて決める (設定に active_regions を書かせない。opt-in したリージョンは次の run から対象)。
+  cloudtrail-lookup のソースが無ければ設定の誤り。各リージョンで LookupEvents を `ReadOnly=false` で窓 (再走査を含む) の分だけ引く (使っていないリージョンはふつう 1 回。レート制限は共有)
+- 決定: 未使用リージョンのイベントは events に残すが、source 列 (`cloudtrail-unused-regions` のソースの ID) で分け、unused_region_activity だけが見る。
+  engine は他のチェックに source を除いた Query を渡す (defense_evasion・public_exposure・access_denied などの二重の報告と、平常帯・結果の変化を防ぐ)。principal_seen と主体の活動の日次集計も出さない。
+  run の stats に `unused_region_events` と `unused_regions_scanned` を残す (`denied_events` / `secret_read_events` には数えない)
+- 決定: cost_anomaly の重大度は固定の金額ではなく予想に対する増加の割合で決める (同じ 100 USD でもサービスの規模で意味が変わる)。金額は小さすぎる異常を除く下限にだけ使う (1 USD → 5 USD の +400% のような誤報を防ぐ)。
+  Data と Summary に予想額・実際の額・割合・影響額を並べる。critical は出さない (費用だけでは侵害と言えない)。費用の削減の提案はしない
+- 決定: cost-anomaly はスナップショット (ADR 0015)。モニターが無ければ Unavailable でチェックを skip し、GetAnomalies は呼ばない。`lookback_days` と `min_impact_usd` は GetAnomalies の問い合わせの条件
+  (`min_impact_usd` はサーバー側の TotalImpact の絞り込み) なので overrides では変えられない。連結アカウントの名前 (LinkedAccountName) は残さない (ID だけ)
+- 費用: LookupEvents は無料。Cost Explorer の API は公式の料金表で 1 リクエスト 0.01 USD (GetAnomalies / GetAnomalyMonitors が対象かは明記が無いので対象とみなす)。
+  1 回の run で GetAnomalyMonitors 1 回 + GetAnomalies 1 ページ (多くは 1 ページ) = 約 0.02 USD、daily だけなら月 0.6 USD ほど。doctor も約 0.02 USD。SDK のリトライの再試行も課金されうる
+
 決定 (週次チェックと ai_path_usage。Step 3、ADR 0015):
 
 | チェック | Mode | Key | Fingerprint | 判定 |
@@ -787,7 +807,9 @@ arata rebuild                  # raw JSONL から SQLite を再構築
   必要な action: iam-credential-report = `iam:GenerateCredentialReport` (書き込み系。doctor では試さない)・`iam:GetCredentialReport`、
   guardduty = `guardduty:ListDetectors`・`ListFindings`・`GetFindings`、access-analyzer = `access-analyzer:ListAnalyzers`・`ListFindings`、
   posture = `cloudtrail:DescribeTrails`・`GetTrailStatus`、`guardduty:ListDetectors`・`GetDetector`、`iam:GetAccountSummary`・`GetAccountPasswordPolicy`、`s3:GetAccountPublicAccessBlock`、
-  waf-config = `wafv2:ListWebACLs`・`GetWebACL`・`GetLoggingConfiguration`・`ListResourcesForWebACL` (決定: ADR 0023。WebACL があれば最初の 1 つで残りを試す)。
+  waf-config = `wafv2:ListWebACLs`・`GetWebACL`・`GetLoggingConfiguration`・`ListResourcesForWebACL` (決定: ADR 0023。WebACL があれば最初の 1 つで残りを試す)、
+  cloudtrail-unused-regions = `account:ListRegions`・`cloudtrail:LookupEvents` (有効なリージョンの数と対象のリージョンを出し、対象の各リージョンで 1 件だけ引く。`cost` の行は「無料」)、
+  cost-anomaly = `ce:GetAnomalyMonitors`・`ce:GetAnomalies` (モニターが無ければ warn。`cost` の行に Cost Explorer の API の 1 日・30 日の見込み。ADR 0032)。
   doctor の `queries` は wafv2 の新しい集計のクエリも構文検査する。`check` の warn は waf_review が読む日次集計の元 (wafv2 ソース) が無いときも出す。
 - 決定 (ADR 0028): wafv2 のソースには `cost` の行を出す。1 日のログの量 (直近 24h に解釈率の集計を流して実測。実測した範囲・読み取り量・その費用も出す。`--no-measure-scan` なら解釈率のサンプルのクエリのスキャン量を 24h に換算した推定。
   sort+limit のスキャン量は sandbox で約 75% に少なく出たので推定は既定にしない) ×

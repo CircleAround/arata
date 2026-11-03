@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -18,6 +19,7 @@ import (
 	"github.com/CircleAround/arata/internal/checks"
 	"github.com/CircleAround/arata/internal/collect"
 	"github.com/CircleAround/arata/internal/collect/account"
+	"github.com/CircleAround/arata/internal/collect/cloudtrail"
 	"github.com/CircleAround/arata/internal/collect/cwlogs"
 	"github.com/CircleAround/arata/internal/config"
 	"github.com/CircleAround/arata/internal/record"
@@ -85,11 +87,19 @@ func Doctor(ctx context.Context, cfg *config.Config, deps Deps, window time.Dura
 				actions[a] = true
 			}
 			d.logs(ctx, src)
+		case config.KindCloudTrailUnusedRegions:
+			for _, a := range account.RequiredActions[src.Kind] {
+				actions[a] = true
+			}
+			d.unusedRegions(ctx, src)
 		default:
 			for _, a := range account.RequiredActions[src.Kind] {
 				actions[a] = true
 			}
 			d.probe(ctx, src)
+			if src.Kind == config.KindCostAnomaly {
+				d.costAnomalyCost(src)
+			}
 		}
 	}
 	d.checks()
@@ -202,6 +212,61 @@ func (d *doctor) probe(ctx context.Context, src config.Source) {
 		}
 		d.add(src, "permission", DoctorOK, "", detail)
 	}
+}
+
+// unusedRegions は有効なリージョンの一覧と、ふだん使わない各リージョンの LookupEvents (1 件) を試す (ADR 0032)。
+func (d *doctor) unusedRegions(ctx context.Context, src config.Source) {
+	e := &Engine{cfg: d.cfg, deps: d.deps, log: d.deps.Logger}
+	c, err := e.collector(ctx, src)
+	if err != nil {
+		d.addErr(src, "permission", err)
+		return
+	}
+	ur := c.(*cloudtrail.UnusedRegions)
+	enabled, targets, results := ur.Probe(ctx, d.now)
+	for _, r := range results {
+		switch {
+		case r.Err != nil && r.Detail != "":
+			d.addErr(src, "permission", wrapAction(fmt.Errorf("%s (%s): %w", r.Action, r.Detail, r.Err), r.Action))
+		case r.Err != nil:
+			d.addErr(src, "permission", wrapAction(r.Err, r.Action))
+		case r.Action == cloudtrail.ActionListRegions:
+			detail := fmt.Sprintf("%s (有効なリージョン %d、ふだん使うリージョン %s を除く %d", r.Action, len(enabled), strings.Join(d.cfg.ActiveRegions(), ", "), len(targets))
+			if len(targets) > 0 {
+				detail += ": " + strings.Join(targets, ", ")
+			}
+			d.add(src, "permission", DoctorOK, "", detail+")")
+		default:
+			d.add(src, "permission", DoctorOK, "", r.Action+" ("+r.Detail+")")
+		}
+	}
+	if len(results) > 0 && results[0].Err == nil {
+		d.add(src, "cost", DoctorOK, "", fmt.Sprintf("LookupEvents は無料。1 回の run でリージョン %d × 1〜数回 (使っていないリージョンはふつう 1 回)", len(targets)))
+	}
+}
+
+// costAnomalyCost は Cost Explorer の API の費用の見込みを出す (1 回の run で GetAnomalyMonitors 1 回 + GetAnomalies 1 ページ。ADR 0032)。
+func (d *doctor) costAnomalyCost(src config.Source) {
+	const perRun = 2
+	var parts []string
+	perDay := 0.0
+	for _, name := range sortedProfiles(d.cfg) {
+		prof := d.cfg.Profiles[name]
+		if !d.profileNeeds(prof, record.KindCostAnomaly) || prof.Window <= 0 {
+			continue
+		}
+		runs := math.Max(1, math.Floor(float64(24*time.Hour)/float64(prof.Window)))
+		perDay += runs * perRun * account.CostExplorerUSDPerRequest
+		parts = append(parts, fmt.Sprintf("%s: 1 日 %.0f 回 × %d リクエスト", name, runs, perRun))
+	}
+	detail := fmt.Sprintf("Cost Explorer の API 1 リクエスト %.2f USD。", account.CostExplorerUSDPerRequest)
+	if len(parts) == 0 {
+		detail += "cost_anomaly を入れたプロファイルが無い"
+	} else {
+		detail += strings.Join(parts, "、") + fmt.Sprintf(" → 約 %.2f USD/日・%.2f USD/30 日 (異常が多くページが増えればその分増える。doctor 自身も約 %.2f USD)",
+			perDay, perDay*30, perRun*account.CostExplorerUSDPerRequest)
+	}
+	d.add(src, "cost", DoctorOK, "", detail)
 }
 
 func (d *doctor) logs(ctx context.Context, src config.Source) {

@@ -158,6 +158,7 @@ func TestEvents(t *testing.T) {
 		{EventID: "e2", Time: ts.Add(time.Minute), Source: "trail", Name: "AttachUserPolicy", EventSource: "iam.amazonaws.com", PrincipalARN: "arn:aws:iam::1:user/a", PrincipalKind: record.PrincipalUser, Resource: "arn:aws:iam::1:user/b"},
 		{EventID: "e3", Time: ts.Add(2 * time.Minute), Source: "trail", Name: "GetUser", EventSource: "iam.amazonaws.com", PrincipalARN: "arn:aws:iam::1:user/a", PrincipalKind: record.PrincipalUser, ReadOnly: true, ErrorCode: "AccessDenied"},
 		{EventID: "e4", Time: ts.Add(48 * time.Hour), Source: "trail", Name: "AssumeRole", EventSource: "sts.amazonaws.com", PrincipalARN: "arn:aws:iam::1:user/a", PrincipalKind: record.PrincipalUser},
+		{EventID: "e5", Time: ts.Add(3 * time.Minute), Source: "unused", Name: "RunInstances", EventSource: "ec2.amazonaws.com", PrincipalARN: "arn:aws:iam::1:user/a", PrincipalKind: record.PrincipalUser, Region: "eu-west-1"},
 	}
 	for _, e := range evs {
 		if err := st.InsertEvent(ctx, e); err != nil {
@@ -174,7 +175,9 @@ func TestEvents(t *testing.T) {
 		f    EventFilter
 		want []string
 	}{
-		{"all in window", EventFilter{}, []string{"e1", "e2", "e3"}},
+		{"all in window", EventFilter{}, []string{"e1", "e2", "e3", "e5"}},
+		{"by event source (source id)", EventFilter{Sources: []string{"unused"}}, []string{"e5"}},
+		{"excluding a source", EventFilter{ExcludeSources: []string{"unused"}}, []string{"e1", "e2", "e3"}},
 		{"by kind", EventFilter{PrincipalKinds: []record.PrincipalKind{record.PrincipalRoot}}, []string{"e1"}},
 		{"by source write only", EventFilter{EventSources: []string{"iam.amazonaws.com"}, WriteOnly: true}, []string{"e2"}},
 		{"by name", EventFilter{Names: []string{"GetUser", "ConsoleLogin"}}, []string{"e1", "e3"}},

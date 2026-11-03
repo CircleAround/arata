@@ -13,8 +13,9 @@ AWS のログと設定を定期的に改め、**前回から新しく発生し�
 ## 現在の実装範囲 (設計書 10 章の Step 1〜3)
 
 - ソース: `cloudtrail-lookup` (CloudTrail LookupEvents)、`cloudwatch-logs` (Logs Insights の集計クエリ。形式プロファイル `nginx_access` / `alb_access` / `wafv2` / `json` / `regex`)、
-  アカウント単位の状態 `iam-credential-report` / `guardduty` / `access-analyzer` / `posture` / `waf-config` (WAFv2 の WebACL の設定)
-- チェック: `root_usage`, `unknown_assume_role`, `new_principal`, `iam_changes`, `access_denied`, `defense_evasion`, `public_exposure`, `principal_new_source`, `secret_access`, `login_bruteforce`, `probe_paths`, `endpoint_abuse`, `waf_block_trend`, `ai_path_usage` (daily)、
+  アカウント単位の状態 `iam-credential-report` / `guardduty` / `access-analyzer` / `posture` / `waf-config` (WAFv2 の WebACL の設定)、
+  `cloudtrail-unused-regions` (ふだん使わないリージョンの書き込み)、`cost-anomaly` (AWS Cost Anomaly Detection の異常)
+- チェック: `root_usage`, `unknown_assume_role`, `new_principal`, `iam_changes`, `access_denied`, `defense_evasion`, `public_exposure`, `principal_new_source`, `secret_access`, `unused_region_activity`, `cost_anomaly`, `login_bruteforce`, `probe_paths`, `endpoint_abuse`, `waf_block_trend`, `ai_path_usage` (daily)、
   `credential_hygiene`, `guardduty_findings`, `posture`, `access_analyzer`, `waf_review` (weekly。WAF の修正提案の候補を report.json の `proposals` に)
 - ストア: `dir://` (JSONL 原本 + SQLite)
 - CLI: `config init` (推奨設定の雛形と `--diff`) / `profiles` (効いているチェックとパラメータ) / `init` (日単位の分割と `--resume`) / `doctor` / `run` / `collect` / `evaluate` / `report` (`--from --to` / `--month` で期間レポート) / `review` / `approve` / `ack` / `snooze` / `resolve` / `help ai`
@@ -32,11 +33,15 @@ AWS のログと設定を定期的に改め、**前回から新しく発生し�
 arata を呼ばず、AWS の監査ロールもストアも使わない (出力ディレクトリだけで連携する。設計は [docs/aratam.md](docs/aratam.md)、経緯は ADR 0018)。
 
 - 送り先と「静か」の判定は規則で固定する。`max_severity` が `urgent_severity` 以上か取れなかったソースがあれば緊急用、report.json が無い・古ければ「arata が実行されていない」と緊急用に送る
-- LLM は分類と説明だけ。重大度は report.json の値を表示し、LLM の出力から漏れた新規・変化・再発の finding は規則で末尾に足す。LLM が使えなければ原文を送る
+- 通知は Slack の Block Kit (`slack.format: blocks`。ADR 0029)。見出し・件数のあとに、`urgent_severity` 以上を「まず対応」(1 件ずつ「→ 何をするか」付き)、
+  それ未満を「確認推奨」(同じチェックの指摘は規則で 1 項目にまとめ、主体を並べる) に分ける。`slack.format: text` で v0.3.0 までの mrkdwn の本文も選べる (v0.4.0 から `slack.format` は必須)
+- LLM が書くのは要約 1〜2 文と「まず対応」の「→」だけ (text のときは分類と説明)。重大度・件数・まとめ方は規則で、report.json の値を表示する。
+  LLM が使えなければ規則だけで組み立てた通知を送る (text のときは原文)
 - LLM のプロバイダ: `bedrock` (Converse。`bedrock:InvokeModel` だけ要る) / `claude-cli` (`claude -p` をツール無し・ユーザー設定を読まず・空の一時ディレクトリで起動) / `none` (LLM を呼ばない)
 - Webhook の URL は設定ファイルに書かず、`slack.webhook_env` に書いた名前の環境変数で渡す。LLM に渡すデータは report.json (と下の提案の候補・前提) だけ
 - weekly の report.json に WAF の修正提案の候補 (`proposals`) があれば、「WAF の改善提案」を 2 通目として通常用に送る (ADR 0024)。
-  種類・段階・根拠の数字は規則で書き、LLM は候補だけを受け取って「何を・なぜ・進め方・設定例」を書き起こす (候補に無い提案・BLOCK に強める提案は捨てる。observation は LLM に渡さない)
+  種類・段階・根拠の数字は規則で書き、LLM は候補だけを受け取って「何を・なぜ・進め方・設定例」を書き起こす (候補に無い提案・BLOCK に強める提案は捨てる。observation は LLM に渡さない)。
+  Block Kit では提案 1 件を 4 行 (種類と数字・なぜ困るか・「→ 次の一手」(WebACL・ルール・パス・確認方法まで具体的に)・根拠) にし、全文と設定例は `--in` のディレクトリの `waf-proposals.md` に書き出す
 - `llm.context_file` にアプリの事情 (決済画面はリクエストが多い、監視の送信元など) を Markdown で書くと、LLM に「この監査対象の前提」として渡す。
   判定 (重大度・送り先) は変わらない。例は [examples/aratam-context.md](examples/aratam-context.md) (架空の値)。利用者の環境に置き、16 KiB まで
 
@@ -46,6 +51,7 @@ export ARATAM_SLACK_WEBHOOK='https://hooks.slack.com/services/...'
 aratam doctor                               # Webhook の環境変数と LLM の疎通 (送信はしない)
 aratam test-notify                          # Slack に試験メッセージを 1 通 (--urgent で緊急用)
 aratam notify --in /var/lib/arata/out/daily --dry-run   # 送らずに標準出力へ (LLM は呼ぶ。--llm none で呼ばない)
+aratam notify --in /var/lib/arata/out/daily --dry-run --format json   # Webhook に送る payload (blocks) そのもの
 ```
 
 cron では arata の後につなぐ。同じ run は `.aratam-notified` で二重に送らない (`--force` で再送)。
@@ -54,7 +60,7 @@ cron では arata の後につなぐ。同じ run は `.aratam-notified` で二�
 0 9 * * * arata run -c /etc/arata/arata.yaml --profile daily --out /var/lib/arata/out/daily; aratam notify -c /etc/arata/aratam.yaml --in /var/lib/arata/out/daily
 ```
 
-終了コード: 0 = 送った (または送る必要が無かった)、2 = 設定エラー、3 = LLM が使えず原文を送った、4 = 入力が無い・古い (その旨は送った)、5 = 送信に失敗した。
+終了コード: 0 = 送った (または送る必要が無かった)、2 = 設定エラー、3 = LLM が使えず規則だけの通知 (text なら原文) を送った、4 = 入力が無い・古い (その旨は送った)、5 = 送信に失敗した。
 
 ## 取得 (リリース版のバイナリ)
 
@@ -234,6 +240,15 @@ arata resolve <finding-id>
 | `posture` | `cloudtrail:DescribeTrails`, `cloudtrail:GetTrailStatus`, `guardduty:ListDetectors`, `guardduty:GetDetector`, `iam:GetAccountSummary`, `iam:GetAccountPasswordPolicy`, `s3:GetAccountPublicAccessBlock` |
 | `waf-config` | `wafv2:ListWebACLs`, `wafv2:GetWebACL`, `wafv2:GetLoggingConfiguration`, `wafv2:ListResourcesForWebACL` (REGIONAL は `regions`、CLOUDFRONT は us-east-1) |
 
+daily のソースのうち、追加の権限が要るもの:
+
+| source.kind | action | 費用 |
+|---|---|---|
+| `cloudtrail-unused-regions` | `account:ListRegions`、`cloudtrail:LookupEvents` (有効なリージョン − `cloudtrail-lookup` の `regions` の各リージョン) | 無料 |
+| `cost-anomaly` | `ce:GetAnomalyMonitors`, `ce:GetAnomalies` (us-east-1) | Cost Explorer の API は 1 リクエスト 0.01 USD。1 回の run で約 2 回 (daily で月 0.6 USD ほど。`arata doctor` の cost に出る) |
+
+- 既に配ったロールには上の 3 つの action を足す必要がある (無ければそのソースだけが ACCESS_DENIED になり、そのチェックが skip される)。
+  `cost_anomaly` は Cost Anomaly Detection のモニター (無料) が無ければ skip される (doctor は warn)
 - `iam:GenerateCredentialReport` だけは書き込み系。読み取り専用ロールで拒否されても、4 時間以内に生成済みのレポートがあればそれを使う (生成時刻は finding の Data に残る)
 - 権限が足りないソースのチェックだけが skip され、他は続行する (coverage と doctor に不足 action が出る)。前回の指摘は「解消」にならない。
   posture は一部の項目だけ取れなければ取れた項目で評価する (終了コード 3)

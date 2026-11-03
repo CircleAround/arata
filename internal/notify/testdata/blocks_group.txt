@@ -1,0 +1,22 @@
+[通知] arata daily (acme): 新規 10 件、最大 high
+<!channel>
+# 🔴 arata daily — acme
+*期間* 10/20 09:00 〜 10/21 09:00 (UTC) | *新規* 🔴 high 1 ・ 🟠 medium 9 | 解消 1 件 ・ 未対応 1 件 | 本日報告済み 1 件 | 情報 1 件 (件数のみ)
+まず対応 1 件 (最も重いのは「GuardDuty: インスタンスの認証情報が AWS の外で使われた」)、確認推奨 9 件。
+⚠️ *取れていないもの* (結果が欠けている可能性があります)
+*形式の解釈率の警告*
+• app (json): 解釈率 0.50、閾値 0.40 `FORMAT_DRIFT`
+*スキップしたチェック*: login_bruteforce (no http_access source)
+---
+*まず対応*
+🔴 *GuardDuty: インスタンスの認証情報が AWS の外で使われた*
+→ 封じ込め: 資源の種類に合わせる
+---
+*確認推奨*
+🟠 *MFA の無いコンソールユーザー* 5 人
+`alice` `bob` `carol` `dave` `erin`
+🟠 *使われていないアクセスキー* 2 本
+`alice` 469 日 ・ `bob` 120 日
+🟠 *新しく観測した主体* 2 件
+`role/vendor-reader` (111122223333) ・ `user/deploy`
+(小) 全文と対処手順: `arata review` ・ `arata help ai playbook <check>` | <dir>/report.md

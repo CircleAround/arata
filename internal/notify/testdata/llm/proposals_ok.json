@@ -1,8 +1,8 @@
 {
   "proposals": [
-    {"id": "p1", "what": "CrossSiteScripting_BODY を POST /posts/:id に限って COUNT にする", "why": "7 日で 250 件、日ごとに最大 60 の異なる IP が BLOCK されており、投稿画面の正規の利用者が止められている可能性がある", "how": "まず COUNT で 1〜2 週間様子を見て、一致の中身を確かめてから除外を確定する", "example": "\"RuleActionOverrides\": [\n  {\"Name\": \"CrossSiteScripting_BODY\", \"ActionToUse\": {\"Count\": {}}}\n]"},
-    {"id": "p2", "what": "探索パスを検知するマネージドルールを COUNT で足す", "why": "/.env などへの探索が 7 日で 14 件、WAF を通っている", "how": "COUNT で足して一致を見る", "example": "{\"Name\": \"AWS-AWSManagedRulesKnownBadInputsRuleSet\", \"OverrideAction\": {\"Count\": {}}}"},
-    {"id": "p3", "what": "/api/* にレートベースのルールを足す", "why": "1 IP が 5 分に最大 400 件で、p99 の 20 を大きく超える", "how": "limit 100 で COUNT として足し、正規の利用者が当たらないか見る", "example": "new wafv2.CfnWebACL(this, 'Acl', { rules: [{ name: 'rate-api', action: { count: {} } }] })"},
+    {"id": "p1", "what": "CrossSiteScripting_BODY を POST /posts/:id に限って COUNT にする", "why": "7 日で 250 件、日ごとに最大 60 の異なる IP が BLOCK されており、投稿画面の正規の利用者が止められている可能性がある", "how": "まず COUNT で 1〜2 週間様子を見て、一致の中身を確かめてから除外を確定する", "example": "\"RuleActionOverrides\": [\n  {\"Name\": \"CrossSiteScripting_BODY\", \"ActionToUse\": {\"Count\": {}}}\n]", "next": "WebACL `prod-waf` のルール `CrossSiteScripting_BODY` を `POST /posts/:id` に限って COUNT にし、1〜2 週間、一致した投稿が正規の利用者のものかを見る"},
+    {"id": "p2", "what": "探索パスを検知するマネージドルールを COUNT で足す", "why": "/.env などへの探索が 7 日で 14 件、WAF を通っている", "how": "COUNT で足して一致を見る", "example": "{\"Name\": \"AWS-AWSManagedRulesKnownBadInputsRuleSet\", \"OverrideAction\": {\"Count\": {}}}", "next": "WebACL `prod-waf` に、`/.env`・`/.git/config` を URI で照合するルールを COUNT で追加し、1〜2 週間、正規の通信が一致しないかを見る"},
+    {"id": "p3", "what": "/api/* にレートベースのルールを足す", "why": "1 IP が 5 分に最大 400 件で、p99 の 20 を大きく超える", "how": "limit 100 で COUNT として足し、正規の利用者が当たらないか見る", "example": "new wafv2.CfnWebACL(this, 'Acl', { rules: [{ name: 'rate-api', action: { count: {} } }] })", "next": "WebACL `prod-waf` に、`/api/*` を対象とする limit 100 / 5 分のレートベースのルールを COUNT で追加し、正規の利用者が当たらないかを見る"},
     {"id": "p4", "what": "rate-login の limit を見直す", "why": "limit 1000 に対し観測の最大は 9", "how": "値を下げるかを見直す", "example": ""},
     {"id": "p5", "what": "block-legacy-admin が今も要るかを確かめる", "why": "30 日一致が無い", "how": "守りとして残すかを人が判断する", "example": ""}
   ]
