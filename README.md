@@ -13,8 +13,9 @@ AWS のログと設定を定期的に改め、**前回から新しく発生し�
 ## 現在の実装範囲 (設計書 10 章の Step 1〜3)
 
 - ソース: `cloudtrail-lookup` (CloudTrail LookupEvents)、`cloudwatch-logs` (Logs Insights の集計クエリ。形式プロファイル `nginx_access` / `alb_access` / `wafv2` / `json` / `regex`)、
-  アカウント単位の状態 `iam-credential-report` / `guardduty` / `access-analyzer` / `posture` / `waf-config` (WAFv2 の WebACL の設定)
-- チェック: `root_usage`, `unknown_assume_role`, `new_principal`, `iam_changes`, `access_denied`, `defense_evasion`, `public_exposure`, `principal_new_source`, `secret_access`, `login_bruteforce`, `probe_paths`, `endpoint_abuse`, `waf_block_trend`, `ai_path_usage` (daily)、
+  アカウント単位の状態 `iam-credential-report` / `guardduty` / `access-analyzer` / `posture` / `waf-config` (WAFv2 の WebACL の設定)、
+  `cloudtrail-unused-regions` (ふだん使わないリージョンの書き込み)、`cost-anomaly` (AWS Cost Anomaly Detection の異常)
+- チェック: `root_usage`, `unknown_assume_role`, `new_principal`, `iam_changes`, `access_denied`, `defense_evasion`, `public_exposure`, `principal_new_source`, `secret_access`, `unused_region_activity`, `cost_anomaly`, `login_bruteforce`, `probe_paths`, `endpoint_abuse`, `waf_block_trend`, `ai_path_usage` (daily)、
   `credential_hygiene`, `guardduty_findings`, `posture`, `access_analyzer`, `waf_review` (weekly。WAF の修正提案の候補を report.json の `proposals` に)
 - ストア: `dir://` (JSONL 原本 + SQLite)
 - CLI: `config init` (推奨設定の雛形と `--diff`) / `profiles` (効いているチェックとパラメータ) / `init` (日単位の分割と `--resume`) / `doctor` / `run` / `collect` / `evaluate` / `report` (`--from --to` / `--month` で期間レポート) / `review` / `approve` / `ack` / `snooze` / `resolve` / `help ai`
@@ -234,6 +235,15 @@ arata resolve <finding-id>
 | `posture` | `cloudtrail:DescribeTrails`, `cloudtrail:GetTrailStatus`, `guardduty:ListDetectors`, `guardduty:GetDetector`, `iam:GetAccountSummary`, `iam:GetAccountPasswordPolicy`, `s3:GetAccountPublicAccessBlock` |
 | `waf-config` | `wafv2:ListWebACLs`, `wafv2:GetWebACL`, `wafv2:GetLoggingConfiguration`, `wafv2:ListResourcesForWebACL` (REGIONAL は `regions`、CLOUDFRONT は us-east-1) |
 
+daily のソースのうち、追加の権限が要るもの:
+
+| source.kind | action | 費用 |
+|---|---|---|
+| `cloudtrail-unused-regions` | `account:ListRegions`、`cloudtrail:LookupEvents` (有効なリージョン − `cloudtrail-lookup` の `regions` の各リージョン) | 無料 |
+| `cost-anomaly` | `ce:GetAnomalyMonitors`, `ce:GetAnomalies` (us-east-1) | Cost Explorer の API は 1 リクエスト 0.01 USD。1 回の run で約 2 回 (daily で月 0.6 USD ほど。`arata doctor` の cost に出る) |
+
+- 既に配ったロールには上の 3 つの action を足す必要がある (無ければそのソースだけが ACCESS_DENIED になり、そのチェックが skip される)。
+  `cost_anomaly` は Cost Anomaly Detection のモニター (無料) が無ければ skip される (doctor は warn)
 - `iam:GenerateCredentialReport` だけは書き込み系。読み取り専用ロールで拒否されても、4 時間以内に生成済みのレポートがあればそれを使う (生成時刻は finding の Data に残る)
 - 権限が足りないソースのチェックだけが skip され、他は続行する (coverage と doctor に不足 action が出る)。前回の指摘は「解消」にならない。
   posture は一部の項目だけ取れなければ取れた項目で評価する (終了コード 3)

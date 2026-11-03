@@ -71,6 +71,10 @@
 - endpoint_abuse (画面への分散した集中・「A のあと B」の連鎖) は事実として書く: 画面の名前・時間幅 (UTC)・件数・異なり IP・ふだんの上限 (`baseline_p99_*`)・同じ UA の IP 数。
   遮断 (IP の拒否・登録の停止) を勧めず、その時間幅に登録・送信されたものを運営が確認・保留することにつなぐ。`baseline_used: false` は導入直後 (絶対の閾値だけ) と書き添える。
   UA はハッシュしか無いので原文を推測しない
+- unused_region_activity (ふだん使わないリージョンでの書き込み) は漏洩した認証情報の悪用 (採掘など) の典型。`region`・`apis`・`compute_apis` を根拠に、同じ主体の principal_new_source・
+  access_denied・iam_changes と cost_anomaly の同じリージョンの根本原因とまとめ、今も動いている資源の確認を最初に勧める。正規なら `cloudtrail-lookup` の `regions` に足すことを提案する
+- cost_anomaly (費用の異常) は予想額・実際の額・増加の割合 (`impact_ratio`)・影響額を並べて伝え、金額だけで重大さを書かない。`root_causes` のリージョン・使用タイプを根拠に
+  unused_region_activity などの操作の指摘とつなぐ。費用の削減の提案 (Savings Plans・サイズの見直しなど) はしない
 - data に `escalated_from_suppressed: true` がある changed は、人が ack / snooze していた finding の重大度が上がったもの
   (`suppressed_status` は acked / snoozed、`suppressed_severity` はそのときの重大度)。「確認済みだった」ことより、悪化したことを優先して書く
 - allowlist のメモ、前回レポート、時間帯 (デプロイ時刻、メンテナンス時間) を踏まえる
