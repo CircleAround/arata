@@ -27,6 +27,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/costexplorer"
 	"github.com/aws/aws-sdk-go-v2/service/guardduty"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3control"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/aws/aws-sdk-go-v2/service/wafv2"
@@ -46,10 +47,14 @@ import (
 
 // エンジン自身のログの code (設計書 2-2)。収集側の語彙は collect パッケージにある。
 const (
-	CodeStoreLocked   = "STORE_LOCKED"
-	CodeStoreCorrupt  = "STORE_CORRUPT"
-	CodeRunMissed     = "RUN_MISSED"
-	CodeConfigInvalid = "CONFIG_INVALID"
+	CodeStoreLocked  = "STORE_LOCKED"
+	CodeStoreCorrupt = "STORE_CORRUPT"
+	// CodeStoreConflict は s3:// のストアを別の実行が先に書いた (何も上書きしていない。もう一度実行する)。
+	CodeStoreConflict = "STORE_CONFLICT"
+	// CodeStoreUnavailable は s3:// のストアに問い合わせられない (権限・通信)。破損ではないので rebuild はしない。
+	CodeStoreUnavailable = "STORE_UNAVAILABLE"
+	CodeRunMissed        = "RUN_MISSED"
+	CodeConfigInvalid    = "CONFIG_INVALID"
 	// CodeCheckUnused はどのプロファイルにも入っていないチェックがある (警告。設定の雛形と照らして入れ忘れを疑う)。
 	CodeCheckUnused = "CHECK_UNUSED"
 	// CodeReportNotFound は report で再表示するレポートが無い (そのプロファイルの run がまだ無い)。
@@ -59,7 +64,7 @@ const (
 // Codes は標準エラーの JSON 行ログに現れ得る code の固定語彙。テストで保証する。
 var Codes = []string{
 	collect.CodeFormatMismatch, collect.CodeFormatDrift, collect.CodeLogGroupMissing, collect.CodeAccessDenied, collect.CodeQueryLimit, collect.CodeQueryInvalid,
-	CodeStoreLocked, CodeStoreCorrupt, CodeRunMissed, collect.CodeCollectFailed, CodeConfigInvalid, CodeCheckUnused, CodeReportNotFound,
+	CodeStoreLocked, CodeStoreCorrupt, CodeStoreConflict, CodeStoreUnavailable, CodeRunMissed, collect.CodeCollectFailed, CodeConfigInvalid, CodeCheckUnused, CodeReportNotFound,
 }
 
 // 終了コード (設計書 8 章)。
@@ -89,6 +94,8 @@ type Deps struct {
 	CloudWatchLogs func(ctx context.Context, cfg *config.Config, src config.Source, region string) (cwlogs.API, error)
 	// Account はアカウント単位のソース (iam-credential-report / guardduty / access-analyzer / posture) のクライアントの束を作る。
 	Account func(ctx context.Context, cfg *config.Config, src config.Source, region string) (account.Clients, error)
+	// S3Store は s3:// のストアのクライアントを作る。監査対象の認証 (aws:) とは別に store_profile / store_region を使う。
+	S3Store func(ctx context.Context, cfg *config.Config) (store.S3API, error)
 	// Sleep は Insights のポーリングと、スロットル時の再試行の待ち。nil なら実時間で待つ。テストでは即時に返す関数を渡す。
 	Sleep  func(ctx context.Context, d time.Duration) error
 	Logger *slog.Logger
@@ -109,6 +116,7 @@ func DefaultDeps(logger *slog.Logger) Deps {
 		CloudTrail:     NewCloudTrailClient,
 		CloudWatchLogs: NewCloudWatchLogsClient,
 		Account:        NewAccountClients,
+		S3Store:        NewS3StoreClient,
 		Logger:         logger,
 	}
 }
@@ -162,6 +170,19 @@ func NewAccountClients(ctx context.Context, cfg *config.Config, _ config.Source,
 		Account: acc.NewFromConfig(ac), CostExplorer: costexplorer.NewFromConfig(ac)}, nil
 }
 
+// NewS3StoreClient はストアのバケットのクライアントを作る。store_profile を省略すると SDK の標準の連鎖 (aws.profile は使わない)。
+func NewS3StoreClient(ctx context.Context, cfg *config.Config) (store.S3API, error) {
+	opts := []func(*awsconfig.LoadOptions) error{awsconfig.WithRegion(cfg.StoreRegion)}
+	if cfg.StoreProfile != "" {
+		opts = append(opts, awsconfig.WithSharedConfigProfile(cfg.StoreProfile))
+	}
+	ac, err := awsconfig.LoadDefaultConfig(ctx, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return s3.NewFromConfig(ac, func(o *s3.Options) { o.DisableLogOutputChecksumValidationSkipped = true }), nil
+}
+
 func loadAWSConfig(ctx context.Context, cfg *config.Config, region string, extra ...func(*awsconfig.LoadOptions) error) (aws.Config, error) {
 	opts := append([]func(*awsconfig.LoadOptions) error{awsconfig.WithRegion(region)}, extra...)
 	if cfg.AWS.Profile != "" {
@@ -197,6 +218,9 @@ func (d *Deps) fill(cfg *config.Config) {
 	if d.Account == nil {
 		d.Account = NewAccountClients
 	}
+	if d.S3Store == nil {
+		d.S3Store = NewS3StoreClient
+	}
 	if d.Logger == nil {
 		d.Logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	}
@@ -216,16 +240,24 @@ func (d *Deps) fill(cfg *config.Config) {
 	}
 }
 
-// Open はストアを開き allowlist を読む。ロック失敗は STORE_LOCKED (exit 2)。
+// Open は OpenContext の中断しない版。
 func Open(cfg *config.Config, deps Deps) (*Engine, error) {
+	return OpenContext(context.Background(), cfg, deps)
+}
+
+// OpenContext はストアを開き allowlist を読む。ロック失敗は STORE_LOCKED、S3 に問い合わせられないときは STORE_UNAVAILABLE (exit 2)。
+func OpenContext(ctx context.Context, cfg *config.Config, deps Deps) (*Engine, error) {
 	deps.fill(cfg)
-	st, err := store.Open(cfg.Store.Dir)
+	st, err := openStore(ctx, cfg, deps)
 	if err != nil {
 		if errors.Is(err, store.ErrLocked) {
-			deps.Logger.Error("store is locked by another process", "code", CodeStoreLocked, "dir", cfg.Store.Dir)
+			deps.Logger.Error("store is locked by another process", "code", CodeStoreLocked, "dir", cfg.Store.String())
 			return nil, &ExitError{Code: CodeStoreLocked, Exit: ExitConfig, Err: err}
 		}
-		deps.Logger.Error("failed to open store", "code", CodeStoreCorrupt, "dir", cfg.Store.Dir, "error", err.Error())
+		if isStoreUnavailable(err) {
+			return nil, storeUnavailable(deps, cfg, err)
+		}
+		deps.Logger.Error("failed to open store", "code", CodeStoreCorrupt, "dir", cfg.Store.String(), "error", err.Error())
 		return nil, &ExitError{Code: CodeStoreCorrupt, Exit: ExitConfig, Err: err}
 	}
 	al, err := allowlist.Load(cfg.Allowlist)
@@ -237,40 +269,103 @@ func Open(cfg *config.Config, deps Deps) (*Engine, error) {
 	return &Engine{cfg: cfg, deps: deps, st: st, al: al, log: deps.Logger}, nil
 }
 
+func openStore(ctx context.Context, cfg *config.Config, deps Deps) (store.Store, error) {
+	if cfg.Store.Scheme != "s3" {
+		return store.Open(cfg.Store.Dir)
+	}
+	api, err := deps.S3Store(ctx, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", store.ErrS3Unavailable, err)
+	}
+	return store.OpenS3(ctx, api, s3Location(cfg))
+}
+
+func s3Location(cfg *config.Config) store.S3Location {
+	return store.S3Location{Bucket: cfg.Store.Bucket, Prefix: cfg.Store.Prefix}
+}
+
+// isStoreUnavailable は S3 に問い合わせられなかった (中断を含む) か。破損と区別する。
+func isStoreUnavailable(err error) bool {
+	return errors.Is(err, store.ErrS3Unavailable) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+func storeUnavailable(deps Deps, cfg *config.Config, err error) error {
+	deps.Logger.Error("cannot reach the S3 store", "code", CodeStoreUnavailable, "store", cfg.Store.String(), "error", err.Error())
+	return &ExitError{Code: CodeStoreUnavailable, Exit: ExitConfig, Err: err}
+}
+
 // Rebuild は raw JSONL から audit.sqlite を作り直す (ADR 0033)。ソースの順は設定に従う。
 // ロック失敗は STORE_LOCKED、既存の SQLite が無い・読めないときは STORE_CORRUPT (exit 2。--from-scratch を案内する)。
+// s3:// では別の実行が先に書いたら STORE_CONFLICT、問い合わせられなければ STORE_UNAVAILABLE。
 func Rebuild(ctx context.Context, cfg *config.Config, deps Deps, o store.RebuildOptions) (*store.RebuildResult, error) {
 	deps.fill(cfg)
 	o.SourceOrder = nil
 	for _, src := range cfg.Sources {
 		o.SourceOrder = append(o.SourceOrder, src.ID)
 	}
+	res, err := rebuildStore(ctx, cfg, deps, o)
+	if err == nil {
+		return res, nil
+	}
+	dir := cfg.Store.String()
+	switch {
+	case errors.Is(err, store.ErrLocked):
+		deps.Logger.Error("store is locked by another process", "code", CodeStoreLocked, "dir", dir)
+		return nil, &ExitError{Code: CodeStoreLocked, Exit: ExitConfig, Err: err}
+	case errors.Is(err, store.ErrConflict):
+		return nil, storeConflict(deps, cfg, err)
+	case errors.Is(err, store.ErrS3Unavailable):
+		return nil, storeUnavailable(deps, cfg, err)
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		deps.Logger.Error("rebuild interrupted; the store is unchanged", "dir", dir, "error", err.Error())
+		return nil, err
+	case errors.Is(err, store.ErrNoDatabase) || !o.FromScratch:
+		deps.Logger.Error("cannot read the existing database to carry over runs, findings and principal status", "code", CodeStoreCorrupt, "dir", dir, "error", err.Error(),
+			"action", "arata rebuild --from-scratch builds it from raw only (findings start empty; every open finding is reported again as new on the next run)")
+		return nil, &ExitError{Code: CodeStoreCorrupt, Exit: ExitConfig, Err: err}
+	}
+	deps.Logger.Error("rebuild failed; the store is unchanged", "code", CodeStoreCorrupt, "dir", dir, "error", err.Error())
+	return nil, &ExitError{Code: CodeStoreCorrupt, Exit: ExitConfig, Err: err}
+}
+
+func rebuildStore(ctx context.Context, cfg *config.Config, deps Deps, o store.RebuildOptions) (*store.RebuildResult, error) {
+	if cfg.Store.Scheme == "s3" {
+		api, err := deps.S3Store(ctx, cfg)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", store.ErrS3Unavailable, err)
+		}
+		return store.RebuildS3(ctx, api, s3Location(cfg), o)
+	}
 	if o.FromScratch {
 		if err := os.MkdirAll(cfg.Store.Dir, 0o750); err != nil {
 			return nil, err
 		}
 	}
-	res, err := store.Rebuild(ctx, cfg.Store.Dir, o)
-	if err == nil {
-		return res, nil
-	}
-	switch {
-	case errors.Is(err, store.ErrLocked):
-		deps.Logger.Error("store is locked by another process", "code", CodeStoreLocked, "dir", cfg.Store.Dir)
-		return nil, &ExitError{Code: CodeStoreLocked, Exit: ExitConfig, Err: err}
-	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-		deps.Logger.Error("rebuild interrupted; the store is unchanged", "dir", cfg.Store.Dir, "error", err.Error())
-		return nil, err
-	case errors.Is(err, store.ErrNoDatabase) || !o.FromScratch:
-		deps.Logger.Error("cannot read the existing database to carry over runs, findings and principal status", "code", CodeStoreCorrupt, "dir", cfg.Store.Dir, "error", err.Error(),
-			"action", "arata rebuild --from-scratch builds it from raw only (findings start empty; every open finding is reported again as new on the next run)")
-		return nil, &ExitError{Code: CodeStoreCorrupt, Exit: ExitConfig, Err: err}
-	}
-	deps.Logger.Error("rebuild failed; the store is unchanged", "code", CodeStoreCorrupt, "dir", cfg.Store.Dir, "error", err.Error())
-	return nil, &ExitError{Code: CodeStoreCorrupt, Exit: ExitConfig, Err: err}
+	return store.Rebuild(ctx, cfg.Store.Dir, o)
 }
 
-// Close はストアを閉じる。
+func storeConflict(deps Deps, cfg *config.Config, err error) error {
+	deps.Logger.Error("another run updated the store first; this run's results were not saved and nothing was overwritten", "code", CodeStoreConflict, "store", cfg.Store.String(),
+		"error", err.Error(), "action", "run the same command again")
+	return &ExitError{Code: CodeStoreConflict, Exit: ExitConfig, Err: err}
+}
+
+// Commit は書き込みを確定する (ADR 0034)。書き込み系のコマンドが成功したときだけ呼ぶ。dir:// では何もしない。
+// s3:// では以後ストアを読み書きできないので、最後に呼ぶ (Close は別に要る)。別の実行が先に書いていたら STORE_CONFLICT。
+func (e *Engine) Commit(ctx context.Context) error {
+	err := e.st.Commit(ctx)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, store.ErrConflict):
+		return storeConflict(e.deps, e.cfg, err)
+	case isStoreUnavailable(err):
+		return storeUnavailable(e.deps, e.cfg, err)
+	}
+	return err
+}
+
+// Close はストアを閉じる。Commit していない s3:// の書き込みは捨てる。
 func (e *Engine) Close() error { return e.st.Close() }
 
 // Store は下層のストア (review など後続コマンド用)。
@@ -1049,7 +1144,7 @@ func (e *Engine) markReported(ctx context.Context, rep *report.Report, now time.
 // saveReport は最新レポートを <store>/reports/<profile>.json と .md に保存する (report コマンドが読む)。
 // 決定: report コマンド (期間指定なし) は再評価せず、保存済みの最新レポートを出す。
 func (e *Engine) saveReport(profileName string, rep *report.Report) error {
-	dir := filepath.Join(e.cfg.Store.Dir, "reports")
+	dir := filepath.Join(e.st.Path(), "reports")
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return err
 	}
@@ -1070,7 +1165,7 @@ func WriteReport(dir, name string, rep *report.Report) error {
 
 // LastReport は保存済みの最新レポート (JSON) を返す。無ければ nil。
 func (e *Engine) LastReport(profileName string) ([]byte, error) {
-	b, err := os.ReadFile(filepath.Join(e.cfg.Store.Dir, "reports", profileName+".json"))
+	b, err := os.ReadFile(filepath.Join(e.st.Path(), "reports", profileName+".json"))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}

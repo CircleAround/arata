@@ -28,6 +28,8 @@ type Dir struct {
 	dir  string
 	db   *sql.DB
 	lock *os.File
+	// beforeAppend は raw のファイル (ストアからの相対パス) へ追記する前に呼ばれる (S3 が取得に使う)。dir:// では nil。
+	beforeAppend func(ctx context.Context, rel string) error
 }
 
 var _ Store = (*Dir)(nil)
@@ -159,6 +161,9 @@ func (s *Dir) Close() error {
 // Path はストアのディレクトリ。
 func (s *Dir) Path() string { return s.dir }
 
+// Commit は何もしない (dir:// の書き込みはその場で確定している)。
+func (s *Dir) Commit(context.Context) error { return nil }
+
 func fmtTime(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
 
 // fixedTimeLayout は文字列の大小で比べる列 (events.collected_at) の書式。RFC3339Nano は末尾の 0 を落とすので大小が崩れる。
@@ -288,7 +293,13 @@ func (s *Dir) AppendRaw(ctx context.Context, source string, rec record.Record) e
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("store: %w", err)
 	}
-	name := filepath.Join(dir, rec.RecordTime().UTC().Format("2006-01-02")+".jsonl")
+	day := rec.RecordTime().UTC().Format("2006-01-02") + ".jsonl"
+	if s.beforeAppend != nil {
+		if err := s.beforeAppend(ctx, "raw/"+source+"/"+day); err != nil {
+			return err
+		}
+	}
+	name := filepath.Join(dir, day)
 	f, err := os.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
 	if err != nil {
 		return fmt.Errorf("store: %w", err)

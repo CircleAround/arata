@@ -515,3 +515,32 @@ test('WAF: waf.challenge で GET /search に Challenge、waf.captcha で /contac
     ['login-rate-limit', 'AWSManagedRulesKnownBadInputsRuleSet', 'AWSManagedRulesCommonRuleSet', 'search-challenge'],
   );
 });
+
+test('storeBucket が無効ならストアのバケットを作らない', () => {
+  const t = synth();
+  assert.equal(resourcesOf(t, 'AWS::S3::Bucket').length, 0);
+  assert.ok(!Object.keys(t.findOutputs('*')).includes('StoreBucketName'));
+});
+
+test('storeBucket: 推奨どおりのバケット (バージョニング・SSE-S3・パブリックアクセスブロック) で、destroy で消える', () => {
+  const t = synth((raw) => {
+    raw.storeBucket = { enabled: true };
+  });
+  t.hasResourceProperties('AWS::S3::Bucket', {
+    VersioningConfiguration: { Status: 'Enabled' },
+    BucketEncryption: { ServerSideEncryptionConfiguration: [{ ServerSideEncryptionByDefault: { SSEAlgorithm: 'AES256' } }] },
+    PublicAccessBlockConfiguration: { BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true },
+  });
+  const [bucket] = resourcesOf(t, 'AWS::S3::Bucket');
+  assert.equal(bucket.DeletionPolicy, 'Delete');
+  assert.equal(resourcesOf(t, 'Custom::S3AutoDeleteObjects').length, 1, 'バージョンが残っていても destroy で消す');
+  assert.ok(Object.keys(t.findOutputs('*')).includes('StoreBucketName'));
+});
+
+test('storeBucket: 読み取り専用ロールにストアへの書き込みを足さない (開発者のプロファイルで書く)', () => {
+  const t = synth((raw) => {
+    raw.storeBucket = { enabled: true };
+  });
+  const text = JSON.stringify(t.findResources('AWS::IAM::Role'));
+  assert.ok(!text.includes('s3:PutObject'));
+});

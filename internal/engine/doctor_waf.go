@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -11,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 
 	"github.com/CircleAround/arata/internal/collect"
 	"github.com/CircleAround/arata/internal/collect/cwlogs"
@@ -66,7 +69,7 @@ func (d *doctor) wafCost(ctx context.Context, src config.Source, c *cwlogs.Colle
 		perDayUSD += perRun * runs * InsightsUSDPerGB
 		part := fmt.Sprintf("%s: 1 回最大 %.2f GB (クエリ %d 本 × 範囲最大 %.1f 時間) × 1 日 %.0f 回", name, perRun, n, span.Hours(), runs)
 		gb := func(h float64) float64 { return daily / 1e9 * h / 24 * float64(n) }
-		if to, ok := d.lastRunTo(name); ok {
+		if to, ok := d.lastRunTo(ctx, name); ok {
 			cur := scanSpan(to, prof.Window, src.IngestDelay)
 			part += fmt.Sprintf("。直近の run (UTC %s、JST %s) では範囲 約 %.1f 時間 (1 回 %.2f GB)", to.UTC().Format("15:04"), to.In(jst).Format("15:04"), cur.Hours(), gb(cur.Hours()))
 		}
@@ -110,11 +113,8 @@ func scanSpan(to time.Time, window, delay time.Duration) time.Duration {
 }
 
 // lastRunTo は保存した profile のレポートの窓の終わり (直近の run の時刻)。無い・読めなければ ok = false。
-func (d *doctor) lastRunTo(profile string) (time.Time, bool) {
-	if d.cfg.Store.Dir == "" {
-		return time.Time{}, false
-	}
-	b, err := os.ReadFile(filepath.Join(d.cfg.Store.Dir, "reports", profile+".json"))
+func (d *doctor) lastRunTo(ctx context.Context, profile string) (time.Time, bool) {
+	b, err := d.savedReport(ctx, profile)
 	if err != nil {
 		return time.Time{}, false
 	}
@@ -128,6 +128,28 @@ func (d *doctor) lastRunTo(profile string) (time.Time, bool) {
 	}
 	t, err := time.Parse(time.RFC3339, rep.Window.To)
 	return t, err == nil
+}
+
+// savedReport は保存した profile のレポート。doctor はストアを開かないので、s3:// ではそのオブジェクトだけを読む。
+func (d *doctor) savedReport(ctx context.Context, profile string) ([]byte, error) {
+	rel := filepath.Join("reports", profile+".json")
+	if d.cfg.Store.Scheme != "s3" {
+		if d.cfg.Store.Dir == "" {
+			return nil, os.ErrNotExist
+		}
+		return os.ReadFile(filepath.Join(d.cfg.Store.Dir, rel))
+	}
+	api, err := d.deps.S3Store(ctx, d.cfg)
+	if err != nil {
+		return nil, err
+	}
+	key := s3Location(d.cfg).Key(rel)
+	out, err := api.GetObject(ctx, &s3.GetObjectInput{Bucket: &d.cfg.Store.Bucket, Key: &key})
+	if err != nil {
+		return nil, err
+	}
+	defer out.Body.Close()
+	return io.ReadAll(out.Body)
 }
 
 func sortedProfiles(cfg *config.Config) []string {

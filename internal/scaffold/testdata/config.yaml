@@ -7,6 +7,9 @@
 
 name: my-service                                 # レポートに出す監査対象の名前
 store: dir:///var/lib/arata/my-service           # ストア (JSONL 原本 + SQLite)。書き込める場所にする
+# store: s3://example-arata-store/my-service     # 毎回消える実行環境 (GitHub Actions など) では S3 に置く (README「S3 ストア」)
+# store_profile: my-service-store                # s3:// のバケットの認証。省略時は SDK の標準の連鎖 (aws.profile は使わない)
+# store_region: ap-northeast-1                   # s3:// のバケットのリージョン。省略時は aws.region
 allowlist: allowlist.yaml                        # 既知リスト。相対パスはこの設定ファイルから。無ければ空として扱う
 
 aws:

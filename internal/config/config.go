@@ -15,14 +15,18 @@ import (
 
 // Config は arata の設定全体。
 type Config struct {
-	Name      string             `yaml:"name"`
-	Store     Store              `yaml:"-"`
-	StoreURL  string             `yaml:"store"`
-	Allowlist string             `yaml:"allowlist"`
-	AWS       AWS                `yaml:"aws"`
-	Sources   []Source           `yaml:"sources"`
-	Profiles  map[string]Profile `yaml:"profiles"`
-	Retention Retention          `yaml:"retention"`
+	Name     string `yaml:"name"`
+	Store    Store  `yaml:"-"`
+	StoreURL string `yaml:"store"`
+	// StoreProfile / StoreRegion は s3:// のストアのバケットに使う認証とリージョン (監査対象の aws: とは別。ADR 0034)。
+	// StoreProfile の省略時は SDK の標準の連鎖、StoreRegion の省略時は aws.region。dir:// では書けない。
+	StoreProfile string             `yaml:"store_profile"`
+	StoreRegion  string             `yaml:"store_region"`
+	Allowlist    string             `yaml:"allowlist"`
+	AWS          AWS                `yaml:"aws"`
+	Sources      []Source           `yaml:"sources"`
+	Profiles     map[string]Profile `yaml:"profiles"`
+	Retention    Retention          `yaml:"retention"`
 	// Checks はアプリ層チェックのパス・閾値 (省略時は既定値)。
 	Checks Checks `yaml:"checks"`
 	// checksRaw は既定値を埋める前の checks: (パラメータの由来の判定に使う)。
@@ -32,10 +36,23 @@ type Config struct {
 	Path string `yaml:"-"`
 }
 
-// Store はストアのバックエンド指定。Step 1 では dir:// のみ。
+// Store はストアのバックエンド指定。dir:// は Dir、s3:// は Bucket と Prefix を使う。
 type Store struct {
-	Scheme string // "dir"
+	Scheme string // "dir" / "s3"
 	Dir    string
+	Bucket string
+	Prefix string // 末尾の / は持たない。空ならバケットの直下
+}
+
+// String はログと出力に使う表記 (dir:// はディレクトリ、s3:// は URL)。
+func (s Store) String() string {
+	if s.Scheme != "s3" {
+		return s.Dir
+	}
+	if s.Prefix == "" {
+		return "s3://" + s.Bucket
+	}
+	return "s3://" + s.Bucket + "/" + s.Prefix
 }
 
 // AWS は SDK の標準認証チェーンに渡す最小限の指定。
@@ -301,6 +318,17 @@ func (c *Config) Validate() error {
 		return err
 	}
 	c.Store = st
+	if st.Scheme != "s3" {
+		// 効かない設定を黙って無視しない
+		if c.StoreProfile != "" {
+			return fmt.Errorf("config: store_profile is only for an s3:// store")
+		}
+		if c.StoreRegion != "" {
+			return fmt.Errorf("config: store_region is only for an s3:// store")
+		}
+	} else if c.StoreRegion == "" {
+		c.StoreRegion = c.AWS.Region
+	}
 	if len(c.Sources) == 0 {
 		return fmt.Errorf("config: at least one source is required")
 	}
@@ -414,17 +442,32 @@ func (c *Config) validateEndpointSources() error {
 
 func parseStore(u string) (Store, error) {
 	if u == "" {
-		return Store{}, fmt.Errorf("config: store is required (e.g. dir:///var/lib/arata/<name>)")
+		return Store{}, fmt.Errorf("config: store is required (e.g. dir:///var/lib/arata/<name> or s3://<bucket>/<prefix>)")
+	}
+	if rest, ok := strings.CutPrefix(u, "s3://"); ok {
+		return parseS3Store(u, rest)
 	}
 	const prefix = "dir://"
 	if !strings.HasPrefix(u, prefix) {
-		return Store{}, fmt.Errorf("config: store %q: only dir:// is supported in this version", u)
+		return Store{}, fmt.Errorf("config: store %q: only dir:// and s3:// are supported", u)
 	}
 	dir := strings.TrimPrefix(u, prefix)
 	if dir == "" {
 		return Store{}, fmt.Errorf("config: store %q: path is empty", u)
 	}
 	return Store{Scheme: "dir", Dir: dir}, nil
+}
+
+func parseS3Store(u, rest string) (Store, error) {
+	bucket, prefix, _ := strings.Cut(rest, "/")
+	if bucket == "" {
+		return Store{}, fmt.Errorf("config: store %q: bucket is empty (want s3://<bucket>/<prefix>)", u)
+	}
+	prefix = strings.TrimSuffix(prefix, "/")
+	if strings.Contains(prefix, "//") || strings.HasPrefix(prefix, "/") {
+		return Store{}, fmt.Errorf("config: store %q: prefix has an empty path segment", u)
+	}
+	return Store{Scheme: "s3", Bucket: bucket, Prefix: prefix}, nil
 }
 
 // ExpandChecks は `default-<cadence>` を展開した有効チェック名の一覧を返す (重複除去、ソート)。

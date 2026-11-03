@@ -41,7 +41,7 @@
 | 低 | 古いパスワード | 認証情報レポートからパスワード未変更の期間を見る | `credential_hygiene` に閾値を足す形 |
 | 低 | prune | 保持期間を過ぎたデータの削除 | 設計書 5-3 章。`finding_events` の扱いを決める。rebuild は実装済み (5-4、ADR 0033) |
 | 低 | `openai-api` プロバイダ | Chat Completions を `net/http` で | `docs/aratam.md` 3-1 章 |
-| 低 | Lambda + S3 バックエンド | `s3://` ストアと Lambda ハンドラ | 設計書 9 章。cron で回す運用なら後回し |
+| 低 | Lambda ハンドラ | `s3://` ストア (ADR 0034) の上に Lambda で動かす | 設計書 9 章。cron で回す運用なら後回し |
 | 低 | 国判定 | IP → 国。MaxMind 同梱か GuardDuty 頼みか | 設計書 11 章の未決 |
 | 低 | 入口スキル | LLM 実行環境に置く数行のスキル (「最初に `arata help ai` を読む」) | 配布先は利用者側のリポジトリ |
 

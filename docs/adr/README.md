@@ -57,3 +57,4 @@
 | [0031](0031-merge-insights-queries.md) | Logs Insights の集計クエリをソースごとに数本にまとめ、振り分けを Go で行う (読み取り量を約半分〜5 分の 2 に) | 採用 |
 | [0032](0032-unused-region-activity-cost-anomaly.md) | ふだん使わないリージョンでの書き込み (`unused_region_activity`) を専用のソースで引き、費用の急増 (`cost_anomaly`) は AWS Cost Anomaly Detection の結果を予想に対する割合で読む | 採用 |
 | [0033](0033-rebuild-from-raw.md) | `arata rebuild` は raw から作れる表だけを作り直し、作れないものは既存の SQLite から引き継ぐ。raw には rebuild に要る印を足す | 採用 |
+| [0034](0034-s3-store.md) | S3 ストアは実行のたびに作業用の複製を出し入れし、確定は明示の Commit と条件付き書き込みで行う | 採用 |

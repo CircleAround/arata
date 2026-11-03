@@ -213,3 +213,19 @@ test('waf.challenge / waf.captcha は真偽値で、既定は false。waf.enable
   disabled.waf = { enabled: false, captcha: true };
   assert.ok(errorsOf(() => parseConfig(disabled)).some((p) => p.startsWith('waf.captcha:') && p.includes('waf.enabled')));
 });
+
+test('storeBucket は必須で、enabled は真偽値 (暗黙の既定を持たない)', () => {
+  assert.equal(parseConfig(example()).storeBucket.enabled, false, 'config.example.json は false (S3 ストアの試験のときだけ有効にする)');
+
+  const missing = example();
+  delete missing.storeBucket;
+  assert.ok(errorsOf(() => parseConfig(missing)).some((p) => p.startsWith('storeBucket:') && p.includes('必須')));
+
+  const wrongType = example();
+  wrongType.storeBucket = { enabled: 'yes' };
+  assert.ok(errorsOf(() => parseConfig(wrongType)).some((p) => p.startsWith('storeBucket.enabled:') && p.includes('真偽値')));
+
+  const on = example();
+  on.storeBucket = { enabled: true };
+  assert.equal(parseConfig(on).storeBucket.enabled, true);
+});
