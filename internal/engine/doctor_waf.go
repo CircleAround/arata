@@ -2,8 +2,11 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -28,6 +31,9 @@ const maxScanMargin = 1.5
 //   - 1 日のログの量は、直近 24h に解釈率の集計 (stats) を流して実測する (1 日分のスキャンの費用がかかる。実測した範囲・読み取り量・その費用を出す)。
 //     --no-measure-scan なら解釈率のサンプルのクエリ (直近 --window) のスキャン量から推定する (追加の費用なし。sandbox で約 75% に少なく出た)
 //   - 1 回の run のスキャン = 1 日の量 × 範囲の日数 × クエリの本数。範囲は窓 + ingest_delay + 日の頭への寄せ (最大 24h) で、上限側で見積もる
+//   - 決定 (ADR 0031): 日の頭への寄せは実行時刻で決まる (範囲の始まり To - 窓 - ingest_delay の UTC の時刻の分)。最小になる時刻
+//     (UTC 0 時 + 窓 + ingest_delay + 余裕 15 分) と、その時の量を案内する。直近の run の時刻は保存したレポート (reports/<profile>.json の窓の終わり) から読み、
+//     あればその範囲も出す (doctor はストアを開かない。レポートのファイルを読むだけ)
 //   - プロファイルごとに、wafv2 を引くプロファイル (チェックが waf_action を必要とする) だけを、1 日の run 数 (24h / 窓) を掛けて足す
 func (d *doctor) wafCost(ctx context.Context, src config.Source, c *cwlogs.Collector) {
 	var daily float64
@@ -58,7 +64,17 @@ func (d *doctor) wafCost(ctx context.Context, src config.Source, c *cwlogs.Colle
 		runs := math.Max(1, math.Floor(float64(24*time.Hour)/float64(prof.Window)))
 		perRunMax = math.Max(perRunMax, perRun)
 		perDayUSD += perRun * runs * InsightsUSDPerGB
-		parts = append(parts, fmt.Sprintf("%s: 1 回最大 %.2f GB (クエリ %d 本 × 範囲最大 %.1f 時間) × 1 日 %.0f 回", name, perRun, n, span.Hours(), runs))
+		part := fmt.Sprintf("%s: 1 回最大 %.2f GB (クエリ %d 本 × 範囲最大 %.1f 時間) × 1 日 %.0f 回", name, perRun, n, span.Hours(), runs)
+		gb := func(h float64) float64 { return daily / 1e9 * h / 24 * float64(n) }
+		if to, ok := d.lastRunTo(name); ok {
+			cur := scanSpan(to, prof.Window, src.IngestDelay)
+			part += fmt.Sprintf("。直近の run (UTC %s、JST %s) では範囲 約 %.1f 時間 (1 回 %.2f GB)", to.UTC().Format("15:04"), to.In(jst).Format("15:04"), cur.Hours(), gb(cur.Hours()))
+		}
+		best := prof.Window + src.IngestDelay + scheduleMargin
+		at := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC).Add(best % (24 * time.Hour))
+		part += fmt.Sprintf("。範囲は実行時刻で決まり、UTC %s (JST %s) に回すと約 %.1f 時間 (1 回 %.2f GB、約 %.2f USD/30 日)",
+			at.Format("15:04"), at.In(jst).Format("15:04"), best.Hours(), gb(best.Hours()), gb(best.Hours())*runs*InsightsUSDPerGB*30)
+		parts = append(parts, part)
 	}
 	detail := fmt.Sprintf("1 日のログ 約 %.2f GB (%s)", daily/1e9, how)
 	if len(parts) == 0 {
@@ -81,6 +97,37 @@ func (d *doctor) wafCost(ctx context.Context, src config.Source, c *cwlogs.Colle
 		detail += fmt.Sprintf("。max_scan_gb %.0f", src.MaxScanGB)
 	}
 	d.add(src, "cost", status, "", detail)
+}
+
+// scheduleMargin は範囲が最小になる実行時刻に足す余裕 (cron の揺れで範囲の始まりが 0 時の前に出ると、前日の 0 時からになり範囲が 24h 増える)。
+const scheduleMargin = 15 * time.Minute
+
+var jst = time.FixedZone("JST", 9*60*60)
+
+// scanSpan は窓の終わり to の run が Insights に問い合わせる範囲の長さ (cwlogs.Collect と同じく、範囲の始まりを含む UTC の日の 0 時から to まで)。
+func scanSpan(to time.Time, window, delay time.Duration) time.Duration {
+	return to.Sub(cwlogs.DayStart(to.Add(-window - delay)))
+}
+
+// lastRunTo は保存した profile のレポートの窓の終わり (直近の run の時刻)。無い・読めなければ ok = false。
+func (d *doctor) lastRunTo(profile string) (time.Time, bool) {
+	if d.cfg.Store.Dir == "" {
+		return time.Time{}, false
+	}
+	b, err := os.ReadFile(filepath.Join(d.cfg.Store.Dir, "reports", profile+".json"))
+	if err != nil {
+		return time.Time{}, false
+	}
+	var rep struct {
+		Window struct {
+			To string `json:"to"`
+		} `json:"window"`
+	}
+	if json.Unmarshal(b, &rep) != nil {
+		return time.Time{}, false
+	}
+	t, err := time.Parse(time.RFC3339, rep.Window.To)
+	return t, err == nil
 }
 
 func sortedProfiles(cfg *config.Config) []string {

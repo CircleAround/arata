@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -82,7 +83,7 @@ func TestDoctor(t *testing.T) {
 		c.fake.Err = cloudtrailtest.APIError{Code: "AccessDeniedException"}
 		c.logs.LogGroups = []string{"/app/nginx"} // /app/rails が無い
 		c.logs.On("sort @timestamp desc", doctorRows(10, 90))
-		c.logs.On("as probe_hits", cwlogstest.Response{StartErr: cwlogstest.APIError{Code: "MalformedQueryException"}})
+		c.logs.On("as http_hits", cwlogstest.Response{StartErr: cwlogstest.APIError{Code: "MalformedQueryException"}})
 		if code := c.run("doctor", "--config", c.cfg, "--format", "json"); code != 2 {
 			t.Fatalf("exit %d\n%s%s", code, c.stdout, c.stderr)
 		}
@@ -204,8 +205,8 @@ func TestAppLayerRun(t *testing.T) {
 	}
 	c.now = c.now.Add(24 * time.Hour)
 	c.logs.On("as lines_total", lines("2026-10-22"))
-	c.logs.On("as sign_in_failures", cwlogstest.Response{Rows: []map[string]string{
-		cwlogstest.Rows("day", "2026-10-22 00:00:00.000", "ip", "198.51.100.7", "sign_in_failures", "120"),
+	c.logs.On("as http_hits", cwlogstest.Response{Rows: []map[string]string{
+		cwlogstest.Rows("day", "2026-10-22 00:00:00.000", "ip", "198.51.100.7", "method", "POST", "status", "401", "sign_in", "/users/sign_in", "http_hits", "120"),
 	}})
 	if code := c.run("run", "--config", c.cfg, "--profile", "daily"); code != 0 {
 		t.Fatalf("run exit %d: %s", code, c.stderr)
@@ -263,8 +264,8 @@ func TestProfileOverridesAndUnusedChecks(t *testing.T) {
 		t.Fatalf("init exit %d: %s", code, c.stderr)
 	}
 	c.now = c.now.Add(24 * time.Hour)
-	c.logs.On("as sign_in_failures", cwlogstest.Response{Rows: []map[string]string{
-		cwlogstest.Rows("day", "2026-10-22 00:00:00.000", "ip", "198.51.100.7", "sign_in_failures", "90"),
+	c.logs.On("as http_hits", cwlogstest.Response{Rows: []map[string]string{
+		cwlogstest.Rows("day", "2026-10-22 00:00:00.000", "ip", "198.51.100.7", "method", "POST", "status", "401", "sign_in", "/users/sign_in", "http_hits", "90"),
 	}})
 	if code := c.run("run", "--config", c.cfg, "--profile", "daily"); code != 0 {
 		t.Fatalf("run exit %d: %s", code, c.stderr)
@@ -343,12 +344,27 @@ func TestDoctorWAF(t *testing.T) {
 	cost := got["cost"]
 	// 既定は直近 24h に解釈率の集計 (stats) を流して実測する (sandbox で sort+limit のスキャン量は約 75% に少なく出た。ADR 0028)。
 	// 実測した範囲・読み取り量・その費用も出す
-	for _, want := range []string{"4.00 GB", "実測", "直近 24h", "読み取り 4.00 GB", "約 0.03 USD", "daily", "80.14 GB", "10 本", "0.61 USD", "18.27 USD", "0.0076 USD/GB", "max_scan_gb", "推奨 121"} {
+	// クエリは 4 本 (ADR 0031)。範囲は実行時刻で決まるので、最小になる時刻 (UTC 0 時 + ingest_delay + 余裕 15 分) と、その時の量も出す。
+	// 直近の run が無ければ今の実行時刻の範囲は出さない
+	for _, want := range []string{"4.00 GB", "実測", "直近 24h", "読み取り 4.00 GB", "約 0.03 USD", "daily", "32.06 GB", "4 本", "0.24 USD", "7.31 USD", "0.0076 USD/GB", "max_scan_gb", "推奨 49",
+		"UTC 00:20 (JST 09:20) に回すと約 24.3 時間 (1 回 16.22 GB、約 3.70 USD/30 日)"} {
 		if !strings.Contains(cost[1], want) {
 			t.Fatalf("cost lacks %q: %v", want, cost)
 		}
 	}
-	if cost[0] != "warn" {
+	if cost[0] != "warn" || strings.Contains(cost[1], "直近の run") {
+		t.Fatalf("cost: %v", cost)
+	}
+
+	// 直近の daily の run (保存したレポートの窓の終わり) が UTC 22:00 (JST 07:00) なら、範囲は前日の 0 時からの約 46 時間
+	c = setup(t, "")
+	if err := os.MkdirAll(filepath.Join(c.dir, "store", "reports"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(c.dir, "store", "reports", "daily.json"), []byte(`{"window":{"from":"2026-10-19T22:00:00Z","to":"2026-10-20T22:00:00Z"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if cost := rows(t, c)["cost"]; !strings.Contains(cost[1], "直近の run (UTC 22:00、JST 07:00) では範囲 約 46.0 時間 (1 回 30.67 GB)") {
 		t.Fatalf("cost: %v", cost)
 	}
 

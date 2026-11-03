@@ -552,7 +552,8 @@ func TestCloudWatchLogsSource(t *testing.T) {
 	h := newHarnessWith(t, nginxSource, hourlyProfile)
 	ctx := context.Background()
 	h.logs.On("as lines_total", linesRows("2026-10-21", 1000, 950))
-	h.logs.On("as sign_in_failures", cwlogstest.Response{Rows: []map[string]string{cwlogstest.Rows("day", "2026-10-21 00:00:00.000", "ip", "198.51.100.7", "sign_in_failures", "30")}})
+	h.logs.On("as http_hits", cwlogstest.Response{Rows: []map[string]string{
+		cwlogstest.Rows("day", "2026-10-21 00:00:00.000", "ip", "198.51.100.7", "method", "POST", "status", "401", "sign_in", "/users/sign_in", "http_hits", "30")}})
 	e := h.open(t)
 
 	// hourly は http_access を使うチェックを持たないので Insights を引かない

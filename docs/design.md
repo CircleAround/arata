@@ -84,6 +84,10 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
 - `QUERY_LIMIT` になるのは次のとき: 同時実行上限 (`LimitExceededException`) を 5 回待って再試行しても通らない / Insights 側のタイムアウト /
   完了待ちが 15 分を超えた (StopQuery する) / ソースの `max_scan_gb` (1 回の収集でのスキャン量。既定 0 = 無制限) を超えた (実行中なら StopQuery、以後のクエリは流さない)。
   集計クエリは窓に重なる UTC 日の 0 時から引くので (3 章)、1 回のスキャンは最大で窓 + 24h 分になる。`max_scan_gb` はこれを見込んで決める。
+- 決定 (クエリをまとめる。ADR 0031): Insights は 1 本ごとに範囲のログ全体を読むので、同じソースの集計を細かい group by の数本にまとめ、振り分けを Go で行う。
+  http_access は 2 本 (解釈率 + `probe_paths`、`sign_in_failures` + `probe_hits`) + endpoint_abuse があれば全画面で 1 本、wafv2 は 4 本 (2 章の下の決定)。
+  値は前の版と同じ (同じログから同じ metrics。`cwlogstest.Sim` とゴールデン `testdata/equiv_*.golden` で固定)。行数の上限 (10000) に当たったら
+  その範囲を半分に分けて引き直し (1h まで。スキャン量は範囲に比例するので、増えるのは引き直した分だけ)、それでも当たればまとめた集計から作る metric を全部 `truncated` に残す
 - 決定 (問い合わせ範囲とロググループの寿命): Logs Insights は、問い合わせの**終わり**がロググループの作成時刻より前、または保持期間 (今 − `retentionInDays`) より古いと
   `MalformedQueryException` で拒否する。始まりが作成前・保持期間外でも、終わりが範囲内なら受理される (2026-11 に実 AWS で確認。「終わりが作成後かつ保持期間外」は未確認だが、文言から拒否される前提で扱う)。
   そこで collector は DescribeLogGroups の `creationTime` と `retentionInDays` を 1 回引き、終わりだけで判定する。外れていれば問い合わせず「データなし」とし (エラーにしない)、
@@ -133,7 +137,7 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
 
 | metric | key | 値 |
 |---|---|---|
-| `waf_rule_action` | `<WebACL>\|<終了ルール>\|<action>` | 件数。既存の `waf_block` (ルール別) はここから作り、クエリを 1 本減らす |
+| `waf_rule_action` | `<WebACL>\|<終了ルール>\|<action>` | 件数。既存の `waf_block` (ルール別) はここから作る。解釈率のクエリと 1 本 (ADR 0031) |
 | `waf_block_path` / `_ips` | `<WebACL>\|<ルール>[/<グループの中のルール>]\|<method>\|<正規化パス>` | BLOCK の件数 / 異なり IP 数。探索パスは除く。日ごとに上位 `top_paths` (既定 50) |
 | `waf_allow_probe` / `_ips` | `<WebACL>\|<正規化パス>` | 探索パス (probe_paths) への ALLOW の件数 / 異なり IP 数。上位 `top_paths` |
 | `waf_rule_count_match` / `_suspect` | `<WebACL>\|<ルール>` (グループの中は `<ruleGroupId>/<ルール>`) | カウントモードの一致の件数 / そのうち探索パスか、その日「BLOCK された IP」(下の決定) からの件数 |
@@ -163,7 +167,10 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
   `top_paths` / `rate_path_groups` / `trusted_cidrs` は集計条件なので overrides では変えられない
 - 決定 (`strip_path_prefix`): API Gateway の REST API では `httpRequest.uri` の前にステージ名が付く (`/prod/login`。sandbox で確認。ALB・CloudFront では付かない)。
   wafv2 ソースの `strip_path_prefix` (`/` で始まり `/` で終わらない) を、探索パス・パスの群の判定では必須の接頭辞として正規表現の前に付け、正規化の前に外す (`/prod` は `/prod/x` と `/prod` だけを外し、`/products` は外さない)。集計条件
-- 費用: wafv2 ソースのクエリは lines + `waf_block_ip` + 7 本 + レート (日数分。合わせて範囲 1 本分)。既存の `max_scan_gb` がそのまま効く (超えたら QUERY_LIMIT で、その日の集計は欠ける)。
+- 費用 (ADR 0031): wafv2 ソースのクエリは 4 本 (解釈率 + `waf_rule_action`、止めた・出した系、カウントの一致、レート (日数分。合わせて範囲 1 本分))。前の版は 10 本。
+  止めた・出した系は filter を `action = "BLOCK" or ((CHALLENGE / CAPTCHA or 許可された探索 or トークンの受理) and 正規の送信元でない)` にし、group by を各集計の軸の和集合にして、
+  `waf_block_ip`・`waf_block_path`・`waf_allow_probe`・「BLOCK された IP」・Challenge の出した / 受理を Go で振り分ける (trusted_cidrs・探索パス・sign-in のパス・レートベース / 既定の action の除外も Go)。
+  カウントの一致は path の軸に入れると行が爆発するので別のまま。既存の `max_scan_gb` がそのまま効く (超えたら QUERY_LIMIT で、その日の集計は欠ける)。
   sandbox の 1 時間・約 300 リクエストのログで 1 本 0.3〜0.5 MB
 - 決定 (資源で絞る。ADR 0028): wafv2 ソースの `resources` (ログの `httpSourceId` の完全一致か `*` / `?` の glob) を前処理に `filter httpSourceId like /^(...)$/` として入れる。
   解釈率と全集計が同じ範囲を数える。集計の key には資源を入れない (分けたいならソースを 2 つ書く)。Insights はロググループ全体をスキャンするので費用は減らない。集計条件
@@ -179,6 +186,8 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
 - 行数の上限 (10000) は UTC の 1 日ずつ流して避け、それでも当たればその範囲を時間幅に揃えて半分に分けて引き直す (1h まで。分けてもスキャン量は範囲に比例するので、増えるのは引き直した分だけ)。
   それでも当たれば WARN と `stats.truncated` (`endpoint_abuse:<画面>`)
 - 費用: 画面ごとに 1 回、既存の集計と同じ範囲 (窓の始まりの日の 0 時から窓の終わり) をスキャンする。画面 2 つなら http_access のソースのスキャンは 4 本 → 6 本 (約 1.5 倍)。
+  決定 (ADR 0031 で置き換え): 全画面で 1 本にまとめる。filter は画面ごとの条件の和、group by に method・status と glob ごとの印 (一致したときだけ先頭の `/` を捕獲する parse) を足し、
+  Go で画面に振り分ける。http_access のソースは endpoint があっても 3 本
   `max_scan_gb` がそのまま効く (超えたら QUERY_LIMIT)。`endpoints` が空なら流さない
 - 拡張点: 集計の軸 (`endpointGroupFields`) にフィールドを足せば行ごとの値として Go に渡る。次の段階でアプリのログからメールのドメインだけを取り出して画面に添えるときはここに足す
 
@@ -237,7 +246,7 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
 
 決定 (解釈率と形式エラーの扱い):
 - 解釈率は `stats count(*) as lines_total, count(<判定フィールド>) as lines_matched by bin(1d)` で測る。判定フィールドは `http_access` が `path`、`waf_action` が `action`。
-- 解釈率を**先に**測り、`FORMAT_MISMATCH` なら集計クエリを流さず metrics も保存しない (誤った集計で平常帯を汚さず、スキャン費用も抑える)。そのソースは失敗扱い (`coverage.sources_failed`、終了コード 3)。
+- 解釈率を**先に**測り (決定: ADR 0031 で、最初のクエリは解釈率と集計 1 種を兼ねる。そのクエリの集計も、`FORMAT_MISMATCH` なら保存しない)、`FORMAT_MISMATCH` なら残りの集計クエリを流さず metrics も保存しない (誤った集計で平常帯を汚さず、スキャン費用も抑える)。そのソースは失敗扱い (`coverage.sources_failed`、終了コード 3)。
 - 窓内に 1 行も無いときは解釈率を判定せず (`match_rate: null`)、WARN ログ (code なし) を出す。ロググループや `stream_prefix` の誤りの手がかり。
 - `FORMAT_DRIFT` の平均は、このソースの解釈率を記録した直近 7 回の run (`runs.stats.match_rates`) から取る。過去の計測が 3 回未満なら判定しない。警告のみで終了コードは変えない。
 - サンプル行は標準エラーの `FORMAT_MISMATCH` ログにだけ添え、report.json / report.md には出さない (マスク済みでも氏名などは検出できないため)。マスクはメールアドレス (URL エンコード形を含む) を `<email>` に置き換えてから 200 文字に切る。metrics の key (パスなど) にも同じマスクをかける。
@@ -805,6 +814,9 @@ arata rebuild                  # raw JSONL から SQLite を再構築
 - 決定 (ADR 0028): wafv2 のソースには `cost` の行を出す。1 日のログの量 (直近 24h に解釈率の集計を流して実測。実測した範囲・読み取り量・その費用も出す。`--no-measure-scan` なら解釈率のサンプルのクエリのスキャン量を 24h に換算した推定。
   sort+limit のスキャン量は sandbox で約 75% に少なく出たので推定は既定にしない) ×
   範囲 (窓 + ingest_delay + 24h) × クエリの本数で 1 回の run を見積もり、wafv2 を引くプロファイルの 1 日の run 数を掛けて、東京の単価 (0.0076 USD/GB) で 1 日・30 日の概算を出す。
+  決定 (ADR 0031): 範囲は実行時刻で決まる (範囲の始まり = 窓の終わり − 窓 − ingest_delay の、UTC の時刻の分だけ長くなる) ので、最小になる時刻
+  (UTC 0 時 + 窓 + ingest_delay + 余裕 15 分。daily なら UTC 00:20 = JST 09:20、約 24.3 時間) とその時の 1 回の量・30 日の概算も出す。直近の run の時刻は
+  保存したレポート (`reports/<profile>.json` の窓の終わり) から読み、あればその範囲と量も出す (ストアは開かない)。
   `max_scan_gb` が無い・見積もりより小さいときは warn (推奨値は見積もりの 1.5 倍)。`resources` があれば `resources` の行で、ログの宛先が同じ WebACL の資源と照合する
   (httpSourceId の形は公式文書で食い違うので候補を複数作る。当たらなければ warn。waf-config のソースが無くても読む)
   run では、権限の無いソースのチェックだけが skip され (posture は取れた項目で評価)、他のチェックは続行する。

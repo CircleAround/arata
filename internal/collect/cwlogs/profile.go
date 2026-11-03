@@ -4,7 +4,7 @@
 // クエリは 3 層で組み立てる。
 //
 //  1. 前処理 (Prelude): 形式プロファイルごと。ストリームの絞り込みと、生ログ → 正規化フィールド (ip, method, path, status ...) の変換
-//  2. 集計 (Aggregate): 正規化レコードの種類ごと (http_access / waf_action)。前処理が作ったフィールド名だけを使うので形式に依らない
+//  2. 集計 (MergedQuery): 正規化レコードの種類ごと (http_access / waf_action)。前処理が作ったフィールド名だけを使うので形式に依らない。ソースごとに数本にまとめる (ADR 0031)
 //  3. 共通の後処理: `stats count(*) as <metric> by bin(1d) as day, <key>` と件数上限
 //
 // 生ログは引かない。例外は FORMAT_MISMATCH 時のサンプル (最大 3 行) と doctor のサンプル (100 行) だけ。
