@@ -14,10 +14,11 @@ const (
 	OriginOverride = "overrides" // profiles.<name>.overrides に書いた値
 )
 
-// CollectionParams は収集 (Logs Insights の集計クエリ) の条件に使うパラメータ。
+// CollectionParams は収集 (Logs Insights の集計クエリ、CloudTrail の注目イベント) の条件に使うパラメータ。
 // 決定: metrics は (date, source, metric, key) で全プロファイル共有・置き換え保存なので、プロファイルごとに集計条件を変えると
 // プロファイルが交互に別条件の値で上書きし平常帯が壊れる。overrides では変えられず、全体の checks: でだけ変える。
-var CollectionParams = map[string]bool{"paths": true, "methods": true, "failure_statuses": true, "statuses": true, "exclude_paths": true}
+// access_denied.error_codes も同じ (events に残す拒否の条件。保存はプロファイルに依らない)。
+var CollectionParams = map[string]bool{"paths": true, "methods": true, "failure_statuses": true, "statuses": true, "exclude_paths": true, "error_codes": true}
 
 // Param はチェックのパラメータ 1 つ (checks.<Check>.<Key>)。
 type Param struct {

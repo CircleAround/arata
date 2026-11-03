@@ -287,6 +287,40 @@ profiles:
 	}
 }
 
+func TestAccessDeniedConfig(t *testing.T) {
+	cfg, err := Load(write(t, minimal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ad := cfg.Checks.AccessDenied
+	if strings.Join(ad.ErrorCodes, ",") != "AccessDenied,AccessDeniedException,UnauthorizedOperation,Client.UnauthorizedOperation" ||
+		ad.MinDistinctAPIs != 5 || ad.HighDistinctAPIs != 20 || ad.Baseline.MinCount != 50 || ad.Baseline.Factor != 3 ||
+		ad.Baseline.BaselineDays != 14 || ad.Baseline.MinBaselineDays != 7 {
+		t.Fatalf("access_denied defaults: %+v", ad)
+	}
+	cfg, err = Load(write(t, minimal+"checks:\n  access_denied:\n    error_codes: [AccessDenied]\n    min_distinct_apis: 3\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ad := cfg.Checks.AccessDenied; strings.Join(ad.ErrorCodes, ",") != "AccessDenied" || ad.MinDistinctAPIs != 3 || ad.HighDistinctAPIs != 20 {
+		t.Fatalf("access_denied: %+v", ad)
+	}
+	for _, body := range []string{
+		minimal + "checks:\n  access_denied:\n    min_distinct_apis: 30\n", // high_distinct_apis (20) 未満でなければならない
+		minimal + "checks:\n  access_denied:\n    min_baseline_days: 30\n",
+		minimal + "checks:\n  access_denied:\n    error_codes: [\"\"]\n",
+	} {
+		if _, err := Load(write(t, body)); err == nil {
+			t.Fatalf("expected error for %q", body)
+		}
+	}
+	// error_codes は保存する (events に残す) 条件なので overrides では変えられない
+	body := strings.Replace(minimal, "    checks: [default-daily, root_usage]\n", "    checks: [default-daily, root_usage]\n    overrides:\n      access_denied: { error_codes: [AccessDenied] }\n", 1)
+	if _, err := Load(write(t, body)); err == nil || !strings.Contains(err.Error(), "access_denied.error_codes") {
+		t.Fatalf("want collection condition error, got %v", err)
+	}
+}
+
 func TestProfileOverrides(t *testing.T) {
 	body := strings.Replace(minimal, "    checks: [default-daily, root_usage]\n",
 		"    checks: [default-daily, root_usage]\n    overrides:\n      login_bruteforce: { factor: 5, min_count: 50 }\n  weekly:\n    window: 7d\n    checks: [new_principal]\n", 1) +
@@ -336,7 +370,7 @@ func TestProfileOverrides(t *testing.T) {
 }
 
 func TestParamChecks(t *testing.T) {
-	if got := strings.Join(ParamChecks(), ","); got != "login_bruteforce,probe_paths,waf_block_trend,credential_hygiene,posture" {
+	if got := strings.Join(ParamChecks(), ","); got != "login_bruteforce,probe_paths,waf_block_trend,access_denied,credential_hygiene,posture" {
 		t.Fatalf("got %s", got)
 	}
 }

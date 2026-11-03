@@ -379,11 +379,25 @@ func TestNotable(t *testing.T) {
 		{record.TrailEvent{EventSource: "ec2.amazonaws.com", Name: "AuthorizeSecurityGroupIngress"}, true},
 		{record.TrailEvent{EventSource: "s3.amazonaws.com", Name: "ListBuckets", ReadOnly: true}, false},
 		{record.TrailEvent{EventSource: "ec2.amazonaws.com", Name: "RunInstances"}, false},
+		// 拒否された呼び出しは読み取りでも残す (access_denied。ADR 0021)。拒否でないエラーは残さない
+		{record.TrailEvent{EventSource: "s3.amazonaws.com", Name: "ListBuckets", ReadOnly: true, ErrorCode: "AccessDenied"}, true},
+		{record.TrailEvent{EventSource: "kms.amazonaws.com", Name: "ListKeys", ReadOnly: true, ErrorCode: "AccessDeniedException"}, true},
+		{record.TrailEvent{EventSource: "ec2.amazonaws.com", Name: "DescribeInstances", ReadOnly: true, ErrorCode: "Client.UnauthorizedOperation"}, true},
+		{record.TrailEvent{EventSource: "ec2.amazonaws.com", Name: "RunInstances", ErrorCode: "UnauthorizedOperation"}, true},
+		{record.TrailEvent{EventSource: "iam.amazonaws.com", Name: "GetRole", ReadOnly: true, ErrorCode: "NoSuchEntity"}, false},
+		{record.TrailEvent{EventSource: "s3.amazonaws.com", Name: "ListBuckets", ReadOnly: true, ErrorCode: "accessdenied"}, false},
 	}
 	for _, tc := range cases {
 		if got := DefaultNotable(tc.e); got != tc.want {
-			t.Errorf("%s/%s: got %v", tc.e.EventSource, tc.e.Name, got)
+			t.Errorf("%s/%s (%s): got %v", tc.e.EventSource, tc.e.Name, tc.e.ErrorCode, got)
 		}
+	}
+	// 設定 (checks.access_denied.error_codes) で拒否のコードを変えられる
+	n := NotableWith([]string{"Forbidden"})
+	if !n(record.TrailEvent{EventSource: "s3.amazonaws.com", Name: "ListBuckets", ReadOnly: true, ErrorCode: "Forbidden"}) ||
+		n(record.TrailEvent{EventSource: "s3.amazonaws.com", Name: "ListBuckets", ReadOnly: true, ErrorCode: "AccessDenied"}) ||
+		!n(record.TrailEvent{EventSource: "iam.amazonaws.com", Name: "CreateUser"}) {
+		t.Fatal("NotableWith")
 	}
 }
 

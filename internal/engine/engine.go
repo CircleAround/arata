@@ -241,6 +241,8 @@ type CollectResult struct {
 	SourcesFailed []string
 	Errors        []report.CollectError
 	Records       int
+	// DeniedEvents は拒否された呼び出し (access_denied の error_codes) として出した trail_event の数 (run の stats の目安。重複排除の前)。
+	DeniedEvents int
 	// Formats は cloudwatch-logs ソースの解釈率 (失敗したソースも計測できた分は入る)。
 	Formats []report.FormatCoverage
 	// yielded はソースごとに出せるレコード種類 (チェックの skip 判定に使う)
@@ -283,6 +285,10 @@ func (e *Engine) Collect(ctx context.Context, w collect.Window, o CollectOptions
 	}
 	res := CollectResult{SourcesOK: []string{}, SourcesFailed: []string{}, Errors: []report.CollectError{}, Formats: []report.FormatCoverage{},
 		yielded: map[string][]record.Kind{}, attempted: map[string]bool{}, unavailable: map[record.Kind]string{}, outOfRange: map[string]string{}}
+	denied := map[string]bool{}
+	for _, c := range e.cfg.Checks.AccessDenied.ErrorCodes {
+		denied[c] = true
+	}
 	want := map[string]bool{}
 	for _, id := range o.SourceIDs {
 		want[id] = true
@@ -305,6 +311,9 @@ func (e *Engine) Collect(ctx context.Context, w collect.Window, o CollectOptions
 				switch v := rec.(type) {
 				case record.TrailEvent:
 					v.CollectedAt = w.CollectedAt
+					if denied[v.ErrorCode] {
+						res.DeniedEvents++
+					}
 					rec = v
 				case record.SnapshotItem:
 					snapshots[v.Kind] = append(snapshots[v.Kind], v)
@@ -464,6 +473,8 @@ func (e *Engine) collector(ctx context.Context, src config.Source) (collect.Coll
 			clients = append(clients, cloudtrail.RegionClient{Region: region, API: api})
 		}
 		c := cloudtrail.New(src.ID, clients...)
+		// 拒否された呼び出しを events に残すコードは設定に従う (access_denied。ADR 0021)
+		c.Notable = cloudtrail.NotableWith(e.cfg.Checks.AccessDenied.ErrorCodes)
 		c.Limiter = e.deps.Limiter
 		c.Logger = e.log
 		if e.deps.Sleep != nil {
@@ -747,7 +758,7 @@ func (e *Engine) Run(ctx context.Context, profileName string) (*RunResult, error
 		status, exit = "partial", ExitPartial
 	}
 	stats := map[string]any{
-		"records": cr.Records, "sources_ok": len(cr.SourcesOK), "sources_failed": len(cr.SourcesFailed),
+		"records": cr.Records, "denied_events": cr.DeniedEvents, "sources_ok": len(cr.SourcesOK), "sources_failed": len(cr.SourcesFailed),
 		"new": rep.Summary.New, "changed": rep.Summary.Changed, "recurred": rep.Summary.Recurred, "resolved": rep.Summary.Resolved, "still_open": rep.Summary.StillOpen,
 	}
 	addFormatStats(stats, cr.Formats)

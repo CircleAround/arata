@@ -16,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/cloudtrail/types"
 
 	"github.com/CircleAround/arata/internal/collect"
+	"github.com/CircleAround/arata/internal/config"
 	"github.com/CircleAround/arata/internal/record"
 )
 
@@ -359,9 +360,24 @@ var notableNames = map[string]bool{
 	"ModifyDBInstance": true, "CreateDBInstance": true, "PutBucketPolicy": true, "PutBucketAcl": true, "PutPublicAccessBlock": true, "DeletePublicAccessBlock": true,
 }
 
-// DefaultNotable は events テーブルに残す「注目イベント」の判定 (設計書 5-2)。
-// 決定: ルート利用、AssumeRole*、IAM / CloudTrail / GuardDuty の書き込み、秘匿値取得、SSM セッション、公開設定の変更を残す。それ以外は principal_seen にだけ集計する。
-func DefaultNotable(e record.TrailEvent) bool {
+// DefaultNotable は events テーブルに残す「注目イベント」の判定 (設計書 5-2)。拒否のコードは既定 (config.DefaultDeniedErrorCodes)。
+// 決定: ルート利用、AssumeRole*、IAM / CloudTrail / GuardDuty の書き込み、秘匿値取得、SSM セッション、公開設定の変更、
+// 拒否された呼び出し (access_denied。ADR 0021) を残す。それ以外は principal_seen にだけ集計する。
+var DefaultNotable = NotableWith(config.DefaultDeniedErrorCodes)
+
+// NotableWith は deniedCodes (errorCode の完全一致) の呼び出しも残す注目イベントの判定を返す (設定 checks.access_denied.error_codes)。
+// 決定: 拒否の保存はチェックを有効にしているかに依らない (init のベースライン収集でも残し、平常帯に使う)。
+func NotableWith(deniedCodes []string) func(record.TrailEvent) bool {
+	denied := make(map[string]bool, len(deniedCodes))
+	for _, c := range deniedCodes {
+		denied[c] = true
+	}
+	return func(e record.TrailEvent) bool {
+		return (e.ErrorCode != "" && denied[e.ErrorCode]) || notable(e)
+	}
+}
+
+func notable(e record.TrailEvent) bool {
 	if e.PrincipalKind == record.PrincipalRoot {
 		return true
 	}

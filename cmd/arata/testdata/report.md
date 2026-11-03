@@ -53,7 +53,7 @@
 
 - 取得できたソース: trail
 - 取得に失敗したソース: なし
-- 実行したチェック: ai_path_usage, iam_changes, new_principal, root_usage, unknown_assume_role
+- 実行したチェック: access_denied, ai_path_usage, iam_changes, new_principal, root_usage, unknown_assume_role
 - スキップしたチェック:
   - login_bruteforce: no http_access source
   - probe_paths: no http_access source

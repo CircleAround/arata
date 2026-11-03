@@ -118,6 +118,17 @@ func Event(id string, t time.Time, who Identity, source, name, region, ip string
 	return types.Event{EventId: &id, EventTime: &t, CloudTrailEvent: &s}
 }
 
+// WithError は ev に errorCode を付けたもの (拒否された呼び出しなど) を返す。
+func WithError(ev types.Event, code string) types.Event {
+	var body map[string]any
+	_ = json.Unmarshal([]byte(*ev.CloudTrailEvent), &body)
+	body["errorCode"] = code
+	b, _ := json.Marshal(body)
+	s := string(b)
+	ev.CloudTrailEvent = &s
+	return ev
+}
+
 // APIError は smithy.APIError を満たす最小のエラー。
 type APIError struct{ Code string }
 

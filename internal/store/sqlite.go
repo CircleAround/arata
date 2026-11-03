@@ -393,6 +393,12 @@ func (s *Dir) Events(ctx context.Context, from, to time.Time, f EventFilter) ([]
 	if f.WriteOnly {
 		q += ` AND read_only = 0`
 	}
+	if len(f.ErrorCodes) > 0 {
+		q += ` AND error_code IN (` + placeholders(len(f.ErrorCodes)) + `)`
+		for _, c := range f.ErrorCodes {
+			args = append(args, c)
+		}
+	}
 	q += ` ORDER BY time, event_id`
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {

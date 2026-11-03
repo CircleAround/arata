@@ -136,6 +136,42 @@ func (h *harness) logCodes(t *testing.T) []string {
 	return codes
 }
 
+// 拒否された呼び出しは events に残り、access_denied が主体ごとに報告する。拒否のコードは設定 (checks.access_denied.error_codes) に従う。
+func TestRunAccessDenied(t *testing.T) {
+	h := newHarnessWith(t, "", "checks:\n  access_denied:\n    error_codes: [AccessDenied, Client.UnauthorizedOperation, Forbidden]\n")
+	ctx := context.Background()
+	scanner := cloudtrailtest.AssumedRole(acct, "example-scanner", "s1")
+	at := h.now.Add(-2 * time.Hour)
+	for i, api := range [][2]string{{"iam.amazonaws.com", "ListUsers"}, {"s3.amazonaws.com", "ListBuckets"}, {"secretsmanager.amazonaws.com", "ListSecrets"}, {"iam.amazonaws.com", "CreateUser"}} {
+		h.fake.Add(cloudtrailtest.WithError(cloudtrailtest.Event(fmt.Sprintf("d%d", i), at, scanner, api[0], api[1], "us-east-1", "198.51.100.1", api[1] != "CreateUser", nil), "AccessDenied"))
+	}
+	h.fake.Add(
+		cloudtrailtest.WithError(cloudtrailtest.Event("d-ec2", at, scanner, "ec2.amazonaws.com", "DescribeInstances", "ap-northeast-1", "198.51.100.1", true, nil), "Client.UnauthorizedOperation"),
+		cloudtrailtest.WithError(cloudtrailtest.Event("d-custom", at, scanner, "kms.amazonaws.com", "ListKeys", "ap-northeast-1", "198.51.100.1", true, nil), "Forbidden"),
+		// 既定のコードでも設定に無ければ数えない。拒否でないエラーも数えない
+		cloudtrailtest.WithError(cloudtrailtest.Event("d-other", at, scanner, "lambda.amazonaws.com", "ListFunctions", "ap-northeast-1", "198.51.100.1", true, nil), "AccessDeniedException"),
+		cloudtrailtest.WithError(cloudtrailtest.Event("d-nse", at, scanner, "iam.amazonaws.com", "GetRole", "us-east-1", "198.51.100.1", true, nil), "NoSuchEntity"),
+	)
+	e := h.open(t)
+	r, err := e.Run(ctx, "daily")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found []string
+	for _, f := range r.Report.Findings.New {
+		if f.Check == "access_denied" {
+			found = append(found, fmt.Sprintf("%s %s %v", f.Key, f.Severity, f.Data["distinct_apis"]))
+		}
+	}
+	if strings.Join(found, ";") != "arn:aws:iam::"+acct+":role/example-scanner medium 6" {
+		t.Fatalf("access_denied: %v (%+v)", found, r.Report.Findings.New)
+	}
+	last, _ := e.Store().RecentRuns(ctx, 1)
+	if last[0].Stats["denied_events"] != float64(6) {
+		t.Fatalf("denied_events: %+v", last[0].Stats)
+	}
+}
+
 func TestInitThenRunTwice(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
@@ -174,7 +210,7 @@ func TestInitThenRunTwice(t *testing.T) {
 	if len(r1.Report.Info) != 1 || r1.Report.Info[0].Check != "iam_changes" {
 		t.Fatalf("deploy principal IAM change should be info: %+v", r1.Report.Info)
 	}
-	if strings.Join(r1.Report.Coverage.ChecksRun, ",") != "ai_path_usage,iam_changes,new_principal,root_usage,unknown_assume_role" {
+	if strings.Join(r1.Report.Coverage.ChecksRun, ",") != "access_denied,ai_path_usage,iam_changes,new_principal,root_usage,unknown_assume_role" {
 		t.Fatalf("checks_run: %v", r1.Report.Coverage.ChecksRun)
 	}
 	e.Close()
@@ -255,7 +291,7 @@ func TestPartialFailureExit3(t *testing.T) {
 	if sf := r.Report.Coverage.SourcesFailed[0]; sf.Source != "trail" || sf.Code != "ACCESS_DENIED" || sf.CoveredFrom != "" {
 		t.Fatalf("sources_failed: %+v", sf)
 	}
-	if len(r.Report.Coverage.ChecksRun) != 0 || len(r.Report.Coverage.ChecksSkipped) != 8 || r.Report.Coverage.ChecksSkipped[0].Reason != "source trail failed" {
+	if len(r.Report.Coverage.ChecksRun) != 0 || len(r.Report.Coverage.ChecksSkipped) != 9 || r.Report.Coverage.ChecksSkipped[0].Reason != "source trail failed" {
 		t.Fatalf("coverage: %+v", r.Report.Coverage)
 	}
 	if codes := h.logCodes(t); strings.Join(codes, ",") != "ACCESS_DENIED" {

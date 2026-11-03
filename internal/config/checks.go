@@ -8,6 +8,7 @@ type Checks struct {
 	LoginBruteforce LoginBruteforce `yaml:"login_bruteforce"`
 	ProbePaths      ProbePaths      `yaml:"probe_paths"`
 	WAFBlockTrend   WAFBlockTrend   `yaml:"waf_block_trend"`
+	AccessDenied    AccessDenied    `yaml:"access_denied"`
 	// 以下は週次チェック (Step 3)。
 	CredentialHygiene CredentialHygiene `yaml:"credential_hygiene"`
 	Posture           Posture           `yaml:"posture"`
@@ -69,6 +70,22 @@ type WAFBlockTrend struct {
 	BaselineDays    int     `yaml:"baseline_days"`
 	MinBaselineDays int     `yaml:"min_baseline_days"`
 }
+
+// AccessDenied は access_denied の設定 (ADR 0021)。
+// 平常帯は Baseline と同じ形 (主体自身の直近 baseline_days 日の日次値の中央値 × factor)。min_count は量の条件の下限。
+// min_baseline_days は平常帯を使うのに要る、データのある過去日数 (それ未満なら平常帯を 0 とみなし絶対の閾値だけで判定する)。
+type AccessDenied struct {
+	// ErrorCodes は拒否とみなす CloudTrail の errorCode (完全一致)。events に残す条件なので overrides では変えられない。
+	ErrorCodes []string `yaml:"error_codes"`
+	// MinDistinctAPIs は拒否された API (eventSource:eventName) の種類がこれ以上で報告する (medium)。
+	MinDistinctAPIs int `yaml:"min_distinct_apis"`
+	// HighDistinctAPIs は種類がこれ以上で high。
+	HighDistinctAPIs int      `yaml:"high_distinct_apis"`
+	Baseline         Baseline `yaml:",inline"`
+}
+
+// DefaultDeniedErrorCodes は拒否とみなす errorCode の既定 (IAM・S3 などは AccessDenied / AccessDeniedException、EC2 は UnauthorizedOperation)。
+var DefaultDeniedErrorCodes = []string{"AccessDenied", "AccessDeniedException", "UnauthorizedOperation", "Client.UnauthorizedOperation"}
 
 // 既定値。
 var (
@@ -134,6 +151,17 @@ func (c *Checks) applyDefaults() {
 	if pp.TopIPMinCount == 0 {
 		pp.TopIPMinCount = 5
 	}
+	ad := &c.AccessDenied
+	if len(ad.ErrorCodes) == 0 {
+		ad.ErrorCodes = DefaultDeniedErrorCodes
+	}
+	if ad.MinDistinctAPIs == 0 {
+		ad.MinDistinctAPIs = 5
+	}
+	if ad.HighDistinctAPIs == 0 {
+		ad.HighDistinctAPIs = 20
+	}
+	ad.Baseline.applyDefaults(50)
 	if c.CredentialHygiene.UnusedDays == 0 {
 		c.CredentialHygiene.UnusedDays = 90
 	}
@@ -168,6 +196,18 @@ func (c *Checks) validate() error {
 	wb := c.WAFBlockTrend
 	if wb.TopN < 1 || wb.BaselineDays < 1 || wb.MinBaselineDays > wb.BaselineDays {
 		return fmt.Errorf("waf_block_trend: top_n >= 1, baseline_days >= 1, min_baseline_days <= baseline_days")
+	}
+	ad := c.AccessDenied
+	if err := ad.Baseline.validate(); err != nil {
+		return fmt.Errorf("access_denied: %w", err)
+	}
+	if ad.MinDistinctAPIs < 1 || ad.HighDistinctAPIs < ad.MinDistinctAPIs {
+		return fmt.Errorf("access_denied: 1 <= min_distinct_apis <= high_distinct_apis")
+	}
+	for _, code := range ad.ErrorCodes {
+		if code == "" {
+			return fmt.Errorf("access_denied: error_codes must not contain an empty string")
+		}
 	}
 	if c.CredentialHygiene.UnusedDays < 1 {
 		return fmt.Errorf("credential_hygiene: unused_days >= 1")
