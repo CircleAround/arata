@@ -1,0 +1,4 @@
+# 依存は公開から 7 日 (10080 分) 経った版だけを解決する。Dependabot の cooldown と 2 段構え (ADR 0017・0020)。
+minimumReleaseAge: 10080
+# Node が package.json の engines (24 系) の範囲外なら install を止める (警告で済ませない)
+engineStrict: true

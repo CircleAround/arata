@@ -1,0 +1,137 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { ConfigError, DEFAULT_PREFIX, loadConfig, parseConfig } from '../lib/config.ts';
+
+const examplePath = new URL('../config.example.json', import.meta.url);
+
+function example(): Record<string, any> {
+  return JSON.parse(readFileSync(examplePath, 'utf8'));
+}
+
+function errorsOf(fn: () => unknown): string[] {
+  try {
+    fn();
+  } catch (e) {
+    assert.ok(e instanceof ConfigError, `ConfigError ではない: ${e}`);
+    return e.problems;
+  }
+  assert.fail('エラーにならなかった');
+}
+
+test('config.example.json は検証を通る', () => {
+  const c = parseConfig(example());
+  assert.equal(c.account, '123456789012');
+  assert.equal(c.prefix, 'arata-sandbox');
+  assert.equal(c.testUsers.length, 2);
+  assert.equal(c.externalRole.trustedAccountId, '111122223333');
+});
+
+test('prefix を省略すると既定の prefix になる', () => {
+  const raw = example();
+  delete raw.prefix;
+  assert.equal(parseConfig(raw).prefix, DEFAULT_PREFIX);
+});
+
+test('必須の項目が無ければ、その名前を挙げてエラーにする', () => {
+  const raw = example();
+  delete raw.account;
+  delete raw.guardDuty;
+  const problems = errorsOf(() => parseConfig(raw));
+  assert.ok(problems.some((p) => p.includes('account') && p.includes('必須')), problems.join('\n'));
+  assert.ok(problems.some((p) => p.includes('guardDuty') && p.includes('必須')), problems.join('\n'));
+});
+
+test('誤りはまとめて全部報告する', () => {
+  const raw = example();
+  raw.account = '12345';
+  raw.externalRole.trustedAccountId = 'abc';
+  raw.nginxLogGroup.retentionDays = 8;
+  const problems = errorsOf(() => parseConfig(raw));
+  assert.equal(problems.length, 3, problems.join('\n'));
+  assert.ok(problems.some((p) => p.startsWith('account:') && p.includes('12 桁')));
+  assert.ok(problems.some((p) => p.startsWith('externalRole.trustedAccountId:')));
+  assert.ok(problems.some((p) => p.startsWith('nginxLogGroup.retentionDays:') && p.includes('7')));
+});
+
+test('未知のキーは打ち間違いとしてエラーにする', () => {
+  const raw = example();
+  raw.guardduty = { enabled: true };
+  raw.accessAnalyzer.enable = true;
+  const problems = errorsOf(() => parseConfig(raw));
+  assert.ok(problems.some((p) => p.includes('guardduty') && p.includes('未知')), problems.join('\n'));
+  assert.ok(problems.some((p) => p.includes('accessAnalyzer.enable') && p.includes('未知')), problems.join('\n'));
+});
+
+test('型の誤り', () => {
+  const raw = example();
+  raw.guardDuty.enabled = 'yes';
+  raw.testUsers = {};
+  const problems = errorsOf(() => parseConfig(raw));
+  assert.ok(problems.some((p) => p.startsWith('guardDuty.enabled:') && p.includes('真偽値')), problems.join('\n'));
+  assert.ok(problems.some((p) => p.startsWith('testUsers:') && p.includes('配列')), problems.join('\n'));
+});
+
+test('試験ユーザーの名前は重複と使えない文字を弾く', () => {
+  const raw = example();
+  raw.testUsers = [
+    { name: 'alice', consolePassword: true, accessKey: false },
+    { name: 'alice', consolePassword: false, accessKey: false },
+    { name: 'bad name!', consolePassword: false, accessKey: false },
+  ];
+  const problems = errorsOf(() => parseConfig(raw));
+  assert.ok(problems.some((p) => p.startsWith('testUsers[1].name:') && p.includes('重複')), problems.join('\n'));
+  assert.ok(problems.some((p) => p.startsWith('testUsers[2].name:')), problems.join('\n'));
+});
+
+test('IAM ユーザー名の長さ (prefix を含めて 64 文字) を超えればエラー', () => {
+  const raw = example();
+  raw.testUsers = [{ name: 'x'.repeat(60), consolePassword: false, accessKey: false }];
+  const problems = errorsOf(() => parseConfig(raw));
+  assert.ok(problems.some((p) => p.startsWith('testUsers[0].name:') && p.includes('64')), problems.join('\n'));
+});
+
+test('bedrock を有効にするとコピー元の ARN が要る', () => {
+  const raw = example();
+  raw.bedrock = { enabled: true };
+  const problems = errorsOf(() => parseConfig(raw));
+  assert.ok(problems.some((p) => p.startsWith('bedrock.modelSourceArn:')), problems.join('\n'));
+
+  raw.bedrock = { enabled: true, modelSourceArn: 'not-an-arn' };
+  const problems2 = errorsOf(() => parseConfig(raw));
+  assert.ok(problems2.some((p) => p.startsWith('bedrock.modelSourceArn:') && p.includes('arn:')), problems2.join('\n'));
+});
+
+test('bedrock が無効ならコピー元の ARN は省略できる', () => {
+  const raw = example();
+  raw.bedrock = { enabled: false };
+  assert.equal(parseConfig(raw).bedrock.enabled, false);
+});
+
+test('信頼する主体は ARN でなければならない', () => {
+  const raw = example();
+  raw.readonlyRole.trustedPrincipalArn = '123456789012';
+  const problems = errorsOf(() => parseConfig(raw));
+  assert.ok(problems.some((p) => p.startsWith('readonlyRole.trustedPrincipalArn:')), problems.join('\n'));
+});
+
+test('トップレベルがオブジェクトでなければエラー', () => {
+  const problems = errorsOf(() => parseConfig([]));
+  assert.equal(problems.length, 1);
+});
+
+test('loadConfig: ファイルが無い・JSON でない場合はパスを含むエラー', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'arata-sandbox-'));
+  const missing = join(dir, 'missing.json');
+  assert.throws(() => loadConfig(missing), (e: unknown) => e instanceof ConfigError && e.message.includes(missing));
+
+  const broken = join(dir, 'broken.json');
+  writeFileSync(broken, '{ "account": ');
+  assert.throws(() => loadConfig(broken), (e: unknown) => e instanceof ConfigError && e.message.includes('JSON'));
+});
+
+test('loadConfig: パスが指定されていなければ渡し方を案内する', () => {
+  assert.throws(() => loadConfig(undefined), (e: unknown) => e instanceof ConfigError && e.message.includes('-c config='));
+});

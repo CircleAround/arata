@@ -43,3 +43,4 @@
 | [0017](0017-supply-chain-hardening.md) | サプライチェーン対策は Actions の SHA 固定・依存の 7 日待機 (2 段構え)・来歴証明で行う | 採用 |
 | [0018](0018-aratam-output-coupling.md) | LLM 要約と通知は aratam が担い、arata とは出力リソースだけで連携する | 採用 |
 | [0019](0019-reduce-dependencies.md) | 標準ライブラリで無理なく書ける依存は持たない (cobra と x/time を外す。SQLite は残す) | 採用 |
+| [0020](0020-sandbox-cdk.md) | 試験環境 (sandbox) は開発用の AWS アカウントに CDK (TypeScript) で作り、配布用のロールは素の CloudFormation のまま取り込む | 採用 |

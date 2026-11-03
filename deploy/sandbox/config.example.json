@@ -1,0 +1,26 @@
+{
+  "account": "123456789012",
+  "region": "ap-northeast-1",
+  "prefix": "arata-sandbox",
+  "readonlyRole": {
+    "trustedPrincipalArn": "arn:aws:iam::123456789012:root"
+  },
+  "nginxLogGroup": {
+    "name": "prod-nginx-access",
+    "retentionDays": 7
+  },
+  "testUsers": [
+    { "name": "alice", "consolePassword": true, "accessKey": false },
+    { "name": "bob", "consolePassword": false, "accessKey": true }
+  ],
+  "externalRole": {
+    "trustedAccountId": "111122223333",
+    "externalId": "example-external-id"
+  },
+  "guardDuty": { "enabled": false },
+  "accessAnalyzer": { "enabled": true },
+  "bedrock": {
+    "enabled": false,
+    "modelSourceArn": "arn:aws:bedrock:ap-northeast-1:123456789012:inference-profile/apac.anthropic.example-model-v1:0"
+  }
+}

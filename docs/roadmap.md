@@ -10,6 +10,7 @@
 - aratam: `docs/aratam.md` 7 章の実装順 1〜4 まで実装済み (入力検査と振り分け、`none` / `claude-cli` / `bedrock`、doctor、test-notify、
   リリースへの追加)。**まだリリースしていない** (v0.2.0 が最初)
 - サプライチェーン対策 (ADR 0017) と依存削減 (ADR 0019) は適用済み
+- 試験環境 sandbox (`deploy/sandbox`、CDK) と配布用の読み取り専用ロール (`deploy/iam/readonly-role.yaml`) を用意した (ADR 0020)。**まだ deploy していない**
 - 実動確認の状況:
   - arata の daily 相当のチェック、doctor、approve の一括解消、週次の doctor は実環境で確認済み
   - 週次の `init` / `run` と `report --month` は未実施 (`iam:GenerateCredentialReport` を呼ぶため、利用者側の判断待ちだった)
@@ -21,7 +22,9 @@
    タグを push すると release ワークフローが走る (来歴証明は公開リポジトリになるまでスキップされる)
 2. **aratam の実送信試験**: 試験用チャンネルの Incoming Webhook で `aratam doctor` → `test-notify` → `notify` を 1 回ずつ。
    `bedrock` は推論プロファイルを 1 つ用意して `doctor` で応答を確かめる
-3. **v0.2.0 の README 見直し**: aratam の節が「cron で 2 つのコマンドをつなぐ」例まで含むか
+3. **sandbox の初回 deploy**: 開発用アカウントに deploy し、`deploy/sandbox/scenarios` を一巡して、各チェックが README の表どおりに出るかを確かめる。
+   週次の `init` / `run` と `report --month` の未実施分もここで確かめられる
+4. **v0.2.0 の README 見直し**: aratam の節が「cron で 2 つのコマンドをつなぐ」例まで含むか
 
 ## 3. 残項目 (優先度順の案)
 

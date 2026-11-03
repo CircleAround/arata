@@ -1,0 +1,38 @@
+name: sandbox
+
+# deploy/sandbox (CDK、TypeScript) と配布用ロールの試験。AWS には接続しない (deploy しない。synth は架空の値の config.example.json で)。
+# 最小権限。Actions は SHA で固定し、版はコメントに書く (ADR 0017・0020)。
+on:
+  push:
+    branches: [main]
+    paths: ['deploy/**', '.github/workflows/sandbox.yml']
+  pull_request:
+    paths: ['deploy/**', '.github/workflows/sandbox.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  sandbox:
+    runs-on: ubuntu-24.04-arm
+    defaults:
+      run:
+        working-directory: deploy/sandbox
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: deploy/sandbox/.node-version
+          package-manager-cache: false
+      # pnpm は Node 24 同梱の corepack で package.json の packageManager の版を使う (別の Action を足さない)
+      - run: corepack enable
+      # ロックファイルどおり。公開から 7 日未満の版は pnpm-workspace.yaml の minimumReleaseAge で解決されない
+      - run: pnpm install --frozen-lockfile
+      # --frozen-lockfile はロックファイルに既にある版の公開日を見ないので、全パッケージを npm レジストリで確かめる
+      - name: age-gate (依存は公開から 7 日以上)
+        run: pnpm agegate
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm synth
