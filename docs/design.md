@@ -336,7 +336,7 @@ internal/checks/              Check インターフェースと各チェック (
 internal/allowlist/           既知リストの読み書き (approve / expire)
 internal/report/              JSON / Markdown 生成、期間集計 (period.go)。決定: report.json の型は標準ライブラリだけに依存する report/schema に置く (aratam と共有。ADR 0018)
 tools/agegate/                CI 用の依存の age-gate (エンジンには入らない小さな main。決定: internal/ ではなく tools/ に置く。ADR 0017)
-docs/ai/*.md                  LLM 向けの使い方。embed でバイナリに入り `arata help ai [report|approve]` で出る (決定: skills/ の同梱は取りやめ。ADR 0012)
+docs/ai/*.md                  LLM 向けの使い方。embed でバイナリに入り `arata help ai [report|approve|playbook <check>]` で出る (決定: skills/ の同梱は取りやめ。ADR 0012)
 deploy/iam/readonly-role.yaml 顧客に配る読み取りロール + Roles Anywhere 用信頼ポリシーの CloudFormation (決定: 信頼先は AWS の主体と Roles Anywhere のトラストアンカーをパラメータで受ける。action は collector の一覧と Go のテストで一致させる。ADR 0020)
 deploy/sandbox/               試験環境 (sandbox = arata の試験用に条件を整えた開発用アカウント上の環境) の CDK (TypeScript)。Go モジュールとは独立。readonly-role.yaml を CfnInclude で取り込む (ADR 0020)
 deploy/lambda/                Lambda 配備用 CDK or SAM テンプレート (S3 ストア、別アカウント推奨)
@@ -613,6 +613,9 @@ arata は LLM を使わず候補だけを作り、aratam の LLM は候補を文
 - パス・メソッド・ステータス・閾値は設定の `checks:` で顧客ごとに変える (examples/arata.yaml)。既定: sign-in は `POST` で `/users/sign_in`, `/login`, `/signin` へ 401 / 403 / 422、
   機密パスは `/.env`, `/.git/`, `/wp-login.php` などへの 403 / 404。`probe_paths.exclude_paths` で正規の管理画面などを外す。
 
+決定 (対処手順。ADR 0024): チェックごとに `docs/ai/playbooks/<check>.md` (見出しは固定: この指摘の意味 / まず確かめること / 判断の分かれ目 / 対処の選択肢 / やってはいけないこと) を書き、
+`arata help ai playbook <check>` で出す。登録済みのチェックすべてに playbook が要る (テストで固定)。新しいチェックを足すときは playbook も書く。封じ込めは人が判断して実行し、LLM は提案まで。
+
 ## 8. CLI
 
 ```
@@ -629,7 +632,7 @@ arata report    --from 2026-10-01 --to 2026-10-31 --format md|json [--template m
 arata review    [--status open|acked]
 arata approve   <finding-id> --note "..." [--expires date] [--tag deploy] [--by name] [--commit] [--account | --arn-pattern glob]
 arata ack|snooze|resolve <finding-id>        # snooze は --until date
-arata help ai [report|approve] [--format json]   # LLM 向けの使い方 (arata ai と同じ)
+arata help ai [report|approve|playbook [check]] [--format json]   # LLM 向けの使い方 (arata ai と同じ)。playbook はチェックごとの対処手順
 arata prune     [--dry-run]
 arata rebuild                  # raw JSONL から SQLite を再構築
 ```

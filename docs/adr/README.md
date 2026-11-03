@@ -47,3 +47,4 @@
 | [0021](0021-access-denied-check.md) | 拒否された API 呼び出しを events に残し、主体ごとの種類と件数を平常帯と比べる `access_denied` チェックを足す | 採用 |
 | [0022](0022-expected-denied-and-escalation.md) | 想定済みの拒否は allowlist の `expected_denied` で主体 × API の単位で除き、ack / snooze 中でも重大度が上がれば再報告する | 採用 |
 | [0023](0023-waf-review-proposals.md) | WAF の修正提案の候補は arata が規則で作り、report.json の `proposals` に出す (WebACL の設定は `waf-config` のスナップショット) | 採用 |
+| [0024](0024-check-playbooks.md) | チェックごとの対処手順 (playbook) を `docs/ai/playbooks/<check>.md` としてバイナリに埋め込み、全チェックに必須にする | 採用 |

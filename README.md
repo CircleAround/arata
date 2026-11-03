@@ -23,7 +23,7 @@ AWS のログと設定を定期的に改め、**前回から新しく発生し�
 
 ## AI (LLM) から使う
 
-`arata help ai` を最初に読ませる (report の読み方は `arata help ai report`、承認判断は `arata help ai approve`、`--format json` も可)。
+`arata help ai` を最初に読ませる (report の読み方は `arata help ai report`、承認判断は `arata help ai approve`、チェックごとの対処手順は `arata help ai playbook <check>`、`--format json` も可)。
 内容はバイナリに埋め込まれていて、エンジンの版と常に揃う。
 
 ## 通知 (aratam)
