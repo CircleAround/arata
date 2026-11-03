@@ -136,7 +136,7 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
 | `waf_rule_action` | `<WebACL>\|<終了ルール>\|<action>` | 件数。既存の `waf_block` (ルール別) はここから作り、クエリを 1 本減らす |
 | `waf_block_path` / `_ips` | `<WebACL>\|<ルール>[/<グループの中のルール>]\|<method>\|<正規化パス>` | BLOCK の件数 / 異なり IP 数。探索パスは除く。日ごとに上位 `top_paths` (既定 50) |
 | `waf_allow_probe` / `_ips` | `<WebACL>\|<正規化パス>` | 探索パス (probe_paths) への ALLOW の件数 / 異なり IP 数。上位 `top_paths` |
-| `waf_rule_count_match` / `_suspect` | `<WebACL>\|<ルール>` (グループの中は `<ruleGroupId>/<ルール>`) | カウントモードの一致の件数 / そのうち探索パスか、その日 BLOCK された IP (`waf_block_ip`) からの件数 |
+| `waf_rule_count_match` / `_suspect` | `<WebACL>\|<ルール>` (グループの中は `<ruleGroupId>/<ルール>`) | カウントモードの一致の件数 / そのうち探索パスか、その日「BLOCK された IP」(下の決定) からの件数 |
 | `waf_ip_rate_p50` / `_p99` / `_max` | `<WebACL>\|<パスの群>` | 1 IP あたり 5 分間の件数の分布。群は `rate_path_groups` の接頭辞 (最長一致)、どれにも当たらなければ `*` |
 | `waf_position_limit` | `<WebACL>\|<配列の名前>` | 配列の位置の上限を超えた (数え漏れの可能性がある) リクエストの数 |
 
@@ -152,13 +152,17 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
   null でない**最後の**位置のものを採る。前にある COUNT のグループは一致すると `terminatingRule` が null でなくなるが、止めたグループより後ろのグループは評価されないので、最後の 1 つが止めたグループになる。
   番兵 (9 番目のグループ) が埋まっているときは判断できないので、中のルール名を付けずグループ単位にする (安全側)。`parse @message` の正規表現で最初の `terminatingRule` を取る案は、
   前にある COUNT のグループのものを取り違える (実ログで確認) のでやめた
+- 決定 (カウントの一致の suspect の「BLOCK された IP」): 専用のクエリ (保存しない) で、レートベースのルール (`terminatingRuleType` が RATE_BASED)・既定の action (`Default_Action`)・
+  sign-in のパス (`login_bruteforce.paths`) での BLOCK を除いた BLOCK の IP を日ごとに取る。正規の利用者も一時的にレート制限に当たり得て (決済などリクエストが多いのが仕様の画面がある)、
+  それを「悪い IP」とみなすと正規の利用者に当たる COUNT ルールを BLOCK に上げる提案をしかねない (危ない方向に間違える)。sandbox で、/login のレート制限で止まった 1 IP のせいで
+  COUNT の一致が 100% suspect になって判明した。候補の evidence に `suspect_blocked_ip_excludes` (除いた BLOCK) を残す
 - 決定 (1 IP あたりの件数): `stats count(*) as n by bin(5m), acl, grp, ip | stats pct(n, 50), pct(n, 99), max(n) by acl, grp` を UTC の 1 日ずつ流す (2 段目で日を切る書き方に頼らない。
   1 日ずつでもスキャン量は同じ)。2 段の stats と pct は sandbox で確認済み
 - 決定: `checks.waf_review.trusted_cidrs` (監視・開発会社など) は `isIpInSubnet` で `waf_rule_action` 以外の新しい集計から外す (`waf_rule_action` は「使われていないルール」の判定に使うので外さない)。
   `top_paths` / `rate_path_groups` / `trusted_cidrs` は集計条件なので overrides では変えられない
 - 決定 (`strip_path_prefix`): API Gateway の REST API では `httpRequest.uri` の前にステージ名が付く (`/prod/login`。sandbox で確認。ALB・CloudFront では付かない)。
   wafv2 ソースの `strip_path_prefix` (`/` で始まり `/` で終わらない) を、探索パス・パスの群の判定では必須の接頭辞として正規表現の前に付け、正規化の前に外す (`/prod` は `/prod/x` と `/prod` だけを外し、`/products` は外さない)。集計条件
-- 費用: wafv2 ソースのクエリは lines + `waf_block_ip` + 4 本 + レート (日数分)。既存の `max_scan_gb` がそのまま効く (超えたら QUERY_LIMIT で、その日の集計は欠ける)。
+- 費用: wafv2 ソースのクエリは lines + `waf_block_ip` + 5 本 + レート (日数分)。既存の `max_scan_gb` がそのまま効く (超えたら QUERY_LIMIT で、その日の集計は欠ける)。
   sandbox の 1 時間・約 300 リクエストのログで 1 本 0.3〜0.5 MB
 
 ### 2-1. 形式プロファイルの種類 (JSON ログと非 JSON ログ)
@@ -559,7 +563,7 @@ arata は LLM を使わず候補だけを作り、aratam の LLM は候補を文
 | 候補 (`kind`) | 段階 (`stage`) | 条件 (閾値はすべて `checks.waf_review`) |
 |---|---|---|
 | `false_positive` (誤検知の疑い) | count_first | 探索パスではない正規化パスで、ルールの BLOCK の異なり IP (日ごとの最大) が `min_distinct_ips` (10) 以上。`finding_distinct_ips` (50) 以上は low の finding にも (key `false_positive\|<WebACL>\|<ルール>\|<method> <path>`、state 型) |
-| `count_to_block` (BLOCK に上げてよいカウントルール) | block | COUNT のルール (グループ全体の COUNT、グループの中の COUNT の上書きを含む) が直近 `count_days` (14) 日すべてで一致し、合計 `count_min_matches` (100) 件以上、そのうち探索パスか BLOCK された IP からが `count_ratio` (0.95) 以上 |
+| `count_to_block` (BLOCK に上げてよいカウントルール) | block | COUNT のルール (グループ全体の COUNT、グループの中の COUNT の上書きを含む) が直近 `count_days` (14) 日すべてで一致し、合計 `count_min_matches` (100) 件以上、そのうち探索パスか、レート制限・既定の action・sign-in のパス以外で BLOCK された IP からが `count_ratio` (0.95) 以上 |
 | `probe_allowed` (すり抜けている探索) | count_first | 探索パスへの ALLOW が直近 `days` (7) 日で `min_count` (10) 件以上 (WebACL ごとに 1 件、パスは上位 10) |
 | `rate_limit_missing` (レート制限の不足) | count_first | パスの群を受け持つレートベースのルールが無く、5 分あたりの最大が p99 の `rate_factor` (10) 倍超え、かつ提案する limit より大きい。limit = max(p99 × `rate_margin` (3), `rate_floor` (100)) |
 | `rate_limit_loose` / `rate_limit_tight` | review | 受け持つルールが 1 つで解釈できるとき、limit (5 分あたりに換算) が観測の最大の `rate_loose_factor` (10) 倍より高い / 観測の p99 より低い |

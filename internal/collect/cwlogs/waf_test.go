@@ -54,7 +54,7 @@ func TestWAFQueries(t *testing.T) {
 	for _, q := range qs {
 		names = append(names, q.Name)
 	}
-	if strings.Join(names, ",") != "waf_rule_action,waf_block_path,waf_allow_probe,waf_rule_count_match,waf_ip_rate" {
+	if strings.Join(names, ",") != "waf_rule_action,waf_block_path,waf_allow_probe,waf_suspect_block_ip,waf_rule_count_match,waf_ip_rate" {
 		t.Fatalf("names: %v", names)
 	}
 	acl := `| parse webaclId /webacl\/(?<acl>[^\/]+)\//`
@@ -90,7 +90,7 @@ func TestWAFQueries(t *testing.T) {
 		!strings.Contains(ap, "by bin(1d) as day, acl, path, ip") {
 		t.Fatalf("allow probe: %s", ap)
 	}
-	cm := qs[3].Query
+	cm := qs[4].Query
 	for _, want := range []string{
 		"ispresent(nonTerminatingMatchingRules.0.ruleId) or ispresent(nonTerminatingMatchingRules.1.ruleId)",
 		"ispresent(ruleGroupList.7.nonTerminatingMatchingRules.0.ruleId)",
@@ -103,7 +103,16 @@ func TestWAFQueries(t *testing.T) {
 			t.Fatalf("count query lacks %q:\n%s", want, cm)
 		}
 	}
-	rate := qs[4]
+	sb := qs[3].Query
+	for _, want := range []string{
+		`filter action = "BLOCK" and terminatingRuleType != "RATE_BASED" and rule != "Default_Action" and path not in ["/users/sign_in"] and ` + trusted,
+		"| stats count(*) as waf_suspect_block_ip by bin(1d) as day, ip",
+	} {
+		if !strings.Contains(sb, want) {
+			t.Fatalf("suspect block ip query lacks %q:\n%s", want, sb)
+		}
+	}
+	rate := qs[5]
 	// 長い接頭辞を先に (最長一致)
 	if !rate.PerDay || !strings.Contains(rate.Query, `| parse path /^(?<grp>\/api\/v2\/|\/login|\/api\/)/`) ||
 		!strings.Contains(rate.Query, "| stats count(*) as n by bin(5m) as t, acl, grp, ip\n| stats pct(n, 50) as waf_ip_rate_p50, pct(n, 99) as waf_ip_rate_p99, max(n) as waf_ip_rate_max by acl, grp") {
@@ -121,6 +130,12 @@ func wafFake() *cwlogstest.Fake {
 	f.On("as waf_block_ip", cwlogstest.Response{Rows: []map[string]string{
 		row("day", day, "ip", "198.51.100.7", "waf_block_ip", "50"),
 		row("day", day, "ip", "198.51.100.8", "waf_block_ip", "1"),
+		row("day", day, "ip", "198.51.100.20", "waf_block_ip", "40"), // レート制限だけで BLOCK された
+	}})
+	// 「BLOCK された IP」はレートベースのルール・既定の action・sign-in のパスでの BLOCK を除く (クエリ側で除く)
+	f.On("as waf_suspect_block_ip", cwlogstest.Response{Rows: []map[string]string{
+		row("day", day, "ip", "198.51.100.7", "waf_suspect_block_ip", "50"),
+		row("day", day, "ip", "198.51.100.8", "waf_suspect_block_ip", "1"),
 	}})
 	f.On("as waf_rule_action", cwlogstest.Response{Rows: []map[string]string{
 		row("day", day, "acl", "prod-waf", "rule", "AWS-AWSManagedRulesCommonRuleSet", "action", "BLOCK", "waf_rule_action", "30"),
@@ -156,6 +171,8 @@ func wafFake() *cwlogstest.Fake {
 		row("day", day, "acl", "prod-waf", "nonTerminatingMatchingRules.0.ruleId", "count-geo",
 			"ruleGroupList.0.ruleGroupId", "AWS#AWSManagedRulesCommonRuleSet", "ruleGroupList.0.nonTerminatingMatchingRules.0.ruleId", "SizeRestrictions_BODY",
 			"ip", "198.51.100.8", "waf_rule_count_match", "4"),
+		// レート制限だけで BLOCK された IP (正規の利用者かもしれない) からの一致は suspect にしない
+		row("day", day, "acl", "prod-waf", "nonTerminatingMatchingRules.0.ruleId", "count-login", "ip", "198.51.100.20", "waf_rule_count_match", "9"),
 		// 正規の IP から。探索パスの除外に当たる
 		row("day", day, "acl", "prod-waf", "nonTerminatingMatchingRules.0.ruleId", "AWS-AWSManagedRulesKnownBadInputsRuleSet", "probe", "/.env", "probe_ex", "/.env.example", "ip", "192.0.2.1", "waf_rule_count_match", "2"),
 	}})
@@ -230,8 +247,8 @@ func TestCollectWAF(t *testing.T) {
 		aws.ToInt64(rate[1].StartTime) != time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC).Unix() || aws.ToInt64(rate[1].EndTime) != now.Unix()-1 {
 		t.Fatalf("rate queries: %+v", rate)
 	}
-	// waf_block は別のクエリを流さない (lines + waf_block_ip + 4 本 + レート 2 日)
-	if len(f.Started) != 8 {
+	// waf_block は別のクエリを流さない (lines + waf_block_ip + 5 本 + レート 2 日)
+	if len(f.Started) != 9 {
 		t.Fatalf("queries: %d", len(f.Started))
 	}
 	if len(c.FormatStats().Truncated) != 0 {
@@ -263,9 +280,12 @@ func TestCollectWAFStripPathPrefix(t *testing.T) {
 	qs := WAFQueries(p, wafChecks())
 	if !strings.Contains(qs[1].Query, `path not like /^\/sandbox(\/\.env|\/wp-login\.php)/`) ||
 		!strings.Contains(qs[2].Query, `path like /^\/sandbox(\/\.env|\/wp-login\.php)/`) ||
-		!strings.Contains(qs[3].Query, `| parse path /^\/sandbox(?<probe>\/\.env|\/wp-login\.php)/`) ||
-		!strings.Contains(qs[4].Query, `| parse path /^\/sandbox(?<grp>\/api\/v2\/|\/login|\/api\/)/`) {
-		t.Fatalf("queries:\n%s\n%s\n%s\n%s", qs[1].Query, qs[2].Query, qs[3].Query, qs[4].Query)
+		!strings.Contains(qs[4].Query, `| parse path /^\/sandbox(?<probe>\/\.env|\/wp-login\.php)/`) ||
+		!strings.Contains(qs[5].Query, `| parse path /^\/sandbox(?<grp>\/api\/v2\/|\/login|\/api\/)/`) {
+		t.Fatalf("queries:\n%s\n%s\n%s\n%s", qs[1].Query, qs[2].Query, qs[4].Query, qs[5].Query)
+	}
+	if !strings.Contains(qs[3].Query, `path not in ["/sandbox/users/sign_in"]`) {
+		t.Fatalf("suspect: %s", qs[3].Query)
 	}
 	f := wafFake()
 	f.On("as waf_allow_probe", cwlogstest.Response{Rows: []map[string]string{row("day", "2026-10-21 00:00:00.000", "acl", "prod-waf", "path", "/sandbox/.env", "ip", "198.51.100.9", "waf_allow_probe", "3")}})

@@ -177,7 +177,8 @@ func TestWAFReview(t *testing.T) {
 		t.Fatalf("12 IP は finding にしない: %+v", byKind["false_positive"][1])
 	}
 	cb := byKind["count_to_block"][0]
-	if cb.Stage != StageBlock || cb.Evidence["matching_days"] != 14 || cb.Evidence["matches"] != 280.0 || cb.Evidence["suspect_ratio"] != 1.0 {
+	if cb.Stage != StageBlock || cb.Evidence["matching_days"] != 14 || cb.Evidence["matches"] != 280.0 || cb.Evidence["suspect_ratio"] != 1.0 ||
+		cb.Evidence["suspect_blocked_ip_excludes"] != "rate_based_rules,default_action,sign_in_paths" || !strings.Contains(cb.Summary, "レート制限以外で BLOCK") {
 		t.Fatalf("count: %+v", cb)
 	}
 	pa := byKind["probe_allowed"][0]

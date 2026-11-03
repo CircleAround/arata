@@ -23,6 +23,8 @@ arata は LLM を使わず (ADR 0001)、aratam は判定を LLM に任せない 
 - weekly のチェック `waf_review` が、保存済みの日次集計と設定から 6 種類の候補 (誤検知の疑い・BLOCK に上げてよいカウントルール・すり抜けている探索・レート制限の不足 / 値の見直し・
   使われていないルール) を作り、report.json の新しい節 `proposals` に出す。**finding ではない** (差分判定に乗せず、毎週その時点の候補を出す)。
   重大な候補 (正規の画面で多数の IP が BLOCK された誤検知の疑い) だけ low の finding にもする
+- 「BLOCK に上げてよいカウントルール」の根拠の「BLOCK された IP」は、レートベースのルール・既定の action・sign-in のパスでの BLOCK を除いたものに限る
+  (正規の利用者も一時的にレート制限に当たり得る。sandbox で、レート制限で止まった IP のせいで COUNT の一致が 100% 不審と数えられた)
 - 閾値と、利用者ごとの事情 (`trusted_cidrs` = 正規の送信元、`expected_high_rate_paths` = リクエストが多いのが仕様のパス) は `checks.waf_review` の設定 (雛形と `config init --diff` に出る。ADR 0014)。
   集計に効くもの (`top_paths` / `rate_path_groups` / `trusted_cidrs`、ソースの `strip_path_prefix`) は集計条件で、overrides では変えられない
 - **迷ったら提案しない**。設定と突き合わせられない・scope-down を解釈できない・データの日数が足りないときは提案しない。
@@ -57,7 +59,7 @@ arata は LLM を使わず (ADR 0001)、aratam は判定を LLM に任せない 
 ## 結果 (良い点・引き受けるコスト)
 
 - 良い点: 提案は規則と数字で再現でき、テストで固定できる。通知に生の値が出ない。利用者の事情は設定で表せる。提案できないときも不審な事実は残る
-- コスト: daily の wafv2 のクエリが 3 本から lines + 6 本 (レートは日数分) に増える (`max_scan_gb` は効く)。既に配った読み取りロールには wafv2 の 4 つを足す必要がある
+- コスト: daily の wafv2 のクエリが 3 本から lines + 7 本 (レートは日数分) に増える (`max_scan_gb` は効く)。既に配った読み取りロールには wafv2 の 4 つを足す必要がある
   (足さなければ waf-config だけが ACCESS_DENIED になり、waf_review が skip される)。配列の位置の上限 (トップレベル 3、グループ 8) を超えた一致は数え漏れる。
   ログの JSON の形 (配列の並び、`terminatingRuleType`) に依存するので、AWS が形を変えたら sandbox で確かめ直す
 - aratam の Slack の節 (none の書式と LLM の書き起こし) は後続。それまでは report.json と report.md に出るだけ

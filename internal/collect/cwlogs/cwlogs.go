@@ -234,7 +234,6 @@ func (c *Collector) Collect(ctx context.Context, w collect.Window, sink collect.
 	if c.stats.Total == 0 {
 		return nil
 	}
-	blocked := map[string]map[string]bool{} // 日 → BLOCK された IP (waf_rule_count_match の判定に使う)
 	for _, a := range c.aggs {
 		rows, err := c.Query(ctx, AggregateQuery(c.prof, a), from, to)
 		c.stats.BytesScanned = c.scanned
@@ -250,19 +249,13 @@ func (c *Collector) Collect(ctx context.Context, w collect.Window, sink collect.
 			if !ok {
 				continue
 			}
-			if a.Metric == MetricWAFBlockIP {
-				if blocked[day] == nil {
-					blocked[day] = map[string]bool{}
-				}
-				blocked[day][r["ip"]] = true
-			}
 			if err := sink.Emit(ctx, c.metric(day, a.Metric, Mask(r[a.KeyField]), num(r[a.Metric]))); err != nil {
 				return err
 			}
 		}
 	}
 	if c.prof.Yields == record.KindWAFAction {
-		return c.collectWAF(ctx, from, to, blocked, sink)
+		return c.collectWAF(ctx, from, to, sink)
 	}
 	return nil
 }

@@ -410,7 +410,9 @@ func (r *reviewer) countToBlock(ctx context.Context) error {
 			cr := rules[id]
 			p := r.proposal(ProposalCountToBlock, StageBlock, acl)
 			p.Rule, p.RuleInGroup = cr.rule, cr.inner
-			p.Evidence = map[string]any{"matching_days": t.days, "count_days": cfg.CountDays, "matches": t.sum, "suspect_matches": s, "suspect_ratio": ratio}
+			// suspect = 探索パスか、同じ日にレートベース以外のルールで BLOCK された IP からの一致 (既定の action と sign-in のパスの BLOCK も除く)
+			p.Evidence = map[string]any{"matching_days": t.days, "count_days": cfg.CountDays, "matches": t.sum, "suspect_matches": s, "suspect_ratio": ratio,
+				"suspect_blocked_ip_excludes": cwlogs.SuspectBlockExcludes}
 			label := cr.rule
 			if cr.inner != "" {
 				label += " の " + cr.inner
@@ -421,7 +423,7 @@ func (r *reviewer) countToBlock(ctx context.Context) error {
 			case t.days < cfg.CountDays || t.sum < cfg.CountMinMatches:
 				o := r.observation(ProposalCountToBlock, ReasonBelowThreshold, acl)
 				o.Rule, o.RuleInGroup, o.Evidence = p.Rule, p.RuleInGroup, p.Evidence
-				o.Summary = fmt.Sprintf("%s: COUNT の %s の一致の %.0f%% が探索パスか BLOCK された IP から (%.0f 件)。一致した日数 %d / %d 日 (または件数が count_min_matches 未満) のため、まだ BLOCK を提案しない",
+				o.Summary = fmt.Sprintf("%s: COUNT の %s の一致の %.0f%% が探索パスか、レート制限以外で BLOCK された IP から (%.0f 件)。一致した日数 %d / %d 日 (または件数が count_min_matches 未満) のため、まだ BLOCK を提案しない",
 					acl, label, ratio*100, t.sum, t.days, cfg.CountDays)
 				notes = append(notes, o)
 			default:
@@ -431,7 +433,7 @@ func (r *reviewer) countToBlock(ctx context.Context) error {
 				} else if a.rules[cr.rule].String("type") == account.WAFRuleManagedGroup || a.rules[cr.rule].String("type") == account.WAFRuleGroup {
 					how = "グループの OverrideAction を COUNT から None にする (BLOCK に上げる)"
 				}
-				p.Summary = fmt.Sprintf("%s: COUNT の %s が %d 日続けて一致し、一致 %.0f 件の %.0f%% が探索パスか BLOCK された IP から。%s", acl, label, t.days, t.sum, ratio*100, how)
+				p.Summary = fmt.Sprintf("%s: COUNT の %s が %d 日続けて一致し、一致 %.0f 件の %.0f%% が探索パスか、レート制限以外で BLOCK された IP から。%s", acl, label, t.days, t.sum, ratio*100, how)
 				props = append(props, p)
 			}
 		}

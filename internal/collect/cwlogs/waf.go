@@ -29,13 +29,19 @@ const (
 	MetricWAFAllowProbe        = "waf_allow_probe"              // key = <WebACL>|<正規化パス> (許可された探索の件数)
 	MetricWAFAllowProbeIPs     = "waf_allow_probe_ips"          // 同じ key の異なり IP 数
 	MetricWAFCountMatch        = "waf_rule_count_match"         // key = <WebACL>|<ルール> (カウントモードの一致)
-	MetricWAFCountMatchSuspect = "waf_rule_count_match_suspect" // 同じ key のうち探索パスか、その日 BLOCK された IP からの一致
+	MetricWAFCountMatchSuspect = "waf_rule_count_match_suspect" // 同じ key のうち探索パスか、その日 BLOCK された IP (suspectBlockIP) からの一致
 	MetricWAFIPRateP50         = "waf_ip_rate_p50"              // key = <WebACL>|<パスの群> (1 IP あたり 5 分間の件数)
 	MetricWAFIPRateP99         = "waf_ip_rate_p99"
 	MetricWAFIPRateMax         = "waf_ip_rate_max"
 	// MetricWAFPositionLimit は配列の位置の上限を超えた (それより後ろを数えていない) リクエストの数。key = <WebACL>|<配列の名前>
 	MetricWAFPositionLimit = "waf_position_limit"
 )
+
+// suspectBlockIP は「BLOCK された IP」の集計の名前 (保存しない)。
+const suspectBlockIP = "waf_suspect_block_ip"
+
+// SuspectBlockExcludes は suspect の「BLOCK された IP」から除く BLOCK (evidence に残す)。
+const SuspectBlockExcludes = "rate_based_rules,default_action,sign_in_paths"
 
 // RateGroupOther は rate_path_groups のどれにも当たらないパスの群の名前。
 const RateGroupOther = "*"
@@ -122,10 +128,26 @@ func WAFQueries(p Profile, c config.Checks) []WAFQuery {
 		"\n| stats count(*) as n by bin(5m) as t, acl, grp, ip" +
 		"\n| stats pct(n, 50) as " + MetricWAFIPRateP50 + ", pct(n, 99) as " + MetricWAFIPRateP99 + ", max(n) as " + MetricWAFIPRateMax + " by acl, grp"
 
+	// カウントの一致の suspect に使う「BLOCK された IP」。
+	// 決定 (ADR 0023): レートベースのルール・既定の action・sign-in のパスでの BLOCK は数えない。正規の利用者も一時的にレート制限に当たり得て
+	// (決済などリクエストが多いのが仕様の画面がある)、それを「悪い IP」とみなすと正規の利用者に当たる COUNT ルールを BLOCK に上げる提案をしかねないため
+	// (sandbox で、レート制限で止まった 1 IP のせいで COUNT の一致が 100% suspect になった)。metrics には保存しない
+	signIn := make([]string, len(c.LoginBruteforce.Paths))
+	for i, sp := range c.LoginBruteforce.Paths {
+		signIn[i] = p.StripPrefix + sp
+	}
+	notSignIn := ""
+	if len(signIn) > 0 {
+		notSignIn = "path not in [" + strings.Join(quoteAll(signIn), ", ") + "]"
+	}
+	suspectIP := head + filter(`action = "BLOCK"`, `terminatingRuleType != "RATE_BASED"`, `rule != "Default_Action"`, notSignIn, trusted) +
+		"\n| stats count(*) as " + suspectBlockIP + " by bin(1d) as day, ip" + tail(suspectBlockIP)
+
 	return []WAFQuery{
 		{Name: MetricWAFRuleAction, Query: ruleAction},
 		{Name: MetricWAFBlockPath, Query: blockPath},
 		{Name: MetricWAFAllowProbe, Query: allowProbe},
+		{Name: suspectBlockIP, Query: suspectIP},
 		{Name: MetricWAFCountMatch, Query: count},
 		{Name: "waf_ip_rate", Query: rate, PerDay: true},
 	}
@@ -268,8 +290,9 @@ func (c *Collector) emitTop(ctx context.Context, sink collect.RecordSink, a path
 	return nil
 }
 
-// collectWAF は waf_review 用の集計を流して metric を出す。blocked は日 → その日 BLOCK された IP (waf_block_ip の結果)。
-func (c *Collector) collectWAF(ctx context.Context, from, to time.Time, blocked map[string]map[string]bool, sink collect.RecordSink) error {
+// collectWAF は waf_review 用の集計を流して metric を出す。
+func (c *Collector) collectWAF(ctx context.Context, from, to time.Time, sink collect.RecordSink) error {
+	blocked := map[string]map[string]bool{} // 日 → BLOCK された IP (suspectBlockIP)
 	wr := c.checks.WAFReview
 	limits := dayCounts{} // 位置の上限を超えたリクエストの数 (waf_position_limit)
 	for _, q := range WAFQueries(c.prof, c.checks) {
@@ -359,6 +382,15 @@ func (c *Collector) collectWAF(ctx context.Context, from, to time.Time, blocked 
 			}
 			if err := c.emitTop(ctx, sink, agg, wr.TopPaths, MetricWAFAllowProbe, MetricWAFAllowProbeIPs); err != nil {
 				return err
+			}
+		case suspectBlockIP:
+			for _, r := range rows {
+				if day, ok := parseDay(r["day"]); ok {
+					if blocked[day] == nil {
+						blocked[day] = map[string]bool{}
+					}
+					blocked[day][r["ip"]] = true
+				}
 			}
 		case MetricWAFCountMatch:
 			if err := c.emitCountMatches(ctx, rows, blocked, limits, sink); err != nil {
