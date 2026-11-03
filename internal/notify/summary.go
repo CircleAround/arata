@@ -334,8 +334,9 @@ func oneLine(s string) string {
 }
 
 // SystemPrompt は LLM に渡す system。出力の契約と、arata が `arata help ai report` で出すのと同じ文書 (docs/ai/report.md)。
+// context は利用者が書いた「この監査対象の前提」(空なら足さない。ADR 0024)。
 // 決定: 期間レポート用の文書は足さない。docs/ai/report.md の「期間レポート」の節で足りるため (aratam 設計書 8 章の未決を閉じる)。
-func SystemPrompt(kind string) string {
+func SystemPrompt(kind, context string) string {
 	t, err := ai.Lookup("report")
 	if err != nil {
 		panic(err) // 埋め込んだ文書なので起きない
@@ -366,5 +367,5 @@ func SystemPrompt(kind string) string {
 
 ---
 
-%s`, input, t.Markdown())
+%s%s`, input, t.Markdown(), contextSection(context))
 }

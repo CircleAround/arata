@@ -20,6 +20,8 @@ type fakeLLM struct {
 	calls     int
 	system    string
 	report    []byte
+	systems   []string // 呼び出しごとの system と入力 (要約と提案の書き起こしで別の呼び出しになる)
+	inputs    [][]byte
 }
 
 func (f *fakeLLM) Summarize(ctx context.Context, system string, report []byte) ([]byte, error) {
@@ -27,6 +29,7 @@ func (f *fakeLLM) Summarize(ctx context.Context, system string, report []byte) (
 	i := min(f.calls, len(f.responses)-1)
 	f.calls++
 	f.system, f.report = system, report
+	f.systems, f.inputs = append(f.systems, system), append(f.inputs, report)
 	resp := f.responses[i]
 	f.mu.Unlock()
 	switch resp {

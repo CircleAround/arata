@@ -412,8 +412,8 @@ func TestMarkNotifiedFailureKeepsExit(t *testing.T) {
 	}
 }
 
-// arata が report.json に足した節 (proposals) や、この aratam が知らない節があっても止まらず、今の通知は変わらない (ADR 0018・0023)。
-// proposals を Slack に出すのは段階 3 (aratam の提案の節)。
+// arata が report.json に足した節 (proposals) や、この aratam が知らない節があっても止まらず、本文の通知は変わらない (ADR 0018・0023)。
+// proposals は 2 通目として通常用に送る (ADR 0024。proposals_test.go)。
 func TestUnknownSectionsAreIgnored(t *testing.T) {
 	base := inputDir(t, golden(t, "report.json"), string(golden(t, "report.md")))
 	s0 := &fakeSender{}
@@ -429,7 +429,7 @@ func TestUnknownSectionsAreIgnored(t *testing.T) {
 	dir := inputDir(t, marshal(t, m), string(golden(t, "report.md")))
 	s := &fakeSender{}
 	res, _ := run(t, dir, s)
-	if res.Exit != ExitOK || !res.Sent || len(s.got) != 1 {
+	if res.Exit != ExitOK || !res.Sent || len(s.got) != 2 {
 		t.Fatalf("%+v %+v", res, s.got)
 	}
 	if got, want := strings.ReplaceAll(s.got[0].text, dir, "<dir>"), strings.ReplaceAll(s0.got[0].text, base, "<dir>"); got != want {

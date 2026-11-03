@@ -13,6 +13,7 @@ llm:
   profile: ""                     # bedrock: AWS の名前付きプロファイル。空なら標準の認証チェーン
   timeout: 120s                   # LLM 呼び出し 1 回の時間切れ。失敗時の再試行は 1 回まで
   command: ""                     # claude-cli: claude の実行ファイル。空なら PATH から探す (cron の PATH が狭いなら絶対パスで書く)
+  context_file: ""                # この監査対象の前提 (Markdown。決済画面はリクエストが多い、など) のパス。LLM に参考として渡す。空なら使わない。相対パスは設定ファイル基準。16 KiB まで
 
 slack:
   webhook_env: ARATAM_SLACK_WEBHOOK                 # 通常用の Webhook URL を入れる環境変数の名前。URL は設定ファイルに書かない

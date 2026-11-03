@@ -1,4 +1,4 @@
-# 0024. チェックごとの対処手順 (playbook) を `docs/ai/playbooks/<check>.md` としてバイナリに埋め込み、全チェックに必須にする
+# 0025. チェックごとの対処手順 (playbook) を `docs/ai/playbooks/<check>.md` としてバイナリに埋め込み、全チェックに必須にする
 
 - 日付: 2026-11-03
 - 状態: 採用 (ADR 0012 の `arata help ai` にトピックを足す)
