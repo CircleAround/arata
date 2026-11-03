@@ -7,6 +7,7 @@
 allowlist で承認済みの主体でも出る (承認は「居ること」を認めるもので、権限を探ってよいという意味ではない)。
 
 - Key は主体の ARN。サービス主体とルートは対象外
+- サービスリンクロール (ARN が `:role/aws-service-role/` を含む) は数えない (AWS が権限を決める仕様由来のノイズで、利用者は直せないため)
 - data: `principal`、`principal_kind`、`allowlist_status`、`external_account`、`threshold` (`breadth` / `volume`)、`distinct_apis`、`count`、
   `apis` (件数の多い順に最大 10。`iam:ListUsers × 3`)、`error_codes`、`ips`、`baseline_median_count` / `baseline_median_distinct`、
   `expected_denied_excluded` (想定済みとして数えなかった件数)、`escalated_from_suppressed` (ack / snooze 中に重大度が上がった)
