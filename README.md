@@ -261,7 +261,7 @@ Logs Insights の集計クエリで日次集計 (IP 別の sign-in 失敗数な�
   解釈率が `expected_match_rate` (既定 0.8) 未満なら形式の指定 (`format` / `fields` / `regex` / `stream_prefix`) を見直す
 - 集計クエリは窓に重なる UTC 日の 0 時から引くので、1 回のスキャンは最大で窓 + 24h 分。`max_scan_gb` でソースごとに上限を付けられる (超えたら `QUERY_LIMIT`)
 - WAF のログ (wafv2) は大きく、集計クエリも多い (範囲 10 本分)。`arata doctor` の `cost` の行に 1 日・30 日の概算と `max_scan_gb` の推奨値が出るので、必ず `max_scan_gb` を設定する
-  (`--measure-scan` で 1 日のスキャン量を実測できる。1 日分のスキャンの費用がかかる)
+  (1 日のスキャン量は直近 24h の集計で実測するので、doctor 1 回で 1 日分の読み取りの費用がかかる。`--no-measure-scan` で推定に切り替えられるが少なく出る)
 - 1 つの WebACL を本番と staging の資源が共有しているなら、wafv2 のソースの `resources` (ログの `httpSourceId`。glob 可) で本番だけを集計する。
   doctor が WebACL の資源と突き合わせる。絞ってもスキャン量 (費用) は減らない
 - hourly プロファイルに `login_bruteforce` などを入れなければ hourly では Insights を回さない

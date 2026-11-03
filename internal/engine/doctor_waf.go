@@ -25,23 +25,25 @@ const maxScanMargin = 1.5
 // wafCost は wafv2 のソースの Insights の費用を見積もり、max_scan_gb が無ければ warn にする (ADR 0028)。
 //
 // 決定:
-//   - 1 日のログの量は、解釈率のサンプルのクエリ (直近 --window) のスキャン量から推定する (追加の費用なし)。
-//     --measure-scan なら直近 24h に解釈率の集計 (stats) を流して実測する (1 日分のスキャンの費用がかかる)
+//   - 1 日のログの量は、直近 24h に解釈率の集計 (stats) を流して実測する (1 日分のスキャンの費用がかかる。実測した範囲・読み取り量・その費用を出す)。
+//     --no-measure-scan なら解釈率のサンプルのクエリ (直近 --window) のスキャン量から推定する (追加の費用なし。sandbox で約 75% に少なく出た)
 //   - 1 回の run のスキャン = 1 日の量 × 範囲の日数 × クエリの本数。範囲は窓 + ingest_delay + 日の頭への寄せ (最大 24h) で、上限側で見積もる
 //   - プロファイルごとに、wafv2 を引くプロファイル (チェックが waf_action を必要とする) だけを、1 日の run 数 (24h / 窓) を掛けて足す
 func (d *doctor) wafCost(ctx context.Context, src config.Source, c *cwlogs.Collector) {
 	var daily float64
 	how := ""
-	if d.opts.MeasureScan {
+	if !d.opts.EstimateScan {
 		before := c.Scanned()
 		if _, err := c.Query(ctx, cwlogs.LinesQuery(c.Profile()), d.now.Add(-24*time.Hour), d.now); err != nil {
 			d.addErr(src, "cost", err)
 			return
 		}
-		daily, how = c.Scanned()-before, "直近 24h に解釈率の集計を流した実測"
+		daily = c.Scanned() - before
+		how = fmt.Sprintf("実測: 直近 24h (%s〜%s UTC) に解釈率の集計を流し、読み取り %.2f GB、その費用 約 %.2f USD", d.now.Add(-24*time.Hour).UTC().Format("01-02 15:04"),
+			d.now.UTC().Format("01-02 15:04"), daily/1e9, daily/1e9*InsightsUSDPerGB)
 	} else if d.window > 0 {
 		daily = c.Scanned() * float64(24*time.Hour) / float64(d.window)
-		how = fmt.Sprintf("解釈率のサンプルのクエリの直近 %s のスキャン量から推定。少なく出る疑いがあれば --measure-scan で実測する", d.window)
+		how = fmt.Sprintf("推定: 解釈率のサンプルのクエリの直近 %s のスキャン量から。少なく出ることがある (sandbox で約 75%%)", d.window)
 	}
 	n := c.QueryCount()
 	var parts []string

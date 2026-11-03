@@ -114,9 +114,10 @@ func Doctor(ctx context.Context, cfg *config.Config, deps Deps, window time.Dura
 
 // DoctorOptions は doctor の任意の動き。
 type DoctorOptions struct {
-	// MeasureScan は wafv2 のソースの 1 日のスキャン量を、直近 24h に解釈率の集計 (stats) を流して実測する (1 日分のスキャンの費用がかかる)。
-	// false なら解釈率のサンプルのクエリのスキャン量から推定する (追加の費用なし。ADR 0028)。
-	MeasureScan bool
+	// EstimateScan は wafv2 のソースの 1 日のスキャン量を、解釈率のサンプルのクエリのスキャン量から推定する (追加の費用なし)。
+	// 既定 (false) は直近 24h に解釈率の集計 (stats) を流して実測する (1 日分のスキャンの費用がかかる)。
+	// 決定 (ADR 0028): sandbox で sort+limit のスキャン量は stats の約 75% に少なく出た (途中で読むのをやめることがある) ので、実測を既定にする。
+	EstimateScan bool
 }
 
 type doctor struct {

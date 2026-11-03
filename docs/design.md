@@ -753,7 +753,8 @@ arata rebuild                  # raw JSONL から SQLite を再構築
   posture = `cloudtrail:DescribeTrails`・`GetTrailStatus`、`guardduty:ListDetectors`・`GetDetector`、`iam:GetAccountSummary`・`GetAccountPasswordPolicy`、`s3:GetAccountPublicAccessBlock`、
   waf-config = `wafv2:ListWebACLs`・`GetWebACL`・`GetLoggingConfiguration`・`ListResourcesForWebACL` (決定: ADR 0023。WebACL があれば最初の 1 つで残りを試す)。
   doctor の `queries` は wafv2 の新しい集計のクエリも構文検査する。`check` の warn は waf_review が読む日次集計の元 (wafv2 ソース) が無いときも出す。
-- 決定 (ADR 0028): wafv2 のソースには `cost` の行を出す。1 日のログの量 (解釈率のサンプルのクエリのスキャン量を 24h に換算。`--measure-scan` なら直近 24h に解釈率の集計を流して実測) ×
+- 決定 (ADR 0028): wafv2 のソースには `cost` の行を出す。1 日のログの量 (直近 24h に解釈率の集計を流して実測。実測した範囲・読み取り量・その費用も出す。`--no-measure-scan` なら解釈率のサンプルのクエリのスキャン量を 24h に換算した推定。
+  sort+limit のスキャン量は sandbox で約 75% に少なく出たので推定は既定にしない) ×
   範囲 (窓 + ingest_delay + 24h) × クエリの本数で 1 回の run を見積もり、wafv2 を引くプロファイルの 1 日の run 数を掛けて、東京の単価 (0.0076 USD/GB) で 1 日・30 日の概算を出す。
   `max_scan_gb` が無い・見積もりより小さいときは warn (推奨値は見積もりの 1.5 倍)。`resources` があれば `resources` の行で、ログの宛先が同じ WebACL の資源と照合する
   (httpSourceId の形は公式文書で食い違うので候補を複数作る。当たらなければ warn。waf-config のソースが無くても読む)

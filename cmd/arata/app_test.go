@@ -341,7 +341,9 @@ func TestDoctorWAF(t *testing.T) {
 		t.Fatalf("resources: %v", res)
 	}
 	cost := got["cost"]
-	for _, want := range []string{"5.00 GB", "直近 24h", "daily", "100.17 GB", "10 本", "0.76 USD", "22.84 USD", "0.0076 USD/GB", "max_scan_gb", "推奨 151"} {
+	// 既定は直近 24h に解釈率の集計 (stats) を流して実測する (sandbox で sort+limit のスキャン量は約 75% に少なく出た。ADR 0028)。
+	// 実測した範囲・読み取り量・その費用も出す
+	for _, want := range []string{"4.00 GB", "実測", "直近 24h", "読み取り 4.00 GB", "約 0.03 USD", "daily", "80.14 GB", "10 本", "0.61 USD", "18.27 USD", "0.0076 USD/GB", "max_scan_gb", "推奨 121"} {
 		if !strings.Contains(cost[1], want) {
 			t.Fatalf("cost lacks %q: %v", want, cost)
 		}
@@ -350,16 +352,16 @@ func TestDoctorWAF(t *testing.T) {
 		t.Fatalf("cost: %v", cost)
 	}
 
-	// max_scan_gb があり、resources がすべて見つかれば ok。--measure-scan は stats を 24h 流して実測する
+	// max_scan_gb があり、resources がすべて見つかれば ok。--no-measure-scan は解釈率のサンプルのスキャン量からの推定 (追加の読み取りなし)
 	c = setup(t, "    max_scan_gb: 200\n")
 	c.acct.WAF.Resources[*c.acct.WAF.WebACLs["REGIONAL|ap-northeast-1"][0].ARN][waftypes.ResourceTypeApplicationLoadBalancer] = append(
 		c.acct.WAF.Resources[*c.acct.WAF.WebACLs["REGIONAL|ap-northeast-1"][0].ARN][waftypes.ResourceTypeApplicationLoadBalancer],
 		"arn:aws:elasticloadbalancing:ap-northeast-1:123456789012:loadbalancer/app/missing-alb/0123456789abcdef")
-	got = rows(t, c, "--measure-scan")
+	got = rows(t, c, "--no-measure-scan")
 	if got["resources"][0] != "ok" {
 		t.Fatalf("resources: %v", got["resources"])
 	}
-	if got["cost"][0] != "ok" || !strings.Contains(got["cost"][1], "4.00 GB") || !strings.Contains(got["cost"][1], "実測") {
+	if got["cost"][0] != "ok" || !strings.Contains(got["cost"][1], "5.00 GB") || !strings.Contains(got["cost"][1], "推定") || strings.Contains(got["cost"][1], "実測") {
 		t.Fatalf("cost: %v", got["cost"])
 	}
 }
