@@ -38,6 +38,8 @@ func (c IAMChanges) Evaluate(ctx context.Context, q store.Query, w collect.Windo
 	}
 	aggs := map[string]*eventAgg{}
 	sev := map[string]Severity{}
+	errs := map[string]int{}
+	codes := map[string]map[string]bool{}
 	for _, e := range evs {
 		if !isIAMChange(e.Name) {
 			continue
@@ -65,14 +67,39 @@ func (c IAMChanges) Evaluate(ctx context.Context, q store.Query, w collect.Windo
 		a.add(e.Time, e.Name, e.IP)
 		if e.ErrorCode != "" {
 			a.extra["has_errors"] = true
+			errs[k]++
+			if codes[k] == nil {
+				codes[k] = map[string]bool{}
+			}
+			codes[k][e.ErrorCode] = true
 		}
 	}
 	obs := map[string]Observation{}
 	for k, a := range aggs {
 		name, _, _ := strings.Cut(k, "|")
-		obs[k] = Observation{Check: c.Name(), Key: k, Severity: sev[k], Data: a.data(),
-			Fingerprint: fingerprint(sev[k], a.ips, a.extra["target"], a.extra["policy_arn"]),
-			Summary:     fmt.Sprintf("IAM 変更 %s: %s → %s (%d 件)", name, a.extra["principal"], a.extra["target"], a.count)}
+		// 決定: 集約した呼び出しがすべてエラーなら、変更は起きていない。「IAM 変更の試行 (拒否)」として報告する
+		// (重大度・Key は変えない)。拒否された呼び出しは requestParameters が記録されず対象が空になるため、表示では「不明」とする。
+		denied := errs[k] > 0 && errs[k] == a.count
+		if len(codes[k]) > 0 {
+			a.extra["error_codes"] = sortedKeys(codes[k])
+		}
+		label, target := "IAM 変更", a.extra["target"].(string)
+		if denied {
+			a.extra["denied"] = true
+			label = "IAM 変更の試行 (拒否)"
+		}
+		if target == "" {
+			target = "不明"
+			if denied {
+				target = "不明 (拒否された呼び出しは内容が記録されない)"
+			}
+		}
+		fp := fingerprint(sev[k], a.ips, a.extra["target"], a.extra["policy_arn"])
+		if denied {
+			fp += "|denied" // 成功が混ざる状態との変化を検出する。成功のみの既存 finding の指紋は変えない
+		}
+		obs[k] = Observation{Check: c.Name(), Key: k, Severity: sev[k], Data: a.data(), Fingerprint: fp,
+			Summary: fmt.Sprintf("%s %s: %s → %s (%d 件)", label, name, a.extra["principal"], target, a.count)}
 	}
 	return sortedObs(obs), nil
 }

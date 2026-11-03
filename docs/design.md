@@ -471,8 +471,10 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 |---|---|---|---|
 | root_usage | event | `<root ARN>\|<ip>` | 重大度 + IP 集合 + MFA の有無 |
 | unknown_assume_role | event | `<caller ARN>-><role ARN>` | 重大度 + IP 集合 + allowlist 状態 (unknown / expired) |
-| iam_changes | event | `<event name>\|<caller ARN>\|<対象>` | 重大度 + IP 集合 + 対象 + policy ARN |
+| iam_changes | event | `<event name>\|<caller ARN>\|<対象>` | 重大度 + IP 集合 + 対象 + policy ARN (全件拒否のときは denied) |
 | new_principal | state | `<ARN>` | 重大度 + IP 集合 + 種類 + allowlist 状態 |
+
+決定: iam_changes は集約した呼び出しがすべてエラー (ErrorCode あり) のとき、変更は起きていないので見出しを「IAM 変更の試行 (拒否)」とし、Data に `denied: true` と `error_codes` を残す (重大度と Key は変えない。権限の無い主体が IAM を変えようとしたこと自体が指摘になるため)。成功が混ざるときは「IAM 変更」のまま `has_errors: true`。対象が取れないとき (拒否では requestParameters が記録されない) は表示を「不明」とする。Fingerprint は全件拒否のときだけ `denied` を足す (既存の finding の指紋は変わらない)。
 
 決定 (アプリ層チェック。Step 2 の 3 つ。ADR 0005 の event 型):
 
