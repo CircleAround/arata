@@ -236,7 +236,7 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
 | `ACCESS_DENIED` | IAM 権限不足 (不足した action を含む) |
 | `QUERY_LIMIT` | Insights のスキャン上限・同時実行上限に当たった |
 | `QUERY_INVALID` | クエリ / 設定の不備 (Insights の構文エラー、不正な時間範囲など)。決定: 上限 (`QUERY_LIMIT`) とは区別する |
-| `STORE_LOCKED` / `STORE_CORRUPT` | ストアの排他失敗 / SQLite 破損 (rebuild を促す) |
+| `STORE_LOCKED` / `STORE_CORRUPT` | ストアの排他失敗 / SQLite 破損 (rebuild を促す。`arata rebuild` で既存の SQLite が読めないときもこれで、`--from-scratch` を案内する) |
 | `RUN_MISSED` | 前回実行から profile の周期の 2 倍以上空いた (起動側の障害) |
 | `COLLECT_FAILED` | 決定: 上記に分類できない収集エラー (ネットワーク断など) |
 | `CONFIG_INVALID` | 決定: 設定ファイルの読み込み・検証エラー (終了コード 2) |
@@ -412,7 +412,7 @@ type Observation struct {
 ### 5-1. 二層構造
 
 - `raw/<source>/<YYYY-MM-DD>.jsonl` — collect が取得した正規化レコード・集計の原本。追記のみ。人が読め、S3 へそのまま退避できる。
-- `audit.sqlite` — raw から再構築可能な派生物。差分判定と期間集計のためのインデックス。`arata rebuild` で raw から作り直せる。
+- `audit.sqlite` — raw から再構築可能な派生物。差分判定と期間集計のためのインデックス。`arata rebuild` で raw から作り直せる (ただし raw に無いものがある。5-4)。
 - `allowlist.yaml` — 人が承認した既知リスト。**git 管理**。エンジンは読むだけ (approve コマンドは書く)。
 
 バックエンドは 2 種類。`dir:///var/lib/arata/<name>` (オンプレ) と `s3://bucket/prefix` (Lambda。実行開始時に取得、終了時に書き戻し、
@@ -426,10 +426,10 @@ S3 の条件付き書き込みでロック)。SQLite ファイルは数十 MB �
 | `principals` | arn, kind (user/role/assumed-role/root), first_seen, last_seen, status (unknown/approved/expired/baseline) | 主体の初出判定。決定: `init` のベースライン収集で初出した主体は `baseline` とし new_principal の対象外。evaluate 時に allowlist から approved / expired を同期する |
 | `principal_ips` | arn, ip, country, first_seen, last_seen, count | 主体 × IP の初出判定。決定: count は各 run の窓 [From, To) の件数の和 (再走査の重なり区間は行を初めて作るときだけ数える。3 章) |
 | `events` | time, source, name, principal_arn, ip, region, resource, data | 「注目イベント」のみ (ルート利用、IAM 変更など)。全 CloudTrail は保存しない。決定: 注目の判定は collector 側 (`cloudtrail.DefaultNotable`) で行い、ルート利用・AssumeRole*・IAM / CloudTrail / GuardDuty / Access Analyzer / Organizations の書き込み・秘匿値取得・SSM セッション・公開設定変更を残す。決定: defense_evasion / public_exposure が見る操作 (ログの削除・保持期間、フローログの削除、Config・Security Hub の停止、WAF のログ設定、S3 のバケットポリシーの削除・ライフサイクル、スナップショットの共有、Lambda の AddPermission など) だけを足し、全書き込みは足さない。一覧はチェック側 (`checks.DefenseEvasionAPIs` / `PublicExposureAPIs`) にあり、collector のテストで突き合わせる。該当する操作だけ requestParameters から判定に要る値を `data` に取り出す (ポリシー全文は残さない。ADR 0026)。決定: 拒否された呼び出し (errorCode が `checks.access_denied.error_codes` に入るもの) も読み取りを含めて残す (access_denied の元。コードは設定から `cloudtrail.NotableWith` に渡す。ADR 0021)。決定 (ADR 0027): 秘匿値の読み取り (GetSecretValue・BatchGetSecretValue・GetParameter(s)・GetParametersByPath) は名前 / ARN・パス・`recursive`・`with_decryption` (常に残す。無いのは以前の版で集めたもの) だけを `data` に取り出す (値は CloudTrail に入らない)。BatchGetSecretValue も注目イベントに足した (一覧は `checks.SecretReadAPIs`)。`event_id` で重複を排除する (複数リージョンを引いた場合の二重も同じ仕組みで防ぐ。collector 側でも同一 Collect 内の event_id は 1 回だけ数える)。決定: `collected_at` (最初に収集した run の時刻) を持ち、再走査で遅れて届いたイベントを見分ける (3 章、ADR 0013)。決定 (ADR 0032): `cloudtrail-unused-regions` のソースは、ふだん使わないリージョンの AWS のサービス以外の主体の書き込みを (失敗を含めて) すべて残す (使っていないリージョンでは 0〜数件)。source 列がそのソースの ID で、unused_region_activity だけが見る (他のチェックの Query は除く) |
-| `metrics` | date, source, metric, key, value | 日次集計 (`sign_in_failures` by ip、`admin_404` by ip、`waf_block` by rule)。平常帯の計算元。決定: 集計元のレコード種類 `from` 列を追加。主キーは (date, source, metric, key) で、後から来た値で**置き換える** (3 章の決定により後の値ほど完全)。raw JSONL には追記されるので rebuild は行順に適用すれば同じ結果になる。日は UTC。決定 (ADR 0027): cloudtrail collector も主体の活動の日次集計を出す: `principal_source` (key `<主体 ARN>\|<送信元の /24・/48>`)、`principal_source_writes` (同じ key の成功した書き込み)、`principal_write_region` (key `<主体 ARN>\|<リージョン>` の成功した書き込み)。対象は IAM ユーザーとロール (のセッション)、送信元は IP のときだけ。cloudtrail は日の頭から引き直さないので、置き換えの規則のため値は「その日を最後に引いた run が見た件数」(下限) になる。判定は「その日に有ったか」と下限値にだけ使う。期間レポートの推移表には出さない。Yields に metric は足さない (http_access / waf_action のチェックの skip 判定を変えないため)。行数の見積もり: 1 日あたり (主体数 × その日の送信元の数) × 2 + (主体数 × 書き込みのリージョン数)。主体 50・送信元 2 なら 1 日 250 行、400 日で 10 万行 (数十 MB 未満)。Lambda などサービスが引き受けるロールは送信元が多く、数十のロールが 1 日数十の /24 を使う環境では年 100 万行に近づく。多ければ prune を入れるときに `principal_*` の保持を baseline_days の数倍 (例 90 日) に短くする (判定は 30 日しか見ない)。決定 (ADR 0030): cloudwatch-logs の http_access のソースは endpoint_abuse の画面ごとに `endpoint_abuse_count` / `endpoint_abuse_ips` (key `<画面>\|<HH:MM>`。時間幅の始まり、UTC)、`endpoint_abuse_ua_ips` (key `<画面>\|<HH:MM>\|<UA のハッシュ>`。その幅で最も多くの IP にまたがった UA 1 つ、2 IP 以上のときだけ)、`endpoint_abuse_follow` (key `<from>><to>\|<HH:MM>`。1 以上のときだけ) を出す。IP と UA の原文は保存しない。行数の見積もり: 1 日あたり最大で画面数 × 144 (10 分幅) × 3 + 連鎖数 × 144。画面 3・連鎖 1 で 1 日最大 1,440 行、400 日で 58 万行 (実際は来訪のある幅だけなのでずっと少ない) |
+| `metrics` | date, source, metric, key, value | 日次集計 (`sign_in_failures` by ip、`admin_404` by ip、`waf_block` by rule)。平常帯の計算元。決定: 集計元のレコード種類 `from` 列を追加。主キーは (date, source, metric, key) で、後から来た値で**置き換える** (3 章の決定により後の値ほど完全)。raw JSONL には追記されるので rebuild は行順に適用すれば同じ結果になる (ソースが主キーに入るので、ソースの中の日付順・行順で足りる。5-4)。日は UTC。決定 (ADR 0027): cloudtrail collector も主体の活動の日次集計を出す: `principal_source` (key `<主体 ARN>\|<送信元の /24・/48>`)、`principal_source_writes` (同じ key の成功した書き込み)、`principal_write_region` (key `<主体 ARN>\|<リージョン>` の成功した書き込み)。対象は IAM ユーザーとロール (のセッション)、送信元は IP のときだけ。cloudtrail は日の頭から引き直さないので、置き換えの規則のため値は「その日を最後に引いた run が見た件数」(下限) になる。判定は「その日に有ったか」と下限値にだけ使う。期間レポートの推移表には出さない。Yields に metric は足さない (http_access / waf_action のチェックの skip 判定を変えないため)。行数の見積もり: 1 日あたり (主体数 × その日の送信元の数) × 2 + (主体数 × 書き込みのリージョン数)。主体 50・送信元 2 なら 1 日 250 行、400 日で 10 万行 (数十 MB 未満)。Lambda などサービスが引き受けるロールは送信元が多く、数十のロールが 1 日数十の /24 を使う環境では年 100 万行に近づく。多ければ prune を入れるときに `principal_*` の保持を baseline_days の数倍 (例 90 日) に短くする (判定は 30 日しか見ない)。決定 (ADR 0030): cloudwatch-logs の http_access のソースは endpoint_abuse の画面ごとに `endpoint_abuse_count` / `endpoint_abuse_ips` (key `<画面>\|<HH:MM>`。時間幅の始まり、UTC)、`endpoint_abuse_ua_ips` (key `<画面>\|<HH:MM>\|<UA のハッシュ>`。その幅で最も多くの IP にまたがった UA 1 つ、2 IP 以上のときだけ)、`endpoint_abuse_follow` (key `<from>><to>\|<HH:MM>`。1 以上のときだけ) を出す。IP と UA の原文は保存しない。行数の見積もり: 1 日あたり最大で画面数 × 144 (10 分幅) × 3 + 連鎖数 × 144。画面 3・連鎖 1 で 1 日最大 1,440 行、400 日で 58 万行 (実際は来訪のある幅だけなのでずっと少ない) |
 | `findings` | id, check, key, severity, first_seen, last_seen, last_changed, status (open/resolved/acked/snoozed), reported_at, fingerprint, data, suppressed_severity | 差分判定の中核。決定: `fingerprint` 列を追加 (4-2)。決定: `suppressed_severity` (ack / snooze したときの重大度。open / resolved では空) を追加 (schema 5、ADR 0022)。移行では既存の acked / snoozed の行に今の severity を入れる |
 | `posture` | check, resource, value, first_seen, last_changed | 姿勢チェックの現在値。決定: 作らず `snapshot_items` にまとめた (ADR 0015) |
-| `snapshot_items` | kind, source, key, data, collected_at | 決定: アカウント単位の状態 (認証情報レポート・GuardDuty・Access Analyzer・姿勢・WAF の WebACL の設定) の最新のスナップショット。収集が成功したときだけ (kind, source) 単位で丸ごと置き換える (ADR 0015) |
+| `snapshot_items` | kind, source, key, data, collected_at | 決定: アカウント単位の状態 (認証情報レポート・GuardDuty・Access Analyzer・姿勢・WAF の WebACL の設定) の最新のスナップショット。収集が成功したときだけ (kind, source) 単位で丸ごと置き換える (ADR 0015)。決定 (ADR 0033): 置き換えたら raw に `snapshot_replaced` の行 (置き換えた収集の時刻と件数) を書く (0 件の置き換えと失敗した収集を rebuild が見分ける) |
 | `finding_events` | finding_id, check, key, class, severity, summary, at, run_id, profile, data | 決定: finding の状態遷移 (new / changed / recurred / resolved) の履歴。run の差分判定、人の resolve / approve、allowlist の編集による解消で追記する。期間レポートの元 (ADR 0016) |
 | `meta` | key, value | 決定: `history_since` (schema 4 以降の最初の run の開始時刻。これより前の状態遷移は残っていない) |
 
@@ -445,6 +445,31 @@ retention:
 ```
 
 `prune` は `run` の最後に自動で走り、`arata prune --dry-run` で対象を確認できる。
+
+### 5-4. 再構築 (`arata rebuild`)
+
+決定 (ADR 0033): `arata rebuild` は raw から作れる表だけを作り直し、raw に無いものは既存の `audit.sqlite` から引き継ぐ。
+
+| 表 | raw から | 作り直し方 |
+|---|---|---|
+| `events` | 作れる | event_id ごとに最初に収集した行 (collected_at が最小。同じ run なら設定で先のソース) を残す。InsertEvent の INSERT OR IGNORE と同じ結果 |
+| `principals` / `principal_ips` | 作れる (状態を除く) | first_seen / last_seen は保存と同じ文字列の MIN / MAX。count は Count の和に、(arn, ip) の行を最初に作った記録の rescan_count を足す (ADR 0013)。「最初」は (collected_at, 設定のソースの順, 行順) |
+| `metrics` | 作れる | ソースごとに日付順・行順に置き換える |
+| `snapshot_items` | 作れる | (kind, source) ごとに、最後の `snapshot_replaced` の収集の項目 |
+| `runs` / `findings` / `finding_events` / `meta` | **作れない** | 既存の SQLite から引き継ぐ (ack / snooze・`suppressed_severity`・reported_at・期間レポートの履歴を含む) |
+| `principals.status` | **作れない** | ARN ごとに既存の SQLite から引き継ぐ。既存に無い主体は unknown (次の run が allowlist と同期する) |
+
+- 決定: raw の行の版の違い。`principal_seen` の `collected_at` と `snapshot_replaced` は ADR 0033 で足したもので、以前の版の raw には無い。
+  無いときは時刻の順 (principal_seen) と時刻が最大の収集 (スナップショット。失敗した収集を含み得る、0 件の置き換えは再現できない) で近似し、警告に出す。
+  `trail_event` の `collected_at` が無い行 (schema 3 より前の収集) は '' として最も古い扱い (今の SQLite と同じ)。
+  知らない種類の行と読めない行 (書き込み途中で止まった最後の行など) は飛ばし、件数と場所 (`raw/<source>/<日付>.jsonl:<行>`) を出す
+- 決定: 既存の SQLite は Open と同じ移行 (schema_version) を通してから読む。無い・読めないときは `STORE_CORRUPT` で止め、`--from-scratch` を案内する
+- 決定: `--from-scratch` は既存の SQLite を読まない (壊れていてもよい)。runs・findings・finding_events・meta は空から。次の run で未解決の finding が全部 new として
+  再報告されるので標準エラーに警告を出す。主体は既定で unknown (監査の安全側。一度全部報告され人が片付ける)、`--baseline` なら baseline (init と同じ扱い)。
+  `--baseline` は `--from-scratch` のときだけ使える
+- 決定: 一時ファイル (`audit.sqlite.rebuild-tmp`、journal は DELETE) に作り、元のファイルを `audit.sqlite.bak` にハードリンク (できなければコピー) してから
+  rename で入れ替える。途中で失敗・中断しても `audit.sqlite` は元のまま。`.bak` は 1 世代 (次の rebuild で上書き)。ロック (`audit.lock`) を取ってから行う
+- 決定: rebuild の規則と記録の規則の一致は、engine を通したテスト (`internal/engine/rebuild_test.go`) で「run を重ねたストアと rebuild したストアの全テーブルが一致する」として固定する
 
 ## 6. 既知リスト (allowlist) と承認フロー (質問 8 への回答)
 
@@ -785,7 +810,7 @@ arata approve   <finding-id> --note "..." [--expires date] [--tag deploy] [--by 
 arata ack|snooze|resolve <finding-id>        # snooze は --until date
 arata help ai [report|approve|playbook [check]] [--format json]   # LLM 向けの使い方 (arata ai と同じ)。playbook はチェックごとの対処手順
 arata prune     [--dry-run]
-arata rebuild                  # raw JSONL から SQLite を再構築
+arata rebuild   [--from-scratch [--baseline]] [--format text|json]   # raw JSONL から SQLite を再構築 (5-4、ADR 0033)
 ```
 
 - 決定: 設定ファイルのパスには既定を持たせる。解決順は `-c` (`--config`) > 環境変数 `ARATA_CONFIG` > カレントディレクトリの `./arata.yaml`。
@@ -893,7 +918,7 @@ LLM がやらないこと、組み込み側で規則として固定すること:
 1. config / store (dir backend) / cloudtrail collector / `root_usage`, `unknown_assume_role`, `new_principal`, `iam_changes` / report.json — ここで日次が最小構成で回る
 2. cwlogs collector と形式プロファイル (`nginx_access`, `wafv2`, `regex`) / `login_bruteforce`, `probe_paths`, `waf_block_trend` / `doctor`
 3. guardduty / iam credential report / posture / weekly チェック / allowlist の approve フロー (決定: Step 3 で実装。設定の雛形 config init / profiles / overrides も。ADR 0014・0015)
-4. `report --from --to` と monthly テンプレート / prune / rebuild (決定: 期間レポートは Step 3 で実装。ADR 0016。prune / rebuild は後続)
+4. `report --from --to` と monthly テンプレート / prune / rebuild (決定: 期間レポートは Step 3 で実装。ADR 0016。rebuild は 5-4・ADR 0033 で実装。prune は後続)
 5. Lambda ハンドラと S3 backend / deploy テンプレート (決定: skill 同梱は `arata help ai` に置き換えて Step 2 で実装済み)
 
 ## 11. 未決事項

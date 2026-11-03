@@ -39,7 +39,7 @@
 | 中 | endpoint_abuse の複数ソースの異なり IP | 1 つの画面を複数のソースで数えると、異なり IP 数が和集合でなく足し算になる | ADR 0031。ソースは別のロググループなので 1 本にまとめられない |
 | 中 | Insights の 1 日あたり費用上限 | ソース単位の `max_scan_gb` に加え、監査対象全体の 1 日上限と縮退 | 設計書 11 章の未決。WAF ログを読むと量が増える |
 | 低 | 古いパスワード | 認証情報レポートからパスワード未変更の期間を見る | `credential_hygiene` に閾値を足す形 |
-| 低 | prune / rebuild | 保持期間を過ぎたデータの削除と、raw JSONL からの SQLite 再構築 | 設計書 5-3 章。`finding_events` の扱いを決める |
+| 低 | prune | 保持期間を過ぎたデータの削除 | 設計書 5-3 章。`finding_events` の扱いを決める。rebuild は実装済み (5-4、ADR 0033) |
 | 低 | `openai-api` プロバイダ | Chat Completions を `net/http` で | `docs/aratam.md` 3-1 章 |
 | 低 | Lambda + S3 バックエンド | `s3://` ストアと Lambda ハンドラ | 設計書 9 章。cron で回す運用なら後回し |
 | 低 | 国判定 | IP → 国。MaxMind 同梱か GuardDuty 頼みか | 設計書 11 章の未決 |

@@ -4,6 +4,7 @@ package record
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/netip"
 	"regexp"
@@ -34,6 +35,9 @@ const (
 	KindUnusedRegionEvent Kind = "unused_region_event"
 	// KindCostAnomaly は AWS Cost Anomaly Detection の異常 1 件 (ADR 0032)。
 	KindCostAnomaly Kind = "cost_anomaly"
+	// KindSnapshotReplaced はスナップショットを (kind, source) 単位で置き換えた印 (raw にだけ書く。ADR 0033)。
+	// チェックが読むレコードではない。rebuild が「どの収集で置き換えたか」(0 件の置き換えを含む) を知るために使う。
+	KindSnapshotReplaced Kind = "snapshot_replaced"
 )
 
 // SnapshotKinds は「窓に依らない今の状態」を表すレコード種類。collector が取るたびに丸ごと置き換えて保存する (ADR 0015)。
@@ -117,6 +121,9 @@ type PrincipalSeen struct {
 	// RescanCount は再走査の区間 [ScanFrom, From) の件数 (Count には含めない)。前回の run で数え済みかもしれないので、
 	// store は (arn, ip) の行を初めて作るときだけ足す (ADR 0013)。
 	RescanCount int `json:"rescan_count,omitempty"`
+	// CollectedAt は収集した run の時刻 (engine が付ける)。rebuild が (arn, ip) の行を「最初に」作った記録を決めるのに使う (ADR 0033)。
+	// 以前の版で書いた行には無い (ゼロ値)。
+	CollectedAt time.Time `json:"collected_at,omitzero"`
 }
 
 func (p PrincipalSeen) RecordKind() Kind      { return KindPrincipalSeen }
@@ -203,6 +210,19 @@ type SnapshotItem struct {
 func (s SnapshotItem) RecordKind() Kind      { return s.Kind }
 func (s SnapshotItem) RecordTime() time.Time { return s.Time }
 
+// SnapshotReplaced はスナップショットを置き換えた印 (store.ReplaceSnapshot が raw に書く。ADR 0033)。
+// Time は置き換えた収集の時刻 (= その収集の SnapshotItem.Time、snapshot_items.collected_at)、Count は置き換えた項目数 (0 なら空にした)。
+// 決定: 失敗した収集の項目も raw には残るので、rebuild は印のある収集の項目だけを表に入れる。
+type SnapshotReplaced struct {
+	SnapshotKind Kind      `json:"snapshot_kind"`
+	Source       string    `json:"source"`
+	Time         time.Time `json:"time"`
+	Count        int       `json:"count"`
+}
+
+func (s SnapshotReplaced) RecordKind() Kind      { return KindSnapshotReplaced }
+func (s SnapshotReplaced) RecordTime() time.Time { return s.Time }
+
 // String は Data の文字列値 (無ければ "")。
 func (s SnapshotItem) String(k string) string {
 	v, _ := s.Data[k].(string)
@@ -229,6 +249,9 @@ func (s SnapshotItem) Number(k string) float64 {
 	}
 	return 0
 }
+
+// ErrUnknownKind はこの版が知らない種類の行 (新しい版で書いた raw など)。rebuild は飛ばして件数を出す。
+var ErrUnknownKind = errors.New("record: unknown kind")
 
 // Envelope は JSONL 1 行の外枠。
 type Envelope struct {
@@ -271,6 +294,12 @@ func Unmarshal(line []byte) (Record, error) {
 			return nil, err
 		}
 		return m, nil
+	case KindSnapshotReplaced:
+		var m SnapshotReplaced
+		if err := json.Unmarshal(env.Data, &m); err != nil {
+			return nil, err
+		}
+		return m, nil
 	default:
 		if SnapshotKinds[env.Kind] {
 			var it SnapshotItem
@@ -279,6 +308,6 @@ func Unmarshal(line []byte) (Record, error) {
 			}
 			return it, nil
 		}
-		return nil, fmt.Errorf("record: unknown kind %q", env.Kind)
+		return nil, fmt.Errorf("%w %q", ErrUnknownKind, env.Kind)
 	}
 }
