@@ -297,3 +297,102 @@ func TestWAFReviewObservations(t *testing.T) {
 		t.Fatalf("%+v", props)
 	}
 }
+
+// Challenge / CAPTCHA の影響評価 (ADR 0028)。
+func TestWAFReviewChallenge(t *testing.T) {
+	st := newStore(t)
+	snapshot(t, st, record.KindWAFConfig, wafACL("prod-waf"),
+		wafRule("prod-waf", "challenge-search", account.WAFRuleRegular, "CHALLENGE"),
+		wafRule("prod-waf", "captcha-bots", account.WAFRuleRegular, "CAPTCHA"),
+		wafRule("prod-waf", "rate-challenge", account.WAFRuleRateBased, "CHALLENGE", "rate_limit", 100, "rate_window_sec", 300, "rate_aggregate", "IP", "rate_scope_paths", "", "rate_scope_parsed", true),
+		wafRule("prod-waf", "AWS-AWSManagedRulesBotControlRuleSet", account.WAFRuleManagedGroup, "NONE", "managed", "AWS/AWSManagedRulesBotControlRuleSet"))
+	m := metricSeed{st: st, t: t}
+	put := func(d, key string, issued, ips, solved float64) {
+		m.put(d, "waf", cwlogs.MetricWAFChallengeIssued, key, issued)
+		m.put(d, "waf", cwlogs.MetricWAFChallengeIssuedIPs, key, ips)
+		m.put(d, "waf", cwlogs.MetricWAFChallengeSolvedIPs, key, solved)
+	}
+	// 正規の画面で多数の IP に Challenge を出し、8 割が解いた → 提案 (review)
+	put("2026-10-20", "prod-waf|challenge|challenge-search|GET|/search", 100, 30, 24)
+	put("2026-10-21", "prod-waf|challenge|challenge-search|GET|/search", 60, 20, 16)
+	// 同じルールで、ほとんど解かれない (ボットらしい、または解けない通信) → 提案しない (challenge_impact に数字だけ)
+	put("2026-10-21", "prod-waf|challenge|challenge-search|GET|/search/export", 500, 40, 1)
+	// GET 以外は解けない構造なので提案の対象にしない (challenge_impact に「GET 以外」として件数)
+	put("2026-10-21", "prod-waf|challenge|challenge-search|POST|/search", 70, 30, 0)
+	// IP が少ない → 提案しない
+	put("2026-10-21", "prod-waf|captcha|captcha-bots|GET|/contact", 20, 4, 4)
+	// レートベースのルール → excluded_by_rule
+	put("2026-10-21", "prod-waf|challenge|rate-challenge|GET|/list", 80, 20, 18)
+	// sign-in のパス → excluded_by_rule
+	put("2026-10-21", "prod-waf|captcha|captcha-bots|GET|/login", 80, 20, 18)
+	// 探索パス → 対象外 (observation も出さない)
+	put("2026-10-21", "prod-waf|captcha|captcha-bots|GET|/wp-login.php", 80, 20, 18)
+	// 設定に無いルール → undetermined
+	put("2026-10-21", "prod-waf|challenge|deleted-rule|GET|/home", 80, 20, 18)
+	// グループの中のルール
+	put("2026-10-21", "prod-waf|captcha|AWS-AWSManagedRulesBotControlRuleSet/CategoryHttpLibrary|GET|/items/:id", 90, 15, 12)
+
+	props, obs := reviewWAF(t, st)
+	var got []string
+	byKind := map[string][]schema.Proposal{}
+	for _, p := range props {
+		got = append(got, p.Kind+":"+p.About+":"+p.Reason+":"+p.Rule+"/"+p.RuleInGroup+":"+p.Method+" "+p.Path)
+		byKind[p.Kind+":"+p.About] = append(byKind[p.Kind+":"+p.About], p)
+		if p.Summary == "" || len(p.Evidence) == 0 {
+			t.Fatalf("incomplete: %+v", p)
+		}
+	}
+	want := []string{
+		"challenge_on_app_path:::challenge-search/:GET /search",
+		"challenge_on_app_path:::AWS-AWSManagedRulesBotControlRuleSet/CategoryHttpLibrary:GET /items/:id",
+		"observation:challenge_on_app_path:excluded_by_rule:captcha-bots/:GET /login",
+		"observation:challenge_on_app_path:undetermined:deleted-rule/:GET /home",
+		"observation:challenge_on_app_path:excluded_by_rule:rate-challenge/:GET /list",
+		// Challenge / CAPTCHA の状況 (毎回。出した数の多い順)
+		"observation:challenge_impact:informational:challenge-search/: ",
+		"observation:challenge_impact:informational:captcha-bots/: ",
+		"observation:challenge_impact:informational:AWS-AWSManagedRulesBotControlRuleSet/CategoryHttpLibrary: ",
+		"observation:challenge_impact:informational:deleted-rule/: ",
+		"observation:challenge_impact:informational:rate-challenge/: ",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") || len(obs) != 0 {
+		t.Fatalf("proposals:\n%s\nwant:\n%s\nobs %+v", strings.Join(got, "\n"), strings.Join(want, "\n"), obs)
+	}
+	p := byKind["challenge_on_app_path:"][0]
+	if p.Stage != StageReview || p.Evidence["kind"] != "challenge" || p.Evidence["issued"] != 160.0 || p.Evidence["distinct_ips_max_per_day"] != 30.0 ||
+		p.Evidence["issued_ips_day_sum"] != 50.0 || p.Evidence["solved_ips_day_sum"] != 40.0 || p.Evidence["solve_ratio"] != 0.8 || p.Evidence["days"] != 7 {
+		t.Fatalf("proposal: %+v", p)
+	}
+	if strings.Contains(p.Summary, "BLOCK") || !strings.Contains(p.Summary, "scope-down") {
+		t.Fatalf("summary: %s", p.Summary)
+	}
+	imp := byKind["observation:challenge_impact"][0]
+	if imp.Evidence["issued"] != 730.0 || imp.Evidence["issued_ips_day_sum"] != 120.0 || imp.Evidence["solved_ips_day_sum"] != 41.0 ||
+		imp.Evidence["solve_ratio"] != 0.342 || imp.Evidence["issued_non_get"] != 70.0 || imp.Stage != StageNone {
+		t.Fatalf("impact: %+v", imp)
+	}
+	if !strings.Contains(imp.Summary, "GET 以外 70 件") || strings.Contains(imp.Summary, "ボット") {
+		t.Fatalf("impact summary must state facts only: %s", imp.Summary)
+	}
+}
+
+// challenge_top_rules を超えるルールは challenge_impact に載せない (出した数の多い順)。
+func TestWAFReviewChallengeTopRules(t *testing.T) {
+	st := newStore(t)
+	snapshot(t, st, record.KindWAFConfig, wafACL("prod-waf"))
+	m := metricSeed{st: st, t: t}
+	for i, r := range []string{"a", "b", "c"} {
+		m.put("2026-10-21", "waf", cwlogs.MetricWAFChallengeIssued, "prod-waf|challenge|"+r+"|GET|/x", float64(10*(i+1)))
+		m.put("2026-10-21", "waf", cwlogs.MetricWAFChallengeIssuedIPs, "prod-waf|challenge|"+r+"|GET|/x", 1)
+	}
+	cfg := config.DefaultChecks()
+	cfg.WAFReview.ChallengeTopRules = 2
+	c := WAFReview{Config: cfg.WAFReview, SignInPaths: cfg.LoginBruteforce.Paths, ProbePaths: cfg.ProbePaths.Paths}
+	props, _, err := c.Propose(context.Background(), st, weekly())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(props) != 2 || props[0].Rule != "c" || props[1].Rule != "b" {
+		t.Fatalf("%+v", props)
+	}
+}
