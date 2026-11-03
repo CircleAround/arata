@@ -60,6 +60,10 @@
   承認済みの主体の列挙は乗っ取り・SaaS 側の侵害の疑いとして扱う
 - access_denied の data の `expected_denied_excluded` は、allowlist の `expected_denied` (想定済みの拒否) に一致して数えなかった件数。
   数に含まれていない分があることを書き添える。想定内の拒否が多い主体なら `expected_denied` を提案する (`arata help ai approve`)
+- defense_evasion (監査・検知を止める・弱める操作) は侵入者が最初にやることの 1 つ。同じ主体の access_denied・iam_changes・unknown_assume_role と近い時刻なら、
+  侵害が進んでいる疑いとして最初に書く。`known_deploy_principal: true` で 1 段下がっていても、監査の無効化そのものは見逃さない
+- public_exposure (外部に開く設定変更) は deploy タグの主体でも重大度を下げていない (`known_deploy_principal` は事実として添える)。
+  `exposure` (開いた中身) と `target` を根拠にし、weekly の access_analyzer・posture の同じ資源の指摘とまとめる
 - data に `escalated_from_suppressed: true` がある changed は、人が ack / snooze していた finding の重大度が上がったもの
   (`suppressed_status` は acked / snoozed、`suppressed_severity` はそのときの重大度)。「確認済みだった」ことより、悪化したことを優先して書く
 - allowlist のメモ、前回レポート、時間帯 (デプロイ時刻、メンテナンス時間) を踏まえる

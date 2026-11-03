@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -777,5 +778,36 @@ func TestRunRescanDoesNotRecur(t *testing.T) {
 	}
 	if r2.Report.Summary.New != 0 || r2.Report.Summary.Recurred != 0 || r2.Report.Summary.Changed != 0 {
 		t.Fatalf("rescan must be silent: %+v", r2.Report.Summary)
+	}
+}
+
+// collector の取り出しから defense_evasion / public_exposure の判定までを通す。監査対象のロググループは cloudwatch-logs のソースから渡る。
+func TestRunSecurityChecks(t *testing.T) {
+	h := newHarnessWith(t, "  - id: nginx\n    kind: cloudwatch-logs\n    log_group: prod-nginx-access\n    format: nginx_access\n",
+		"  security:\n    window: 24h\n    checks: [defense_evasion, public_exposure]\n")
+	ctx := context.Background()
+	alice := cloudtrailtest.User(acct, "alice")
+	at := h.now.Add(-2 * time.Hour)
+	h.fake.Add(
+		cloudtrailtest.Event("l1", at, alice, "logs.amazonaws.com", "DeleteLogGroup", "ap-northeast-1", "198.51.100.1", false, map[string]any{"logGroupName": "prod-nginx-access"}),
+		cloudtrailtest.Event("l2", at, alice, "logs.amazonaws.com", "DeleteLogGroup", "ap-northeast-1", "198.51.100.1", false, map[string]any{"logGroupName": "scratch"}),
+		cloudtrailtest.Event("sg1", at, alice, "ec2.amazonaws.com", "AuthorizeSecurityGroupIngress", "ap-northeast-1", "198.51.100.1", false, map[string]any{"groupId": "sg-1",
+			"ipPermissions": map[string]any{"items": []any{map[string]any{"ipProtocol": "tcp", "fromPort": 22, "toPort": 22, "ipRanges": map[string]any{"items": []any{map[string]any{"cidrIp": "0.0.0.0/0"}}}}}}}),
+	)
+	e := h.open(t)
+	r, err := e.Run(ctx, "security")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found []string
+	for _, f := range r.Report.Findings.New {
+		found = append(found, fmt.Sprintf("%s %s %s", f.Check, f.Key, f.Severity))
+	}
+	want := "defense_evasion logs:DeleteLogGroup|arn:aws:iam::" + acct + ":user/alice|prod-nginx-access critical;" +
+		"defense_evasion logs:DeleteLogGroup|arn:aws:iam::" + acct + ":user/alice|scratch high;" +
+		"public_exposure ec2:AuthorizeSecurityGroupIngress|sg-1|tcp/22 0.0.0.0/0 high"
+	sort.Strings(found)
+	if strings.Join(found, ";") != want {
+		t.Fatalf("findings:\n%s\nwant\n%s", strings.Join(found, ";"), want)
 	}
 }

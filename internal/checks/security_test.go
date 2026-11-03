@@ -84,17 +84,17 @@ func TestDefenseEvasion(t *testing.T) {
 		{id: "10", source: gd, name: "CreateFilter", data: map[string]any{"name": "quiet", "filter_action": "ARCHIVE"}},
 		{id: "11", source: gd, name: "CreateFilter", data: map[string]any{"name": "noop", "filter_action": "NOOP"}},
 		{id: "12", source: "access-analyzer.amazonaws.com", name: "CreateArchiveRule", data: map[string]any{"analyzer": "a1", "rule": "r1"}},
-		{id: "13", source: logs, name: "DeleteLogGroup", data: map[string]any{"log_group": "prod-nginx-access"}},          // 監査対象 → critical
-		{id: "14", source: logs, name: "DeleteLogGroup", data: map[string]any{"log_group": "scratch"}},                    // high
+		{id: "13", source: logs, name: "DeleteLogGroup", data: map[string]any{"log_group": "prod-nginx-access"}},                          // 監査対象 → critical
+		{id: "14", source: logs, name: "DeleteLogGroup", data: map[string]any{"log_group": "scratch"}},                                    // high
 		{id: "15", source: logs, name: "PutRetentionPolicy", data: map[string]any{"log_group": "prod-nginx-access", "retention_days": 7}}, // critical、平常帯より短い
 		{id: "16", source: logs, name: "PutRetentionPolicy", data: map[string]any{"log_group": "scratch", "retention_days": 30}},          // high
 		{id: "17", source: logs, name: "PutRetentionPolicy", data: map[string]any{"log_group": "scratch2", "retention_days": 365}},        // 下限以上
 		{id: "18", source: logs, name: "DeleteLogStream", data: map[string]any{"log_group": "prod-nginx-access"}},                         // 監査対象だけ
 		{id: "19", source: logs, name: "DeleteLogStream", data: map[string]any{"log_group": "scratch"}},
 		{id: "20", source: "ec2.amazonaws.com", name: "DeleteFlowLogs", principal: secDeploy, data: map[string]any{"flow_log_ids": []any{"fl-1"}}}, // deploy → medium
-		{id: "21", source: "s3.amazonaws.com", name: "DeleteBucketPolicy", data: map[string]any{"bucket": "example-trail-bucket"}}, // trail_buckets にある
+		{id: "21", source: "s3.amazonaws.com", name: "DeleteBucketPolicy", data: map[string]any{"bucket": "example-trail-bucket"}},                 // trail_buckets にある
 		{id: "22", source: "s3.amazonaws.com", name: "PutBucketLifecycle", data: map[string]any{"bucket": "seen-trail-bucket", "lifecycle_expiration_days": 1}},
-		{id: "23", source: "s3.amazonaws.com", name: "PutBucketLifecycle", data: map[string]any{"bucket": "app-bucket"}}, // 宛先でない
+		{id: "23", source: "s3.amazonaws.com", name: "PutBucketLifecycle", data: map[string]any{"bucket": "app-bucket"}},      // 宛先でない
 		{id: "24", source: ct, name: "CreateTrail", data: map[string]any{"name": "second", "s3_bucket": "seen-trail-bucket"}}, // 宛先として覚える
 		{id: "25", source: "wafv2.amazonaws.com", name: "PutLoggingConfiguration", data: map[string]any{"resource_arn": "arn:x"}},
 		{id: "26", source: "wafv2.amazonaws.com", name: "PutLoggingConfiguration", data: map[string]any{"resource_arn": "arn:y", "logging_filter": true}},
@@ -109,24 +109,24 @@ func TestDefenseEvasion(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]Severity{
-		"cloudtrail:StopLogging|" + secUser + "|main":                         Critical,
-		"cloudtrail:StopLogging|" + secDeploy + "|main":                       High,
-		"cloudtrail:UpdateTrail|" + secUser + "|main":                         High,
-		"cloudtrail:PutEventSelectors|" + secUser + "|main":                   High,
-		"guardduty:UpdateDetector|" + secUser + "|d1":                         High,
-		"guardduty:CreateFilter|" + secUser + "|quiet":                        High,
-		"access-analyzer:CreateArchiveRule|" + secUser + "|a1/r1":             High,
-		"logs:DeleteLogGroup|" + secUser + "|prod-nginx-access":               Critical,
-		"logs:DeleteLogGroup|" + secUser + "|scratch":                         High,
-		"logs:PutRetentionPolicy|" + secUser + "|prod-nginx-access":           Critical,
-		"logs:PutRetentionPolicy|" + secUser + "|scratch":                     High,
-		"logs:DeleteLogStream|" + secUser + "|prod-nginx-access":              Critical,
-		"ec2:DeleteFlowLogs|" + secDeploy + "|fl-1":                           Medium,
-		"s3:DeleteBucketPolicy|" + secUser + "|example-trail-bucket":          High,
-		"s3:PutBucketLifecycle|" + secUser + "|seen-trail-bucket":             High,
-		"wafv2:PutLoggingConfiguration|" + secUser + "|arn:y":                 High,
-		"securityhub:DisableSecurityHub|" + secUser + "|":                     High,
-		"config:StopConfigurationRecorder|" + secUser + "|default":            High,
+		"cloudtrail:StopLogging|" + secUser + "|main":                Critical,
+		"cloudtrail:StopLogging|" + secDeploy + "|main":              High,
+		"cloudtrail:UpdateTrail|" + secUser + "|main":                High,
+		"cloudtrail:PutEventSelectors|" + secUser + "|main":          High,
+		"guardduty:UpdateDetector|" + secUser + "|d1":                High,
+		"guardduty:CreateFilter|" + secUser + "|quiet":               High,
+		"access-analyzer:CreateArchiveRule|" + secUser + "|a1/r1":    High,
+		"logs:DeleteLogGroup|" + secUser + "|prod-nginx-access":      Critical,
+		"logs:DeleteLogGroup|" + secUser + "|scratch":                High,
+		"logs:PutRetentionPolicy|" + secUser + "|prod-nginx-access":  Critical,
+		"logs:PutRetentionPolicy|" + secUser + "|scratch":            High,
+		"logs:DeleteLogStream|" + secUser + "|prod-nginx-access":     Critical,
+		"ec2:DeleteFlowLogs|" + secDeploy + "|fl-1":                  Medium,
+		"s3:DeleteBucketPolicy|" + secUser + "|example-trail-bucket": High,
+		"s3:PutBucketLifecycle|" + secUser + "|seen-trail-bucket":    High,
+		"wafv2:PutLoggingConfiguration|" + secUser + "|arn:y":        High,
+		"securityhub:DisableSecurityHub|" + secUser + "|":            High,
+		"config:StopConfigurationRecorder|" + secUser + "|default":   High,
 	}
 	got := bySev(obs)
 	for k, s := range want {
@@ -174,8 +174,8 @@ func TestPublicExposure(t *testing.T) {
 		{id: "1", source: ec2, name: "AuthorizeSecurityGroupIngress", data: map[string]any{"group_id": "sg-1", "public_ingress": []any{rule("tcp", 22, 22, "0.0.0.0/0")}}},
 		{id: "2", source: ec2, name: "AuthorizeSecurityGroupIngress", data: map[string]any{"group_id": "sg-2", "public_ingress": []any{rule("tcp", 443, 443, "0.0.0.0/0")}}},
 		{id: "3", source: ec2, name: "AuthorizeSecurityGroupIngress", data: map[string]any{"group_id": "sg-3", "public_ingress": []any{rule("-1", -1, -1, "::/0")}}},
-		{id: "4", source: ec2, name: "AuthorizeSecurityGroupIngress", data: map[string]any{"group_id": "sg-4", "public_ingress": []any{rule("tcp", 3000, 3400, "0.0.0.0/0")}}}, // 3306・3389 を含む範囲
-		{id: "5", source: ec2, name: "AuthorizeSecurityGroupIngress", data: map[string]any{"group_id": "sg-5"}},                                                       // 公開でない
+		{id: "4", source: ec2, name: "AuthorizeSecurityGroupIngress", data: map[string]any{"group_id": "sg-4", "public_ingress": []any{rule("tcp", 3000, 3400, "0.0.0.0/0")}}},                   // 3306・3389 を含む範囲
+		{id: "5", source: ec2, name: "AuthorizeSecurityGroupIngress", data: map[string]any{"group_id": "sg-5"}},                                                                                  // 公開でない
 		{id: "6", source: ec2, name: "AuthorizeSecurityGroupIngress", principal: secDeploy, data: map[string]any{"group_id": "sg-6", "public_ingress": []any{rule("tcp", 22, 22, "0.0.0.0/0")}}}, // deploy でも下げない
 		{id: "7", source: ec2, name: "AuthorizeSecurityGroupIngress", code: "InvalidPermission.Duplicate", data: map[string]any{"group_id": "sg-7", "public_ingress": []any{rule("tcp", 22, 22, "0.0.0.0/0")}}},
 		{id: "8", source: ec2, name: "ModifySecurityGroupRules", data: map[string]any{"group_id": "sg-8", "public_ingress": []any{map[string]any{"protocol": "tcp", "from_port": 22, "to_port": 22, "cidr": "0.0.0.0/0", "rule_id": "sgr-1"}}}},
