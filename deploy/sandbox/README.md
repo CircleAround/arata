@@ -21,6 +21,7 @@
 | Bedrock の application inference profile (任意) | `<prefix>` | `bedrock.enabled`。aratam の `bedrock` プロバイダの試験用。コピー元のモデル (またはシステム定義の推論プロファイル) の ARN を `bedrock.modelSourceArn` に書く |
 | 試験用の WAF (任意) | API `<prefix>-waf`、WebACL `<prefix>`、ロググループ `aws-waf-logs-<prefix>` | `waf.enabled`。WAF の修正提案を本物の WAF のログで確かめる用。下の「試験用の WAF」。**費用がかかる** (月 8 USD 程度) ので試験のときだけ有効にする |
 | 秘匿値の読み取りの試験用 (任意) | シークレット 3 つ (名前は CloudFormation が付ける)、ロール `<prefix>-secret-reader` | `secretAccess.enabled`。シナリオ 10 (secret_access) 用。シークレットの値は生成した無意味な文字列。読み手のロールは `readonlyRole.trustedPrincipalArn` を信頼し、権限はこのシークレットと `/<prefix>/scenario-10` のパラメータの読み取りだけ (テストで固定)。シークレットは月 1.2 USD 程度かかるので試験のときだけ有効にする |
+| Cost Anomaly Detection のモニター (任意) | `<prefix>` | `costAnomaly.enabled`。cost_anomaly 用 (AWS のサービスごとのモニター。無料。通知の購読は作らない)。AWS のサービスのモニターはアカウントに 1 つしか作れないので、既にあるアカウントでは `false` (既存のモニターを arata がそのまま読む)。異常の発生は試験できないので、doctor の権限とモニターの検出だけを確かめる |
 
 スタック名は `prefix` (既定 `arata-sandbox`)。出力: `ReadonlyRoleArn`、`NginxLogGroupName`、`ExternalRoleArn`、`TestUserNames`、(Bedrock を有効にしたとき) `InferenceProfileArn`、
 (WAF を有効にしたとき) `ApiUrl`・`WebAclArn`・`WafLogGroupName`、(secretAccess を有効にしたとき) `SecretReaderRoleArn`・`ScenarioSecretArns`・`ScenarioParameterPath`。
@@ -62,7 +63,7 @@ cp config.example.json ~/arata-sandbox/config.json
 | `nginxLogGroup.name` / `retentionDays` | ロググループの名前と保持日数 (CloudWatch Logs の決まった値: 1, 3, 5, 7, 14, 30 ...) |
 | `testUsers[]` | `name` (prefix の後ろ)、`consolePassword`、`accessKey`。要らなければ `[]` |
 | `externalRole.trustedAccountId` / `externalId` | 外部用ロールを引き受けてよい外部アカウントと、要求する ExternalId (省略可) |
-| `guardDuty.enabled` / `accessAnalyzer.enabled` / `bedrock.enabled` / `waf.enabled` / `secretAccess.enabled` | 任意の機能。暗黙の既定は持たないので、5 つとも書く (`waf`・`secretAccess` は例でも `false`。費用がかかる)。以前の設定ファイルには `"secretAccess": { "enabled": false }` を足す |
+| `guardDuty.enabled` / `accessAnalyzer.enabled` / `bedrock.enabled` / `waf.enabled` / `secretAccess.enabled` / `costAnomaly.enabled` | 任意の機能。暗黙の既定は持たないので、6 つとも書く (`waf`・`secretAccess` は例でも `false`。費用がかかる)。以前の設定ファイルには `"secretAccess": { "enabled": false }`・`"costAnomaly": { "enabled": false }` を足す |
 | `waf.challenge` / `waf.captcha` | 任意 (省略時は false)。試験用の WAF に Challenge (GET /search) と CAPTCHA (/contact) のルールを足す (ADR 0028)。`waf.enabled` が true のときだけ書ける。ルール 1 つにつき月 1 USD |
 | `bedrock.modelSourceArn` | `bedrock.enabled: true` のとき必須 |
 
@@ -93,6 +94,7 @@ scenarios/08-public-exposure.sh              # 試験用の SG の 22 を 0.0.0.
 scenarios/09-new-source-region.sh <リージョン> # ふだん書き込まないリージョンで無害な書き込み (principal_new_source)
 scenarios/10-secret-bulk-read.sh             # secretAccess.enabled: true で deploy したときだけ。試験用の秘匿値をまとめて読む
 scenarios/11-endpoint-abuse.sh               # 多数の IP からの登録の集中と直後のメッセージ送信の行を書く (checks.endpoint_abuse を設定しておく)
+scenarios/12-unused-region-write.sh eu-west-1  # ふだん使わないリージョンに SSM の String パラメータを作って消す (計算資源は作らない)
 ```
 
 ### 5. arata を回す

@@ -74,6 +74,7 @@ test('リソースの説明は ASCII (IAM などは日本語を受け付けず d
     raw.bedrock.enabled = true;
     raw.waf.enabled = true;
     raw.secretAccess.enabled = true;
+    raw.costAnomaly.enabled = true;
   });
   for (const [id, r] of Object.entries(t.toJSON().Resources as Record<string, any>)) {
     const d = r.Properties?.Description;
@@ -183,6 +184,14 @@ test('Access Analyzer (外部アクセス、アカウント単位) は設定で 
   synth((raw) => (raw.accessAnalyzer.enabled = false)).resourceCountIs('AWS::AccessAnalyzer::Analyzer', 0);
 });
 
+test('Cost Anomaly Detection のモニター (AWS のサービスごと、無料) は設定で on/off', () => {
+  synth().resourceCountIs('AWS::CE::AnomalyMonitor', 0);
+  const t = synth((raw) => (raw.costAnomaly.enabled = true));
+  t.hasResourceProperties('AWS::CE::AnomalyMonitor', { MonitorName: 'arata-sandbox', MonitorType: 'DIMENSIONAL', MonitorDimension: 'SERVICE' });
+  // 通知の購読 (AnomalySubscription) は作らない (arata が読むだけ)
+  t.resourceCountIs('AWS::CE::AnomalySubscription', 0);
+});
+
 test('Bedrock の application inference profile は設定で on/off し、ARN を出力する', () => {
   synth().resourceCountIs('AWS::Bedrock::ApplicationInferenceProfile', 0);
   const t = synth((raw) => (raw.bedrock.enabled = true));
@@ -199,6 +208,7 @@ test('全リソースが cdk destroy で消える (Retain / Snapshot を持た�
     raw.bedrock.enabled = true;
     raw.waf.enabled = true;
     raw.secretAccess.enabled = true;
+    raw.costAnomaly.enabled = true;
   });
   for (const [id, r] of Object.entries(t.toJSON().Resources as Record<string, any>)) {
     for (const key of ['DeletionPolicy', 'UpdateReplacePolicy']) {

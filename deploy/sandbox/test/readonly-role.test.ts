@@ -11,6 +11,9 @@ import { READONLY_ROLE_TEMPLATE } from '../lib/sandbox-stack.ts';
 const EXPECTED_ACTIONS = [
   'access-analyzer:ListAnalyzers',
   'access-analyzer:ListFindings',
+  'account:ListRegions',
+  'ce:GetAnomalies',
+  'ce:GetAnomalyMonitors',
   'cloudtrail:DescribeTrails',
   'cloudtrail:GetTrailStatus',
   'cloudtrail:LookupEvents',

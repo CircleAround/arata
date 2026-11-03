@@ -23,6 +23,7 @@ sandbox (arata の試験用に条件を整えた、開発用アカウント上�
 | `09-new-source-region.sh <リージョン>` | 実行する主体 (既知で、過去 30 日に活動のある開発者の主体) が、ふだん書き込まないリージョン (arata の cloudtrail-lookup の regions に入っているもの) に String のパラメータ `/<stack>/scenario-09` を作って消す。送信元の初出も試すなら AWS CloudShell など別の送信元から実行する | `principal_new_source` medium (実行した主体の ARN、`reasons` に `new_region`、`new_regions` に指定のリージョンと書き込み 2 件)。arata が CloudTrail を収集し終えた日 (この版の init・daily の窓) が 15 日 (`min_baseline_days`) 未満なら出ない (導入直後)。下の「09・10 の期待」 | daily |
 | `10-secret-bulk-read.sh` | (`secretAccess.enabled: true` のとき) SecureString のパラメータを 9 つ作り、読み手のロール `<stack>-secret-reader` でシークレット 3 つ (個別と BatchGetSecretValue)・パラメータ 9 つ (個別に復号)・パス 1 つ (再帰・復号) を読み、パラメータを消す。値は表示しない | `secret_access` high (読み手のロールの ARN、`distinct_secrets` 13 > `min_distinct` 10、`bulk: true`、`paths` に `(recursive)`)。収集し終えた日が 7 日以上なら `first_reader: true` と `new_secrets` 13 個。読み手のロールの `new_principal` medium も出る (承認すれば止まる) | daily |
 | `11-endpoint-abuse.sh [登録の IP 数=25] [送信する IP 数=8]` | nginx のロググループに、`POST /signup` 302 を 203.0.113.11〜 の 25 IP から 1 件ずつ約 1 分の間に (22 IP は同じ UA)、そのうち 8 IP の `POST /messages` 200 を登録の約 5 分後に書き込む (行を書くだけで通信は起きない。時刻は約 20 分前から)。arata の設定に `checks.endpoint_abuse` の画面と連鎖を書いておく (下の「11 の期待」) | `endpoint_abuse` medium (`signup`。`reasons` に `distributed_burst`・`volume`・`same_user_agent`、異なり IP 25、同じ UA が 22 IP) と medium (`signup>message`。`follow_up`、8 IP)。収集した過去日が 7 日未満なら `baseline_used: false` (絶対の閾値で判定) | daily |
+| `12-unused-region-write.sh <リージョン>` | 実行する主体が、ふだん使わないリージョン (有効で、arata の cloudtrail-lookup の regions に入っていないもの。例 eu-west-1) に String のパラメータ `/<stack>/scenario-12` を作って消す。計算資源は作らない | `unused_region_activity` high (`<リージョン>\|<実行した主体の ARN>`、`apis` に `ssm:DeleteParameter`・`ssm:PutParameter`、`compute_apis` は空)。実行した主体を `tags: [deploy]` にすると medium。下の「12 の期待」 | daily |
 
 ## 06 の期待 (WAF の action)
 
@@ -111,10 +112,23 @@ checks:
 - 結果は事実だけ (件数・異なり IP・ふだんの上限)。遮断の提案は出ない。同じ日にもう一度実行しても still_open で沈黙する (イベント型)
 - Insights のクエリは画面ごとに 1 本増える (この設定なら 2 本)。`max_scan_gb` を付けておく
 
+## 12 の期待 (cost_anomaly・出ないはずのもの)
+
+- 先に `arata doctor` で `cloudtrail-unused-regions` の行を見る: `account:ListRegions (有効なリージョン N、ふだん使うリージョン … を除く M: …)` に指定のリージョンが入り、
+  各リージョンの `cloudtrail:LookupEvents` が ok、`cost` の行が「LookupEvents は無料」。readonly ロールを deploy し直していなければ `account:ListRegions` が ng (ACCESS_DENIED)
+- run の後、stats の `unused_region_events` が 2 増え、`unused_regions_scanned` に対象のリージョンが並ぶ。LookupEvents は対象のリージョンごとにふつう 1 回
+- 同じパラメータの書き込みは `defense_evasion`・`public_exposure`・`access_denied`・`principal_new_source` (新しいリージョン)・`new_principal` には出ない
+  (未使用リージョンのイベントは unused_region_activity だけが見る)。同じ日にもう一度実行しても still_open で沈黙する (イベント型)
+- 指定のリージョンを cloudtrail-lookup の `regions` に足すと、以後は unused_region_activity の対象から外れ、代わりに 09 と同じく `principal_new_source` の新しいリージョンになり得る
+- cost_anomaly は異常を起こせないので、`costAnomaly.enabled: true` で deploy したモニターを doctor が見つけること (`ce:GetAnomalyMonitors (us-east-1): モニター 1 個以上`)、
+  `cost` の行の見込み (daily で約 0.02 USD/日)、run で `cost_anomaly` が skip されずに走る (異常が無ければ 0 件) ことだけを確かめる。
+  モニターが無ければ doctor は warn、run は `cost_anomaly` を「モニターが無い」理由で skip する。判定 (割合・下限・Feedback) は Go のテストのフェイクで固定している
+
 ## 片付け
 
 - 03 で作ったユーザーは `03-iam-changes.sh cleanup` で消す (`cdk destroy` はスタックの外のものを消さない)
 - 01・11 のログと 04 のサンプル finding は `cdk destroy` でロググループ・detector ごと消える
 - 10 のシークレットと読み手のロールは `secretAccess.enabled: false` で deploy し直すか `cdk destroy` で消える (シークレットは削除の猶予期間 (30 日) の後に消える。名前は CloudFormation が付けるので、すぐ作り直してもぶつからない)
+- 12 のパラメータはスクリプトの中で消す。Cost Anomaly Detection のモニターは `costAnomaly.enabled: false` で deploy し直すか `cdk destroy` で消える
 - 07・08・09・10 はスクリプトの中で作ったもの (ロググループ・ルール・セキュリティグループ・パラメータ) を消す (途中で失敗しても終了時に消す)。08 で「消せませんでした」と出たら、そのセキュリティグループを手で消す
 - 06 の WAF のログは `cdk destroy` (または `waf.enabled: false` で deploy) でロググループごと消える
