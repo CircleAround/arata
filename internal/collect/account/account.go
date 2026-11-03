@@ -1,5 +1,6 @@
 // Package account はアカウント単位の状態 (スナップショット) を取る collector を持つ: IAM 認証情報レポート、GuardDuty の findings、
-// IAM Access Analyzer の findings、姿勢 (CloudTrail 証跡・GuardDuty 有効・ルート MFA・S3 Public Access Block・パスワードポリシー)。
+// IAM Access Analyzer の findings、姿勢 (CloudTrail 証跡・GuardDuty 有効・ルート MFA・S3 Public Access Block・パスワードポリシー)、
+// WAFv2 の WebACL の設定。
 //
 // 決定 (ADR 0015): 窓に依らない「今の状態」なので Window は使わず、record.SnapshotItem を出す。engine は収集が成功したときだけ
 // (kind, source) 単位でスナップショットを丸ごと置き換える。設計書 4-1 の guardduty/ iam/ accessanalyzer/ posture/ を
@@ -18,6 +19,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/s3control"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
+	"github.com/aws/aws-sdk-go-v2/service/wafv2"
 
 	"github.com/CircleAround/arata/internal/collect"
 	"github.com/CircleAround/arata/internal/record"
@@ -38,6 +40,10 @@ const (
 	ActionDescribeTrails           = "cloudtrail:DescribeTrails"
 	ActionGetTrailStatus           = "cloudtrail:GetTrailStatus"
 	ActionGetPublicAccessBlock     = "s3:GetAccountPublicAccessBlock"
+	ActionListWebACLs              = "wafv2:ListWebACLs"
+	ActionGetWebACL                = "wafv2:GetWebACL"
+	ActionGetLoggingConfiguration  = "wafv2:GetLoggingConfiguration"
+	ActionListResourcesForWebACL   = "wafv2:ListResourcesForWebACL"
 )
 
 // RequiredActions は source.kind ごとに読み取りロールへ付ける action (doctor の表の最後に出す)。
@@ -46,6 +52,7 @@ var RequiredActions = map[string][]string{
 	KindGuardDuty:        {ActionListDetectors, ActionListGDFindings, ActionGetGDFindings},
 	KindAccessAnalyzer:   {ActionListAnalyzers, ActionListAAFindings},
 	KindPosture:          {ActionDescribeTrails, ActionGetTrailStatus, ActionListDetectors, ActionGetDetector, ActionGetAccountSummary, ActionGetPasswordPolicy, ActionGetPublicAccessBlock},
+	KindWAFConfig:        {ActionListWebACLs, ActionGetWebACL, ActionGetLoggingConfiguration, ActionListResourcesForWebACL},
 }
 
 // source.kind (config と同じ文字列)。
@@ -54,6 +61,7 @@ const (
 	KindGuardDuty        = "guardduty"
 	KindAccessAnalyzer   = "access-analyzer"
 	KindPosture          = "posture"
+	KindWAFConfig        = "waf-config"
 )
 
 // IAMAPI は IAM クライアントのうち使う部分。
@@ -94,6 +102,14 @@ type STSAPI interface {
 	GetCallerIdentity(ctx context.Context, in *sts.GetCallerIdentityInput, optFns ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error)
 }
 
+// WAFV2API は WAFv2 クライアントのうち使う部分 (読み取りのみ)。
+type WAFV2API interface {
+	ListWebACLs(ctx context.Context, in *wafv2.ListWebACLsInput, optFns ...func(*wafv2.Options)) (*wafv2.ListWebACLsOutput, error)
+	GetWebACL(ctx context.Context, in *wafv2.GetWebACLInput, optFns ...func(*wafv2.Options)) (*wafv2.GetWebACLOutput, error)
+	GetLoggingConfiguration(ctx context.Context, in *wafv2.GetLoggingConfigurationInput, optFns ...func(*wafv2.Options)) (*wafv2.GetLoggingConfigurationOutput, error)
+	ListResourcesForWebACL(ctx context.Context, in *wafv2.ListResourcesForWebACLInput, optFns ...func(*wafv2.Options)) (*wafv2.ListResourcesForWebACLOutput, error)
+}
+
 // Clients はリージョン 1 つ分の SDK クライアントの束。テストではフェイクを入れる。
 type Clients struct {
 	Region         string
@@ -103,6 +119,7 @@ type Clients struct {
 	CloudTrail     CloudTrailAPI
 	S3Control      S3ControlAPI
 	STS            STSAPI
+	WAFV2          WAFV2API
 }
 
 // base は collector の共通部。

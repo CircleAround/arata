@@ -32,6 +32,9 @@ sources:
     kind: access-analyzer
   - id: posture
     kind: posture
+  - id: waf_config
+    kind: waf-config               # WAFv2 の WebACL の設定 → waf_review (提案の候補)。REGIONAL は regions、CLOUDFRONT は us-east-1 を見る
+    # regions: [ap-northeast-1]    # 既定は aws.region
 
   # アプリ層: ロググループ → 形式プロファイル → 正規化レコード (設計書 2 章)。取得は Logs Insights の集計クエリのみ。
   - id: nginx_prod

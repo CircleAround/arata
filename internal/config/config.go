@@ -126,14 +126,16 @@ const (
 	KindGuardDuty        = "guardduty"
 	KindAccessAnalyzer   = "access-analyzer"
 	KindPosture          = "posture"
+	// KindWAFConfig は WAFv2 の WebACL の設定。REGIONAL は regions、CLOUDFRONT は us-east-1 を引く (ADR 0023)。
+	KindWAFConfig = "waf-config"
 )
 
 // SupportedKinds は受け付ける source.kind。
 var SupportedKinds = map[string]bool{KindCloudTrailLookup: true, KindCloudWatchLogs: true,
-	KindCredentialReport: true, KindGuardDuty: true, KindAccessAnalyzer: true, KindPosture: true}
+	KindCredentialReport: true, KindGuardDuty: true, KindAccessAnalyzer: true, KindPosture: true, KindWAFConfig: true}
 
 // SnapshotSourceKinds はスナップショットを取る source.kind (regions の既定は aws.region だけ、ingest_delay は使わない)。
-var SnapshotSourceKinds = map[string]bool{KindCredentialReport: true, KindGuardDuty: true, KindAccessAnalyzer: true, KindPosture: true}
+var SnapshotSourceKinds = map[string]bool{KindCredentialReport: true, KindGuardDuty: true, KindAccessAnalyzer: true, KindPosture: true, KindWAFConfig: true}
 
 // Load は設定を読み、既定値を埋め、検証する。
 func Load(path string) (*Config, error) {

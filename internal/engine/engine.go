@@ -26,6 +26,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/s3control"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
+	"github.com/aws/aws-sdk-go-v2/service/wafv2"
 
 	"github.com/CircleAround/arata/internal/allowlist"
 	"github.com/CircleAround/arata/internal/checks"
@@ -153,7 +154,7 @@ func NewAccountClients(ctx context.Context, cfg *config.Config, _ config.Source,
 		return account.Clients{}, err
 	}
 	return account.Clients{Region: region, IAM: iam.NewFromConfig(ac), GuardDuty: guardduty.NewFromConfig(ac), AccessAnalyzer: accessanalyzer.NewFromConfig(ac),
-		CloudTrail: ct.NewFromConfig(ac), S3Control: s3control.NewFromConfig(ac), STS: sts.NewFromConfig(ac)}, nil
+		CloudTrail: ct.NewFromConfig(ac), S3Control: s3control.NewFromConfig(ac), STS: sts.NewFromConfig(ac), WAFV2: wafv2.NewFromConfig(ac)}, nil
 }
 
 func loadAWSConfig(ctx context.Context, cfg *config.Config, region string, extra ...func(*awsconfig.LoadOptions) error) (aws.Config, error) {
@@ -419,7 +420,7 @@ func (e *Engine) partialProblems(c collect.Collector, src config.Source, runID s
 
 func (e *Engine) collector(ctx context.Context, src config.Source) (collect.Collector, error) {
 	switch src.Kind {
-	case config.KindCredentialReport, config.KindGuardDuty, config.KindAccessAnalyzer, config.KindPosture:
+	case config.KindCredentialReport, config.KindGuardDuty, config.KindAccessAnalyzer, config.KindPosture, config.KindWAFConfig:
 		clients := make([]account.Clients, 0, len(src.Regions))
 		for _, region := range src.Regions {
 			cl, err := e.deps.Account(ctx, e.cfg, src, region)
@@ -440,6 +441,13 @@ func (e *Engine) collector(ctx context.Context, src config.Source) (collect.Coll
 			c = account.NewGuardDuty(src.ID, clients...)
 		case config.KindAccessAnalyzer:
 			c = account.NewAccessAnalyzer(src.ID, clients...)
+		case config.KindWAFConfig:
+			// CLOUDFRONT の WebACL は us-east-1 にしか無いので、regions に関係なく us-east-1 のクライアントを足す
+			cf, err := e.deps.Account(ctx, e.cfg, src, config.GlobalRegion)
+			if err != nil {
+				return nil, err
+			}
+			c = account.NewWAFConfig(src.ID, cf, clients...)
 		default:
 			c = account.NewPosture(src.ID, clients...)
 		}
@@ -637,6 +645,8 @@ func kindsOf(src config.Source) []record.Kind {
 		return []record.Kind{record.KindAccessAnalyzer}
 	case config.KindPosture:
 		return []record.Kind{record.KindPostureItem}
+	case config.KindWAFConfig:
+		return []record.Kind{record.KindWAFConfig}
 	}
 	return nil
 }
