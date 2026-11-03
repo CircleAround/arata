@@ -195,7 +195,7 @@ func TestDeniedEventsDoNotAffectOtherChecks(t *testing.T) {
 
 func TestRegistry(t *testing.T) {
 	r := NewRegistry()
-	if strings.Join(r.Names(), ",") != "root_usage,unknown_assume_role,new_principal,iam_changes,access_denied,login_bruteforce,probe_paths,waf_block_trend,ai_path_usage,credential_hygiene,guardduty_findings,posture,access_analyzer,waf_review" {
+	if strings.Join(r.Names(), ",") != "root_usage,unknown_assume_role,new_principal,iam_changes,access_denied,defense_evasion,public_exposure,login_bruteforce,probe_paths,waf_block_trend,ai_path_usage,credential_hygiene,guardduty_findings,posture,access_analyzer,waf_review" {
 		t.Fatalf("%v", r.Names())
 	}
 	for _, n := range r.Names() {
@@ -206,9 +206,14 @@ func TestRegistry(t *testing.T) {
 		}
 	}
 	d := r.Defaults()
-	if strings.Join(d["daily"], ",") != "access_denied,ai_path_usage,iam_changes,login_bruteforce,new_principal,probe_paths,waf_block_trend" || strings.Join(d["hourly"], ",") != "root_usage,unknown_assume_role" ||
+	if strings.Join(d["daily"], ",") != "access_denied,ai_path_usage,defense_evasion,iam_changes,login_bruteforce,new_principal,probe_paths,public_exposure,waf_block_trend" || strings.Join(d["hourly"], ",") != "root_usage,unknown_assume_role" ||
 		strings.Join(d["weekly"], ",") != "access_analyzer,credential_hygiene,guardduty_findings,posture,waf_review" {
 		t.Fatalf("%v", d)
+	}
+	// 監査対象のロググループはソースの設定から渡す
+	r.SetAuditLogGroups([]string{"prod-nginx-access"})
+	if c, _ := r.Get("defense_evasion"); strings.Join(c.(DefenseEvasion).AuditLogGroups, ",") != "prod-nginx-access" || c.(DefenseEvasion).LogBaselineDays != 14 {
+		t.Fatalf("%+v", c)
 	}
 	if MaxSeverity([]Severity{Low, Critical, Medium}) != Critical || MaxSeverity(nil) != "" {
 		t.Fatal("MaxSeverity")

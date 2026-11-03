@@ -62,6 +62,8 @@ sources:
 #   new_principal        daily   state  principal_seen  allowlist にもベースラインにも無い主体 (medium)
 #   iam_changes          daily   event  trail_event     IAM の変更。deploy タグの主体なら info (medium)
 #   access_denied        daily   event  trail_event     拒否された API 呼び出しの急増。種類が多ければ権限の列挙の兆候 (medium / high)
+#   defense_evasion      daily   event  trail_event     監査・検知の仕組み (CloudTrail・GuardDuty・ログなど) を止める・弱める操作。deploy タグの主体なら 1 段下げる (critical / high)
+#   public_exposure      daily   event  trail_event     セキュリティグループ・S3・RDS・スナップショットなどを外部に開く設定変更。deploy タグでも下げない (high / medium / low)
 #   login_bruteforce     daily   event  http_access     sign-in 失敗の IP 別件数が平常帯超え (medium)
 #   probe_paths          daily   event  http_access     機密パス探索の 403/404 が平常帯超え (low)
 #   waf_block_trend      daily   event  waf_action      WAF の新しく鳴り始めたルール・Top IP の入れ替わり (low)
@@ -88,6 +90,8 @@ profiles:
       - new_principal        # allowlist にもベースラインにも無い主体 (medium)
       - iam_changes          # IAM の変更。deploy タグの主体なら info (medium)
       - access_denied        # 拒否された API 呼び出しの急増。種類が多ければ権限の列挙の兆候 (medium / high)
+      - defense_evasion      # 監査・検知の仕組み (CloudTrail・GuardDuty・ログなど) を止める・弱める操作。deploy タグの主体なら 1 段下げる (critical / high)
+      - public_exposure      # セキュリティグループ・S3・RDS・スナップショットなどを外部に開く設定変更。deploy タグでも下げない (high / medium / low)
       - login_bruteforce     # sign-in 失敗の IP 別件数が平常帯超え (medium)
       - probe_paths          # 機密パス探索の 403/404 が平常帯超え (low)
       - waf_block_trend      # WAF の新しく鳴り始めたルール・Top IP の入れ替わり (low)
@@ -153,6 +157,11 @@ checks:
     factor: 3                                    # 平常帯の倍率
     min_count: 50                                # 件数の条件の下限 (同じ API を叩き続ける設定ミスなど。medium 止まり)
     min_baseline_days: 7                         # 平常帯を使うのに要る、拒否のある過去日数 (それ未満は平常帯 0 として絶対の閾値だけで判定)
+  defense_evasion:
+    min_log_retention_days: 90                   # ロググループの保持期間の下限。PutRetentionPolicy でこれより短くしたら報告 (arata の監査対象のロググループなら critical)
+    trail_buckets: []                            # CloudTrail の証跡の宛先バケット (例 [example-trail-bucket])。バケットポリシーの削除・ライフサイクルの設定を報告する。保存済みの CreateTrail / UpdateTrail の宛先も自動で加わる
+  public_exposure:
+    sensitive_ports: [22, 3389, 3306, 5432, 1433, 1521, 6379, 11211, 27017, 9200, 5601, 2375] # 0.0.0.0/0・::/0 に開けたら high にするポート (範囲が重なれば該当。全ポートは常に high、他のポートは low)
   credential_hygiene:
     unused_days: 90                              # アクセスキーを未使用とみなす日数 (最終使用、使われていなければ作成・ローテーションから)
   posture:

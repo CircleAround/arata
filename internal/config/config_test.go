@@ -370,7 +370,7 @@ func TestProfileOverrides(t *testing.T) {
 }
 
 func TestParamChecks(t *testing.T) {
-	if got := strings.Join(ParamChecks(), ","); got != "login_bruteforce,probe_paths,waf_block_trend,waf_review,access_denied,credential_hygiene,posture" {
+	if got := strings.Join(ParamChecks(), ","); got != "login_bruteforce,probe_paths,waf_block_trend,waf_review,access_denied,defense_evasion,public_exposure,credential_hygiene,posture" {
 		t.Fatalf("got %s", got)
 	}
 }
@@ -464,5 +464,48 @@ func TestWAFReviewRemovedKeys(t *testing.T) {
 	got, err := UnknownKeys([]byte(minimal + "checks:\n  waf_review:\n    count_days: 14\n    count_ratio: 0.95\n    count_min_matches: 100\n"))
 	if err != nil || strings.Join(got, ",") != "checks.waf_review.count_days,checks.waf_review.count_ratio,checks.waf_review.count_min_matches" {
 		t.Fatalf("%v %v", got, err)
+	}
+}
+
+func TestSecurityChecksConfig(t *testing.T) {
+	cfg, err := Load(write(t, minimal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	de, pe := cfg.Checks.DefenseEvasion, cfg.Checks.PublicExposure
+	if de.MinLogRetentionDays != 90 || len(de.TrailBuckets) != 0 {
+		t.Fatalf("defense_evasion defaults: %+v", de)
+	}
+	if fmt.Sprint(pe.SensitivePorts) != "[22 3389 3306 5432 1433 1521 6379 11211 27017 9200 5601 2375]" {
+		t.Fatalf("public_exposure defaults: %+v", pe)
+	}
+	cfg, err = Load(write(t, minimal+"checks:\n  defense_evasion:\n    min_log_retention_days: 30\n    trail_buckets: [example-trail-bucket]\n  public_exposure:\n    sensitive_ports: [8080]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if de := cfg.Checks.DefenseEvasion; de.MinLogRetentionDays != 30 || strings.Join(de.TrailBuckets, ",") != "example-trail-bucket" ||
+		fmt.Sprint(cfg.Checks.PublicExposure.SensitivePorts) != "[8080]" {
+		t.Fatalf("%+v", cfg.Checks)
+	}
+	for _, body := range []string{
+		minimal + "checks:\n  defense_evasion:\n    min_log_retention_days: -1\n",
+		minimal + "checks:\n  public_exposure:\n    sensitive_ports: [70000]\n",
+		minimal + "checks:\n  defense_evasion:\n    trail_buckets: [\"\"]\n",
+	} {
+		if _, err := Load(write(t, body)); err == nil {
+			t.Fatalf("expected error for %q", body)
+		}
+	}
+}
+
+// 監査対象のロググループは cloudwatch-logs のソースの log_group から作る (利用者が別に書かない)。
+func TestAuditLogGroups(t *testing.T) {
+	body := strings.Replace(minimal, "profiles:", "  - id: nginx\n    kind: cloudwatch-logs\n    log_group: prod-nginx-access\n    format: nginx_access\nprofiles:", 1)
+	cfg, err := Load(write(t, body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(cfg.AuditLogGroups(), ","); got != "prod-nginx-access" {
+		t.Fatalf("audit log groups: %q", got)
 	}
 }

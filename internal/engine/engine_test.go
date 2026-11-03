@@ -210,7 +210,7 @@ func TestInitThenRunTwice(t *testing.T) {
 	if len(r1.Report.Info) != 1 || r1.Report.Info[0].Check != "iam_changes" {
 		t.Fatalf("deploy principal IAM change should be info: %+v", r1.Report.Info)
 	}
-	if strings.Join(r1.Report.Coverage.ChecksRun, ",") != "access_denied,ai_path_usage,iam_changes,new_principal,root_usage,unknown_assume_role" {
+	if strings.Join(r1.Report.Coverage.ChecksRun, ",") != "access_denied,ai_path_usage,defense_evasion,iam_changes,new_principal,public_exposure,root_usage,unknown_assume_role" {
 		t.Fatalf("checks_run: %v", r1.Report.Coverage.ChecksRun)
 	}
 	e.Close()
@@ -291,7 +291,7 @@ func TestPartialFailureExit3(t *testing.T) {
 	if sf := r.Report.Coverage.SourcesFailed[0]; sf.Source != "trail" || sf.Code != "ACCESS_DENIED" || sf.CoveredFrom != "" {
 		t.Fatalf("sources_failed: %+v", sf)
 	}
-	if len(r.Report.Coverage.ChecksRun) != 0 || len(r.Report.Coverage.ChecksSkipped) != 9 || r.Report.Coverage.ChecksSkipped[0].Reason != "source trail failed" {
+	if len(r.Report.Coverage.ChecksRun) != 0 || len(r.Report.Coverage.ChecksSkipped) != 11 || r.Report.Coverage.ChecksSkipped[0].Reason != "source trail failed" {
 		t.Fatalf("coverage: %+v", r.Report.Coverage)
 	}
 	if codes := h.logCodes(t); strings.Join(codes, ",") != "ACCESS_DENIED" {

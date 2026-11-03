@@ -14,6 +14,9 @@ type Checks struct {
 	// WAFReview は wafv2 の日次集計の条件と、週次の waf_review (WAF の修正提案の候補) の閾値 (ADR 0023)。
 	WAFReview    WAFReview    `yaml:"waf_review"`
 	AccessDenied AccessDenied `yaml:"access_denied"`
+	// DefenseEvasion と PublicExposure は CloudTrail の注目イベントを見る daily のチェック (ADR 0026)。
+	DefenseEvasion DefenseEvasion `yaml:"defense_evasion"`
+	PublicExposure PublicExposure `yaml:"public_exposure"`
 	// 以下は週次チェック (Step 3)。
 	CredentialHygiene CredentialHygiene `yaml:"credential_hygiene"`
 	Posture           Posture           `yaml:"posture"`
@@ -125,6 +128,26 @@ type AccessDenied struct {
 	Baseline         Baseline `yaml:",inline"`
 }
 
+// DefenseEvasion は defense_evasion (監査・検知の仕組みを止める・弱める操作) の設定 (ADR 0026)。
+// 監査対象のロググループ (cloudwatch-logs のソースの log_group) は設定から自動で作るのでここには書かない (Config.AuditLogGroups)。
+type DefenseEvasion struct {
+	// MinLogRetentionDays はロググループの保持期間の下限。PutRetentionPolicy でこれより短くしたものを報告する
+	// (CloudTrail には新しい値しか残らないので「短くした」かは分からず、下限との比較で判定する)。
+	MinLogRetentionDays int `yaml:"min_log_retention_days"`
+	// TrailBuckets は CloudTrail の証跡の宛先の S3 バケット名。バケットポリシーの削除・ライフサイクルの設定を報告する。
+	// 保存済みの CreateTrail / UpdateTrail の宛先 (s3BucketName) も自動で加える。
+	TrailBuckets []string `yaml:"trail_buckets"`
+}
+
+// PublicExposure は public_exposure (外部に開く設定変更) の設定 (ADR 0026)。
+type PublicExposure struct {
+	// SensitivePorts はセキュリティグループを 0.0.0.0/0・::/0 に開けたときに high とするポート (範囲が重なれば該当)。全ポート (protocol -1) は常に high。
+	SensitivePorts []int `yaml:"sensitive_ports"`
+}
+
+// DefaultSensitivePorts は sensitive_ports の既定 (SSH・RDP・DB・キャッシュ・検索・Docker の API)。
+var DefaultSensitivePorts = []int{22, 3389, 3306, 5432, 1433, 1521, 6379, 11211, 27017, 9200, 5601, 2375}
+
 // DefaultDeniedErrorCodes は拒否とみなす errorCode の既定 (IAM・S3 などは AccessDenied / AccessDeniedException、EC2 は UnauthorizedOperation)。
 var DefaultDeniedErrorCodes = []string{"AccessDenied", "AccessDeniedException", "UnauthorizedOperation", "Client.UnauthorizedOperation"}
 
@@ -203,6 +226,10 @@ func (c *Checks) applyDefaults() {
 		ad.HighDistinctAPIs = 20
 	}
 	ad.Baseline.applyDefaults(50)
+	setInt(&c.DefenseEvasion.MinLogRetentionDays, 90)
+	if len(c.PublicExposure.SensitivePorts) == 0 {
+		c.PublicExposure.SensitivePorts = DefaultSensitivePorts
+	}
 	if c.CredentialHygiene.UnusedDays == 0 {
 		c.CredentialHygiene.UnusedDays = 90
 	}
@@ -268,6 +295,19 @@ func (c *Checks) validate() error {
 	for _, code := range ad.ErrorCodes {
 		if code == "" {
 			return fmt.Errorf("access_denied: error_codes must not contain an empty string")
+		}
+	}
+	if c.DefenseEvasion.MinLogRetentionDays < 1 {
+		return fmt.Errorf("defense_evasion: min_log_retention_days >= 1")
+	}
+	for _, b := range c.DefenseEvasion.TrailBuckets {
+		if b == "" {
+			return fmt.Errorf("defense_evasion: trail_buckets must not contain an empty string")
+		}
+	}
+	for _, p := range c.PublicExposure.SensitivePorts {
+		if p < 0 || p > 65535 {
+			return fmt.Errorf("public_exposure: sensitive_ports must be 0-65535 (got %d)", p)
 		}
 	}
 	if c.CredentialHygiene.UnusedDays < 1 {
