@@ -490,7 +490,9 @@ retention:
 - 決定: `run` の partial は Commit する。`init` は中断・部分失敗でも Commit する (`--resume` のため)。Commit に失敗したら、その実行の収集が失われたことと再実行の手順を出す
 - 決定: `run` / `evaluate` は Commit してからレポートを出す。衝突したら `--out` に何も書かないので、aratam が入力の問題として知らせる (`docs/aratam.md` 2 章)
 - 決定: S3 に問い合わせられない (権限・通信) ときは `STORE_UNAVAILABLE`。404 だけを「まだ無い」と扱う
-- 決定: S3 に SQLite が無いのに raw があれば、消えた可能性が高いので `STORE_CORRUPT` の警告で `arata rebuild --from-scratch` を案内する。止めはしない (気づかず定時に回る環境で、失敗の連続より実行を優先する)。この実行が空の SQLite を作るので、次の実行からは警告が出ない
+- 決定: S3 に SQLite が無いのに raw があれば、消えた可能性が高いので `init` / `run` / `collect` / `evaluate` / `approve` / `ack` / `snooze` / `resolve` は `STORE_CORRUPT` (終了コード 2) で止め、`arata rebuild --from-scratch` (とバージョニングからの復元) を案内する。
+  続けると空の SQLite を Commit して findings・承認・ack の状態を空で上書きし、次からは気づけない。止まれば aratam が「実行されていない」と知らせる。`init` も止める (raw があるのに init するのは rebuild の誤用の可能性が高い)。`report` / `review` は警告して続け、doctor は `store_read` を ng にする。`rebuild` は止めない。
+  最初の `init` で SQLite の送信だけが失敗したときも同じ状態になる。そのときは `arata rebuild --from-scratch --baseline` で、収集した主体を baseline にして続ける
 - 決定: raw だけが先に進む (SQLite の書き込みが失敗する) ことは受け入れる。次の run は古い SQLite から同じ窓を引き直すので SQLite では二重に数えない。
   rebuild でも events・metrics・スナップショットは同じ結果で、`principal_ips.count` だけが増え得る (判定に使わない。ADR 0011・0034)
 - 決定: `rebuild` は raw を全部取得して作り直し、SQLite だけを条件付きで置き換える。`.bak` は残さない (世代はバケットのバージョニング)

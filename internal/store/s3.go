@@ -143,6 +143,7 @@ func openS3(ctx context.Context, api S3API, loc S3Location, work string) (*S3, e
 }
 
 // RawWithoutDatabase は開始時に S3 に SQLite が無く raw があったか (SQLite が失われた疑い。初回は raw も無い)。
+// 呼び出し側は書き込みを進めないこと (Commit すると空の SQLite が状態を上書きする)。
 func (s *S3) RawWithoutDatabase() bool { return s.rawOrphaned }
 
 // fetchRaw は raw のファイルに初めて追記する前に、S3 の今の内容を取得する。

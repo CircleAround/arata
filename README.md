@@ -288,7 +288,7 @@ store: s3://example-arata-store/my-service
 - **権限** (バケットに対して。prefix に限定): `s3:GetObject`、`s3:PutObject`、`s3:ListBucket`。条件付きの書き込みにも `s3:GetObject` が要ります。監査対象の読み取りロールには付けません
 - **バケットの推奨**: バージョニング (誤った上書きから戻す)、暗号化 (SSE-S3 か SSE-KMS)、パブリックアクセスブロック。Object Lock は任意です。`arata doctor` が満たしていないものを warn で示します (確かめる権限が無ければ飛ばします。書き込みは試しません)
 - **同時に動いたとき**: 後から終わったほうが `STORE_CONFLICT` (終了コード 2) で失敗し、何も上書きしません。もう一度実行してください。人の `ack` と定時の run が重なったときも同じです。衝突した run は report を出さないので、aratam が「出力が無いか古い」として緊急用に知らせます (`--out` が残る環境では `max_age` を超えたとき)
-- **SQLite が壊れた・失われた**: `arata rebuild --from-scratch` で raw から作り直せます。バージョニングがあれば前の版にも戻せます。raw があるのに SQLite が無い状態で動かすと `STORE_CORRUPT` の警告が出ます (その run は空から始まり、全部が新規として報告されます)
+- **SQLite が壊れた・失われた**: `arata rebuild --from-scratch` で raw から作り直せます。バージョニングがあれば前の版にも戻せます。raw があるのに SQLite が無いと、書き込み系のコマンド (`init` を含む) は `STORE_CORRUPT` で止まります (状態を空で上書きしないため)。`report` / `review` は警告して続き、`doctor` は ng で示します。最初の `init` で SQLite の送信だけが失敗したときも同じ状態になるので、`arata rebuild --from-scratch --baseline` で続けてください
 - **中断したとき**: `INTERRUPTED` (終了コード 2) で止まり、S3 には保存しません。もう一度実行してください
 
 ### アプリ層 (CloudWatch Logs) を足す

@@ -22,7 +22,7 @@ func newReviewCmd(d *Deps, g *globalFlags) *subcmd.Command {
 		Use:   "review",
 		Short: "未対応 (open / acked) の finding を一覧する (対話なし。approve できるものは対象を示す)",
 		Run: func(ctx context.Context, _ []string) error {
-			e, _, err := openEngine(ctx, d, g)
+			e, err := openEngineForRead(ctx, d, g)
 			if err != nil {
 				return err
 			}

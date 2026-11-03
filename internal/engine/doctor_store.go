@@ -81,7 +81,16 @@ func (d *doctor) storeRead(ctx context.Context, api store.S3API, src config.Sour
 	case err == nil:
 		d.add(src, "store_read", DoctorOK, "", d.cfg.Store.String()+" を読める")
 	case store.HTTPStatus(err) == http.StatusNotFound:
-		d.add(src, "store_read", DoctorOK, "", d.cfg.Store.String()+" を読める (SQLite はまだ無い。最初の init / run が作る)")
+		raw := loc.Key("raw/")
+		out, err := api.ListObjectsV2(ctx, &s3.ListObjectsV2Input{Bucket: &loc.Bucket, Prefix: &raw, MaxKeys: aws.Int32(1)})
+		switch {
+		case err != nil:
+			d.storeReadFailed(src, "s3:ListBucket", err)
+		case len(out.Contents) > 0:
+			d.add(src, "store_read", DoctorNG, CodeStoreCorrupt, d.cfg.Store.String()+" に raw があるのに SQLite が無い (書き込み系のコマンドは止まる)。"+lostDatabaseAction)
+		default:
+			d.add(src, "store_read", DoctorOK, "", d.cfg.Store.String()+" を読める (SQLite はまだ無い。最初の init / run が作る)")
+		}
 	default:
 		d.storeReadFailed(src, "s3:GetObject", err)
 	}

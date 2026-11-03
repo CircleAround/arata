@@ -248,7 +248,19 @@ func Open(cfg *config.Config, deps Deps) (*Engine, error) {
 }
 
 // OpenContext はストアを開き allowlist を読む。ロック失敗は STORE_LOCKED、S3 に問い合わせられないときは STORE_UNAVAILABLE (exit 2)。
+//
+// 決定: S3 に raw があるのに SQLite が無ければ STORE_CORRUPT で止める (ADR 0034)。続けると空の SQLite を Commit して findings・承認・ack の状態を
+// 空で上書きし、次からは気づけない。止まれば aratam が「実行されていない」と知らせる。読むだけなら OpenForRead。
 func OpenContext(ctx context.Context, cfg *config.Config, deps Deps) (*Engine, error) {
+	return open(ctx, cfg, deps, false)
+}
+
+// OpenForRead は Commit しないコマンド (report / review) 用。S3 に SQLite が無く raw があっても止めず、警告する。
+func OpenForRead(ctx context.Context, cfg *config.Config, deps Deps) (*Engine, error) {
+	return open(ctx, cfg, deps, true)
+}
+
+func open(ctx context.Context, cfg *config.Config, deps Deps, readOnly bool) (*Engine, error) {
 	deps.fill(cfg)
 	st, err := openStore(ctx, cfg, deps)
 	if err != nil {
@@ -266,19 +278,27 @@ func OpenContext(ctx context.Context, cfg *config.Config, deps Deps) (*Engine, e
 		deps.Logger.Error("failed to open store", "code", CodeStoreCorrupt, "dir", cfg.Store.String(), "error", err.Error())
 		return nil, &ExitError{Code: CodeStoreCorrupt, Exit: ExitConfig, Err: err}
 	}
+	if s, ok := st.(*store.S3); ok && s.RawWithoutDatabase() {
+		attrs := []any{"code", CodeStoreCorrupt, "store", cfg.Store.String(), "action", lostDatabaseAction}
+		if !readOnly {
+			st.Close()
+			deps.Logger.Error("the S3 store has raw files but no database; stopped so that the findings and approvals are not overwritten with an empty database", attrs...)
+			return nil, &ExitError{Code: CodeStoreCorrupt, Exit: ExitConfig, Err: errLostDatabase}
+		}
+		deps.Logger.Warn("the S3 store has raw files but no database; showing an empty database", attrs...)
+	}
 	al, err := allowlist.Load(cfg.Allowlist)
 	if err != nil {
 		st.Close()
 		deps.Logger.Error("invalid allowlist", "code", CodeConfigInvalid, "path", cfg.Allowlist, "error", err.Error())
 		return nil, &ExitError{Code: CodeConfigInvalid, Exit: ExitConfig, Err: err}
 	}
-	// 決定: raw があるのに SQLite が無いのは消えた可能性が高い。止めはしないが (この実行が空の SQLite を作る)、全部が新規として報告される原因が分かるように知らせる
-	if s, ok := st.(*store.S3); ok && s.RawWithoutDatabase() {
-		deps.Logger.Warn("the S3 store has raw files but no database; it may have been lost, so this run starts empty and reports everything as new", "code", CodeStoreCorrupt, "store", cfg.Store.String(),
-			"action", "stop and run arata rebuild --from-scratch to rebuild it from raw (or restore the previous version if the bucket has versioning)")
-	}
 	return &Engine{cfg: cfg, deps: deps, st: st, al: al, log: deps.Logger}, nil
 }
+
+const lostDatabaseAction = "arata rebuild --from-scratch builds it from raw, or restore the previous version if the bucket has versioning"
+
+var errLostDatabase = errors.New("the S3 store has raw files but no database")
 
 func openStore(ctx context.Context, cfg *config.Config, deps Deps) (store.Store, error) {
 	if cfg.Store.Scheme != "s3" {

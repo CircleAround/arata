@@ -264,8 +264,8 @@ func TestDoctorLastRunToReadsS3(t *testing.T) {
 	}
 }
 
-// SQLite が消えて raw だけ残っているのに黙って空から始めない (全部が新規として報告され、原因に気づきにくい)。
-func TestS3WarnsWhenDatabaseIsLost(t *testing.T) {
+// SQLite が消えて raw だけ残っているときは書き込み系を止める。続けると空の SQLite が findings・承認・ack の状態を上書きし、次からは気づけない。
+func TestS3StopsWhenDatabaseIsLost(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness(t)
 	f := useS3(t, h)
@@ -282,17 +282,40 @@ func TestS3WarnsWhenDatabaseIsLost(t *testing.T) {
 	}
 	e.Close()
 	if strings.Contains(h.stderr.String(), "rebuild --from-scratch") {
-		t.Fatalf("the first run of a new store must not warn: %s", h.stderr)
+		t.Fatalf("the first run of a new store must not stop: %s", h.stderr)
 	}
 
 	f.Delete("acme/audit.sqlite.gz")
-	e, err = Open(h.cfg, h.deps)
+	_, err = Open(h.cfg, h.deps)
+	var xe *ExitError
+	if !errors.As(err, &xe) || xe.Code != CodeStoreCorrupt || xe.Exit != ExitConfig {
+		t.Fatalf("want STORE_CORRUPT, got %v", err)
+	}
+	if !strings.Contains(h.stderr.String(), "arata rebuild --from-scratch") {
+		t.Fatalf("must point to rebuild: %s", h.stderr)
+	}
+
+	// 読むだけなら止めず、警告する
+	h.stderr.Reset()
+	r, err := OpenForRead(ctx, h.cfg, h.deps)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer e.Close()
-	if !strings.Contains(strings.Join(h.logCodes(t), ","), CodeStoreCorrupt) || !strings.Contains(h.stderr.String(), "arata rebuild --from-scratch") {
-		t.Fatalf("must warn and point to rebuild: %s", h.stderr)
+	defer r.Close()
+	if !strings.Contains(h.stderr.String(), "arata rebuild --from-scratch") {
+		t.Fatalf("a reader must be warned: %s", h.stderr)
+	}
+}
+
+// doctor はこの状態を ng で示す。
+func TestDoctorS3DatabaseLost(t *testing.T) {
+	h := newHarness(t)
+	f := useS3(t, h)
+	f.Put("acme/raw/trail/2026-10-21.jsonl", []byte("{}\n"))
+	res := Doctor(context.Background(), h.cfg, h.deps, 24*time.Hour)
+	row := doctorRow(res, "store_read")
+	if row == nil || row.Status != DoctorNG || row.Code != CodeStoreCorrupt || !strings.Contains(row.Detail, "rebuild --from-scratch") {
+		t.Fatalf("row: %+v", row)
 	}
 }
 

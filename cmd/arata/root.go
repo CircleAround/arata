@@ -158,6 +158,15 @@ func openEngine(ctx context.Context, d *Deps, g *globalFlags) (*engine.Engine, *
 	return e, cfg, nil
 }
 
+// openEngineForRead は Commit しないコマンド (report / review) 用。書き込み系は openEngine を使う。
+func openEngineForRead(ctx context.Context, d *Deps, g *globalFlags) (*engine.Engine, error) {
+	cfg, err := loadConfig(d, g)
+	if err != nil {
+		return nil, err
+	}
+	return engine.OpenForRead(ctx, cfg, d.Engine)
+}
+
 func newInitCmd(d *Deps, g *globalFlags) *subcmd.Command {
 	var window string
 	var resume bool
@@ -421,7 +430,7 @@ func newReportCmd(d *Deps, g *globalFlags) *subcmd.Command {
 			if (from == "") != (to == "") {
 				return configErr(d, fmt.Errorf("--from and --to must be given together"))
 			}
-			e, _, err := openEngine(ctx, d, g)
+			e, err := openEngineForRead(ctx, d, g)
 			if err != nil {
 				return err
 			}

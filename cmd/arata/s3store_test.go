@@ -250,3 +250,82 @@ func TestDirStoreInterrupted(t *testing.T) {
 		t.Fatalf("last log: %v", last)
 	}
 }
+
+// SQLite が無く raw がある状態: 書き込み系は止まり S3 を変えない。読むコマンドと doctor・rebuild は止めず、rebuild で戻せる。
+func TestS3StoreLostDatabase(t *testing.T) {
+	c, f := newS3CLI(t)
+	c.rootLogin("r1")
+	if code := c.run("run", "--config", c.cfg, "--profile", "daily"); code != 0 {
+		t.Fatalf("run: exit %d\n%s", code, c.stderr)
+	}
+	id := c.firstFinding()
+	f.Delete(s3DB)
+	before := f.Snapshot()
+	f.ResetRequests()
+
+	for _, args := range [][]string{
+		{"run", "--profile", "daily"}, {"collect"}, {"evaluate", "--profile", "daily"}, {"init"},
+		{"ack", id}, {"snooze", id, "--until", "2026-12-01"}, {"resolve", id}, {"approve", id, "--note", "x"},
+	} {
+		code := c.run(append(args, "--config", c.cfg)...)
+		if code != 2 || !strings.Contains(strings.Join(c.codes(), ","), "STORE_CORRUPT") || !strings.Contains(c.stderr.String(), "arata rebuild --from-scratch") {
+			t.Fatalf("%v: exit %d\n%s", args, code, c.stderr)
+		}
+	}
+	if len(f.Requests("PUT")) != 0 || !reflect.DeepEqual(f.Snapshot(), before) {
+		t.Fatalf("S3 must not change: %+v", f.Requests("PUT"))
+	}
+	if b, _ := os.ReadFile(filepath.Join(c.dir, "allowlist.yaml")); strings.Contains(string(b), "note: x") {
+		t.Fatalf("approve must stop before touching the allowlist")
+	}
+
+	if code := c.run("report", "--config", c.cfg, "--profile", "daily"); code != 0 || !strings.Contains(c.stdout.String(), "root_usage") {
+		t.Fatalf("report: exit %d\n%s", code, c.stderr)
+	}
+	if !strings.Contains(c.stderr.String(), "arata rebuild --from-scratch") {
+		t.Fatalf("report must warn: %s", c.stderr)
+	}
+	if code := c.run("review", "--config", c.cfg); code != 0 {
+		t.Fatalf("review: exit %d\n%s", code, c.stderr)
+	}
+	if code := c.run("doctor", "--config", c.cfg); code != 2 || !strings.Contains(c.stdout.String(), "STORE_CORRUPT") {
+		t.Fatalf("doctor: exit %d\n%s", code, c.stdout)
+	}
+
+	if code := c.run("rebuild", "--config", c.cfg, "--from-scratch"); code != 0 {
+		t.Fatalf("rebuild: exit %d\n%s", code, c.stderr)
+	}
+	c.now = c.now.Add(time.Hour)
+	if code := c.run("run", "--config", c.cfg, "--profile", "daily"); code != 0 {
+		t.Fatalf("run after rebuild: exit %d\n%s", code, c.stderr)
+	}
+	c.assertCodesInVocabulary()
+}
+
+// 最初の init で SQLite の送信だけが失敗すると raw だけが残り、init のやり直しも止まる。rebuild --from-scratch --baseline で続けられる。
+func TestS3StoreFirstInitFailsAtDatabase(t *testing.T) {
+	c, f := newS3CLI(t)
+	c.rootLogin("r1")
+	f.BeforePut = func(key string) int {
+		if key == s3DB {
+			return 500
+		}
+		return 0
+	}
+	if code := c.run("init", "--config", c.cfg, "--window", "2d"); code != 2 || !strings.Contains(strings.Join(c.codes(), ","), "STORE_UNAVAILABLE") {
+		t.Fatalf("init: exit %d\n%s", code, c.stderr)
+	}
+	f.BeforePut = nil
+	if f.Get(s3DB) != nil || len(f.Snapshot()) == 0 {
+		t.Fatalf("raw must be ahead: %v", f.Snapshot())
+	}
+	if code := c.run("init", "--config", c.cfg, "--window", "2d"); code != 2 || !strings.Contains(c.stderr.String(), "arata rebuild --from-scratch") {
+		t.Fatalf("init again: exit %d\n%s", code, c.stderr)
+	}
+	if code := c.run("rebuild", "--config", c.cfg, "--from-scratch", "--baseline"); code != 0 {
+		t.Fatalf("rebuild: exit %d\n%s", code, c.stderr)
+	}
+	if code := c.run("run", "--config", c.cfg, "--profile", "daily"); code != 0 {
+		t.Fatalf("run: exit %d\n%s", code, c.stderr)
+	}
+}
