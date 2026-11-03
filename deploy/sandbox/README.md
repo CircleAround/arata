@@ -63,6 +63,7 @@ cp config.example.json ~/arata-sandbox/config.json
 | `testUsers[]` | `name` (prefix の後ろ)、`consolePassword`、`accessKey`。要らなければ `[]` |
 | `externalRole.trustedAccountId` / `externalId` | 外部用ロールを引き受けてよい外部アカウントと、要求する ExternalId (省略可) |
 | `guardDuty.enabled` / `accessAnalyzer.enabled` / `bedrock.enabled` / `waf.enabled` / `secretAccess.enabled` | 任意の機能。暗黙の既定は持たないので、5 つとも書く (`waf`・`secretAccess` は例でも `false`。費用がかかる)。以前の設定ファイルには `"secretAccess": { "enabled": false }` を足す |
+| `waf.challenge` / `waf.captcha` | 任意 (省略時は false)。試験用の WAF に Challenge (GET /search) と CAPTCHA (/contact) のルールを足す (ADR 0028)。`waf.enabled` が true のときだけ書ける。ルール 1 つにつき月 1 USD |
 | `bedrock.modelSourceArn` | `bedrock.enabled: true` のとき必須 |
 
 未知のキー・型の誤り・不足は deploy の前にまとめて報告される (`cdk synth` で確かめられる)。
@@ -119,7 +120,8 @@ sources:
     log_group: aws-waf-logs-arata-sandbox     # 出力の WafLogGroupName
     format: wafv2                             # → waf_action
     strip_path_prefix: /sandbox               # API Gateway の REST API はパスの前にステージ名が付く
-    max_scan_gb: 1                            # 試験のログは小さい。念のため上限を付ける
+    max_scan_gb: 1                            # 試験のログは小さい。念のため上限を付ける (doctor の cost の行に見積もり)
+    # resources: ["<アカウント>:<api-id>:sandbox"]   # 資源で絞る試験 (ログの httpSourceId。scenarios/README.md の 06)
   - id: waf_config
     kind: waf-config                          # WebACL の設定 → waf_review
 ```
@@ -177,7 +179,8 @@ WAF の修正提案 (arata が WAF のログと設定から候補を作り、ara
   `login-rate-limit` (/login に絞った 1 IP あたり 60 秒に 10 件。WAF の下限。BLOCK)、
   `AWSManagedRulesKnownBadInputsRuleSet` (全体を COUNT)、
   `AWSManagedRulesCommonRuleSet` (`NoUserAgent_HEADER`・`SizeRestrictions_QUERYSTRING`・`SizeRestrictions_BODY` だけ COUNT、他は BLOCK)。
-  BLOCK・COUNT・ALLOW の行がそれぞれ出る。シナリオ 06 で何がどれになるはずかは [scenarios/README.md](scenarios/README.md)
+  BLOCK・COUNT・ALLOW の行がそれぞれ出る。`waf.challenge` / `waf.captcha` で `search-challenge` (末尾が /search に Challenge) と `contact-captcha` (末尾が /contact に CAPTCHA) を足す。
+  シナリオ 06 で何がどれになるはずかは [scenarios/README.md](scenarios/README.md)
 - **ログ**: CloudWatch Logs の `aws-waf-logs-<prefix>` (WAF の決まりで名前は `aws-waf-logs-` で始める)。保持は `nginxLogGroup.retentionDays` と同じ。
   `authorization` と `cookie` のヘッダーは WAF が落とす (redacted fields)。
   配信の許可はこのロググループに絞ったリソースポリシー `<prefix>-waf-logs` で与える (無いと WAF がアカウントのリソースポリシーを自動で作り、destroy で残るため)

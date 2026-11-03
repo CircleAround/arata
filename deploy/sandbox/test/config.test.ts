@@ -175,3 +175,25 @@ test('secretAccess は必須で、enabled は真偽値 (暗黙の既定を持た
   on.secretAccess = { enabled: true };
   assert.equal(parseConfig(on).secretAccess.enabled, true);
 });
+
+test('waf.challenge / waf.captcha は真偽値で、既定は false。waf.enabled が false のまま true にすると誤り (効かないため)', () => {
+  const ex = parseConfig(example());
+  assert.equal(ex.waf.challenge, false);
+  assert.equal(ex.waf.captcha, false);
+
+  const omitted = example();
+  omitted.waf = { enabled: true };
+  assert.deepEqual(parseConfig(omitted).waf, { enabled: true, challenge: false, captcha: false });
+
+  const on = example();
+  on.waf = { enabled: true, challenge: true, captcha: true };
+  assert.deepEqual(parseConfig(on).waf, { enabled: true, challenge: true, captcha: true });
+
+  const wrongType = example();
+  wrongType.waf = { enabled: true, challenge: 'yes' };
+  assert.ok(errorsOf(() => parseConfig(wrongType)).some((p) => p.startsWith('waf.challenge:') && p.includes('真偽値')));
+
+  const disabled = example();
+  disabled.waf = { enabled: false, captcha: true };
+  assert.ok(errorsOf(() => parseConfig(disabled)).some((p) => p.startsWith('waf.captcha:') && p.includes('waf.enabled')));
+});

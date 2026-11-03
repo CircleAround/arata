@@ -139,6 +139,7 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
 | `waf_rule_count_match` / `_suspect` | `<WebACL>\|<ルール>` (グループの中は `<ruleGroupId>/<ルール>`) | カウントモードの一致の件数 / そのうち探索パスか、その日「BLOCK された IP」(下の決定) からの件数 |
 | `waf_ip_rate_p50` / `_p99` / `_max` | `<WebACL>\|<パスの群>` | 1 IP あたり 5 分間の件数の分布。群は `rate_path_groups` の接頭辞 (最長一致)、どれにも当たらなければ `*` |
 | `waf_position_limit` | `<WebACL>\|<配列の名前>` | 配列の位置の上限を超えた (数え漏れの可能性がある) リクエストの数 |
+| `waf_challenge_issued` / `_issued_ips` / `_solved_ips` | `<WebACL>\|<challenge\|captcha>\|<ルール>[/<グループの中のルール>]\|<method>\|<正規化パス>` | Challenge / CAPTCHA を出した件数 / 出した異なり IP / そのうち解いた異なり IP (ADR 0028)。日ごとに上位 `top_paths` |
 
 - 決定: ヘッダー・クエリ文字列・Cookie・User-Agent・本文は引かない。WebACL 名は `webaclId` の ARN から `parse` で取る
 - 決定: パスはクエリと `#` 以降を落とし、数字だけ・UUID の区間を `:id` にし、メールアドレスらしき文字列を伏せる。Insights に正規表現の置換が無いので Go 側で行う。
@@ -162,8 +163,14 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
   `top_paths` / `rate_path_groups` / `trusted_cidrs` は集計条件なので overrides では変えられない
 - 決定 (`strip_path_prefix`): API Gateway の REST API では `httpRequest.uri` の前にステージ名が付く (`/prod/login`。sandbox で確認。ALB・CloudFront では付かない)。
   wafv2 ソースの `strip_path_prefix` (`/` で始まり `/` で終わらない) を、探索パス・パスの群の判定では必須の接頭辞として正規表現の前に付け、正規化の前に外す (`/prod` は `/prod/x` と `/prod` だけを外し、`/products` は外さない)。集計条件
-- 費用: wafv2 ソースのクエリは lines + `waf_block_ip` + 5 本 + レート (日数分)。既存の `max_scan_gb` がそのまま効く (超えたら QUERY_LIMIT で、その日の集計は欠ける)。
+- 費用: wafv2 ソースのクエリは lines + `waf_block_ip` + 7 本 + レート (日数分。合わせて範囲 1 本分)。既存の `max_scan_gb` がそのまま効く (超えたら QUERY_LIMIT で、その日の集計は欠ける)。
   sandbox の 1 時間・約 300 リクエストのログで 1 本 0.3〜0.5 MB
+- 決定 (資源で絞る。ADR 0028): wafv2 ソースの `resources` (ログの `httpSourceId` の完全一致か `*` / `?` の glob) を前処理に `filter httpSourceId like /^(...)$/` として入れる。
+  解釈率と全集計が同じ範囲を数える。集計の key には資源を入れない (分けたいならソースを 2 つ書く)。Insights はロググループ全体をスキャンするので費用は減らない。集計条件
+- 決定 (Challenge / CAPTCHA。ADR 0028): 出した行 (`action` が CHALLENGE / CAPTCHA) と、トークンが受理された行を別のクエリで (日, method, パス, IP) まで取り、Go で数える。
+  受理は公式文書の説明 (トップレベルの `<種類>Response` に solveTimestamp があり failureReason が無い) と例 (`nonTerminatingMatchingRules.N.action` が CHALLENGE / CAPTCHA、
+  グループの中は `ruleGroupList.N.nonTerminatingMatchingRules.0.action`) が食い違うので両方を受け付ける。期限切れ (failureReason あり) は受理としない。
+  解いた IP は「出した IP」との積集合 (同じ日・同じ method とパス・同じ種類)。トークンはルールで共有されるのでルールでは突き合わせない
 
 ### 2-1. 形式プロファイルの種類 (JSON ログと非 JSON ログ)
 
@@ -567,6 +574,7 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 - 決定: error_codes は保存 (events) の条件なので overrides では変えられない。後から足したコードは、足す前の拒否が保存されていないので平常帯 0 から始まる
 - 決定 (ADR 0027 で見直し、変えない): 平常帯を使うかは「拒否のある過去日」で数えたまま (principal_new_source / secret_access の「収集し終えた日」にしない)。拒否の少ない主体は収集済みの日で数えても中央値 0 で同じ閾値になり、拒否の多い主体は拒否のある日が min_baseline_days に届くので結果は実質変わらない (足りない間は平常帯 0 = 絶対の閾値で、鳴りやすい側に倒れる)
 - 決定 (ADR 0022): 想定済みの拒否 (allowlist の `expected_denied`。窓の終わりの時点で期限内の項目) は数える前に除く。窓にも平常帯の過去分にも同じく適用する (平常帯に残すと、ふだんの想定内の拒否で平常帯が膨らみ想定外の拒否を吸収するため)。窓で除いた件数は Data の `expected_denied_excluded`
+- 決定: サービスリンクロール (主体の ARN が `:role/aws-service-role/` を含む。AWS のサービスだけが引き受け、権限は利用者が変えられない) の拒否は窓にも平常帯にも数えない。仕様由来のノイズ (例: AWS Config のロールが毎日多数の API で拒否される) で、盗んだ認証情報による権限の探索に当たらないため。どの利用者でも同じなので設定にせず固定の規則とする (ADR 0021 の延長)。events への保存は変えない
 - サービス主体と root は対象外。allowlist で承認済みでも対象 (想定内の拒否は `expected_denied` で除く。主体ごと止めるなら ack / snooze だが、重大度が上がれば再報告される)。Data: principal, principal_kind, allowlist_status, external_account, count, distinct_apis, expected_denied_excluded, apis (件数の多い順に最大 10 個、`iam:ListUsers × 3`), error_codes, ips, first_time, last_time, baseline_median_count, baseline_median_distinct, threshold (`breadth` / `volume`)
 
 決定 (defense_evasion / public_exposure。ADR 0026):
@@ -664,8 +672,10 @@ arata は LLM を使わず候補だけを作り、aratam の LLM は候補を文
 | `probe_allowed` (すり抜けている探索) | count_first | 探索パスへの ALLOW が直近 `days` (7) 日で `min_count` (10) 件以上 (WebACL ごとに 1 件、パスは上位 10) |
 | `rate_limit_missing` (レート制限の不足) | count_first | パスの群を受け持つレートベースのルールが無く、5 分あたりの最大が p99 の `rate_factor` (10) 倍超え、かつ提案する limit より大きい。limit = max(p99 × `rate_margin` (3), `rate_floor` (100)) |
 | `rate_limit_loose` / `rate_limit_tight` | review | 受け持つルールが 1 つで解釈できるとき、limit (5 分あたりに換算) が観測の最大の `rate_loose_factor` (10) 倍より高い / 観測の p99 より低い |
+| `challenge_on_app_path` (正規の画面に Challenge / CAPTCHA。ADR 0028) | review | 探索パスではない GET の正規化パスで、出した異なり IP (日ごとの最大) が `challenge_min_distinct_ips` (10) 以上、解かれた割合 (解いた IP / 出した IP、日ごとの値の合計の比) が `challenge_solve_ratio` (0.5) 以上。sign-in のパス・レートベース・送信元の評判のグループは observation (`excluded_by_rule`) |
 | `unused_rule` (使われていないルール) | review | 直近 `unused_days` (30) 日すべてにデータがあり、終了ルールにもカウントの一致にもならなかった (COUNT のルールは除く)。削除は勧めない |
 | `observation` (提案なし) | none | 下の「不審な事実は必ず伝える」。`about` (関わる候補) と `reason` (提案しなかった理由) を持つ |
+| `observation` / about `challenge_impact` (Challenge / CAPTCHA の状況。ADR 0028) | none | 毎回、出した数の多い `challenge_top_rules` (10) 個のルール (`reason: informational`)。出した数・解かれた割合・GET 以外の件数・主なパス。事実だけを書く |
 | `observation` / about `count_rule_status` (COUNT のルールの状況) | none | COUNT で動いているルール (グループ全体の COUNT、グループの中の COUNT の上書きを含む) ごとに毎回 1 件 (`reason: informational`)。直近 `days` 日の一致件数・怪しい通信の割合・一致した日数。一致 0 も載せる |
 
 - 決定: COUNT → BLOCK の切り替えは提案しない (当初の `count_to_block` は廃止)。切り替えは運用で計画して行う作業 (COUNT で入れるときに期間を決めて様子を見る) で、
@@ -685,6 +695,9 @@ arata は LLM を使わず候補だけを作り、aratam の LLM は候補を文
 - 決定: 異なり IP 数は日ごとの値の最大 (日をまたいで足せない。下限の見積もり)。Evidence に `distinct_ips_is_lower_bound: true` を付ける
 - 決定: `expected_high_rate_paths` (決済など、リクエストが多いのが仕様のパス) はレート制限の候補から外す (突出していれば observation に残る)。判定のパラメータ
 - 決定: 候補は種類ごとに `max_proposals` (20) まで (根拠の強い順)。候補は差分判定に乗せず毎週その時点の候補を出す
+- 決定 (Challenge / CAPTCHA。ADR 0028): 解かれた割合が高い = 人が解いている = 正規の利用者が巻き込まれている疑い、と読む (仮説。検証方法と前提は ADR)。
+  止めるのではなく緩める提案なので stage は review。GET 以外は解けない構造なので提案の対象にせず、challenge_impact に「GET 以外 N 件」を添える。
+  割合が低いものは提案しない (ボットを止めているのか、解けない通信なのかを区別できない)
 - 決定: waf_review は保存済みの日次集計だけを読む (`StoredNeeds`)。weekly の run は wafv2 のソースを引かない (Insights の費用)。wafv2 のソースが設定に無ければ skip (`no waf_action source`)。
   候補を見るには daily が回っている必要がある
 
@@ -740,6 +753,11 @@ arata rebuild                  # raw JSONL から SQLite を再構築
   posture = `cloudtrail:DescribeTrails`・`GetTrailStatus`、`guardduty:ListDetectors`・`GetDetector`、`iam:GetAccountSummary`・`GetAccountPasswordPolicy`、`s3:GetAccountPublicAccessBlock`、
   waf-config = `wafv2:ListWebACLs`・`GetWebACL`・`GetLoggingConfiguration`・`ListResourcesForWebACL` (決定: ADR 0023。WebACL があれば最初の 1 つで残りを試す)。
   doctor の `queries` は wafv2 の新しい集計のクエリも構文検査する。`check` の warn は waf_review が読む日次集計の元 (wafv2 ソース) が無いときも出す。
+- 決定 (ADR 0028): wafv2 のソースには `cost` の行を出す。1 日のログの量 (直近 24h に解釈率の集計を流して実測。実測した範囲・読み取り量・その費用も出す。`--no-measure-scan` なら解釈率のサンプルのクエリのスキャン量を 24h に換算した推定。
+  sort+limit のスキャン量は sandbox で約 75% に少なく出たので推定は既定にしない) ×
+  範囲 (窓 + ingest_delay + 24h) × クエリの本数で 1 回の run を見積もり、wafv2 を引くプロファイルの 1 日の run 数を掛けて、東京の単価 (0.0076 USD/GB) で 1 日・30 日の概算を出す。
+  `max_scan_gb` が無い・見積もりより小さいときは warn (推奨値は見積もりの 1.5 倍)。`resources` があれば `resources` の行で、ログの宛先が同じ WebACL の資源と照合する
+  (httpSourceId の形は公式文書で食い違うので候補を複数作る。当たらなければ warn。waf-config のソースが無くても読む)
   run では、権限の無いソースのチェックだけが skip され (posture は取れた項目で評価)、他のチェックは続行する。
 
 ### report.json の骨子

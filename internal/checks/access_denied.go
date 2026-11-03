@@ -23,6 +23,8 @@ import (
 //     拒否のある過去日が min_baseline_days 未満 (導入直後) は平常帯を 0 とみなし、絶対の閾値だけで判定する。
 //   - 幅: 拒否された API (eventSource:eventName) の種類が min_distinct_apis 以上かつ平常帯を超える → medium。high_distinct_apis 以上なら high。
 //   - 量: 件数が max(min_count, 中央値 × factor) を超える → medium。両方満たせば重い方を 1 件 (Data の threshold は breadth)。
+//   - サービスリンクロール (ARN が :role/aws-service-role/ を含む) は窓にも平常帯にも数えない。AWS のサービスしか引き受けられず、
+//     権限も利用者が変えられないので、拒否は仕様由来のノイズで列挙の兆候に当たらない。設定にせず固定の規則 (events の保存は変えない)。
 //   - サービス主体と root (root_usage が扱う) は除く。allowlist で承認済みでも除かない (承認は「居ること」を認めるもので、権限を探ってよいではない)。
 //   - 想定済みの拒否 (allowlist の expected_denied。窓の終わりの時点で期限内の項目) は数える前に除く。窓にも平常帯にも同じく適用する
 //     (平常帯に残すと、ふだんの想定内の拒否で平常帯が膨らみ、想定外の拒否が吸収されるため)。窓で除いた件数は Data の
@@ -47,8 +49,14 @@ func deniedAPI(e record.TrailEvent) string {
 	return strings.TrimSuffix(e.EventSource, ".amazonaws.com") + ":" + e.Name
 }
 
+// isServiceLinkedRole はサービスリンクロール (IAM のパスが /aws-service-role/ のロール) の ARN か。
+// assumed-role のセッションはロールの ARN にまとまっているので ARN だけで判る。
+func isServiceLinkedRole(arn string) bool {
+	return strings.Contains(arn, ":role/aws-service-role/")
+}
+
 func deniedTarget(e record.TrailEvent) bool {
-	return e.PrincipalARN != "" && e.PrincipalKind != record.PrincipalService && e.PrincipalKind != record.PrincipalRoot
+	return e.PrincipalARN != "" && !isServiceLinkedRole(e.PrincipalARN) && e.PrincipalKind != record.PrincipalService && e.PrincipalKind != record.PrincipalRoot
 }
 
 func (c AccessDenied) Evaluate(ctx context.Context, q store.Query, w collect.Window, al *allowlist.List) ([]Observation, error) {

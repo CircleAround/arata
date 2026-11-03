@@ -356,3 +356,18 @@ func TestProposalsLongTextIsTrimmed(t *testing.T) {
 		}
 	}
 }
+
+// challenge_on_app_path (ADR 0028) の根拠の行は、種類・出した数・IP・解かれた割合・日数を出す。
+func TestProposalChallengeEvidence(t *testing.T) {
+	p := schema.Proposal{Kind: "challenge_on_app_path", Stage: "review", WebACL: "prod-waf", Evidence: map[string]any{
+		"kind": "challenge", "issued": 160.0, "distinct_ips_max_per_day": 30.0, "solve_ratio": 0.8, "days": 7, "issued_ips_day_sum": 50.0}}
+	got := evidenceText(p)
+	for _, want := range []string{"kind", "issued", "solve_ratio", "0.8"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("%q lacks %q", got, want)
+		}
+	}
+	if strings.Contains(got, "issued_ips_day_sum") {
+		t.Fatalf("only the listed keys: %q", got)
+	}
+}

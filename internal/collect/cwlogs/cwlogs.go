@@ -176,6 +176,28 @@ func (c *Collector) queryRange(ctx context.Context, from, to time.Time) (time.Ti
 	return from, ""
 }
 
+// Scanned はこの collector がこれまでに Insights でスキャンした量 (バイト。Statistics.BytesScanned の合計)。doctor の費用の見積もりに使う。
+func (c *Collector) Scanned() float64 { return c.scanned }
+
+// QueryCount は 1 回の Collect で流すクエリの本数 (解釈率 + 集計。日ごとに流すクエリは 1 本と数える。範囲全体のスキャン量で何本分かを表す)。
+func (c *Collector) QueryCount() int {
+	n := 1 + len(c.aggs)
+	if c.prof.Yields == record.KindWAFAction {
+		perDay := false
+		for _, q := range WAFQueries(c.prof, c.checks) {
+			if q.PerDay {
+				perDay = true
+				continue
+			}
+			n++
+		}
+		if perDay {
+			n++
+		}
+	}
+	return n
+}
+
 // FormatStats は直近の Collect で計測した解釈率。計測前なら nil。
 func (c *Collector) FormatStats() *collect.FormatStats { return c.stats }
 

@@ -55,6 +55,8 @@ sources:
   #   log_group: aws-waf-logs-prod
   #   format: wafv2                  # → waf_action (waf_block_trend、waf_review の日次集計)
   #   strip_path_prefix: /prod       # API Gateway の REST API はパスの前にステージ名が付く。ALB・CloudFront なら書かない
+  #   max_scan_gb: 50                # WAF のログは大きい。必ず設定する (arata doctor の cost の行に推奨値)
+  #   resources: ["123456789012:abcde12345:prod"]   # 集計する資源 (ログの httpSourceId。glob 可)。WebACL を staging と共有するとき。費用は減らない
   # - id: rails_app
   #   kind: cloudwatch-logs
   #   log_group: prod-app.log

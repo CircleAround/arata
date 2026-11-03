@@ -473,3 +473,35 @@ test('secretAccess: 読み手のロールは設定の主体を信頼し、権限
   assert.ok(outputs.SecretReaderRoleArn);
   assert.ok(!JSON.stringify(outputs).includes('SecretString'));
 });
+
+// --- Challenge / CAPTCHA (waf.challenge / waf.captcha。ADR 0028)。既定は無効 ---
+
+test('WAF: Challenge / CAPTCHA のルールは既定で作らない', () => {
+  const names = webAcl(withWaf()).Rules.map((r: any) => r.Name);
+  assert.ok(!names.includes('search-challenge') && !names.includes('contact-captcha'), names.join(', '));
+});
+
+test('WAF: waf.challenge で GET /search に Challenge、waf.captcha で /contact に CAPTCHA (ステージ名が頭に付くので末尾で一致)', () => {
+  const acl = webAcl(
+    synth((raw) => {
+      raw.waf = { enabled: true, challenge: true, captcha: true };
+    }),
+  );
+  const ch = ruleNamed(acl, 'search-challenge');
+  assert.deepEqual(ch.Action, { Challenge: {} });
+  assert.deepEqual(ch.Statement.ByteMatchStatement.FieldToMatch, { UriPath: {} });
+  assert.equal(ch.Statement.ByteMatchStatement.PositionalConstraint, 'ENDS_WITH');
+  assert.equal(ch.Statement.ByteMatchStatement.SearchString, '/search');
+  const cp = ruleNamed(acl, 'contact-captcha');
+  assert.deepEqual(cp.Action, { Captcha: {} });
+  assert.equal(cp.Statement.ByteMatchStatement.SearchString, '/contact');
+  const priorities = acl.Rules.map((r: any) => r.Priority);
+  assert.equal(new Set(priorities).size, priorities.length, '優先度が重複している');
+
+  // 片方だけ
+  const only = webAcl(synth((raw) => (raw.waf = { enabled: true, challenge: true })));
+  assert.deepEqual(
+    only.Rules.map((r: any) => r.Name),
+    ['login-rate-limit', 'AWSManagedRulesKnownBadInputsRuleSet', 'AWSManagedRulesCommonRuleSet', 'search-challenge'],
+  );
+});

@@ -29,14 +29,16 @@ type Report struct {
 
 // Proposal は WAF の修正提案の候補 1 件。arata が決まった規則で作り、根拠の数字を Evidence に持つ。適用は人が判断する。
 type Proposal struct {
-	// Kind は候補の種類 (false_positive / probe_allowed / rate_limit_missing / rate_limit_loose / rate_limit_tight / unused_rule)、
-	// または observation (提案はしないが、WAF の設定の観点で気づいた観測。COUNT のルールの状況 count_rule_status もここ)。
+	// Kind は候補の種類 (false_positive / challenge_on_app_path / probe_allowed / rate_limit_missing / rate_limit_loose / rate_limit_tight / unused_rule)、
+	// または observation (提案はしないが、WAF の設定の観点で気づいた観測。COUNT のルールの状況 count_rule_status、
+	// Challenge / CAPTCHA の状況 challenge_impact もここ)。
 	Kind string `json:"kind"`
-	// About は observation が関わる候補の種類 (false_positive など) か count_rule_status (COUNT のルールの状況)。提案では空。
+	// About は observation が関わる候補の種類 (false_positive など) か count_rule_status (COUNT のルールの状況)・
+	// challenge_impact (Challenge / CAPTCHA の状況)。提案では空。
 	About string `json:"about,omitempty"`
 	// Reason は observation で提案しなかった理由: below_threshold (閾値未満) / undetermined (判断できない) /
 	// excluded_by_config (除外設定に一致) / excluded_by_rule (決まった除外に一致。レートベースのルールなど) / position_limit (数え漏れの可能性) /
-	// informational (提案の候補ではない情報。count_rule_status)。
+	// informational (提案の候補ではない情報。count_rule_status・challenge_impact)。
 	Reason string `json:"reason,omitempty"`
 	// Stage は提案の段階: count_first (まず COUNT で様子を見る) / review (人が見直す。変更は勧めない) / none (observation。提案なし)。
 	// COUNT → BLOCK の切り替えは運用で計画して行うので、arata は勧めない (ADR 0023)。

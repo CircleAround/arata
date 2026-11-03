@@ -102,7 +102,12 @@ export class SandboxStack extends Stack {
     }
     if (config.waf.enabled) {
       // WAF の修正提案の試験用 (費用がかかる。試験のときだけ。lib/waf.ts)。ログの保持は nginx のロググループと同じ日数
-      new SandboxWaf(this, 'Waf', { prefix: p, retentionDays: config.nginxLogGroup.retentionDays });
+      new SandboxWaf(this, 'Waf', {
+        prefix: p,
+        retentionDays: config.nginxLogGroup.retentionDays,
+        challenge: config.waf.challenge,
+        captcha: config.waf.captcha,
+      });
     }
 
     if (config.secretAccess.enabled) {

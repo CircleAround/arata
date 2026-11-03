@@ -148,7 +148,7 @@ func TestProfilesCmd(t *testing.T) {
 	if v.Profiles[0].Name != "daily" || origins["login_bruteforce.factor"] != "overrides" || origins["login_bruteforce.min_count"] != "checks" || origins["login_bruteforce.baseline_days"] != "default" {
 		t.Fatalf("origins: %v", origins)
 	}
-	if v.Profiles[1].Name != "hourly" || len(v.Profiles[1].Params) != 0 || len(v.Unused) != 0 || v.Profiles[2].Name != "weekly" || len(v.Profiles[2].Params) != 2+14 {
+	if v.Profiles[1].Name != "hourly" || len(v.Profiles[1].Params) != 0 || len(v.Unused) != 0 || v.Profiles[2].Name != "weekly" || len(v.Profiles[2].Params) != 2+17 {
 		t.Fatalf("hourly: %+v", v)
 	}
 }

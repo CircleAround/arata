@@ -106,6 +106,14 @@ func (s *Source) validateLogs() error {
 			return fmt.Errorf("strip_path_prefix %q: must start with / and must not end with / (e.g. /prod)", s.StripPathPrefix)
 		}
 	}
+	if len(s.Resources) > 0 && s.Format != FormatWAFv2 {
+		return fmt.Errorf("resources is only for format wafv2")
+	}
+	for _, r := range s.Resources {
+		if !resourcePattern.MatchString(r) {
+			return fmt.Errorf("resources: %q must be a non-empty httpSourceId or glob (letters, digits, -_.:/#@ and * ?)", r)
+		}
+	}
 	switch s.Format {
 	case FormatJSON:
 		known := append(append([]string{}, RequiredFields[s.Yields]...), OptionalFields[s.Yields]...)
@@ -126,6 +134,9 @@ func (s *Source) validateLogs() error {
 	}
 	return nil
 }
+
+// resourcePattern は resources に書ける文字 (httpSourceId と glob の * ?)。空白や引用符は Insights のクエリに入れない。
+var resourcePattern = regexp.MustCompile(`^[A-Za-z0-9\-_.:/#@*?]+$`)
 
 // RegexGroups は regex プロファイルの正規表現を検証し、名前付きキャプチャの一覧を返す。
 // Python 形式 (?P<name>...) と (?<name>...) の両方を受ける。Go (RE2) で解釈できない表現 (後方参照・先読みなど) は
