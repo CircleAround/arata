@@ -313,3 +313,44 @@ principals:
 		}
 	})
 }
+
+// サービスリンクロール (パスが /aws-service-role/) の拒否は、窓にも平常帯にも数えない。
+// 普通のロールは従来どおり報告する。
+func TestAccessDeniedSkipsServiceLinkedRole(t *testing.T) {
+	st := newStore(t)
+	d := &deniedSeed{st: st, t: t}
+	in := now.Add(-3 * time.Hour)
+	const (
+		slr    = "arn:aws:iam::123456789012:role/aws-service-role/config.amazonaws.com/AWSServiceRoleForConfig"
+		plain  = "arn:aws:iam::123456789012:role/example-scanner"
+		lookal = "arn:aws:iam::123456789012:role/service-role/example-aws-service-role-like"
+	)
+	// 幅・量のどちらも超える数
+	d.put(slr, record.PrincipalAssumedRole, in, "AccessDenied", "", apis("config", 25)...)
+	d.put(slr, record.PrincipalAssumedRole, in, "AccessDenied", "", repeat("s3:GetObject", 80)...)
+	d.put(plain, record.PrincipalAssumedRole, in, "AccessDenied", "", apis("ssm", 6)...)
+	// 名前に似ているだけのロールは除かない
+	d.put(lookal, record.PrincipalAssumedRole, in, "AccessDenied", "", apis("kms", 6)...)
+
+	al, err := allowlist.Parse([]byte(deniedAllowlist))
+	if err != nil {
+		t.Fatal(err)
+	}
+	obs := evaluate(t, deniedCheck(), st, al)
+	if got := strings.Join(sortedObsKeys(obs), ";"); got != sortedJoin(plain, lookal) {
+		t.Fatalf("keys: %s", got)
+	}
+}
+
+func TestIsServiceLinkedRole(t *testing.T) {
+	for arn, want := range map[string]bool{
+		"arn:aws:iam::123456789012:role/aws-service-role/config.amazonaws.com/AWSServiceRoleForConfig": true,
+		"arn:aws:iam::123456789012:role/example-app":                                                   false,
+		"arn:aws:iam::123456789012:role/service-role/example":                                          false,
+		"arn:aws:iam::123456789012:user/aws-service-role/x":                                            false,
+	} {
+		if got := isServiceLinkedRole(arn); got != want {
+			t.Errorf("%s: %v", arn, got)
+		}
+	}
+}

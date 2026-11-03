@@ -567,6 +567,7 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 - 決定: error_codes は保存 (events) の条件なので overrides では変えられない。後から足したコードは、足す前の拒否が保存されていないので平常帯 0 から始まる
 - 決定 (ADR 0027 で見直し、変えない): 平常帯を使うかは「拒否のある過去日」で数えたまま (principal_new_source / secret_access の「収集し終えた日」にしない)。拒否の少ない主体は収集済みの日で数えても中央値 0 で同じ閾値になり、拒否の多い主体は拒否のある日が min_baseline_days に届くので結果は実質変わらない (足りない間は平常帯 0 = 絶対の閾値で、鳴りやすい側に倒れる)
 - 決定 (ADR 0022): 想定済みの拒否 (allowlist の `expected_denied`。窓の終わりの時点で期限内の項目) は数える前に除く。窓にも平常帯の過去分にも同じく適用する (平常帯に残すと、ふだんの想定内の拒否で平常帯が膨らみ想定外の拒否を吸収するため)。窓で除いた件数は Data の `expected_denied_excluded`
+- 決定: サービスリンクロール (主体の ARN が `:role/aws-service-role/` を含む。AWS のサービスだけが引き受け、権限は利用者が変えられない) の拒否は窓にも平常帯にも数えない。仕様由来のノイズ (例: AWS Config のロールが毎日多数の API で拒否される) で、盗んだ認証情報による権限の探索に当たらないため。どの利用者でも同じなので設定にせず固定の規則とする (ADR 0021 の延長)。events への保存は変えない
 - サービス主体と root は対象外。allowlist で承認済みでも対象 (想定内の拒否は `expected_denied` で除く。主体ごと止めるなら ack / snooze だが、重大度が上がれば再報告される)。Data: principal, principal_kind, allowlist_status, external_account, count, distinct_apis, expected_denied_excluded, apis (件数の多い順に最大 10 個、`iam:ListUsers × 3`), error_codes, ips, first_time, last_time, baseline_median_count, baseline_median_distinct, threshold (`breadth` / `volume`)
 
 決定 (defense_evasion / public_exposure。ADR 0026):
