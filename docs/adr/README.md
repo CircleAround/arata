@@ -55,3 +55,4 @@
 | [0029](0029-aratam-block-kit.md) | aratam の Slack 通知を Block Kit にし、同じチェックの指摘は規則でまとめ、LLM は要約と「→ 何をするか」だけを書く | 採用 |
 | [0030](0030-endpoint-abuse.md) | 画面への分散した集中と「A のあと B」の連鎖 (`endpoint_abuse`) を、画面ごとの時間幅の集計とふだんの p99 で判定する | 採用 |
 | [0032](0032-unused-region-activity-cost-anomaly.md) | ふだん使わないリージョンでの書き込み (`unused_region_activity`) を専用のソースで引き、費用の急増 (`cost_anomaly`) は AWS Cost Anomaly Detection の結果を予想に対する割合で読む | 採用 |
+| [0033](0033-rebuild-from-raw.md) | `arata rebuild` は raw から作れる表だけを作り直し、作れないものは既存の SQLite から引き継ぐ。raw には rebuild に要る印を足す | 採用 |

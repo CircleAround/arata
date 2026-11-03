@@ -191,6 +191,7 @@ cat /tmp/arata-out/report.md                  # 人向け。report.json は機�
 arata report   --profile daily --format md    # 最後の run のレポートを再表示
 arata collect  --window 2h                    # 収集だけ
 arata evaluate --profile daily                # 収集せずに評価だけ
+arata rebuild                                 # raw JSONL から audit.sqlite を作り直す (findings・runs・主体の状態は引き継ぐ)
 ```
 
 - `--out` を省略すると `report.json` を標準出力に出す (`--format md` で Markdown)
@@ -211,6 +212,9 @@ arata evaluate --profile daily                # 収集せずに評価だけ
 - `init` は現在の主体をベースライン (`baseline`) として記録し、以後に現れた主体だけを `new_principal` で報告する。
   **導入時点で既に侵入している主体はベースラインに紛れる**ので、init の後に `audit.sqlite` の `principals` を一度人が眺めること
 - `allowlist.yaml` は人が承認したものだけを書く
+- `audit.sqlite` が壊れた・失われたときは `arata rebuild` で raw JSONL から作り直す。runs・findings (ack / snooze を含む)・主体の状態は raw に無いので
+  既存の SQLite から引き継ぐ。SQLite が読めなければ `--from-scratch` (findings は空から作るので、次の run で未解決のものが全部 new として再報告される。
+  主体は unknown、`--baseline` なら baseline)。元のファイルは `audit.sqlite.bak` に残る (設計書 5-4、ADR 0033)
 
 ### 承認と未対応の整理
 

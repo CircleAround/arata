@@ -65,7 +65,7 @@ LLM の役割は「危険の判定を代行する」ことではなく「人が�
 | `QUERY_LIMIT` | Insights の同時実行・スキャン上限、LookupEvents のスロットル | 時間を置いて再実行。`max_scan_gb` を見直す |
 | `QUERY_INVALID` | クエリ / 設定の不備 (Insights の構文エラーなど) | `arata doctor` の `queries` 行を見る |
 | `STORE_LOCKED` | 同じストアを別プロセスが使用中 | 前の実行が終わるのを待つ |
-| `STORE_CORRUPT` | SQLite を開けない | ストアを調べる (rebuild は後続) |
+| `STORE_CORRUPT` | SQLite を開けない (`arata rebuild` で既存の SQLite が無い・読めないときも) | 人に知らせる。`arata rebuild` で raw から作り直せる。SQLite が読めなければ `--from-scratch` (findings が空になり次の run で全部が再報告されるので、人の判断を仰ぐ) |
 | `RUN_MISSED` | 前回実行から周期の 2 倍以上空いた | 起動側 (cron など) の障害を疑う。`truncated: true` なら取りこぼしあり |
 | `COLLECT_FAILED` | 上記に分類できない収集エラー | ネットワークなどを確認して再実行 |
 | `CONFIG_INVALID` | 設定ファイルの読み込み・検証エラー | エラーメッセージに従い設定を直す |
