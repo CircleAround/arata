@@ -2,6 +2,7 @@ package cwlogs
 
 import (
 	"context"
+	"net/netip"
 	"regexp"
 	"sort"
 	"strconv"
@@ -71,26 +72,31 @@ var (
 	groupSentinel = "ruleGroupList." + strconv.Itoa(groupPositions) + ".ruleGroupId"
 )
 
-// WAFQuery は wafv2 の集計 1 本。PerDay なら UTC の 1 日ずつ流す (2 段の stats で日を切らないため)。
-type WAFQuery struct {
-	Name   string
-	Query  string
-	PerDay bool
-}
+// wafv2 のまとめた集計の名前 (保存しない。クエリの列名)。
+const (
+	wafActions = "waf_actions" // BLOCK / CHALLENGE / CAPTCHA・許可された探索・トークンの受理の行
+	wafRate    = "waf_ip_rate"
+)
 
-// WAFQueries は wafv2 ソースの waf_review 用の集計クエリ。前処理の後ろに WebACL 名の取り出しを付ける。
-func WAFQueries(p Profile, c config.Checks) []WAFQuery {
-	head := p.Prelude + "\n" + `| parse webaclId /webacl\/(?<acl>[^\/]+)\//`
+// 決定 (ADR 0031): wafv2 のクエリは 4 本 (解釈率 + ルールごとの件数、止めた・出した系の細かい集計、カウントの一致、レート)。
+//   - 解釈率と waf_rule_action は全行を (日, WebACL, ルール, action) で数える 1 本にまとめる (行は数十)
+//   - waf_block_ip・waf_block_path・waf_allow_probe・「BLOCK された IP」・Challenge / CAPTCHA (出した・受理) は 1 本にまとめる。
+//     filter は行の種類の和 (BLOCK、または正規の送信元以外の CHALLENGE / CAPTCHA・許可された探索・トークンの受理) だけにして、
+//     group by はそれぞれの軸の和集合にする。trusted_cidrs・探索パス・sign-in のパス・レートベース / 既定の action の除外は Go で行う
+//     (Insights の isIpInSubnet・接頭辞の like・完全一致の in と同じ意味)
+//   - カウントの一致は別のまま (評価中のマネージドルールを COUNT にすると全行に一致し、path の軸に入れると行が爆発する)
+//   - レートは 2 段の stats (pct) なので別のまま (UTC の 1 日ずつ)
+//
+// WAFQueries は wafv2 ソースの集計クエリ (順番どおりに流す。先頭は解釈率を兼ねる)。前処理の後ろに WebACL 名の取り出しを付ける。
+func WAFQueries(p Profile, c config.Checks) []MergedQuery {
+	head := wafHead(p)
 	trusted := trustedFilter(c.WAFReview.TrustedCIDRs)
 	pp := c.ProbePaths
 	// 決定: strip_path_prefix があれば、接頭辞を必須にして判定する (API Gateway の REST API は全部のパスにステージ名が付く。sandbox で確認)
 	sp := regexLiteral(p.StripPrefix)
 	probe := "path like /^" + sp + "(" + prefixAlternation(pp.Paths) + ")/"
-	notProbe := "path not like /^" + sp + "(" + prefixAlternation(pp.Paths) + ")/"
 	if len(pp.ExcludePaths) > 0 {
-		ex := prefixAlternation(pp.ExcludePaths)
-		probe = and(probe, "path not like /^"+sp+"("+ex+")/")
-		notProbe = "(" + notProbe + " or path like /^" + sp + "(" + ex + ")/)"
+		probe = and(probe, "path not like /^"+sp+"("+prefixAlternation(pp.ExcludePaths)+")/")
 	}
 	tail := func(metric string) string {
 		return "\n| sort " + metric + " desc\n| limit " + strconv.Itoa(MaxRows)
@@ -102,7 +108,8 @@ func WAFQueries(p Profile, c config.Checks) []WAFQuery {
 		return ""
 	}
 
-	ruleAction := head + "\n| stats count(*) as " + MetricWAFRuleAction + " by bin(1d) as day, acl, rule, action" + tail(MetricWAFRuleAction)
+	lines := head + "\n| stats count(*) as " + MetricLinesTotal + ", count(" + p.MatchField + ") as " + MetricLinesMatched +
+		" by bin(1d) as day, acl, rule, action" + tail(MetricLinesTotal)
 
 	// 止めたグループの中のルール名は ruleGroupList.N.terminatingRule.ruleId を位置で取る (blockInner)。
 	// 決定: `parse @message` の正規表現で最初の terminatingRule を取る案は、前にある COUNT のグループの terminatingRule を取り違えるのでやめた (sandbox で確認)
@@ -110,11 +117,24 @@ func WAFQueries(p Profile, c config.Checks) []WAFQuery {
 	for i := 0; i < groupPositions; i++ {
 		terms = append(terms, "ruleGroupList."+strconv.Itoa(i)+".terminatingRule.ruleId")
 	}
-	blockPath := head + filter(`action = "BLOCK"`, notProbe, trusted) +
-		"\n| stats count(*) as " + MetricWAFBlockPath + " by bin(1d) as day, acl, rule, terminatingRuleType, " + strings.Join(terms, ", ") + ", " + groupSentinel + ", method, path, ip" + tail(MetricWAFBlockPath)
-
-	allowProbe := head + filter(`action = "ALLOW"`, probe, trusted) +
-		"\n| stats count(*) as " + MetricWAFAllowProbe + " by bin(1d) as day, acl, path, ip" + tail(MetricWAFAllowProbe)
+	// Challenge / CAPTCHA (ADR 0028)。出した行は action が CHALLENGE / CAPTCHA (トークンが無い・無効で止めた)。
+	// 決定: 受理の形は公式文書の説明 (トップレベルの challengeResponse / captchaResponse に solveTimestamp があり failureReason が無い) と
+	// 例 (nonTerminatingMatchingRules の要素の action が CHALLENGE / CAPTCHA) が食い違うので、両方を受け付ける。グループの中の一致も位置で見る
+	kinds := `["CHALLENGE", "CAPTCHA"]`
+	accepted := challengeAcceptedFields()
+	solvedConds := []string{"challengeResponse.solveTimestamp > 0", "captchaResponse.solveTimestamp > 0"}
+	for _, f := range accepted {
+		solvedConds = append(solvedConds, f+" in "+kinds)
+	}
+	others := "action in " + kinds + ` or (action = "ALLOW" and ` + probe + ") or " + strings.Join(solvedConds, " or ")
+	cond := `action = "BLOCK" or ` + others
+	if trusted != "" {
+		cond = `action = "BLOCK" or ((` + others + ") and " + trusted + ")"
+	}
+	actions := head + "\n| filter " + cond +
+		"\n| stats count(*) as " + wafActions + " by bin(1d) as day, acl, rule, action, terminatingRuleType, " + strings.Join(terms, ", ") + ", " + groupSentinel +
+		", method, path, ip, challengeResponse.solveTimestamp, challengeResponse.failureReason, captchaResponse.solveTimestamp, captchaResponse.failureReason, " +
+		strings.Join(accepted, ", ") + tail(wafActions)
 
 	fields := countFields()
 	var present []string
@@ -132,54 +152,28 @@ func WAFQueries(p Profile, c config.Checks) []WAFQuery {
 	}
 	count += "\n| stats count(*) as " + MetricWAFCountMatch + " by bin(1d) as " + group + "ip" + tail(MetricWAFCountMatch)
 
+	return []MergedQuery{
+		{Name: MetricWAFRuleAction, Query: lines, Metrics: []string{MetricLinesTotal, MetricWAFRuleAction, MetricWAFBlock}},
+		{Name: wafActions, Query: actions, Metrics: []string{MetricWAFBlockIP, MetricWAFBlockPath, MetricWAFAllowProbe, suspectBlockIP, MetricWAFChallengeIssued, challengeSolved}},
+		{Name: MetricWAFCountMatch, Query: count, Metrics: []string{MetricWAFCountMatch}},
+	}
+}
+
+func wafHead(p Profile) string {
+	return p.Prelude + "\n" + `| parse webaclId /webacl\/(?<acl>[^\/]+)\//`
+}
+
+// WAFRateQuery は 1 IP あたり 5 分間の件数の分布のクエリ。UTC の 1 日ずつ流す (2 段の stats で日を切らないため)。
+func WAFRateQuery(p Profile, c config.Checks) string {
 	groups := append([]string(nil), c.WAFReview.RatePathGroups...)
 	sort.SliceStable(groups, func(i, j int) bool { return len(groups[i]) > len(groups[j]) }) // 最長一致
-	rate := head + filter(trusted) +
-		"\n| parse path /^" + sp + "(?<grp>" + prefixAlternation(groups) + ")/" +
+	rate := wafHead(p)
+	if t := trustedFilter(c.WAFReview.TrustedCIDRs); t != "" {
+		rate += "\n| filter " + t
+	}
+	return rate + "\n| parse path /^" + regexLiteral(p.StripPrefix) + "(?<grp>" + prefixAlternation(groups) + ")/" +
 		"\n| stats count(*) as n by bin(5m) as t, acl, grp, ip" +
 		"\n| stats pct(n, 50) as " + MetricWAFIPRateP50 + ", pct(n, 99) as " + MetricWAFIPRateP99 + ", max(n) as " + MetricWAFIPRateMax + " by acl, grp"
-
-	// カウントの一致の suspect に使う「BLOCK された IP」。
-	// 決定 (ADR 0023): レートベースのルール・既定の action・sign-in のパスでの BLOCK は数えない。正規の利用者も一時的にレート制限に当たり得て
-	// (決済などリクエストが多いのが仕様の画面がある)、それを「悪い IP」とみなすと正規の利用者に当たる COUNT ルールを BLOCK に上げる提案をしかねないため
-	// (sandbox で、レート制限で止まった 1 IP のせいで COUNT の一致が 100% suspect になった)。metrics には保存しない
-	signIn := make([]string, len(c.LoginBruteforce.Paths))
-	for i, sp := range c.LoginBruteforce.Paths {
-		signIn[i] = p.StripPrefix + sp
-	}
-	notSignIn := ""
-	if len(signIn) > 0 {
-		notSignIn = "path not in [" + strings.Join(quoteAll(signIn), ", ") + "]"
-	}
-	suspectIP := head + filter(`action = "BLOCK"`, `terminatingRuleType != "RATE_BASED"`, `rule != "Default_Action"`, notSignIn, trusted) +
-		"\n| stats count(*) as " + suspectBlockIP + " by bin(1d) as day, ip" + tail(suspectBlockIP)
-
-	// Challenge / CAPTCHA (ADR 0028)。出した行 (action が CHALLENGE / CAPTCHA = トークンが無い・無効で止めた) と、
-	// トークンが受理された行 (解いた後の再訪) を別の集計にする (行の上限をそれぞれに持たせ、group by の数を抑える)。
-	// 決定: 受理の形は公式文書の説明 (トップレベルの challengeResponse / captchaResponse に solveTimestamp があり failureReason が無い) と
-	// 例 (nonTerminatingMatchingRules の要素の action が CHALLENGE / CAPTCHA) が食い違うので、両方を受け付ける。グループの中の一致も位置で見る
-	kinds := `["CHALLENGE", "CAPTCHA"]`
-	issued := head + filter(`action in `+kinds, trusted) +
-		"\n| stats count(*) as " + MetricWAFChallengeIssued + " by bin(1d) as day, acl, rule, action, terminatingRuleType, " + strings.Join(terms, ", ") + ", " + groupSentinel + ", method, path, ip" + tail(MetricWAFChallengeIssued)
-	accepted := challengeAcceptedFields()
-	conds := []string{"challengeResponse.solveTimestamp > 0", "captchaResponse.solveTimestamp > 0"}
-	for _, f := range accepted {
-		conds = append(conds, f+" in "+kinds)
-	}
-	solved := head + filter("("+strings.Join(conds, " or ")+")", trusted) +
-		"\n| stats count(*) as " + challengeSolved + " by bin(1d) as day, acl, action, challengeResponse.solveTimestamp, challengeResponse.failureReason, captchaResponse.solveTimestamp, captchaResponse.failureReason, " +
-		strings.Join(accepted, ", ") + ", method, path, ip" + tail(challengeSolved)
-
-	return []WAFQuery{
-		{Name: MetricWAFRuleAction, Query: ruleAction},
-		{Name: MetricWAFBlockPath, Query: blockPath},
-		{Name: MetricWAFAllowProbe, Query: allowProbe},
-		{Name: suspectBlockIP, Query: suspectIP},
-		{Name: MetricWAFCountMatch, Query: count},
-		{Name: MetricWAFChallengeIssued, Query: issued},
-		{Name: challengeSolved, Query: solved},
-		{Name: "waf_ip_rate", Query: rate, PerDay: true},
-	}
 }
 
 // countFields はカウントの一致を見る平坦化されたフィールド (トップレベルのルール ID、グループ ID とその中のルール ID)。
@@ -357,153 +351,212 @@ func (c *Collector) emitTop(ctx context.Context, sink collect.RecordSink, a path
 	return nil
 }
 
-// collectWAF は waf_review 用の集計を流して metric を出す。
-func (c *Collector) collectWAF(ctx context.Context, from, to time.Time, sink collect.RecordSink) error {
-	blocked := map[string]map[string]bool{}           // 日 → BLOCK された IP (suspectBlockIP)
-	issued := pathAgg{}                               // Challenge / CAPTCHA を出した (key → 件数と IP)
-	solved := map[string]map[string]map[string]bool{} // 日 → <WebACL>|<種類>|<method>|<パス> → トークンが受理された IP
-	wr := c.checks.WAFReview
+// collectWAF は waf_review 用の集計を流して metric を出す。qs は WAFQueries、lines はその先頭 (解釈率 + ルールごとの件数) の結果。
+func (c *Collector) collectWAF(ctx context.Context, qs []MergedQuery, lines []map[string]string, from, to time.Time, sink collect.RecordSink) error {
+	if err := c.emitRuleActions(ctx, lines, sink); err != nil {
+		return err
+	}
 	limits := dayCounts{} // 位置の上限を超えたリクエストの数 (waf_position_limit)
-	for _, q := range WAFQueries(c.prof, c.checks) {
-		if q.PerDay {
-			for d := from; d.Before(to); d = d.Add(24 * time.Hour) {
-				end := d.Add(24 * time.Hour)
-				if end.After(to) {
-					end = to
-				}
-				rows, err := c.wafQuery(ctx, q.Name, q.Query, d, end)
-				if err != nil {
-					return err
-				}
-				day := d.UTC().Format(record.DateLayout)
-				for _, r := range rows {
-					grp := r["grp"]
-					if grp == "" {
-						grp = RateGroupOther
-					}
-					key := r["acl"] + "|" + grp
-					for _, m := range []string{MetricWAFIPRateP50, MetricWAFIPRateP99, MetricWAFIPRateMax} {
-						if err := sink.Emit(ctx, c.metric(day, m, key, num(r[m]))); err != nil {
-							return err
-						}
-					}
-				}
-			}
-			continue
+	rows, err := c.splitQuery(ctx, qs[1], from, to, time.Hour, false)
+	if err != nil {
+		return err
+	}
+	blocked, err := c.emitActions(ctx, rows, limits, sink)
+	if err != nil {
+		return err
+	}
+	rows, err = c.splitQuery(ctx, qs[2], from, to, time.Hour, false)
+	if err != nil {
+		return err
+	}
+	if err := c.emitCountMatches(ctx, rows, blocked, limits, sink); err != nil {
+		return err
+	}
+	rate := WAFRateQuery(c.prof, c.checks)
+	for d := from; d.Before(to); d = d.Add(24 * time.Hour) {
+		end := d.Add(24 * time.Hour)
+		if end.After(to) {
+			end = to
 		}
-		rows, err := c.wafQuery(ctx, q.Name, q.Query, from, to)
+		rows, err := c.Query(ctx, rate, d, end)
+		c.stats.BytesScanned = c.scanned
 		if err != nil {
 			return err
 		}
-		switch q.Name {
-		case MetricWAFRuleAction:
-			block := map[string]map[string]float64{}
-			for _, r := range rows {
-				day, ok := parseDay(r["day"])
-				if !ok {
-					continue
-				}
-				n := num(r[MetricWAFRuleAction])
-				if err := sink.Emit(ctx, c.metric(day, MetricWAFRuleAction, r["acl"]+"|"+r["rule"]+"|"+r["action"], n)); err != nil {
+		day := d.UTC().Format(record.DateLayout)
+		for _, r := range rows {
+			grp := r["grp"]
+			if grp == "" {
+				grp = RateGroupOther
+			}
+			key := r["acl"] + "|" + grp
+			for _, m := range []string{MetricWAFIPRateP50, MetricWAFIPRateP99, MetricWAFIPRateMax} {
+				if err := sink.Emit(ctx, c.metric(day, m, key, num(r[m]))); err != nil {
 					return err
-				}
-				if r["action"] == "BLOCK" {
-					if block[day] == nil {
-						block[day] = map[string]float64{}
-					}
-					block[day][r["rule"]] += n
-				}
-			}
-			// 既存の waf_block (ルール別。waf_block_trend が使う) はここから作り、クエリを 1 本減らす
-			for _, day := range sortedDays(block) {
-				for _, rule := range sortedNames(block[day]) {
-					if err := sink.Emit(ctx, c.metric(day, MetricWAFBlock, Mask(rule), block[day][rule])); err != nil {
-						return err
-					}
-				}
-			}
-		case MetricWAFBlockPath:
-			agg := pathAgg{}
-			for _, r := range rows {
-				day, ok := parseDay(r["day"])
-				if !ok {
-					continue
-				}
-				rule := r["rule"]
-				inner, limited := blockInner(r)
-				if inner != "" {
-					rule += "/" + inner
-				}
-				if limited {
-					limits.add(day, r["acl"]+"|ruleGroupList", num(r[MetricWAFBlockPath]))
-				}
-				agg.add(day, r["acl"]+"|"+rule+"|"+r["method"]+"|"+c.normalize(r["path"]), r["ip"], num(r[MetricWAFBlockPath]))
-			}
-			if err := c.emitTop(ctx, sink, agg, wr.TopPaths, MetricWAFBlockPath, MetricWAFBlockPathIPs); err != nil {
-				return err
-			}
-		case MetricWAFAllowProbe:
-			agg := pathAgg{}
-			for _, r := range rows {
-				if day, ok := parseDay(r["day"]); ok {
-					agg.add(day, r["acl"]+"|"+c.normalize(r["path"]), r["ip"], num(r[MetricWAFAllowProbe]))
-				}
-			}
-			if err := c.emitTop(ctx, sink, agg, wr.TopPaths, MetricWAFAllowProbe, MetricWAFAllowProbeIPs); err != nil {
-				return err
-			}
-		case suspectBlockIP:
-			for _, r := range rows {
-				if day, ok := parseDay(r["day"]); ok {
-					if blocked[day] == nil {
-						blocked[day] = map[string]bool{}
-					}
-					blocked[day][r["ip"]] = true
-				}
-			}
-		case MetricWAFCountMatch:
-			if err := c.emitCountMatches(ctx, rows, blocked, limits, sink); err != nil {
-				return err
-			}
-		case MetricWAFChallengeIssued:
-			for _, r := range rows {
-				day, ok := parseDay(r["day"])
-				if !ok {
-					continue
-				}
-				rule := r["rule"]
-				inner, limited := blockInner(r)
-				if inner != "" {
-					rule += "/" + inner
-				}
-				if limited {
-					limits.add(day, r["acl"]+"|ruleGroupList", num(r[MetricWAFChallengeIssued]))
-				}
-				issued.add(day, r["acl"]+"|"+strings.ToLower(r["action"])+"|"+rule+"|"+r["method"]+"|"+c.normalize(r["path"]), r["ip"], num(r[MetricWAFChallengeIssued]))
-			}
-		case challengeSolved:
-			for _, r := range rows {
-				day, ok := parseDay(r["day"])
-				if !ok {
-					continue
-				}
-				for k := range solvedKinds(r) {
-					key := r["acl"] + "|" + k + "|" + r["method"] + "|" + c.normalize(r["path"])
-					if solved[day] == nil {
-						solved[day] = map[string]map[string]bool{}
-					}
-					if solved[day][key] == nil {
-						solved[day][key] = map[string]bool{}
-					}
-					solved[day][key][r["ip"]] = true
 				}
 			}
 		}
 	}
-	if err := c.emitChallenges(ctx, sink, issued, solved); err != nil {
-		return err
-	}
 	return limits.emit(ctx, c, sink)
+}
+
+// emitRuleActions は解釈率のクエリの行 (日, WebACL, ルール, action) から waf_rule_action と waf_block (ルール別、WebACL をまたいで足す) を出す。
+func (c *Collector) emitRuleActions(ctx context.Context, rows []map[string]string, sink collect.RecordSink) error {
+	actions, block := dayCounts{}, dayCounts{}
+	for _, r := range rows {
+		day, ok := parseDay(r["day"])
+		if !ok {
+			continue
+		}
+		n := num(r[MetricLinesTotal])
+		actions.add(day, r["acl"]+"|"+r["rule"]+"|"+r["action"], n)
+		if r["action"] == "BLOCK" {
+			block.add(day, Mask(r["rule"]), n)
+		}
+	}
+	for _, out := range []struct {
+		name string
+		m    dayCounts
+	}{{MetricWAFRuleAction, actions}, {MetricWAFBlock, block}} {
+		for _, day := range sortedDays(out.m) {
+			for _, k := range sortedNames(out.m[day]) {
+				if err := sink.Emit(ctx, c.metric(day, out.name, k, out.m[day][k])); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// emitActions は止めた・出した系の行を振り分けて、waf_block_ip・waf_block_path・waf_allow_probe・Challenge / CAPTCHA の metric を出し、
+// カウントの一致の suspect に使う「BLOCK された IP」(日 → IP) を返す。振り分けは前の版のクエリの filter と同じ意味 (ADR 0031)。
+func (c *Collector) emitActions(ctx context.Context, rows []map[string]string, limits dayCounts, sink collect.RecordSink) (map[string]map[string]bool, error) {
+	wr, pp := c.checks.WAFReview, c.checks.ProbePaths
+	sp := c.prof.StripPrefix
+	signIn := map[string]bool{}
+	for _, s := range c.checks.LoginBruteforce.Paths {
+		signIn[sp+s] = true
+	}
+	trusted := parseCIDRs(wr.TrustedCIDRs)
+	blockIP := dayCounts{}
+	blocked := map[string]map[string]bool{} // 日 → BLOCK された IP (suspectBlockIP)
+	blockPath, allowProbe, issued := pathAgg{}, pathAgg{}, pathAgg{}
+	solved := map[string]map[string]map[string]bool{} // 日 → <WebACL>|<種類>|<method>|<パス> → トークンが受理された IP
+	for _, r := range rows {
+		day, ok := parseDay(r["day"])
+		if !ok {
+			continue
+		}
+		n, action, path, ip := num(r[wafActions]), r["action"], r["path"], r["ip"]
+		probe := hasPrefixAny(path, sp, pp.Paths) && !hasPrefixAny(path, sp, pp.ExcludePaths)
+		normal := !inCIDRs(ip, trusted) // 正規の送信元 (trusted_cidrs) でない
+		if action == "BLOCK" {
+			blockIP.add(day, Mask(ip), n)
+			if !probe && normal {
+				rule := r["rule"]
+				inner, limited := blockInner(r)
+				if inner != "" {
+					rule += "/" + inner
+				}
+				if limited {
+					limits.add(day, r["acl"]+"|ruleGroupList", n)
+				}
+				blockPath.add(day, r["acl"]+"|"+rule+"|"+r["method"]+"|"+c.normalize(path), ip, n)
+			}
+			// 決定 (ADR 0023): レートベースのルール・既定の action・sign-in のパスでの BLOCK は「BLOCK された IP」に数えない
+			if r["terminatingRuleType"] != "RATE_BASED" && r["rule"] != "Default_Action" && !signIn[path] && normal {
+				if blocked[day] == nil {
+					blocked[day] = map[string]bool{}
+				}
+				blocked[day][ip] = true
+			}
+		}
+		if !normal {
+			continue
+		}
+		if action == "ALLOW" && probe {
+			allowProbe.add(day, r["acl"]+"|"+c.normalize(path), ip, n)
+		}
+		if action == "CHALLENGE" || action == "CAPTCHA" {
+			rule := r["rule"]
+			inner, limited := blockInner(r)
+			if inner != "" {
+				rule += "/" + inner
+			}
+			if limited {
+				limits.add(day, r["acl"]+"|ruleGroupList", n)
+			}
+			issued.add(day, r["acl"]+"|"+strings.ToLower(action)+"|"+rule+"|"+r["method"]+"|"+c.normalize(path), ip, n)
+		}
+		if tokenRow(r) {
+			for k := range solvedKinds(r) {
+				key := r["acl"] + "|" + k + "|" + r["method"] + "|" + c.normalize(path)
+				if solved[day] == nil {
+					solved[day] = map[string]map[string]bool{}
+				}
+				if solved[day][key] == nil {
+					solved[day][key] = map[string]bool{}
+				}
+				solved[day][key][ip] = true
+			}
+		}
+	}
+	for _, day := range sortedDays(blockIP) {
+		for _, k := range sortedNames(blockIP[day]) {
+			if err := sink.Emit(ctx, c.metric(day, MetricWAFBlockIP, k, blockIP[day][k])); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if err := c.emitTop(ctx, sink, blockPath, wr.TopPaths, MetricWAFBlockPath, MetricWAFBlockPathIPs); err != nil {
+		return nil, err
+	}
+	if err := c.emitTop(ctx, sink, allowProbe, wr.TopPaths, MetricWAFAllowProbe, MetricWAFAllowProbeIPs); err != nil {
+		return nil, err
+	}
+	if err := c.emitChallenges(ctx, sink, issued, solved); err != nil {
+		return nil, err
+	}
+	return blocked, nil
+}
+
+// tokenRow はトークンが受理された行の条件 (クエリの filter と同じ。solveTimestamp > 0 か、一致の action が CHALLENGE / CAPTCHA)。
+func tokenRow(r map[string]string) bool {
+	if num(r["challengeResponse.solveTimestamp"]) > 0 || num(r["captchaResponse.solveTimestamp"]) > 0 {
+		return true
+	}
+	for _, f := range challengeAcceptedFields() {
+		if v := r[f]; v == "CHALLENGE" || v == "CAPTCHA" {
+			return true
+		}
+	}
+	return false
+}
+
+func parseCIDRs(l []string) []netip.Prefix {
+	var out []netip.Prefix
+	for _, s := range l {
+		if p, err := netip.ParsePrefix(s); err == nil {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// inCIDRs は ip が prefixes のどれかに入るか (Insights の isIpInSubnet と同じ。IP として読めなければ入らない)。
+func inCIDRs(ip string, prefixes []netip.Prefix) bool {
+	a, err := netip.ParseAddr(ip)
+	if err != nil {
+		return false
+	}
+	a = a.Unmap()
+	for _, p := range prefixes {
+		if p.Contains(a) {
+			return true
+		}
+	}
+	return false
 }
 
 // emitChallenges は日ごとに出した件数の多い順に top_paths 個の key について、出した件数・異なり IP と、そのうち解いた IP の数を出す。
@@ -610,20 +663,6 @@ func (c *Collector) emitCountMatches(ctx context.Context, rows []map[string]stri
 		}
 	}
 	return nil
-}
-
-// wafQuery は 1 本流し、行の上限に当たったら WARN を出して FormatStats.Truncated に残す。
-func (c *Collector) wafQuery(ctx context.Context, name, query string, from, to time.Time) ([]map[string]string, error) {
-	rows, err := c.Query(ctx, query, from, to)
-	c.stats.BytesScanned = c.scanned
-	if err != nil {
-		return nil, err
-	}
-	if len(rows) >= MaxRows {
-		c.Logger.Warn("aggregate truncated at row limit; counts are lower bounds", "source", c.src.ID, "metric", name, "limit", MaxRows)
-		c.stats.AddTruncated(name)
-	}
-	return rows, nil
 }
 
 func sortedDays[T any](m map[string]T) []string {

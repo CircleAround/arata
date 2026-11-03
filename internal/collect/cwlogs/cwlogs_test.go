@@ -3,11 +3,13 @@ package cwlogs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	cwl "github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs/types"
 
 	"github.com/CircleAround/arata/internal/collect"
@@ -74,27 +76,26 @@ func TestQueryTemplates(t *testing.T) {
 	if got := LinesQuery(p); !strings.HasSuffix(got, "\n| stats count(*) as lines_total, count(path) as lines_matched by bin(1d) as day") {
 		t.Fatalf("lines: %s", got)
 	}
-	aggs := Aggregates(record.KindHTTPAccess, checksCfg())
-	if len(aggs) != 3 {
-		t.Fatalf("aggs: %+v", aggs)
-	}
-	want := p.Prelude + `
-| filter method in ["POST"] and path in ["/users/sign_in"] and status in [401, 422]
-| stats count(*) as sign_in_failures by bin(1d) as day, ip
-| sort sign_in_failures desc
-| limit 10000`
-	if got := AggregateQuery(p, aggs[0]); got != want {
-		t.Fatalf("sign_in query:\n%s\nwant:\n%s", got, want)
-	}
+	// 解釈率と probe_paths は 1 本 (全行を日・status・探索パスのときだけ値を持つ probe_path で数える)
 	c := checksCfg()
 	c.ProbePaths.ExcludePaths = []string{"/admin/ok"}
-	probe := AggregateQuery(p, Aggregates(record.KindHTTPAccess, c)[1])
-	if !strings.Contains(probe, `| filter status in [403, 404] and path like /^(\/\.env|\/wp-login\.php)/ and path not like /^(\/admin\/ok)/`) {
-		t.Fatalf("probe query: %s", probe)
+	if got, want := HTTPLinesQuery(p, c), p.Prelude+`
+| parse path /^(?<probe_path>\/\.env.*|\/wp-login\.php.*)/
+| stats count(*) as lines_total, count(path) as lines_matched by bin(1d) as day, status, probe_path
+| sort lines_total desc
+| limit 10000`; got != want {
+		t.Fatalf("lines query:\n%s\nwant:\n%s", got, want)
 	}
-	waf := Aggregates(record.KindWAFAction, c)
-	if len(waf) != 1 || waf[0].Filter != `action = "BLOCK"` || waf[0].KeyField != "ip" {
-		t.Fatalf("waf aggs: %+v", waf)
+	// sign_in_failures と probe_hits は 1 本 (IP 別)。filter は両方の行の和、振り分けはパスの印で
+	if got, want := HTTPHitsQuery(p, c), p.Prelude+`
+| filter (method in ["POST"] and path in ["/users/sign_in"] and status in [401, 422]) or (status in [403, 404] and path like /^(\/\.env|\/wp-login\.php)/ and path not like /^(\/admin\/ok)/)
+| parse path /^(?<sign_in>\/users\/sign_in)$/
+| parse path /^(?<probe>\/\.env|\/wp-login\.php)/
+| parse path /^(?<probe_ex>\/admin\/ok)/
+| stats count(*) as http_hits by bin(1d) as day, ip, method, status, sign_in, probe, probe_ex
+| sort http_hits desc
+| limit 10000`; got != want {
+		t.Fatalf("hits query:\n%s\nwant:\n%s", got, want)
 	}
 	if !strings.HasSuffix(SampleQuery(p, 3), "| filter not ispresent(path)\n| fields @message\n| limit 3") {
 		t.Fatal(SampleQuery(p, 3))
@@ -158,12 +159,19 @@ func linesResp(day string, total, matched string) cwlogstest.Response {
 
 func TestCollect(t *testing.T) {
 	f := &cwlogstest.Fake{}
-	f.On("as lines_total", linesResp("2026-10-21", "1000", "990"))
-	f.On("as sign_in_failures", cwlogstest.Response{Polls: 2, Rows: []map[string]string{
-		cwlogstest.Rows("day", "2026-10-20 00:00:00.000", "ip", "198.51.100.7", "sign_in_failures", "40"),
-		cwlogstest.Rows("day", "2026-10-21 00:00:00.000", "ip", "198.51.100.7", "sign_in_failures", "12"),
+	// 解釈率のクエリは探索パスの行だけ probe_path を持つ (日 × status × probe_path)
+	f.On("as lines_total", cwlogstest.Response{BytesScanned: 1e6, Rows: []map[string]string{
+		cwlogstest.Rows("day", "2026-10-21 00:00:00.000", "status", "200", "lines_total", "987", "lines_matched", "977"),
+		cwlogstest.Rows("day", "2026-10-21 00:00:00.000", "status", "404", "probe_path", "/.env/alice@example.com", "lines_total", "3", "lines_matched", "3"),
+		cwlogstest.Rows("day", "2026-10-21 00:00:00.000", "status", "200", "probe_path", "/.env", "lines_total", "10", "lines_matched", "10"),
 	}})
-	f.On("as probe_paths", cwlogstest.Response{Rows: []map[string]string{cwlogstest.Rows("day", "2026-10-21 00:00:00.000", "path", "/.env/alice@example.com", "probe_paths", "3")}})
+	f.On("as http_hits", cwlogstest.Response{Polls: 2, Rows: []map[string]string{
+		cwlogstest.Rows("day", "2026-10-20 00:00:00.000", "ip", "198.51.100.7", "method", "POST", "status", "401", "sign_in", "/users/sign_in", "http_hits", "40"),
+		cwlogstest.Rows("day", "2026-10-21 00:00:00.000", "ip", "198.51.100.7", "method", "POST", "status", "422", "sign_in", "/users/sign_in", "http_hits", "12"),
+		// sign-in のパスでも GET は数えない。探索の 404 は probe_hits
+		cwlogstest.Rows("day", "2026-10-21 00:00:00.000", "ip", "198.51.100.7", "method", "GET", "status", "401", "sign_in", "/users/sign_in", "http_hits", "5"),
+		cwlogstest.Rows("day", "2026-10-21 00:00:00.000", "ip", "198.51.100.8", "method", "GET", "status", "404", "probe", "/.env", "http_hits", "3"),
+	}})
 	c := newCollector(t, nginxSource(), f)
 	sink := &sinkRecorder{}
 	w := collect.Window{From: now.Add(-24 * time.Hour), To: now}
@@ -171,7 +179,8 @@ func TestCollect(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := sink.metrics()
-	if m["2026-10-21|lines_total|"] != 1000 || m["2026-10-20|sign_in_failures|198.51.100.7"] != 40 || m["2026-10-21|probe_paths|/.env/<email>"] != 3 {
+	if m["2026-10-21|lines_total|"] != 1000 || m["2026-10-20|sign_in_failures|198.51.100.7"] != 40 || m["2026-10-21|sign_in_failures|198.51.100.7"] != 12 ||
+		m["2026-10-21|probe_paths|/.env/<email>"] != 3 || m["2026-10-21|probe_hits|198.51.100.8"] != 3 || len(m) != 6 {
 		t.Fatalf("metrics: %v", m)
 	}
 	// 窓の始まりの日の 0 時から、窓の終わり (含まない) まで
@@ -179,7 +188,8 @@ func TestCollect(t *testing.T) {
 	if aws.ToInt64(in.StartTime) != time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC).Unix() || aws.ToInt64(in.EndTime) != now.Unix()-1 || aws.ToString(in.LogGroupName) != "/app/nginx" {
 		t.Fatalf("query range: %d..%d", aws.ToInt64(in.StartTime), aws.ToInt64(in.EndTime))
 	}
-	if len(f.Started) != 4 {
+	// 解釈率 + probe_paths と、sign-in + 探索の 2 本 (ADR 0031)
+	if len(f.Started) != 2 || c.QueryCount() != 2 {
 		t.Fatalf("queries: %d", len(f.Started))
 	}
 	st := c.FormatStats()
@@ -302,7 +312,7 @@ func TestCollectErrors(t *testing.T) {
 	t.Run("max_scan_gb", func(t *testing.T) {
 		f := &cwlogstest.Fake{}
 		f.On("as lines_total", linesResp("2026-10-21", "10", "10"))
-		f.On("as sign_in_failures", cwlogstest.Response{Polls: 3, BytesScanned: 3e9})
+		f.On("as http_hits", cwlogstest.Response{Polls: 3, BytesScanned: 3e9})
 		src := nginxSource()
 		src.MaxScanGB = 2
 		c := newCollector(t, src, f)
@@ -432,6 +442,46 @@ func TestCollectWithoutLogGroupInfo(t *testing.T) {
 		}
 		if len(f.Started) == 0 {
 			t.Fatal("must query as before")
+		}
+	}
+}
+
+// sign-in と探索をまとめた集計が 1h まで分けても行数の上限に当たれば、そこから作る metric を両方 truncated に残す。
+// 分けて当たらなくなれば truncated にせず、分けた範囲の行を足し合わせる (ADR 0031)。
+func TestCollectHTTPHitsTruncated(t *testing.T) {
+	full := make([]map[string]string, MaxRows)
+	for i := range full {
+		full[i] = cwlogstest.Rows("day", "2026-10-21 00:00:00.000", "ip", fmt.Sprintf("10.0.%d.%d", i/256, i%256), "method", "GET", "status", "404", "probe", "/.env", "http_hits", "1")
+	}
+	for _, always := range []bool{false, true} {
+		f := &cwlogstest.Fake{}
+		f.On("as lines_total", linesResp("2026-10-21", "1000", "1000"))
+		f.On("as http_hits", cwlogstest.Response{RowsFor: func(in *cwl.StartQueryInput) []map[string]string {
+			if always || aws.ToInt64(in.EndTime)+1-aws.ToInt64(in.StartTime) > int64(6*time.Hour/time.Second) {
+				return full
+			}
+			return []map[string]string{cwlogstest.Rows("day", "2026-10-21 00:00:00.000", "ip", "198.51.100.8", "method", "GET", "status", "404", "probe", "/.env", "http_hits", "1")}
+		}})
+		c := newCollector(t, nginxSource(), f)
+		sink := &sinkRecorder{}
+		if err := c.Collect(context.Background(), collect.Window{From: now.Add(-24 * time.Hour), To: now}, sink); err != nil {
+			t.Fatal(err)
+		}
+		got := strings.Join(c.FormatStats().Truncated, ",")
+		if always {
+			if got != "sign_in_failures,probe_hits" {
+				t.Fatalf("truncated: %q", got)
+			}
+			continue
+		}
+		leaves := 0
+		for _, in := range f.Started {
+			if strings.Contains(aws.ToString(in.QueryString), "as http_hits") && aws.ToInt64(in.EndTime)+1-aws.ToInt64(in.StartTime) <= int64(6*time.Hour/time.Second) {
+				leaves++
+			}
+		}
+		if got != "" || leaves < 6 || sink.metrics()["2026-10-21|probe_hits|198.51.100.8"] != float64(leaves) {
+			t.Fatalf("truncated %q, leaves %d, metrics %v", got, leaves, sink.metrics())
 		}
 	}
 }

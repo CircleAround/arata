@@ -35,6 +35,8 @@
 | 高 | ConsoleLogin の失敗 | コンソールのサインイン失敗 (errorCode ではなく responseElements に出る) を主体・送信元ごとに数える | root のサインインは root_usage が扱う。access_denied とは別の仕組み |
 | 中 | allowlist の雛形共有 | 監査対象をまたいで共通になる承認 (開発会社の switch role、CDK の bootstrap ロール `cdk-hnb659fds-*` など) | 設計書 11 章の未決。CDK を使うアカウントでは deploy のたびに unknown_assume_role / iam_changes が出る |
 | 中 | `allowlist_stale` | 承認済みの主体で長く観測が無いものを棚卸しとして報告 | weekly / info。承認の期限 (`expires`) との関係を整理 |
+| 中 | Insights の読み取りをさらに減らす | (1) 前回の続きから読み、時間幅の細かい行を保存して日次を Go で作り直す (2) フィールドインデックス (`filterIndex`) を doctor で案内し、あれば使う | ADR 0031 の検討した選択肢。(1) は IP と生パスの保存・schema の更新・pct の再現が論点。(2) は sandbox で効果を測ってから |
+| 中 | endpoint_abuse の複数ソースの異なり IP | 1 つの画面を複数のソースで数えると、異なり IP 数が和集合でなく足し算になる | ADR 0031。ソースは別のロググループなので 1 本にまとめられない |
 | 中 | Insights の 1 日あたり費用上限 | ソース単位の `max_scan_gb` に加え、監査対象全体の 1 日上限と縮退 | 設計書 11 章の未決。WAF ログを読むと量が増える |
 | 低 | 古いパスワード | 認証情報レポートからパスワード未変更の期間を見る | `credential_hygiene` に閾値を足す形 |
 | 低 | prune | 保持期間を過ぎたデータの削除 | 設計書 5-3 章。`finding_events` の扱いを決める。rebuild は実装済み (5-4、ADR 0033) |

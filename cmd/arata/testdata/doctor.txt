@@ -2,10 +2,10 @@ SOURCE  KIND               ITEM        STATUS  CODE          DETAIL
 trail   cloudtrail-lookup  permission  ok      -             cloudtrail:LookupEvents (ap-northeast-1)
 trail   cloudtrail-lookup  permission  ok      -             cloudtrail:LookupEvents (us-east-1)
 web     cloudwatch-logs    log_group   ok      -             /app/nginx (ap-northeast-1)
-web     cloudwatch-logs    queries     ok      -             6 本のクエリを Insights が受理 (doctor, lines, probe_hits, probe_paths, sample, sign_in_failures)
+web     cloudwatch-logs    queries     ok      -             5 本のクエリを Insights が受理 (doctor, http_hits, http_lines, lines, sample)
 web     cloudwatch-logs    match_rate  ok      -             0.97 (97/100 行、閾値 0.80、形式 nginx_access)
 rails   cloudwatch-logs    log_group   ok      -             /app/rails (ap-northeast-1)
-rails   cloudwatch-logs    queries     ok      -             6 本のクエリを Insights が受理 (doctor, lines, probe_hits, probe_paths, sample, sign_in_failures)
+rails   cloudwatch-logs    queries     ok      -             5 本のクエリを Insights が受理 (doctor, http_hits, http_lines, lines, sample)
 rails   cloudwatch-logs    match_rate  ok      -             0.97 (97/100 行、閾値 0.60、形式 json)
 -       -                  check       warn    CHECK_UNUSED  どのプロファイルにも入っていない (実行されない): root_usage, unknown_assume_role, credential_hygiene, guardduty_findings, posture, access_analyzer, waf_review
 -       -                  check       warn    -             cost_anomaly は skip される: no cost_anomaly source (profile daily)
