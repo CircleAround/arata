@@ -19,8 +19,10 @@
 | GuardDuty detector (任意) | — | `guardDuty.enabled`。リージョンに 1 つしか作れないので、既に有効なアカウントでは `false` |
 | IAM Access Analyzer (任意) | `<prefix>` | `accessAnalyzer.enabled`。外部アクセスのアナライザー (アカウント単位)。外部用ロールの信頼が finding になる |
 | Bedrock の application inference profile (任意) | `<prefix>` | `bedrock.enabled`。aratam の `bedrock` プロバイダの試験用。コピー元のモデル (またはシステム定義の推論プロファイル) の ARN を `bedrock.modelSourceArn` に書く |
+| 試験用の WAF (任意) | API `<prefix>-waf`、WebACL `<prefix>`、ロググループ `aws-waf-logs-<prefix>` | `waf.enabled`。WAF の修正提案を本物の WAF のログで確かめる用。下の「試験用の WAF」。**費用がかかる** (月 8 USD 程度) ので試験のときだけ有効にする |
 
-スタック名は `prefix` (既定 `arata-sandbox`)。出力: `ReadonlyRoleArn`、`NginxLogGroupName`、`ExternalRoleArn`、`TestUserNames`、(Bedrock を有効にしたとき) `InferenceProfileArn`。
+スタック名は `prefix` (既定 `arata-sandbox`)。出力: `ReadonlyRoleArn`、`NginxLogGroupName`、`ExternalRoleArn`、`TestUserNames`、(Bedrock を有効にしたとき) `InferenceProfileArn`、
+(WAF を有効にしたとき) `ApiUrl`・`WebAclArn`・`WafLogGroupName`。
 
 ## 必要なもの
 
@@ -28,7 +30,8 @@
   範囲外の Node では `pnpm install` がエラーで止まる (`pnpm-workspace.yaml` の `engineStrict: true`)
 - pnpm 10 (`package.json` の `packageManager` の版。`corepack enable` で揃う)
 - aws CLI v2 (シナリオと arata の profile 用)
-- 開発用アカウントで CloudFormation・IAM・CloudWatch Logs・Secrets Manager (と任意の GuardDuty・Access Analyzer・Bedrock) を作れる認証情報
+- 開発用アカウントで CloudFormation・IAM・CloudWatch Logs・Secrets Manager (と任意の GuardDuty・Access Analyzer・Bedrock・API Gateway・WAFv2) を作れる認証情報
+- curl (シナリオ 06 だけ)
 
 ## 使い方
 
@@ -58,7 +61,7 @@ cp config.example.json ~/arata-sandbox/config.json
 | `nginxLogGroup.name` / `retentionDays` | ロググループの名前と保持日数 (CloudWatch Logs の決まった値: 1, 3, 5, 7, 14, 30 ...) |
 | `testUsers[]` | `name` (prefix の後ろ)、`consolePassword`、`accessKey`。要らなければ `[]` |
 | `externalRole.trustedAccountId` / `externalId` | 外部用ロールを引き受けてよい外部アカウントと、要求する ExternalId (省略可) |
-| `guardDuty.enabled` / `accessAnalyzer.enabled` / `bedrock.enabled` | 任意の機能。暗黙の既定は持たないので、3 つとも書く |
+| `guardDuty.enabled` / `accessAnalyzer.enabled` / `bedrock.enabled` / `waf.enabled` | 任意の機能。暗黙の既定は持たないので、4 つとも書く (`waf` は例でも `false`。費用がかかる) |
 | `bedrock.modelSourceArn` | `bedrock.enabled: true` のとき必須 |
 
 未知のキー・型の誤り・不足は deploy の前にまとめて報告される (`cdk synth` で確かめられる)。
@@ -82,6 +85,7 @@ pnpm cdk deploy -c config=$HOME/arata-sandbox/config.json
 export SANDBOX_ACCOUNT=<account>
 scenarios/01-nginx-bruteforce.sh
 EXTERNAL_PROFILE=<外部アカウントの profile> EXTERNAL_ID=<config の externalId> scenarios/02-external-assume-role.sh
+scenarios/06-waf-traffic.sh                  # waf.enabled: true で deploy したときだけ
 ```
 
 ### 5. arata を回す
@@ -100,6 +104,16 @@ arata の設定は `arata config init` の雛形から作り、次を変える:
 - `aws.profile: arata-sandbox`、`store` は手元の書き込める場所
 - `sources` に nginx のロググループを足す (`kind: cloudwatch-logs`、`log_group: <NginxLogGroupName>`、`format: nginx_access`)
 - `checks.credential_hygiene.unused_days: 1` (試験用のアクセスキーを翌日から「未使用」として出す)
+- (WAF を有効にしたとき) `sources` に WAF のロググループを足し、daily の `checks` に `waf_block_trend` を入れる:
+
+```yaml
+sources:
+  - id: waf
+    kind: cloudwatch-logs
+    log_group: aws-waf-logs-arata-sandbox     # 出力の WafLogGroupName
+    format: wafv2                             # → waf_action
+    max_scan_gb: 1                            # 試験のログは小さい。念のため上限を付ける
+```
 
 ```sh
 arata doctor -c arata.yaml                   # 権限・ロググループ・解釈率
@@ -134,9 +148,30 @@ pnpm cdk destroy -c config=$HOME/arata-sandbox/config.json
 | GuardDuty (任意) | 初回の 30 日は無料試用。その後は CloudTrail のイベント量などに応じて、小さなアカウントで月数 USD 程度 |
 | IAM Access Analyzer (外部アクセス) | 無料 |
 | Bedrock (任意) | 推論プロファイル自体は無料。呼び出した分のトークン課金 |
+| 試験用の WAF (任意) | WebACL 月 5 USD + ルール 1 USD/個 × 3 (レート制限と、追加料金の無い AWS マネージドルール 2 つ) + リクエスト 100 万件あたり 0.60 USD。時間割りで、置いておくと月 8 USD 程度 (1 日なら 0.3 USD 程度)。API Gateway (REST) はリクエスト 100 万件あたり数 USD でシナリオの量なら実質 0。WAF のログは CloudWatch Logs の取り込みの料金 (行は 1 件 1〜2 KB) |
 | IAM・CloudFormation | 無料 |
 
-使わない間は `cdk destroy` しておく。
+使わない間は `cdk destroy` しておく。WAF は試験のときだけ `waf.enabled: true` で deploy し、終わったら `cdk destroy` するか `false` に戻して deploy する
+(WebACL・API・WAF のロググループが消える)。
+
+## 試験用の WAF (`waf.enabled`)
+
+WAF の修正提案 (arata が WAF のログと設定から候補を作り、aratam が通知に書く。実装中) を本物の WAF のログで確かめるための、小さな構成 ([lib/waf.ts](lib/waf.ts))。
+
+- **API Gateway (REST、REGIONAL)** `<prefix>-waf`: mock 統合で固定の 200 を返す。パスは `/`、`/health`、`/search` (GET)、`/login` (POST)、`/api/{proxy+}` (全メソッド)。
+  認証なし。ステージは `sandbox` で、スロットリングは 10 件/秒 (バースト 20)。裏に何も無いので、漏れても固定の応答を返すだけ。
+  POST は `Content-Type: application/json` で送る (mock 統合のテンプレートが JSON だけのため)
+- **WebACL (REGIONAL)** `<prefix>` を API のステージに関連付ける。既定の action は ALLOW。ルール:
+  `login-rate-limit` (/login に絞った 1 IP あたり 60 秒に 10 件。WAF の下限。BLOCK)、
+  `AWSManagedRulesKnownBadInputsRuleSet` (全体を COUNT)、
+  `AWSManagedRulesCommonRuleSet` (`NoUserAgent_HEADER`・`SizeRestrictions_QUERYSTRING`・`SizeRestrictions_BODY` だけ COUNT、他は BLOCK)。
+  BLOCK・COUNT・ALLOW の行がそれぞれ出る。シナリオ 06 で何がどれになるはずかは [scenarios/README.md](scenarios/README.md)
+- **ログ**: CloudWatch Logs の `aws-waf-logs-<prefix>` (WAF の決まりで名前は `aws-waf-logs-` で始める)。保持は `nginxLogGroup.retentionDays` と同じ。
+  `authorization` と `cookie` のヘッダーは WAF が落とす (redacted fields)。
+  配信の許可はこのロググループに絞ったリソースポリシー `<prefix>-waf-logs` で与える (無いと WAF がアカウントのリソースポリシーを自動で作り、destroy で残るため)
+- **アカウント全体の設定は変えない**: API Gateway が CloudWatch Logs に書くためのアカウントの設定 (`AWS::ApiGateway::Account` と CloudWatch 用のロール) は作らない。
+  アクセスログ・実行ログは出さない (見たいのは WAF のログだけ。テストで固定)
+- destroy で全部消える (ロググループは明示で Delete。他は CloudFormation の既定)
 
 ## 手動の部分
 
