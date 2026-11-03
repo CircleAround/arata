@@ -32,6 +32,9 @@ sources:
     kind: access-analyzer
   - id: posture
     kind: posture
+  - id: waf_config
+    kind: waf-config               # WAFv2 の WebACL の設定 → waf_review (提案の候補)。REGIONAL は regions、CLOUDFRONT は us-east-1 を見る
+    # regions: [ap-northeast-1]    # 既定は aws.region
 
   # アプリ層: ロググループ → 形式プロファイル → 正規化レコード (設計書 2 章)。取得は Logs Insights の集計クエリのみ。
   - id: nginx_prod
@@ -50,7 +53,8 @@ sources:
   # - id: waf
   #   kind: cloudwatch-logs
   #   log_group: aws-waf-logs-prod
-  #   format: wafv2                  # → waf_action
+  #   format: wafv2                  # → waf_action (waf_block_trend、waf_review の日次集計)
+  #   strip_path_prefix: /prod       # API Gateway の REST API はパスの前にステージ名が付く。ALB・CloudFront なら書かない
   # - id: rails_app
   #   kind: cloudwatch-logs
   #   log_group: prod-app.log
@@ -68,7 +72,7 @@ sources:
 # `default-<cadence>` はその周期のチェック全部に展開される (版が上がって増えたチェックも黙って入る。雛形では使わない)。
 # チェック: root_usage (hourly), unknown_assume_role (hourly), new_principal (daily), iam_changes (daily), access_denied (daily),
 #           ai_path_usage (daily), login_bruteforce / probe_paths (daily, http_access), waf_block_trend (daily, waf_action),
-#           credential_hygiene / guardduty_findings / posture / access_analyzer (weekly)
+#           credential_hygiene / guardduty_findings / posture / access_analyzer / waf_review (weekly)
 # hourly に http_access / waf_action を使うチェックを入れなければ hourly では Logs Insights を回さない
 profiles:
   hourly:
@@ -80,7 +84,7 @@ profiles:
     checks: [default-daily, root_usage, unknown_assume_role]   # daily だけ運用する場合は hourly のチェックも入れる
   weekly:
     window: 7d
-    checks: [credential_hygiene, guardduty_findings, posture, access_analyzer]
+    checks: [credential_hygiene, guardduty_findings, posture, access_analyzer, waf_review]   # waf_review は waf_config と wafv2 のソースが要る (無ければ skip)
 
 # アプリ層チェックのパス・閾値 (省略時の既定値)。平常帯 = その IP 自身の直近 baseline_days 日の中央値 × factor (下限 min_count)。
 checks:
@@ -102,6 +106,11 @@ checks:
     top_n: 5                                   # BLOCK 件数の Top IP の入れ替わりを見る数
     min_count: 10
     new_rule_min_count: 1
+  waf_review:                                  # WAF の修正提案の候補 (weekly。daily が貯めた wafv2 の日次集計を読む。ADR 0023)
+    trusted_cidrs: [198.51.100.0/24]           # 監視・開発会社などの正規の送信元 (集計と候補から外す。集計条件)
+    expected_high_rate_paths: [/checkout/]     # リクエストが多いのが仕様のパス (レート制限の候補から外す)
+    rate_path_groups: [/login, /api/]          # 1 IP あたりの件数を分けて測るパスの群
+    min_distinct_ips: 10                       # 誤検知の疑いに要る異なり IP 数 (日ごとの最大)
   access_denied:                               # 拒否された API 呼び出し (主体ごと。平常帯はその主体自身の過去)
     error_codes: [AccessDenied, AccessDeniedException, UnauthorizedOperation, Client.UnauthorizedOperation]
     min_distinct_apis: 5                       # 拒否された API の種類がこれ以上で medium (列挙の兆候)

@@ -71,8 +71,9 @@ func TestConfigInitThenRun(t *testing.T) {
 	if err := json.Unmarshal(c.stdout.Bytes(), &rep); err != nil {
 		t.Fatal(err)
 	}
-	// weekly: GuardDuty が無効でアナライザーも無いアカウント (フェイクの既定) なので 2 つは skip、posture が無効であることを報告する
-	if strings.Join(rep.Coverage.ChecksRun, ",") != "credential_hygiene,posture" || len(rep.Coverage.ChecksSkipped) != 2 || !strings.Contains(c.stdout.String(), "GuardDuty が有効でない (ap-northeast-1)") {
+	// weekly: GuardDuty が無効でアナライザーも無いアカウント (フェイクの既定) なので 2 つは skip、posture が無効であることを報告する。
+	// waf_review は雛形で waf-config ソースがコメントなので skip
+	if strings.Join(rep.Coverage.ChecksRun, ",") != "credential_hygiene,posture" || len(rep.Coverage.ChecksSkipped) != 3 || !strings.Contains(c.stdout.String(), "GuardDuty が有効でない (ap-northeast-1)") {
 		t.Fatalf("weekly coverage: %+v", rep.Coverage)
 	}
 	// daily は hourly のチェックも走らせる。アプリ層は cloudwatch-logs ソースが無いので skip
@@ -147,7 +148,7 @@ func TestProfilesCmd(t *testing.T) {
 	if v.Profiles[0].Name != "daily" || origins["login_bruteforce.factor"] != "overrides" || origins["login_bruteforce.min_count"] != "checks" || origins["login_bruteforce.baseline_days"] != "default" {
 		t.Fatalf("origins: %v", origins)
 	}
-	if v.Profiles[1].Name != "hourly" || len(v.Profiles[1].Params) != 0 || len(v.Unused) != 0 || v.Profiles[2].Name != "weekly" || len(v.Profiles[2].Params) != 2 {
+	if v.Profiles[1].Name != "hourly" || len(v.Profiles[1].Params) != 0 || len(v.Unused) != 0 || v.Profiles[2].Name != "weekly" || len(v.Profiles[2].Params) != 2+14 {
 		t.Fatalf("hourly: %+v", v)
 	}
 }

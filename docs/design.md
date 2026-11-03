@@ -115,6 +115,56 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
 - `iam:GenerateCredentialReport` は書き込み系 (レポートの生成のみ)。拒否されても 4 時間以内に生成済みのレポートがあれば使い、生成時刻を Data に残す。
 - `regions` の既定は aws.region だけ。`ingest_delay` は使わない (窓に依らないため)。
 
+決定 (WAF の修正提案の素材。ADR 0023): `waf_review` (7 章) のために、wafv2 の集計と WebACL の設定のソースを足す。
+
+- `waf-config` (アカウント単位のソース): `ListWebACLs` / `GetWebACL` / `GetLoggingConfiguration` / `ListResourcesForWebACL` で WebACL 1 件
+  (`acl|<scope>|<region>|<WebACL>`) とルール 1 件ずつ (`rule|<scope>|<region>|<WebACL>|<ルール>`) を `snapshot_items` (kind `waf_config`) に置く。
+  REGIONAL は `regions` (既定 aws.region)、CLOUDFRONT は regions に関係なく us-east-1 のクライアントで引く。`ListResourcesForWebACL` は CloudFront に使えないので REGIONAL だけ、資源の種類ごとに呼ぶ。
+  決定: ListResourcesForWebACL は種類ごとに資源のサービス側の権限も要る (COGNITO_USER_POOL → `cognito-idp:ListResourcesForWebACL`。sandbox の本物の AWS で拒否されて判明)。
+  守っている資源は提案の補助なので、読み取りロールに各サービスの権限は足さず (最小権限)、呼べない種類はその種類だけ WebACL の `resources_unknown` (`<種類>: <code>`) に残して WARN を出し、ソースは失敗にしない。
+  エラー文は解釈しない (種類ごとに文言がばらばらで、Verified Access・AgentCore Gateway は action を名指ししない。sandbox で確認)。代わりに wafv2 の権限だけで呼べる
+  APPLICATION_LOAD_BALANCER を最初に呼び、それが拒否されたときだけ `wafv2:ListResourcesForWebACL` 自体の拒否 (ロールの更新漏れ) としてソースの失敗にする。
+  ALB が通った後の拒否・パラメータエラー (その種類がリージョンで使えない `WAFInvalidParameterException` など) は、すべてその種類だけ不明にする。
+  doctor も同じ規則で、実際に呼ぶ種類ごとに試し、ALB の拒否は ng、他の種類の失敗は warn にする。
+  Statement の全体は保存せず、action (BLOCK / ALLOW / COUNT など、グループは OverrideAction の NONE / COUNT)・種類 (`managed_group` / `rule_group` / `rate_based` / `regular`)・
+  マネージドの名前・グループの中で COUNT にしたルール (`RuleActionOverrides` と古い `ExcludedRules`)・レート制限の値・評価窓・集約・scope-down の URI 条件だけを持つ。
+  scope-down は UriPath の ByteMatch (STARTS_WITH / EXACTLY) とその And だけを解釈し、他を含めば `rate_scope_parsed: false`。WebACL が 1 つも無ければ Unavailable (waf_review は skip)
+- wafv2 の日次集計に足すもの (`cloudwatch-logs` の wafv2 ソース。daily で回る):
+
+| metric | key | 値 |
+|---|---|---|
+| `waf_rule_action` | `<WebACL>\|<終了ルール>\|<action>` | 件数。既存の `waf_block` (ルール別) はここから作り、クエリを 1 本減らす |
+| `waf_block_path` / `_ips` | `<WebACL>\|<ルール>[/<グループの中のルール>]\|<method>\|<正規化パス>` | BLOCK の件数 / 異なり IP 数。探索パスは除く。日ごとに上位 `top_paths` (既定 50) |
+| `waf_allow_probe` / `_ips` | `<WebACL>\|<正規化パス>` | 探索パス (probe_paths) への ALLOW の件数 / 異なり IP 数。上位 `top_paths` |
+| `waf_rule_count_match` / `_suspect` | `<WebACL>\|<ルール>` (グループの中は `<ruleGroupId>/<ルール>`) | カウントモードの一致の件数 / そのうち探索パスか、その日「BLOCK された IP」(下の決定) からの件数 |
+| `waf_ip_rate_p50` / `_p99` / `_max` | `<WebACL>\|<パスの群>` | 1 IP あたり 5 分間の件数の分布。群は `rate_path_groups` の接頭辞 (最長一致)、どれにも当たらなければ `*` |
+| `waf_position_limit` | `<WebACL>\|<配列の名前>` | 配列の位置の上限を超えた (数え漏れの可能性がある) リクエストの数 |
+
+- 決定: ヘッダー・クエリ文字列・Cookie・User-Agent・本文は引かない。WebACL 名は `webaclId` の ARN から `parse` で取る
+- 決定: パスはクエリと `#` 以降を落とし、数字だけ・UUID の区間を `:id` にし、メールアドレスらしき文字列を伏せる。Insights に正規表現の置換が無いので Go 側で行う。
+  そのため Insights では (パス, IP) で集計し、Go で正規化してから異なり IP を数える (生パスごとの異なり IP を足すと、1 IP が /items/1..500 を列挙したときに 500 IP と数え、攻撃を誤検知と取り違える)
+- 決定: 1 回の結果は 10000 行まで。超えたら件数の多い組だけが残る (少なめに数え、候補は出にくい側に倒れる)。WARN を出し、`coverage.formats[].truncated` と run の stats の `truncated_aggregates` (ソース → 集計の名前) に残す
+- 決定 (カウントの一致): Insights は JSON の配列を `name.0.field` に平坦化し、group by できる (2026-11 に sandbox の実ログで確認)。トップレベルの `nonTerminatingMatchingRules` は先頭 3 個、
+  `ruleGroupList` は先頭 8 グループ (各グループの中の `nonTerminatingMatchingRules` は先頭 1 個) を group by に並べて 1 回のスキャンで取り、Go で分解する。
+  グループ全体を COUNT にした場合はトップレベルに WebACL 上のルール名が出て、グループの中の 1 ルールを COUNT に上書きした場合は `ruleGroupList.N.nonTerminatingMatchingRules` に中のルール名が出る (実ログで確認)。
+  `ruleGroupList` には一致しなかったグループも WebACL の順に全部入る。上限のすぐ後ろの位置 (番兵) も group by に入れ、埋まっていれば `waf_position_limit` に数える (それより後ろは数え漏れる。waf_review は observation で伝える)
+- 決定 (止めたグループの中のルール名): BLOCK の行は `ruleGroupList.N.terminatingRule.ruleId` を位置で取り、`terminatingRuleType` がグループ (GROUP / MANAGED_RULE_GROUP) のときだけ、
+  null でない**最後の**位置のものを採る。前にある COUNT のグループは一致すると `terminatingRule` が null でなくなるが、止めたグループより後ろのグループは評価されないので、最後の 1 つが止めたグループになる。
+  番兵 (9 番目のグループ) が埋まっているときは判断できないので、中のルール名を付けずグループ単位にする (安全側)。`parse @message` の正規表現で最初の `terminatingRule` を取る案は、
+  前にある COUNT のグループのものを取り違える (実ログで確認) のでやめた
+- 決定 (カウントの一致の suspect の「BLOCK された IP」): 専用のクエリ (保存しない) で、レートベースのルール (`terminatingRuleType` が RATE_BASED)・既定の action (`Default_Action`)・
+  sign-in のパス (`login_bruteforce.paths`) での BLOCK を除いた BLOCK の IP を日ごとに取る。正規の利用者も一時的にレート制限に当たり得て (決済などリクエストが多いのが仕様の画面がある)、
+  それを「悪い IP」とみなすと、正規の利用者に当たっている COUNT ルールを「怪しい通信ばかり」と見せてしまう (危ない方向に間違える)。sandbox で、/login のレート制限で止まった 1 IP のせいで
+  COUNT の一致が 100% suspect になって判明した。count_rule_status の evidence に `suspect_blocked_ip_excludes` (除いた BLOCK) を残す
+- 決定 (1 IP あたりの件数): `stats count(*) as n by bin(5m), acl, grp, ip | stats pct(n, 50), pct(n, 99), max(n) by acl, grp` を UTC の 1 日ずつ流す (2 段目で日を切る書き方に頼らない。
+  1 日ずつでもスキャン量は同じ)。2 段の stats と pct は sandbox で確認済み
+- 決定: `checks.waf_review.trusted_cidrs` (監視・開発会社など) は `isIpInSubnet` で `waf_rule_action` 以外の新しい集計から外す (`waf_rule_action` は「使われていないルール」の判定に使うので外さない)。
+  `top_paths` / `rate_path_groups` / `trusted_cidrs` は集計条件なので overrides では変えられない
+- 決定 (`strip_path_prefix`): API Gateway の REST API では `httpRequest.uri` の前にステージ名が付く (`/prod/login`。sandbox で確認。ALB・CloudFront では付かない)。
+  wafv2 ソースの `strip_path_prefix` (`/` で始まり `/` で終わらない) を、探索パス・パスの群の判定では必須の接頭辞として正規表現の前に付け、正規化の前に外す (`/prod` は `/prod/x` と `/prod` だけを外し、`/products` は外さない)。集計条件
+- 費用: wafv2 ソースのクエリは lines + `waf_block_ip` + 5 本 + レート (日数分)。既存の `max_scan_gb` がそのまま効く (超えたら QUERY_LIMIT で、その日の集計は欠ける)。
+  sandbox の 1 時間・約 300 リクエストのログで 1 本 0.3〜0.5 MB
+
 ### 2-1. 形式プロファイルの種類 (JSON ログと非 JSON ログ)
 
 アプリの言語・フレームワークで形式は変わるので、プロファイルは「組み込み」と「汎用」の 2 系統にする。
@@ -353,7 +403,7 @@ S3 の条件付き書き込みでロック)。SQLite ファイルは数十 MB �
 | `metrics` | date, source, metric, key, value | 日次集計 (`sign_in_failures` by ip、`admin_404` by ip、`waf_block` by rule)。平常帯の計算元。決定: 集計元のレコード種類 `from` 列を追加。主キーは (date, source, metric, key) で、後から来た値で**置き換える** (3 章の決定により後の値ほど完全)。raw JSONL には追記されるので rebuild は行順に適用すれば同じ結果になる。日は UTC |
 | `findings` | id, check, key, severity, first_seen, last_seen, last_changed, status (open/resolved/acked/snoozed), reported_at, fingerprint, data, suppressed_severity | 差分判定の中核。決定: `fingerprint` 列を追加 (4-2)。決定: `suppressed_severity` (ack / snooze したときの重大度。open / resolved では空) を追加 (schema 5、ADR 0022)。移行では既存の acked / snoozed の行に今の severity を入れる |
 | `posture` | check, resource, value, first_seen, last_changed | 姿勢チェックの現在値。決定: 作らず `snapshot_items` にまとめた (ADR 0015) |
-| `snapshot_items` | kind, source, key, data, collected_at | 決定: アカウント単位の状態 (認証情報レポート・GuardDuty・Access Analyzer・姿勢) の最新のスナップショット。収集が成功したときだけ (kind, source) 単位で丸ごと置き換える (ADR 0015) |
+| `snapshot_items` | kind, source, key, data, collected_at | 決定: アカウント単位の状態 (認証情報レポート・GuardDuty・Access Analyzer・姿勢・WAF の WebACL の設定) の最新のスナップショット。収集が成功したときだけ (kind, source) 単位で丸ごと置き換える (ADR 0015) |
 | `finding_events` | finding_id, check, key, class, severity, summary, at, run_id, profile, data | 決定: finding の状態遷移 (new / changed / recurred / resolved) の履歴。run の差分判定、人の resolve / approve、allowlist の編集による解消で追記する。期間レポートの元 (ADR 0016) |
 | `meta` | key, value | 決定: `history_since` (schema 4 以降の最初の run の開始時刻。これより前の状態遷移は残っていない) |
 
@@ -479,6 +529,7 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 | credential_hygiene | weekly | iam_credential_report | 未使用キー 90 日超、MFA 無し、ルートのアクセスキー の増減 (決定: 古いパスワードは後続) | medium (ルートのキーは high) |
 | access_analyzer | weekly | access_analyzer | ACTIVE な finding の増減 | medium (公開は high) |
 | posture (決定: posture_* ではなく 1 チェックで項目ごとに finding) | weekly | posture_item | CloudTrail 有効・検証 ON、GuardDuty 有効、ルート MFA、S3 Public Access Block、パスワードポリシー | high (検証とパスワードポリシーは medium) |
+| waf_review | weekly | waf_config (+ 保存済みの waf_action の日次集計) | WAF の修正提案の候補を report.json の `proposals` に (finding ではない)。決定: ADR 0023 | 正規の画面での多数の IP の BLOCK だけ low |
 | allowlist_stale | quarterly (report) | principals | 90 日未観測の approved 主体 | info |
 
 決定 (Step 1 の 4 チェックの Mode と Fingerprint。ADR 0005):
@@ -521,6 +572,39 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 | posture | state | `cloudtrail_logging` / `cloudtrail_log_validation` / `guardduty_enabled\|<region>` / `root_mfa` / `s3_public_access_block` / `password_policy` | 重大度 + 問題の中身 (無効な項目・最小文字数など) | 記録中のマルチリージョン証跡が無い (high)、ログファイル検証が無効な証跡 (medium)、GuardDuty 無効 (high)、ルート MFA 無し (high)、PAB 未設定 / 無効な項目 (high)、パスワードポリシー未設定 / 最小文字数 < `checks.posture.min_password_length` (既定 14) (medium)。取れなかった項目は前回の finding を維持 |
 | access_analyzer | state | finding ID | 重大度 + リソース + 許可先 + action | ACTIVE な外部アクセスのアナライザーの ACTIVE な finding。公開は high、他は medium |
 | ai_path_usage | event | `<ARN>\|<ip>` | info + IP | allowlist の `tags: [ai]` を持つ承認済みの主体で、principal_ips.last_seen が窓内の組を毎回 info に 1 行 (件数は累計) |
+
+決定 (waf_review。ADR 0023): 週次に、daily が貯めた wafv2 の日次集計 (2 章) と `waf-config` の設定から、決まった規則で WAF の修正提案の候補を作る。
+arata は LLM を使わず候補だけを作り、aratam の LLM は候補を文章と設定例に書き起こすだけ (候補に無い提案を作らない)。適用は人が判断する。
+
+| 候補 (`kind`) | 段階 (`stage`) | 条件 (閾値はすべて `checks.waf_review`) |
+|---|---|---|
+| `false_positive` (誤検知の疑い) | count_first | 探索パスではない正規化パスで、ルールの BLOCK の異なり IP (日ごとの最大) が `min_distinct_ips` (10) 以上。`finding_distinct_ips` (50) 以上は low の finding にも (key `false_positive\|<WebACL>\|<ルール>\|<method> <path>`、state 型) |
+| `probe_allowed` (すり抜けている探索) | count_first | 探索パスへの ALLOW が直近 `days` (7) 日で `min_count` (10) 件以上 (WebACL ごとに 1 件、パスは上位 10) |
+| `rate_limit_missing` (レート制限の不足) | count_first | パスの群を受け持つレートベースのルールが無く、5 分あたりの最大が p99 の `rate_factor` (10) 倍超え、かつ提案する limit より大きい。limit = max(p99 × `rate_margin` (3), `rate_floor` (100)) |
+| `rate_limit_loose` / `rate_limit_tight` | review | 受け持つルールが 1 つで解釈できるとき、limit (5 分あたりに換算) が観測の最大の `rate_loose_factor` (10) 倍より高い / 観測の p99 より低い |
+| `unused_rule` (使われていないルール) | review | 直近 `unused_days` (30) 日すべてにデータがあり、終了ルールにもカウントの一致にもならなかった (COUNT のルールは除く)。削除は勧めない |
+| `observation` (提案なし) | none | 下の「不審な事実は必ず伝える」。`about` (関わる候補) と `reason` (提案しなかった理由) を持つ |
+| `observation` / about `count_rule_status` (COUNT のルールの状況) | none | COUNT で動いているルール (グループ全体の COUNT、グループの中の COUNT の上書きを含む) ごとに毎回 1 件 (`reason: informational`)。直近 `days` 日の一致件数・怪しい通信の割合・一致した日数。一致 0 も載せる |
+
+- 決定: COUNT → BLOCK の切り替えは提案しない (当初の `count_to_block` は廃止)。切り替えは運用で計画して行う作業 (COUNT で入れるときに期間を決めて様子を見る) で、
+  アプリの事情も絡むので、ログの数字だけで勧めると正規の利用者を止める危険がある。代わりに COUNT のルールの状況を計画の材料として毎回載せ、Summary は事実だけを書く
+  (例「COUNT の X: 直近 7 日で 6 件一致、うち怪しい通信 100%、一致した日 1 / 7 日」)。怪しい通信 = 探索パスか、レート制限・既定の action・sign-in のパス以外で BLOCK された IP からの一致。
+  COUNT のルールは一致 0 でも count_rule_status に載るので、`unused_rule` の対象から外す (重ならないように)。閾値 `count_days` / `count_ratio` / `count_min_matches` は設定から外した
+  (書いたままの設定は `config init --diff` で unknown_key と出る。Load は未知のキーで止まるので消す)
+- 決定: 「迷ったら提案しない」。設定と突き合わせられない (WebACL が waf-config に無い・同じ名前の WebACL が複数ある・ルールが設定に無い)、scope-down を解釈できない、
+  IP 以外の集約のレートベースのルール、複数の条件の scope-down、群の一部だけを受け持つルール、データの日数が足りない、のどれでも提案しない
+- 決定: 誤検知の候補から外すもの: 探索パス、sign-in のパス (`login_bruteforce.paths`。多数の IP からの BLOCK はクレデンシャルスタッフィングかもしれない)、
+  レートベースのルール (レート制限の候補で扱う)、送信元の評判で止めるグループ (`IpReputation` / `AnonymousIp`)、既定の action (`Default_Action`)
+- 決定 (不審な事実は必ず伝える): 規則が提案に至らなかったが不審な観測があれば、`kind: observation` で理由 (`below_threshold` 閾値未満 / `undetermined` 判断できない /
+  `excluded_by_config` 除外設定に一致 / `excluded_by_rule` 決まった除外に一致 / `position_limit` 数え漏れの可能性) と根拠の数字を添えて残す。
+  対象は、異なり IP が足りない BLOCK (2 IP 以上・`min_count` 件以上)、除外に当たった多数の IP の BLOCK、閾値未満の許可された探索、日数が足りないが不審な一致ばかりのカウントルール、
+  判断できない・除外したパスの群の突出、配列の位置の上限超え。正規の通信にも当たっているカウントルール (割合が足りない) は不審ではないので出さない。
+  攻撃そのものの検知は既存のチェック (waf_block_trend・probe_paths・login_bruteforce) の finding が担い、observation は「WAF の設定の観点で気づいたこと」に限る
+- 決定: 異なり IP 数は日ごとの値の最大 (日をまたいで足せない。下限の見積もり)。Evidence に `distinct_ips_is_lower_bound: true` を付ける
+- 決定: `expected_high_rate_paths` (決済など、リクエストが多いのが仕様のパス) はレート制限の候補から外す (突出していれば observation に残る)。判定のパラメータ
+- 決定: 候補は種類ごとに `max_proposals` (20) まで (根拠の強い順)。候補は差分判定に乗せず毎週その時点の候補を出す
+- 決定: waf_review は保存済みの日次集計だけを読む (`StoredNeeds`)。weekly の run は wafv2 のソースを引かない (Insights の費用)。wafv2 のソースが設定に無ければ skip (`no waf_action source`)。
+  候補を見るには daily が回っている必要がある
 
 - 評価する日は窓に重なる UTC の日。key ごとに件数が最大の日を 1 件にまとめる。複数ソースが同じ metric を出す場合は合算する。
 - 件数・日付・中央値・閾値は Data に残し、Fingerprint には入れない (翌日も同じ IP が続けば still_open で沈黙し、窓が途切れてから再び現れたら recurred)。
@@ -568,7 +652,9 @@ arata rebuild                  # raw JSONL から SQLite を再構築
 - 決定 (Step 3): アカウント単位のソースは、collector の読み取り API を 1 回ずつ試して action ごとに permission 行を出す (拒否は ng / ACCESS_DENIED)。
   必要な action: iam-credential-report = `iam:GenerateCredentialReport` (書き込み系。doctor では試さない)・`iam:GetCredentialReport`、
   guardduty = `guardduty:ListDetectors`・`ListFindings`・`GetFindings`、access-analyzer = `access-analyzer:ListAnalyzers`・`ListFindings`、
-  posture = `cloudtrail:DescribeTrails`・`GetTrailStatus`、`guardduty:ListDetectors`・`GetDetector`、`iam:GetAccountSummary`・`GetAccountPasswordPolicy`、`s3:GetAccountPublicAccessBlock`。
+  posture = `cloudtrail:DescribeTrails`・`GetTrailStatus`、`guardduty:ListDetectors`・`GetDetector`、`iam:GetAccountSummary`・`GetAccountPasswordPolicy`、`s3:GetAccountPublicAccessBlock`、
+  waf-config = `wafv2:ListWebACLs`・`GetWebACL`・`GetLoggingConfiguration`・`ListResourcesForWebACL` (決定: ADR 0023。WebACL があれば最初の 1 つで残りを試す)。
+  doctor の `queries` は wafv2 の新しい集計のクエリも構文検査する。`check` の warn は waf_review が読む日次集計の元 (wafv2 ソース) が無いときも出す。
   run では、権限の無いソースのチェックだけが skip され (posture は取れた項目で評価)、他のチェックは続行する。
 
 ### report.json の骨子
@@ -594,6 +680,9 @@ arata rebuild                  # raw JSONL から SQLite を再構築
 - acked / snoozed 中の finding はレポートに出さない。決定 (ADR 0022): ただし重大度が ack / snooze したときより上がったものは `changed` に出す (Data の `escalated_from_suppressed`)。
 - `coverage.checks_run` を追加し、実際に走ったチェック名を出す。
 - 決定 (Step 3): `coverage.sources_failed` / `summary.collect_errors` に `action` (不足した IAM action) と `partial` (一部の項目だけ取れず、取れた項目で評価した) を足す。
+- 決定 (ADR 0023): `proposals` (WAF の修正提案の候補と observation。waf_review が走った run だけ。無ければ節ごと出さない) を足す。1 件は `kind` / `stage` / `web_acl` / `scope` / `region` /
+  `rule` / `rule_in_group` / `method` / `path` / `summary` / `evidence` (根拠の数字と提案する値) / `finding_key` (low の finding にもした候補)、observation は `about` / `reason`。
+  aratam は未知のフィールドを無視するので、古い aratam でも止まらない (テストで固定)。`coverage.formats[].truncated` (行の上限に当たった集計) も足す。report.md には「WAF の修正提案の候補」の節を出す
 
 決定 (期間レポート。ADR 0016): `report --from --to` (`--month`) は `"kind": "period"` の別の形を出す。
 `period` / `notes` (履歴の無い期間の注意) / `summary` (new / changed / recurred / resolved / by_severity / open) / `events` / `new_principals` / `open` /

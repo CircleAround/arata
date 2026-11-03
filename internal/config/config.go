@@ -65,6 +65,9 @@ type Source struct {
 	// SampleLines は FORMAT_MISMATCH のエラーに解釈できなかった行の例 (マスク済み) を添えるか (既定 true)。
 	SampleLines    bool  `yaml:"-"`
 	SampleLinesRaw *bool `yaml:"sample_lines"`
+	// StripPathPrefix は wafv2 のログの httpRequest.uri の前に付く接頭辞 (API Gateway の REST API のステージ名 `/prod` など)。
+	// 探索パス・パスの群の判定とパスの正規化の前に外す (ADR 0023)。集計条件。wafv2 のときだけ。
+	StripPathPrefix string `yaml:"strip_path_prefix"`
 	// MaxScanGB は 1 回の収集でこのソースが Insights でスキャンしてよい量 (GB)。0 なら無制限。超えたら QUERY_LIMIT。
 	MaxScanGB float64 `yaml:"max_scan_gb"`
 	// IngestDelay はイベントが起きてから取得できるようになるまでの遅延の見込み。収集は [From - IngestDelay, To) を引き、
@@ -126,14 +129,16 @@ const (
 	KindGuardDuty        = "guardduty"
 	KindAccessAnalyzer   = "access-analyzer"
 	KindPosture          = "posture"
+	// KindWAFConfig は WAFv2 の WebACL の設定。REGIONAL は regions、CLOUDFRONT は us-east-1 を引く (ADR 0023)。
+	KindWAFConfig = "waf-config"
 )
 
 // SupportedKinds は受け付ける source.kind。
 var SupportedKinds = map[string]bool{KindCloudTrailLookup: true, KindCloudWatchLogs: true,
-	KindCredentialReport: true, KindGuardDuty: true, KindAccessAnalyzer: true, KindPosture: true}
+	KindCredentialReport: true, KindGuardDuty: true, KindAccessAnalyzer: true, KindPosture: true, KindWAFConfig: true}
 
 // SnapshotSourceKinds はスナップショットを取る source.kind (regions の既定は aws.region だけ、ingest_delay は使わない)。
-var SnapshotSourceKinds = map[string]bool{KindCredentialReport: true, KindGuardDuty: true, KindAccessAnalyzer: true, KindPosture: true}
+var SnapshotSourceKinds = map[string]bool{KindCredentialReport: true, KindGuardDuty: true, KindAccessAnalyzer: true, KindPosture: true, KindWAFConfig: true}
 
 // Load は設定を読み、既定値を埋め、検証する。
 func Load(path string) (*Config, error) {

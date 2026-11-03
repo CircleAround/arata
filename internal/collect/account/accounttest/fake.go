@@ -1,4 +1,4 @@
-// Package accounttest はアカウント単位の collector (認証情報レポート・GuardDuty・Access Analyzer・姿勢) が使う SDK のフェイク。
+// Package accounttest はアカウント単位の collector (認証情報レポート・GuardDuty・Access Analyzer・姿勢・WAF の設定) が使う SDK のフェイク。
 package accounttest
 
 import (
@@ -20,17 +20,29 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3control"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3control/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
+	"github.com/aws/aws-sdk-go-v2/service/wafv2"
+	waftypes "github.com/aws/aws-sdk-go-v2/service/wafv2/types"
 	"github.com/aws/smithy-go"
 
 	"github.com/CircleAround/arata/internal/collect/account"
 )
 
-// APIError は smithy.APIError のフェイク。
-type APIError struct{ Code string }
+// APIError は smithy.APIError のフェイク。Message が空なら Code を返す。
+type APIError struct{ Code, Message string }
 
-func (e APIError) Error() string                 { return e.Code }
-func (e APIError) ErrorCode() string             { return e.Code }
-func (e APIError) ErrorMessage() string          { return e.Code }
+func (e APIError) Error() string {
+	if e.Message != "" {
+		return e.Code + ": " + e.Message
+	}
+	return e.Code
+}
+func (e APIError) ErrorCode() string { return e.Code }
+func (e APIError) ErrorMessage() string {
+	if e.Message != "" {
+		return e.Message
+	}
+	return e.Code
+}
 func (e APIError) ErrorFault() smithy.ErrorFault { return smithy.FaultClient }
 
 // Denied は AccessDenied のエラー。
@@ -66,11 +78,14 @@ type Fake struct {
 
 	// S3 のアカウント単位の Public Access Block (nil なら未設定)
 	PublicAccessBlock *s3types.PublicAccessBlockConfiguration
+
+	// WAF は WAFv2 の WebACL (nil なら WebACL が無い)。
+	WAF *WAF
 }
 
 // Clients は region のクライアントの束を返す (全部このフェイク)。
 func (f *Fake) Clients(region string) account.Clients {
-	return account.Clients{Region: region, IAM: f, GuardDuty: gdFake{f}, AccessAnalyzer: aaFake{f}, CloudTrail: f, S3Control: f, STS: f}
+	return account.Clients{Region: region, IAM: f, GuardDuty: gdFake{f}, AccessAnalyzer: aaFake{f}, CloudTrail: f, S3Control: f, STS: f, WAFV2: wafFake{f, region}}
 }
 
 func (f *Fake) call(action string) error {
@@ -315,4 +330,93 @@ func (f *Fake) GetPublicAccessBlock(context.Context, *s3control.GetPublicAccessB
 
 func (f *Fake) GetCallerIdentity(context.Context, *sts.GetCallerIdentityInput, ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error) {
 	return &sts.GetCallerIdentityOutput{Account: aws.String("123456789012")}, nil
+}
+
+// WAF は WAFv2 のフェイクの状態。WebACLs の key は "<scope>|<region>" (CLOUDFRONT は us-east-1 のクライアントだけが引ける)。
+type WAF struct {
+	WebACLs map[string][]waftypes.WebACL
+	// Logging は WebACL の ARN → ログの送り先 (無ければ WAFNonexistentItemException)。
+	Logging map[string][]string
+	// Resources は WebACL の ARN → 資源の種類 → 関連付けた資源の ARN。
+	Resources map[string]map[waftypes.ResourceType][]string
+	// ResourceTypeErrs は資源の種類 → ListResourcesForWebACL のエラー。本物は種類ごとに資源のサービス側の権限も要る
+	// (COGNITO_USER_POOL は cognito-idp:ListResourcesForWebACL。読み取りロールに無いので AccessDeniedException になる。sandbox で確認)。
+	ResourceTypeErrs map[waftypes.ResourceType]error
+}
+
+// DeniedCognito は読み取りロールで COGNITO_USER_POOL を問い合わせたときの本物のエラー (サービス側の権限が無い)。
+var DeniedCognito = APIError{Code: "AccessDeniedException", Message: "User: arn:aws:sts::123456789012:assumed-role/arata-readonly/s is not authorized to perform: cognito-idp:ListResourcesForWebACL because no identity-based policy allows the cognito-idp:ListResourcesForWebACL action"}
+
+type wafFake struct {
+	*Fake
+	region string
+}
+
+func (f wafFake) ListWebACLs(_ context.Context, in *wafv2.ListWebACLsInput, _ ...func(*wafv2.Options)) (*wafv2.ListWebACLsOutput, error) {
+	if err := f.call(account.ActionListWebACLs); err != nil {
+		return nil, err
+	}
+	out := &wafv2.ListWebACLsOutput{}
+	if f.WAF == nil {
+		return out, nil
+	}
+	acls := f.WAF.WebACLs[string(in.Scope)+"|"+f.region]
+	// 1 ページ 1 件にしてページ送りを確かめる
+	start := 0
+	if in.NextMarker != nil {
+		fmt.Sscan(*in.NextMarker, &start)
+	}
+	if start < len(acls) {
+		a := acls[start]
+		out.WebACLs = []waftypes.WebACLSummary{{ARN: a.ARN, Id: a.Id, Name: a.Name}}
+		if start+1 < len(acls) {
+			out.NextMarker = aws.String(fmt.Sprint(start + 1))
+		}
+	}
+	return out, nil
+}
+
+func (f wafFake) GetWebACL(_ context.Context, in *wafv2.GetWebACLInput, _ ...func(*wafv2.Options)) (*wafv2.GetWebACLOutput, error) {
+	if err := f.call(account.ActionGetWebACL); err != nil {
+		return nil, err
+	}
+	for _, a := range f.WAF.WebACLs[string(in.Scope)+"|"+f.region] {
+		if aws.ToString(a.Id) == aws.ToString(in.Id) && aws.ToString(a.Name) == aws.ToString(in.Name) {
+			a := a
+			return &wafv2.GetWebACLOutput{WebACL: &a}, nil
+		}
+	}
+	return nil, APIError{Code: "WAFNonexistentItemException"}
+}
+
+func (f wafFake) GetLoggingConfiguration(_ context.Context, in *wafv2.GetLoggingConfigurationInput, _ ...func(*wafv2.Options)) (*wafv2.GetLoggingConfigurationOutput, error) {
+	if err := f.call(account.ActionGetLoggingConfiguration); err != nil {
+		return nil, err
+	}
+	dst, ok := f.WAF.Logging[aws.ToString(in.ResourceArn)]
+	if !ok {
+		return nil, APIError{Code: "WAFNonexistentItemException"}
+	}
+	return &wafv2.GetLoggingConfigurationOutput{LoggingConfiguration: &waftypes.LoggingConfiguration{ResourceArn: in.ResourceArn, LogDestinationConfigs: dst}}, nil
+}
+
+func (f wafFake) ListResourcesForWebACL(_ context.Context, in *wafv2.ListResourcesForWebACLInput, _ ...func(*wafv2.Options)) (*wafv2.ListResourcesForWebACLOutput, error) {
+	if err := f.call(account.ActionListResourcesForWebACL); err != nil {
+		return nil, err
+	}
+	if err := f.WAF.ResourceTypeErrs[in.ResourceType]; err != nil {
+		return nil, err
+	}
+	return &wafv2.ListResourcesForWebACLOutput{ResourceArns: f.WAF.Resources[aws.ToString(in.WebACLArn)][in.ResourceType]}, nil
+}
+
+// WebACL は WebACL のフェイク。ARN は region と scope から作る。
+func WebACL(scope waftypes.Scope, region, name string, rules ...waftypes.Rule) waftypes.WebACL {
+	s := "regional"
+	if scope == waftypes.ScopeCloudfront {
+		s = "global"
+	}
+	return waftypes.WebACL{Name: aws.String(name), Id: aws.String(name + "-id"),
+		ARN:           aws.String(fmt.Sprintf("arn:aws:wafv2:%s:123456789012:%s/webacl/%s/%s-id", region, s, name, name)),
+		DefaultAction: &waftypes.DefaultAction{Allow: &waftypes.AllowAction{}}, Rules: rules}
 }

@@ -51,6 +51,7 @@ type Collector struct {
 	src     config.Source
 	prof    Profile
 	aggs    []Aggregate
+	checks  config.Checks
 	api     API
 	Sleep   func(ctx context.Context, d time.Duration) error
 	Logger  *slog.Logger
@@ -85,7 +86,7 @@ func New(src config.Source, checks config.Checks, api API) (*Collector, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Collector{src: src, prof: p, aggs: Aggregates(p.Yields, checks), api: api, Sleep: sleepFor, Now: time.Now,
+	return &Collector{src: src, prof: p, aggs: Aggregates(p.Yields, checks), checks: checks, api: api, Sleep: sleepFor, Now: time.Now,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), MaxWait: DefaultMaxWait}, nil
 }
 
@@ -104,6 +105,20 @@ func (c *Collector) ID() string              { return c.src.ID }
 func (c *Collector) Yields() []record.Kind   { return []record.Kind{c.prof.Yields} }
 func (c *Collector) Profile() Profile        { return c.prof }
 func (c *Collector) Aggregates() []Aggregate { return c.aggs }
+
+// Queries は Collect が流す集計クエリ (名前 → クエリ。doctor の構文検査用)。解釈率・サンプルは含まない。
+func (c *Collector) Queries() map[string]string {
+	out := map[string]string{}
+	for _, a := range c.aggs {
+		out[a.Metric] = AggregateQuery(c.prof, a)
+	}
+	if c.prof.Yields == record.KindWAFAction {
+		for _, q := range WAFQueries(c.prof, c.checks) {
+			out[q.Name] = q.Query
+		}
+	}
+	return out
+}
 
 // SetLogGroup は DescribeLogGroups で引き済みのロググループを渡す (doctor が同じ API を 2 回呼ばないため)。
 func (c *Collector) SetLogGroup(g types.LogGroup) {
@@ -227,6 +242,7 @@ func (c *Collector) Collect(ctx context.Context, w collect.Window, sink collect.
 		}
 		if len(rows) >= MaxRows {
 			c.Logger.Warn("aggregate truncated at row limit", "source", c.src.ID, "metric", a.Metric, "limit", MaxRows)
+			c.stats.AddTruncated(a.Metric)
 		}
 		for _, r := range rows {
 			day, ok := parseDay(r["day"])
@@ -237,6 +253,9 @@ func (c *Collector) Collect(ctx context.Context, w collect.Window, sink collect.
 				return err
 			}
 		}
+	}
+	if c.prof.Yields == record.KindWAFAction {
+		return c.collectWAF(ctx, from, to, sink)
 	}
 	return nil
 }

@@ -25,10 +25,12 @@ const (
 	KindCredentialReport Kind = "iam_credential_report"
 	// KindAccessAnalyzer は IAM Access Analyzer の ACTIVE な finding 1 件。
 	KindAccessAnalyzer Kind = "access_analyzer"
+	// KindWAFConfig は WAFv2 の WebACL の設定 (WebACL 1 件か、その中のルール 1 件)。
+	KindWAFConfig Kind = "waf_config"
 )
 
 // SnapshotKinds は「窓に依らない今の状態」を表すレコード種類。collector が取るたびに丸ごと置き換えて保存する (ADR 0015)。
-var SnapshotKinds = map[Kind]bool{KindCredentialReport: true, KindGuardDuty: true, KindAccessAnalyzer: true, KindPostureItem: true}
+var SnapshotKinds = map[Kind]bool{KindCredentialReport: true, KindGuardDuty: true, KindAccessAnalyzer: true, KindPostureItem: true, KindWAFConfig: true}
 
 // PrincipalKind は主体の種類。principals.kind に対応する。
 type PrincipalKind string

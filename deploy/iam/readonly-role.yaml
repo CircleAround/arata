@@ -136,6 +136,15 @@ Resources:
                   - iam:GetAccountPasswordPolicy
                   - s3:GetAccountPublicAccessBlock
                 Resource: '*'
+              # waf-config (WebACL の設定を読むだけ。waf_review の提案の候補に使う)
+              - Sid: WAFConfig
+                Effect: Allow
+                Action:
+                  - wafv2:ListWebACLs
+                  - wafv2:GetWebACL
+                  - wafv2:GetLoggingConfiguration
+                  - wafv2:ListResourcesForWebACL
+                Resource: '*'
 
 Outputs:
   RoleArn:

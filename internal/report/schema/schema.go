@@ -22,6 +22,39 @@ type Report struct {
 	AlreadyReported []Finding `json:"already_reported"`
 	Info            []Finding `json:"info"`
 	Coverage        Coverage  `json:"coverage"`
+	// Proposals は WAF の修正提案の候補 (waf_review。ADR 0023)。finding ではなく、毎回その時点の候補を出す (差分判定に乗せない)。
+	// waf_review が走らなかった run では出さない (omitempty)。読む側は無い節を「候補なし」として扱う。
+	Proposals []Proposal `json:"proposals,omitempty"`
+}
+
+// Proposal は WAF の修正提案の候補 1 件。arata が決まった規則で作り、根拠の数字を Evidence に持つ。適用は人が判断する。
+type Proposal struct {
+	// Kind は候補の種類 (false_positive / probe_allowed / rate_limit_missing / rate_limit_loose / rate_limit_tight / unused_rule)、
+	// または observation (提案はしないが、WAF の設定の観点で気づいた観測。COUNT のルールの状況 count_rule_status もここ)。
+	Kind string `json:"kind"`
+	// About は observation が関わる候補の種類 (false_positive など) か count_rule_status (COUNT のルールの状況)。提案では空。
+	About string `json:"about,omitempty"`
+	// Reason は observation で提案しなかった理由: below_threshold (閾値未満) / undetermined (判断できない) /
+	// excluded_by_config (除外設定に一致) / excluded_by_rule (決まった除外に一致。レートベースのルールなど) / position_limit (数え漏れの可能性) /
+	// informational (提案の候補ではない情報。count_rule_status)。
+	Reason string `json:"reason,omitempty"`
+	// Stage は提案の段階: count_first (まず COUNT で様子を見る) / review (人が見直す。変更は勧めない) / none (observation。提案なし)。
+	// COUNT → BLOCK の切り替えは運用で計画して行うので、arata は勧めない (ADR 0023)。
+	Stage  string `json:"stage"`
+	WebACL string `json:"web_acl"`
+	Scope  string `json:"scope,omitempty"`
+	Region string `json:"region,omitempty"`
+	// Rule は WebACL のルール名。RuleInGroup はルールグループの中のルール名 (グループの中の 1 つが対象のとき)。
+	Rule        string `json:"rule,omitempty"`
+	RuleInGroup string `json:"rule_in_group,omitempty"`
+	Method      string `json:"method,omitempty"`
+	// Path は正規化したパス (クエリを落とし、数字・UUID の区間は :id)。
+	Path    string `json:"path,omitempty"`
+	Summary string `json:"summary"`
+	// Evidence は根拠の数字 (件数・異なり IP 数・日数・p99 など) と、提案する値 (レート制限の limit など)。
+	Evidence map[string]any `json:"evidence"`
+	// FindingKey は同じ候補を low の finding にもしたときの key (重大な候補だけ)。
+	FindingKey string `json:"finding_key,omitempty"`
 }
 
 // Window は対象期間。
@@ -112,6 +145,8 @@ type FormatCoverage struct {
 	RecentAverage *float64 `json:"recent_average,omitempty"`
 	BytesScanned  float64  `json:"bytes_scanned"`
 	Code          string   `json:"code,omitempty"`
+	// Truncated は結果が行の上限 (10000) に当たった集計の名前 (件数は少なめ)。
+	Truncated []string `json:"truncated,omitempty"`
 }
 
 // SkippedCheck は走らなかったチェックと理由。

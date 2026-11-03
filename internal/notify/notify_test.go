@@ -412,6 +412,35 @@ func TestMarkNotifiedFailureKeepsExit(t *testing.T) {
 	}
 }
 
+// arata が report.json に足した節 (proposals) や、この aratam が知らない節があっても止まらず、今の通知は変わらない (ADR 0018・0023)。
+// proposals を Slack に出すのは段階 3 (aratam の提案の節)。
+func TestUnknownSectionsAreIgnored(t *testing.T) {
+	base := inputDir(t, golden(t, "report.json"), string(golden(t, "report.md")))
+	s0 := &fakeSender{}
+	run(t, base, s0)
+
+	var m map[string]any
+	if err := json.Unmarshal(golden(t, "report.json"), &m); err != nil {
+		t.Fatal(err)
+	}
+	m["proposals"] = []any{map[string]any{"kind": "probe_allowed", "stage": "count_first", "web_acl": "prod-waf", "summary": "探索が許可された", "evidence": map[string]any{"count": 12}},
+		map[string]any{"kind": "observation", "about": "false_positive", "reason": "undetermined", "stage": "none", "web_acl": "prod-waf", "summary": "s", "evidence": map[string]any{}}}
+	m["future_section"] = map[string]any{"x": 1}
+	dir := inputDir(t, marshal(t, m), string(golden(t, "report.md")))
+	s := &fakeSender{}
+	res, _ := run(t, dir, s)
+	if res.Exit != ExitOK || !res.Sent || len(s.got) != 1 {
+		t.Fatalf("%+v %+v", res, s.got)
+	}
+	if got, want := strings.ReplaceAll(s.got[0].text, dir, "<dir>"), strings.ReplaceAll(s0.got[0].text, base, "<dir>"); got != want {
+		t.Fatalf("notification changed:\n%s\nwant:\n%s", got, want)
+	}
+	r, err := schema.Parse(marshal(t, m))
+	if err != nil || len(r.Proposals) != 2 || r.Proposals[1].Reason != "undetermined" {
+		t.Fatalf("%v %+v", err, r)
+	}
+}
+
 // ack 中の finding の重大度が上がったとき、arata は新しい class を足さず changed に印を付けて出す (ADR 0022)。
 // aratam は max_severity で緊急用に振り分け、変化として本文に出す (aratam 側の変更なしで届くことを固定する)。
 func TestEscalatedChangedGoesUrgent(t *testing.T) {

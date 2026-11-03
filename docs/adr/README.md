@@ -46,3 +46,4 @@
 | [0020](0020-sandbox-cdk.md) | 試験環境 (sandbox) は開発用の AWS アカウントに CDK (TypeScript) で作り、配布用のロールは素の CloudFormation のまま取り込む | 採用 |
 | [0021](0021-access-denied-check.md) | 拒否された API 呼び出しを events に残し、主体ごとの種類と件数を平常帯と比べる `access_denied` チェックを足す | 採用 |
 | [0022](0022-expected-denied-and-escalation.md) | 想定済みの拒否は allowlist の `expected_denied` で主体 × API の単位で除き、ack / snooze 中でも重大度が上がれば再報告する | 採用 |
+| [0023](0023-waf-review-proposals.md) | WAF の修正提案の候補は arata が規則で作り、report.json の `proposals` に出す (WebACL の設定は `waf-config` のスナップショット) | 採用 |

@@ -9,7 +9,8 @@
   "findings": {"new": [], "changed": [], "recurred": [], "resolved": [], "still_open": []},
   "already_reported": [],
   "info": [],
-  "coverage": {"sources_ok": [], "sources_failed": [], "checks_run": [], "checks_skipped": [], "formats": []}
+  "coverage": {"sources_ok": [], "sources_failed": [], "checks_run": [], "checks_skipped": [], "formats": []},
+  "proposals": []
 }
 ```
 
@@ -20,7 +21,9 @@
 - `coverage.sources_failed`: 取れなかったソースと `code`、不足した `action`。`covered_from` / `covered_until` は取れた期間。
   `partial: true` は一部の項目だけ取れなかった (取れた項目で評価済み。取れなかった項目は前回の状態のまま)
 - `coverage.checks_skipped`: 走らなかったチェックと理由 (必要なソースが無い / 失敗)
-- `coverage.formats`: アプリログの解釈率 (`match_rate`、`code` が FORMAT_MISMATCH / FORMAT_DRIFT のこともある)
+- `coverage.formats`: アプリログの解釈率 (`match_rate`、`code` が FORMAT_MISMATCH / FORMAT_DRIFT のこともある)。
+  `truncated` は結果の行の上限に当たった集計 (件数は少なめ)
+- `proposals` (weekly の waf_review が走ったときだけ): WAF の修正提案の候補と observation。下の「WAF の修正提案の候補」
 
 ## 読む順序
 
@@ -79,6 +82,32 @@ LLM は critical / high を「情報」に格下げして沈黙させない。
 
 high 以上の finding は、同じ読み取りロールで追加照会して根拠を足してよい (例: その主体の直近の CloudTrail イベント)。
 追加照会は読み取りのみ。書き込み・設定変更はしない。
+
+## WAF の修正提案の候補 (proposals)
+
+arata が決まった規則で作った、WAF の設定を変える候補。finding ではない (毎週その時点の候補が出る)。適用するかは人が判断する。
+
+- 1 件: `kind`、`stage`、`web_acl` / `scope` / `region`、`rule` (WebACL のルール名)、`rule_in_group` (ルールグループの中のルール名)、`method` / `path` (正規化したパス。数字・UUID は `:id`)、
+  `summary`、`evidence` (根拠の数字と提案する値)、`finding_key` (low の finding にもした候補)
+- **提案** (`kind` が observation 以外): `false_positive` (誤検知の疑い)、`probe_allowed` (すり抜けている探索)、
+  `rate_limit_missing` (レート制限の不足)、`rate_limit_loose` / `rate_limit_tight` (レート制限の値の見直し)、`unused_rule` (使われていないルール。削除は勧めない)
+- `stage`: `count_first` = まず COUNT で様子を見てから確定する、`review` = 人が見直す (変更を勧めるものではない)。
+  **COUNT → BLOCK の切り替えは arata は勧めない** (運用で計画して行う作業)
+- **observation** (`kind: observation`、`stage: none`): 規則が提案に至らなかったが、WAF の設定の観点で不審な観測。`about` は関わる候補の種類、`reason` は提案しなかった理由:
+  `below_threshold` (閾値未満)、`undetermined` (設定と突き合わせられない・scope-down を解釈できないなど、判断できない)、`excluded_by_config` (除外設定に一致。決済のパスなど)、
+  `excluded_by_rule` (決まった除外に一致。レートベースのルール・IP 評判のグループ・sign-in のパス)、`position_limit` (ログの配列の位置の上限を超え、数え漏れの可能性)
+- **COUNT のルールの状況** (`kind: observation`、`about: count_rule_status`、`reason: informational`): COUNT で動いているルールごとに毎回 1 件。提案ではなく、COUNT → BLOCK を計画するときの材料。
+  `matches` (一致件数)、`suspect_ratio` (怪しい通信の割合 = 探索パスか、レート制限・既定の action・sign-in のパス以外で BLOCK された IP からの一致)、`matching_days` / `days` (一致した日数 / 集計の日数)
+- 根拠の読み方: `distinct_ips_max_per_day` は日ごとの異なり IP 数の最大で、期間全体の IP 数の**下限**。`count` などは期間 (`days` 日) の合計。
+  レートの値 (`p99_per_5min`、`proposed_limit`、`current_limit_per_5min`) は 1 IP あたり 5 分間の件数
+
+書き起こし方:
+
+- 提案ごとに「何を・なぜ (evidence の数字)・段階 (まず COUNT で様子を見る / 見直す)」を書く。**候補に無い提案を足さない**。数字を作らない
+- count_rule_status は事実 (一致件数・割合・日数) だけを書く。「BLOCK に上げるべき」とは書かない (割合が高くても、切り替えは人が計画して決める)
+- observation は「提案はしないが気づいたこと」として、理由 (`reason`) と一緒に事実だけを書く。observation を提案に格上げしない
+- 攻撃そのもの (同じ IP の探索・総当たり) は findings (waf_block_trend・probe_paths・login_bruteforce) の方に出る。proposals と同じ IP・パスなら関連付けてよい
+- ヘッダー・クエリ文字列・Cookie などの生の値は report.json に無い。推測で補わない
 
 ## 期間レポート (report --month / --from --to)
 

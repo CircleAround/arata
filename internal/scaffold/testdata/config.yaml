@@ -31,6 +31,8 @@ sources:
     kind: access-analyzer                        # → access_analyzer。アナライザーが無ければ skip
   - id: posture
     kind: posture                                # → posture (CloudTrail・GuardDuty・ルート MFA・S3・パスワードポリシー)
+  # - id: waf_config
+  #   kind: waf-config                           # WebACL の設定 → waf_review (下の wafv2 のソースも要る)。REGIONAL は regions、CLOUDFRONT は us-east-1
 
   # アプリ層 (CloudWatch Logs): ロググループ → 形式プロファイル → 正規化レコード。取得は Logs Insights の集計クエリだけ。
   # 足したら arata doctor で解釈率とクエリを確かめる。
@@ -52,6 +54,7 @@ sources:
   #   kind: cloudwatch-logs
   #   log_group: aws-waf-logs-my-app
   #   format: wafv2
+  #   # strip_path_prefix: /prod                 # API Gateway の REST API はパスの前にステージ名が付く。探索パス・パスの群の判定の前に外す
 
 # チェック一覧 (周期 / 型 / 必要なレコード)。event 型は窓内の出来事、state 型は今の状態を報告する。
 #   root_usage           hourly  event  trail_event     ルートユーザーの利用 (critical)
@@ -67,6 +70,7 @@ sources:
 #   guardduty_findings   weekly  state  guardduty       GuardDuty の findings。新規と件数の増加 (重大度は GuardDuty 準拠)
 #   posture              weekly  state  posture_item    CloudTrail 証跡と検証・GuardDuty 有効・ルート MFA・S3 Public Access Block・パスワードポリシー (high / medium)
 #   access_analyzer      weekly  state  access_analyzer  IAM Access Analyzer の外部アクセス findings (公開は high、他は medium)
+#   waf_review           weekly  state  waf_config      WAF の修正提案の候補を report.json の proposals に (正規の画面での大量 BLOCK は low の finding にも)
 # 必要なレコードを出すソースが無いチェックは skip される (coverage に理由が出る)。http_access / waf_action は cloudwatch-logs が出す。
 profiles:
   hourly:                                        # 発生そのものが異常な事象の早期検知。Logs Insights を使うチェックは入れない (費用)
@@ -98,6 +102,7 @@ profiles:
       - guardduty_findings   # GuardDuty の findings。新規と件数の増加 (重大度は GuardDuty 準拠)
       - posture              # CloudTrail 証跡と検証・GuardDuty 有効・ルート MFA・S3 Public Access Block・パスワードポリシー (high / medium)
       - access_analyzer      # IAM Access Analyzer の外部アクセス findings (公開は high、他は medium)
+      - waf_review           # WAF の修正提案の候補を report.json の proposals に (正規の画面での大量 BLOCK は low の finding にも)
 
 # チェックのパラメータ (すべてのプロファイルに効く)。下の値はこの版の既定値。
 checks:
@@ -125,6 +130,21 @@ checks:
     new_rule_min_count: 1                        # 新しく鳴り始めたルールとして報告する BLOCK 件数の下限
     baseline_days: 14                            # 過去と比べる日数
     min_baseline_days: 7                         # 「初出」判定に要る過去日数
+  waf_review:
+    top_paths: 50                                # wafv2 の BLOCK / 許可された探索のパスを日ごとに残す数 (件数の多い順)。集計条件なので overrides では変えられない
+    rate_path_groups: [/login, /api/]            # 1 IP あたりの件数を分けて測るパスの接頭辞 (どれにも当たらなければ「その他」)。集計条件
+    trusted_cidrs: []                            # 監視・開発会社などの正規の送信元 (例 [203.0.113.0/24])。wafv2 の新しい集計と候補から外す。集計条件
+    expected_high_rate_paths: []                 # リクエストが多いのが仕様のパスの接頭辞 (決済など)。レート制限の候補から外す (observation には残る)
+    days: 7                                      # 候補を作るのに見る直近の日数 (daily が貯めた日次集計を読む。weekly は wafv2 を引かない)
+    min_distinct_ips: 10                         # 誤検知の疑いに要る異なり IP 数 (日ごとの最大。下限の見積もり)
+    finding_distinct_ips: 50                     # 誤検知の疑いを low の finding にもする異なり IP 数
+    min_count: 10                                # すり抜けている探索の件数の下限。誤検知の observation (異なり IP が足りない) の件数の下限にも使う
+    rate_factor: 10                              # レート制限が無いとみなす条件: 1 IP の 5 分あたりの最大が p99 のこの倍を超える
+    rate_margin: 3                               # 提案する limit = max(p99 × rate_margin, rate_floor) (5 分あたり)
+    rate_floor: 100                              # 提案する limit の下限
+    rate_loose_factor: 10                        # 既存のレート制限が観測の最大のこの倍より高ければ緩すぎる (p99 より低ければ厳しすぎる)
+    unused_days: 30                              # 使われていないルールとみなす一致 0 の日数 (この日数分のデータが要る)
+    max_proposals: 20                            # 候補の種類ごとに出す上限 (根拠の強い順)
   access_denied:
     error_codes: [AccessDenied, AccessDeniedException, UnauthorizedOperation, Client.UnauthorizedOperation] # 拒否とみなす CloudTrail の errorCode (完全一致)。events に残す条件なので overrides では変えられない。後から足したコードは過去分が無いので平常帯 0 から始まる
     min_distinct_apis: 5                         # 拒否された API の種類がこれ以上 (かつ平常帯超え) で報告 (medium)

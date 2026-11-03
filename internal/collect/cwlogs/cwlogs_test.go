@@ -93,7 +93,7 @@ func TestQueryTemplates(t *testing.T) {
 		t.Fatalf("probe query: %s", probe)
 	}
 	waf := Aggregates(record.KindWAFAction, c)
-	if len(waf) != 2 || waf[0].Filter != `action = "BLOCK"` || waf[0].KeyField != "rule" {
+	if len(waf) != 1 || waf[0].Filter != `action = "BLOCK"` || waf[0].KeyField != "ip" {
 		t.Fatalf("waf aggs: %+v", waf)
 	}
 	if !strings.HasSuffix(SampleQuery(p, 3), "| filter not ispresent(path)\n| fields @message\n| limit 3") {

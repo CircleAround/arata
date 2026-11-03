@@ -128,6 +128,18 @@ type FormatStats struct {
 	BytesScanned float64
 	// OutOfRange は問い合わせ範囲がロググループの作成前 / 保持期間外で、問い合わせずに「データなし」とした理由 (空なら問い合わせた)。
 	OutOfRange string
+	// Truncated は結果が行の上限 (10000) に当たった集計の名前 (件数は少なめ。run の stats に残す)。
+	Truncated []string
+}
+
+// AddTruncated は行の上限に当たった集計の名前を足す (同じ名前は 1 回)。
+func (s *FormatStats) AddTruncated(name string) {
+	for _, n := range s.Truncated {
+		if n == name {
+			return
+		}
+	}
+	s.Truncated = append(s.Truncated, name)
 }
 
 // Rate は matched / total。total が 0 なら ok=false (行が無く判定できない)。
@@ -156,10 +168,12 @@ type PartialReporter interface {
 }
 
 // ProbeResult は doctor の権限検査 1 件 (action ごと)。Err が nil なら許可されている。
+// Warn は「許可されているが、この項目は取れない」(収集はその項目だけ不明として続ける) ことの理由。doctor は warn の行にする。
 type ProbeResult struct {
 	Action string
 	Detail string
 	Err    error
+	Warn   string
 }
 
 // Prober は doctor の権限検査を、副作用の無い読み取り API だけで行う collector が満たす。
