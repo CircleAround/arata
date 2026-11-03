@@ -27,8 +27,11 @@ export interface SandboxConfig {
   guardDuty: { enabled: boolean };
   accessAnalyzer: { enabled: boolean };
   bedrock: { enabled: boolean; modelSourceArn?: string };
-  /** 試験用の WAF (API Gateway + WebACL)。費用がかかるので試験のときだけ有効にする。 */
-  waf: { enabled: boolean };
+  /**
+   * 試験用の WAF (API Gateway + WebACL)。費用がかかるので試験のときだけ有効にする。
+   * challenge / captcha は Challenge (GET /search) と CAPTCHA (/contact) のルールを足す (ADR 0028。省略時は false。waf.enabled のときだけ)。
+   */
+  waf: { enabled: boolean; challenge: boolean; captcha: boolean };
   /** 秘匿値の読み取りの試験用 (シークレット 3 つと読み手のロール。シナリオ 10)。シークレットは月額の費用がかかる。 */
   secretAccess: { enabled: boolean };
 }
@@ -117,8 +120,8 @@ class Checker {
     return v;
   }
 
-  boolean(o: Obj, key: string, path: string): boolean | undefined {
-    const v = this.required(o, key, path);
+  boolean(o: Obj, key: string, path: string, opts: { optional?: boolean } = {}): boolean | undefined {
+    const v = opts.optional ? o[key] : this.required(o, key, path);
     if (v === undefined) return undefined;
     if (typeof v !== 'boolean') {
       this.add(join(path, key), '真偽値 (true / false) を指定してください');
@@ -249,7 +252,7 @@ export function parseConfig(raw: unknown): SandboxConfig {
   }
 
   // 任意の機能。暗黙の既定を持たないよう enabled は必須
-  const toggle = (key: 'guardDuty' | 'accessAnalyzer' | 'waf' | 'secretAccess'): boolean | undefined => {
+  const toggle = (key: 'guardDuty' | 'accessAnalyzer' | 'secretAccess'): boolean | undefined => {
     const v = c.required(top, key, '');
     if (v === undefined) return undefined;
     const o = c.object(v, key, ['enabled']);
@@ -257,8 +260,27 @@ export function parseConfig(raw: unknown): SandboxConfig {
   };
   const guardDuty = toggle('guardDuty');
   const accessAnalyzer = toggle('accessAnalyzer');
-  const waf = toggle('waf');
   const secretAccess = toggle('secretAccess');
+
+  // WAF。challenge / captcha は WAF の試験の追加のルール (省略時は false)。waf.enabled が false のまま true にしても効かないので誤りにする
+  let waf: boolean | undefined;
+  let challenge = false;
+  let captcha = false;
+  const wv = c.required(top, 'waf', '');
+  if (wv !== undefined) {
+    const o = c.object(wv, 'waf', ['enabled', 'challenge', 'captcha']);
+    if (o) {
+      waf = c.boolean(o, 'enabled', 'waf');
+      for (const k of ['challenge', 'captcha'] as const) {
+        const b = c.boolean(o, k, 'waf', { optional: true });
+        if (b === true && waf === false) c.add(`waf.${k}`, 'waf.enabled が true のときだけ使えます');
+        if (b !== undefined) {
+          if (k === 'challenge') challenge = b;
+          else captcha = b;
+        }
+      }
+    }
+  }
 
   let bedrockEnabled: boolean | undefined;
   let modelSourceArn: string | undefined;
@@ -287,7 +309,7 @@ export function parseConfig(raw: unknown): SandboxConfig {
     guardDuty: { enabled: guardDuty! },
     accessAnalyzer: { enabled: accessAnalyzer! },
     bedrock: modelSourceArn === undefined ? { enabled: bedrockEnabled! } : { enabled: bedrockEnabled!, modelSourceArn },
-    waf: { enabled: waf! },
+    waf: { enabled: waf!, challenge, captcha },
     secretAccess: { enabled: secretAccess! },
   };
 }
