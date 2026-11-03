@@ -20,6 +20,8 @@ sandbox (arata の試験用に条件を整えた、開発用アカウント上�
 | `06-waf-traffic.sh [正規=60] [探索=20] [攻撃=20] [/login=150]` | 試験用の WAF の API (config の `waf.enabled: true`) に curl で送る: 正規らしい通信、探索パス、XSS などの攻撃らしいクエリ、/login の連打 (送信元はこのホストの IP 1 つ。下の「06 の期待」) | `waf_block_trend` low (`new_rule`: `AWSManagedRulesCommonRuleSet` と `login-rate-limit`。BLOCK が `min_count` 10 を超えればこのホストの IP の `new_top_ip` も)。WAF の修正提案 (実装中) の素材 | daily |
 | `07-defense-evasion.sh` | 試験用のロググループ `<stack>-scenario-07` を作り、保持期間を 1 日にして消す。sandbox のアナライザー (config の `accessAnalyzer.enabled: true`) にアーカイブルール `arata-scenario-07` (存在しないバケットにだけ一致) を作って消す。**CloudTrail の証跡は止めない** | `defense_evasion` high が 3 件: `logs:PutRetentionPolicy` (1 日 < 既定の `min_log_retention_days` 90)・`logs:DeleteLogGroup`・`access-analyzer:CreateArchiveRule` (`<prefix>/arata-scenario-07`。アナライザーがあるとき)。呼び出した主体を `tags: [deploy]` にすると medium (info にはならない)。試験用のロググループは arata の監査対象ではないので critical にはならない | daily |
 | `08-public-exposure.sh` [`VPC_ID=...`] | 試験用のセキュリティグループ `<stack>-scenario-08` をデフォルト VPC (または `VPC_ID`) に作り、tcp/22 を 0.0.0.0/0 に開けて、すぐ閉じて消す。どこにも付けない | `public_exposure` high (`ec2:AuthorizeSecurityGroupIngress\|<sg>\|tcp/22 0.0.0.0/0`)。すぐ閉じても出る。`tags: [deploy]` の主体でも下がらない (`known_deploy_principal: true`) | daily |
+| `09-new-source-region.sh <リージョン>` | 実行する主体 (既知で、過去 30 日に活動のある開発者の主体) が、ふだん書き込まないリージョン (arata の cloudtrail-lookup の regions に入っているもの) に String のパラメータ `/<stack>/scenario-09` を作って消す。送信元の初出も試すなら AWS CloudShell など別の送信元から実行する | `principal_new_source` medium (実行した主体の ARN、`reasons` に `new_region`、`new_regions` に指定のリージョンと書き込み 2 件)。ストアに CloudTrail のデータのある日が 15 日 (`min_baseline_days`) 未満なら出ない (導入直後)。下の「09・10 の期待」 | daily |
+| `10-secret-bulk-read.sh` | (`secretAccess.enabled: true` のとき) SecureString のパラメータを 9 つ作り、読み手のロール `<stack>-secret-reader` でシークレット 3 つ (個別と BatchGetSecretValue)・パラメータ 9 つ (個別に復号)・パス 1 つ (再帰・復号) を読み、パラメータを消す。値は表示しない | `secret_access` high (読み手のロールの ARN、`distinct_secrets` 13 > `min_distinct` 10、`bulk: true`、`paths` に `(recursive)`)。データのある日が 7 日以上なら `first_reader: true` と `new_secrets` 13 個。読み手のロールの `new_principal` medium も出る (承認すれば止まる) | daily |
 
 ## 06 の期待 (WAF の action)
 
@@ -68,9 +70,19 @@ WebACL のルール ([lib/waf.ts](../lib/waf.ts)): `login-rate-limit` (優先度
 - どちらも、既存のチェック (`iam_changes`・`access_denied` など) の結果は変わらない。失敗した呼び出しは `defense_evasion` / `public_exposure` に出ない (拒否なら `access_denied` の材料)
 - 読み取りロールに権限は足していない (`cloudtrail:LookupEvents` だけで判定する)
 
+## 09・10 の期待 (出ないはずのもの・注意)
+
+- 09: 新しく作ったロールで試さない。過去 30 日に活動が無く、その間に初めて現れた主体は「すべてが初めて」なので principal_new_source は報告しない (new_principal・承認の流れが扱う)。
+  実行する主体が CI のように `dynamic_source: true` でも、新しいリージョンは medium なので出る。パラメータの作成・削除はほかのチェックに出ない
+- 09: arata が LookupEvents で引くのは `cloudtrail-lookup` の `regions` だけ。それ以外のリージョンでの書き込みは見えない (使っていないリージョンの監視は後続の unused_region_activity)
+- 10: SecureString の復号は AWS 管理の鍵 (`aws/ssm`) のキーポリシーで許される (読み手のロールに KMS の権限は付けていない)。顧客管理の鍵は使わない
+- 10: 同じ日にもう一度実行しても still_open で沈黙する (イベント型)。読み手のロールの `secrets_access` を allowlist に書くと初出に数えなくなる (一括読み出しは数える)
+- どちらも読み取りロールに権限は足していない (`cloudtrail:LookupEvents` だけで判定する)
+
 ## 片付け
 
 - 03 で作ったユーザーは `03-iam-changes.sh cleanup` で消す (`cdk destroy` はスタックの外のものを消さない)
 - 01 のログと 04 のサンプル finding は `cdk destroy` でロググループ・detector ごと消える
-- 07・08 はスクリプトの中で作ったものを消す (途中で失敗しても終了時に消す)。08 で「消せませんでした」と出たら、そのセキュリティグループを手で消す
+- 10 のシークレットと読み手のロールは `secretAccess.enabled: false` で deploy し直すか `cdk destroy` で消える (シークレットは削除の猶予期間 (30 日) の後に消える。名前は CloudFormation が付けるので、すぐ作り直してもぶつからない)
+- 07・08・09・10 はスクリプトの中で作ったもの (ロググループ・ルール・セキュリティグループ・パラメータ) を消す (途中で失敗しても終了時に消す)。08 で「消せませんでした」と出たら、そのセキュリティグループを手で消す
 - 06 の WAF のログは `cdk destroy` (または `waf.enabled: false` で deploy) でロググループごと消える

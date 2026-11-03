@@ -2,7 +2,7 @@
 // arata の各チェックに中身が出る状態 (MFA の無いユーザー、外部アカウントから引き受けられるロール、nginx のロググループなど) を作る。
 // 置くものには実権限を付けない (漏れても何もできない)。cdk destroy で全部消える (Retain / Snapshot を持たない。CDK の既定が Retain のロググループとシークレットだけ明示で DESTROY)。
 import { fileURLToPath } from 'node:url';
-import { App, CfnOutput, RemovalPolicy, SecretValue, Stack, Tags, type StackProps } from 'aws-cdk-lib';
+import { App, CfnOutput, Fn, RemovalPolicy, SecretValue, Stack, Tags, type StackProps } from 'aws-cdk-lib';
 import { CfnInclude } from 'aws-cdk-lib/cloudformation-include';
 import * as accessanalyzer from 'aws-cdk-lib/aws-accessanalyzer';
 import * as bedrock from 'aws-cdk-lib/aws-bedrock';
@@ -103,6 +103,43 @@ export class SandboxStack extends Stack {
     if (config.waf.enabled) {
       // WAF の修正提案の試験用 (費用がかかる。試験のときだけ。lib/waf.ts)。ログの保持は nginx のロググループと同じ日数
       new SandboxWaf(this, 'Waf', { prefix: p, retentionDays: config.nginxLogGroup.retentionDays });
+    }
+
+    if (config.secretAccess.enabled) {
+      // 秘匿値の読み取りの試験用 (シナリオ 10。secret_access)。値は生成した無意味な文字列で、実際の秘密は入れない。
+      // 読み手のロールは読み取りロールと同じ主体を信頼し、権限はこのシークレットと /<prefix>/scenario-10 のパラメータの読み取りだけ。
+      // SecureString のパラメータは CloudFormation で作れないので、シナリオが作って消す。復号は AWS 管理の鍵 (aws/ssm) のキーポリシーで許される
+      // 名前は付けない (CloudFormation が付ける)。削除したシークレットは猶予期間 (30 日) の間同じ名前で作れず、deploy し直せなくなるため
+      const secrets = [1, 2, 3].map(
+        (i) =>
+          new secretsmanager.Secret(this, `ScenarioSecret${i}`, {
+            description: 'arata sandbox: dummy secret for the secret_access scenario (no real secret)',
+            generateSecretString: { passwordLength: 16, excludePunctuation: true },
+            removalPolicy: RemovalPolicy.DESTROY,
+          }),
+      );
+      const paramArn = (suffix: string) => Stack.of(this).formatArn({ service: 'ssm', resource: 'parameter', resourceName: `${p}/scenario-10${suffix}` });
+      const reader = new iam.Role(this, 'SecretReaderRole', {
+        roleName: `${p}-secret-reader`,
+        description: 'arata sandbox: reads the scenario-10 dummy secrets and parameters only',
+        assumedBy: new iam.ArnPrincipal(config.readonlyRole.trustedPrincipalArn),
+        inlinePolicies: {
+          ScenarioSecretRead: new iam.PolicyDocument({
+            statements: [
+              new iam.PolicyStatement({ actions: ['secretsmanager:GetSecretValue'], resources: secrets.map((s) => s.secretArn) }),
+              // BatchGetSecretValue は資源を指定できない。値を読めるかは GetSecretValue の権限で決まる
+              new iam.PolicyStatement({ actions: ['secretsmanager:BatchGetSecretValue'], resources: ['*'] }),
+              new iam.PolicyStatement({
+                actions: ['ssm:GetParameter', 'ssm:GetParameters', 'ssm:GetParametersByPath'],
+                resources: [paramArn(''), paramArn('/*')],
+              }),
+            ],
+          }),
+        },
+      });
+      new CfnOutput(this, 'SecretReaderRoleArn', { value: reader.roleArn });
+      new CfnOutput(this, 'ScenarioSecretArns', { value: Fn.join(',', secrets.map((s) => s.secretArn)) });
+      new CfnOutput(this, 'ScenarioParameterPath', { value: `/${p}/scenario-10` });
     }
 
     new CfnOutput(this, 'ReadonlyRoleArn', { value: readonlyRole.attrArn });

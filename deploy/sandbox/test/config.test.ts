@@ -159,3 +159,19 @@ test('waf は必須で、enabled は真偽値 (暗黙の既定を持たない)',
   on.waf = { enabled: true };
   assert.equal(parseConfig(on).waf.enabled, true);
 });
+
+test('secretAccess は必須で、enabled は真偽値 (暗黙の既定を持たない)', () => {
+  assert.equal(parseConfig(example()).secretAccess.enabled, false, 'config.example.json は false (シークレットは月額の費用がかかる)');
+
+  const missing = example();
+  delete missing.secretAccess;
+  assert.ok(errorsOf(() => parseConfig(missing)).some((p) => p.startsWith('secretAccess:') && p.includes('必須')));
+
+  const wrongType = example();
+  wrongType.secretAccess = { enabled: 1 };
+  assert.ok(errorsOf(() => parseConfig(wrongType)).some((p) => p.startsWith('secretAccess.enabled:') && p.includes('真偽値')));
+
+  const on = example();
+  on.secretAccess = { enabled: true };
+  assert.equal(parseConfig(on).secretAccess.enabled, true);
+});
