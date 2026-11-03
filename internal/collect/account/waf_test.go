@@ -139,9 +139,12 @@ func TestWAFConfigResourceTypeDenied(t *testing.T) {
 		WebACLs:   map[string][]waftypes.WebACL{"REGIONAL|ap-northeast-1": {acl}},
 		Resources: map[string]map[waftypes.ResourceType][]string{*acl.ARN: {waftypes.ResourceTypeApiGateway: {"arn:aws:apigateway:ap-northeast-1::/restapis/abc/stages/prod"}}},
 		ResourceTypeErrs: map[waftypes.ResourceType]error{
-			waftypes.ResourceTypeCognitioUserPool:       accounttest.DeniedCognito,
-			waftypes.ResourceTypeAppRunnerService:       accounttest.DeniedCognito,
-			waftypes.ResourceTypeVerifiedAccessInstance: accounttest.APIError{Code: "WAFInvalidParameterException"},
+			waftypes.ResourceTypeCognitioUserPool: accounttest.DeniedCognito,
+			waftypes.ResourceTypeAppRunnerService: accounttest.DeniedCognito,
+			// 実 AWS の文言は種類ごとにばらばらで、action を名指ししないものもある (sandbox で確認)
+			waftypes.ResourceTypeVerifiedAccessInstance: accounttest.APIError{Code: "AccessDeniedException", Message: "The Verified Access API action failed because of an unauthorized operation."},
+			waftypes.ResourceTypeAgentcoreGateway:       accounttest.APIError{Code: "AccessDeniedException", Message: "Access denied by AgentCore Gateway."},
+			waftypes.ResourceTypeAmplify:                accounttest.APIError{Code: "WAFInvalidParameterException", Message: "The resource is not supported in current region"},
 		},
 	}}
 	var logs bytes.Buffer
@@ -153,7 +156,7 @@ func TestWAFConfigResourceTypeDenied(t *testing.T) {
 	}
 	a := s.byKey()["acl|REGIONAL|ap-northeast-1|prod-waf"]
 	if a.String("resources") != "arn:aws:apigateway:ap-northeast-1::/restapis/abc/stages/prod" ||
-		a.String("resources_unknown") != "APP_RUNNER_SERVICE: ACCESS_DENIED,COGNITO_USER_POOL: ACCESS_DENIED,VERIFIED_ACCESS_INSTANCE: WAFInvalidParameterException" {
+		a.String("resources_unknown") != "AGENTCORE_GATEWAY: ACCESS_DENIED,AMPLIFY: WAFInvalidParameterException,APP_RUNNER_SERVICE: ACCESS_DENIED,COGNITO_USER_POOL: ACCESS_DENIED,VERIFIED_ACCESS_INSTANCE: ACCESS_DENIED" {
 		t.Fatalf("acl: %+v", a.Data)
 	}
 	if !strings.Contains(logs.String(), `"level":"WARN"`) || !strings.Contains(logs.String(), "COGNITO_USER_POOL") {
@@ -175,19 +178,37 @@ func TestWAFConfigResourceTypeDenied(t *testing.T) {
 		}
 		got[r.Detail] = v
 	}
-	if got["prod-waf COGNITO_USER_POOL"] != "warn" || got["prod-waf API_GATEWAY"] != "ok" || got["prod-waf VERIFIED_ACCESS_INSTANCE"] != "warn" || len(got) != len(waftypes.ResourceType("").Values()) {
+	if got["prod-waf COGNITO_USER_POOL"] != "warn" || got["prod-waf API_GATEWAY"] != "ok" || got["prod-waf VERIFIED_ACCESS_INSTANCE"] != "warn" ||
+		got["prod-waf AGENTCORE_GATEWAY"] != "warn" || got["prod-waf AMPLIFY"] != "warn" || got["prod-waf APPLICATION_LOAD_BALANCER"] != "ok" || len(got) != len(waftypes.ResourceType("").Values()) {
 		t.Fatalf("probe: %v", got)
 	}
 }
 
-// wafv2:ListResourcesForWebACL 自体が拒否されたら (読み取りロールの更新漏れ)、従来どおりソースの失敗 (ACCESS_DENIED) にする。
+// wafv2 の権限だけで呼べる APPLICATION_LOAD_BALANCER が拒否されたら、wafv2:ListResourcesForWebACL 自体の拒否 (読み取りロールの更新漏れ) として
+// ソースの失敗 (ACCESS_DENIED) にする。doctor も ng。
 func TestWAFConfigListResourcesItselfDenied(t *testing.T) {
 	acl := accounttest.WebACL(waftypes.ScopeRegional, "ap-northeast-1", "prod-waf")
 	f := &accounttest.Fake{WAF: &accounttest.WAF{WebACLs: map[string][]waftypes.WebACL{"REGIONAL|ap-northeast-1": {acl}}},
 		Errs: map[string]error{account.ActionListResourcesForWebACL: accounttest.APIError{Code: "AccessDeniedException",
 			Message: "User: arn:aws:sts::123456789012:assumed-role/arata-readonly/s is not authorized to perform: wafv2:ListResourcesForWebACL"}}}
-	_, err := collectWith(t, account.NewWAFConfig("waf_config", f.Clients("us-east-1"), f.Clients("ap-northeast-1")))
+	c := account.NewWAFConfig("waf_config", f.Clients("us-east-1"), f.Clients("ap-northeast-1"))
+	_, err := collectWith(t, c)
 	if ce := collect.Classify("", "", err); ce.Code != collect.CodeAccessDenied || ce.Action != account.ActionListResourcesForWebACL {
 		t.Fatalf("%v", err)
+	}
+	// 文言に関係なく ALB の拒否で判断する
+	f.Errs = nil
+	f.WAF.ResourceTypeErrs = map[waftypes.ResourceType]error{waftypes.ResourceTypeApplicationLoadBalancer: accounttest.APIError{Code: "AccessDeniedException", Message: "denied"}}
+	if _, err := collectWith(t, c); collect.Classify("", "", err).Code != collect.CodeAccessDenied {
+		t.Fatalf("ALB denied: %v", err)
+	}
+	var ng []string
+	for _, r := range c.Probe(context.Background()) {
+		if r.Err != nil {
+			ng = append(ng, r.Detail)
+		}
+	}
+	if strings.Join(ng, ",") != "prod-waf APPLICATION_LOAD_BALANCER" {
+		t.Fatalf("probe ng: %v", ng)
 	}
 }

@@ -48,6 +48,9 @@ arata は LLM を使わず (ADR 0001)、aratam は判定を LLM に任せない 
   COUNT と BLOCK を見分けられない
 - **ListResourcesForWebACL のためにサービス側の読み取り権限 (cognito-idp・apprunner・ec2 など) を読み取りロールに足す**: 却下。守っている資源は提案の補助で、
   監査ロールに資源ごとのサービスの権限を足す理由が弱い (最小権限)。呼べない種類は不明として残し、doctor は warn にする
+- **拒否のエラー文 (`not authorized to perform: <service>:...`) で wafv2 自体の拒否とサービス側の拒否を見分ける**: 却下。実 AWS で文言が統一されていないことを確認した
+  (Verified Access は「The Verified Access API action failed because of an unauthorized operation.」、AgentCore Gateway は「Access denied by AgentCore Gateway.」で、action を名指ししない)。
+  種類が増えるたびに壊れる。wafv2 の権限だけで呼べる APPLICATION_LOAD_BALANCER を最初に呼び、その結果で見分ける
 - **呼ぶ種類を、追加の権限が要らないものに絞る**: 見送り。どの種類が追加の権限を要るかは文書と実環境で確かめきれていない。全種類を呼び、拒否された種類だけを不明にすれば、確かめた結果に依らない
 - **scope-down を全部解釈してレート制限の受け持ちを決める**: 見送り。Statement の木は任意に深い。UriPath の ByteMatch とその And だけを解釈し、他は「判断できない」として提案しない
 

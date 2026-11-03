@@ -2,7 +2,6 @@ package account
 
 import (
 	"context"
-	"regexp"
 	"sort"
 	"strings"
 
@@ -154,10 +153,10 @@ func (c *WAFConfig) aclData(ctx context.Context, sc wafScope, acl *waftypes.WebA
 	}
 	if sc.scope == waftypes.ScopeRegional {
 		var res, unknown []string
-		for _, rt := range waftypes.ResourceType("").Values() {
+		for _, rt := range resourceTypes() {
 			out, err := sc.api.ListResourcesForWebACL(ctx, &wafv2.ListResourcesForWebACLInput{WebACLArn: acl.ARN, ResourceType: rt})
 			if err != nil {
-				code, ok := resourceTypeProblem(err)
+				code, ok := resourceTypeProblem(rt, err)
 				if !ok {
 					return nil, c.fail(ActionListResourcesForWebACL, err)
 				}
@@ -175,27 +174,34 @@ func (c *WAFConfig) aclData(ctx context.Context, sc wafScope, acl *waftypes.WebA
 	return d, nil
 }
 
-var otherServiceDenied = regexp.MustCompile(`not authorized to perform: ([a-z0-9-]+):`)
+// resourceTypes は ListResourcesForWebACL を呼ぶ資源の種類。wafv2 の権限だけで呼べる APPLICATION_LOAD_BALANCER を最初に呼ぶ。
+func resourceTypes() []waftypes.ResourceType {
+	out := []waftypes.ResourceType{waftypes.ResourceTypeApplicationLoadBalancer}
+	for _, rt := range waftypes.ResourceType("").Values() {
+		if rt != waftypes.ResourceTypeApplicationLoadBalancer {
+			out = append(out, rt)
+		}
+	}
+	return out
+}
 
-// resourceTypeProblem は ListResourcesForWebACL の資源の種類 1 つのエラーが「その種類だけ不明にして続ける」ものかを返す。
+// resourceTypeProblem は ListResourcesForWebACL の資源の種類 1 つのエラーが「その種類だけ不明にして続ける」ものかと、記録する code を返す。
 //
 // 決定 (ADR 0023): ListResourcesForWebACL は資源の種類ごとに、WAF の権限に加えて資源のサービス側の権限も要る
-// (COGNITO_USER_POOL → cognito-idp:ListResourcesForWebACL。sandbox で確認)。守っている資源は提案の補助なので、読み取りロールに
-// 各サービスの権限は足さず (最小権限)、呼べない種類は不明として記録する (resources_unknown)。拒否の文言が wafv2 以外の action を
-// 名指しするときだけを「サービス側の権限が無い」とみなす。wafv2:ListResourcesForWebACL 自体の拒否や、文言から分からない拒否は従来どおり失敗にする。
-// その種類がこのリージョンで使えない (WAFInvalidParameterException など) も不明にする。
-func resourceTypeProblem(err error) (string, bool) {
+// (COGNITO_USER_POOL → cognito-idp:ListResourcesForWebACL、Verified Access、AgentCore Gateway など。sandbox の本物の AWS で確認)。
+// 守っている資源は提案の補助なので、読み取りロールに各サービスの権限は足さず (最小権限)、呼べない種類は不明として記録する (resources_unknown)。
+// エラー文は種類ごとにばらばらで action を名指ししないものもあるので、文言は解釈しない。wafv2 の権限だけで呼べる APPLICATION_LOAD_BALANCER を
+// 最初に呼び、それが拒否されたときだけ wafv2:ListResourcesForWebACL 自体の拒否 (読み取りロールの更新漏れ) としてソースの失敗にする。
+// ALB が通った後の拒否・パラメータエラー (その種類がリージョンで使えない WAFInvalidParameterException など) は、すべてその種類だけ不明にする。
+func resourceTypeProblem(rt waftypes.ResourceType, err error) (string, bool) {
 	ce := collect.Classify("", ActionListResourcesForWebACL, err)
-	if ce.Code != collect.CodeAccessDenied {
-		if code := collect.APICode(err); code != "" {
-			return code, true
-		}
-		return ce.Code, true
+	if ce.Code == collect.CodeAccessDenied {
+		return ce.Code, rt != waftypes.ResourceTypeApplicationLoadBalancer
 	}
-	if m := otherServiceDenied.FindStringSubmatch(err.Error()); m != nil && m[1] != "wafv2" {
-		return ce.Code, true
+	if code := collect.APICode(err); code != "" {
+		return code, true
 	}
-	return "", false
+	return ce.Code, true
 }
 
 // destinationName はログの送り先の ARN を短くする (CloudWatch Logs ならロググループ名)。
@@ -331,11 +337,11 @@ func (c *WAFConfig) Probe(ctx context.Context) []collect.ProbeResult {
 	out = append(out, collect.ProbeResult{Action: ActionGetLoggingConfiguration, Detail: detail, Err: err})
 	if first.scope == waftypes.ScopeRegional {
 		// 実際に呼ぶ種類ごとに試す。サービス側の権限が無い・使えない種類は warn (収集はその種類だけ不明にして続ける)
-		for _, rt := range waftypes.ResourceType("").Values() {
+		for _, rt := range resourceTypes() {
 			_, err = first.api.ListResourcesForWebACL(ctx, &wafv2.ListResourcesForWebACLInput{WebACLArn: acl.ARN, ResourceType: rt})
 			r := collect.ProbeResult{Action: ActionListResourcesForWebACL, Detail: detail + " " + string(rt), Err: err}
 			if err != nil {
-				if code, ok := resourceTypeProblem(err); ok {
+				if code, ok := resourceTypeProblem(rt, err); ok {
 					r.Err, r.Warn = nil, "この種類の守っている資源は不明として扱う ("+code+": "+err.Error()+")"
 				}
 			}
