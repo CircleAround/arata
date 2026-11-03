@@ -70,37 +70,59 @@ func TestEndpointPathRegex(t *testing.T) {
 
 func TestEndpointQueries(t *testing.T) {
 	p, _ := ProfileFor(nginxSource())
-	qs := EndpointQueries(p, "web", abuseChecks().EndpointAbuse)
-	// sources: [api] の endpoint は web では数えない
-	if len(qs) != 2 || qs[0].Endpoint != "signup" || qs[1].Endpoint != "message" {
-		t.Fatalf("queries: %+v", qs)
+	// sources: [api] の endpoint は web では数えない。全画面で 1 本
+	q, ok := EndpointsQuery(p, "web", abuseChecks().EndpointAbuse)
+	if !ok || strings.Join(q.Metrics, ",") != "endpoint_abuse:signup,endpoint_abuse:message" {
+		t.Fatalf("query: %+v", q)
 	}
-	q := qs[1].Query
 	for _, want := range []string{
-		`path like /^\/messages([?#].*)?$/`, `path like /^\/messages\/[^\/?#]+([?#].*)?$/`,
-		`method in ["POST"]`, `status in [200, 302]`, `path not like /^\/messages\/preview([?#].*)?$/`,
-		"stats count(*) as " + endpointHits + ", min(@timestamp) as first_seen, max(@timestamp) as last_seen by bin(10m) as t, ip, ua",
+		`| filter (((path like /^\/signup([?#].*)?$/) and method in ["POST"]) or ((path like /^\/messages([?#].*)?$/ or path like /^\/messages\/[^\/?#]+([?#].*)?$/ or `,
+		`method in ["POST"] and status in [200, 302])) and path not like /^\/messages\/preview([?#].*)?$/`,
+		// glob ごとの印 (一致したときだけ "/" を捕獲する)。中のグループは名前付き
+		`| parse path /^(?<ep0_0>\/)signup(?<ep0_0_g1>[?#].*)?$/`,
+		`| parse path /^(?<ep1_1>\/)messages\/[^\/?#]+(?<ep1_1_g1>[?#].*)?$/`,
+		`| parse path /^(?<ep1_2>\/)(?<ep1_2_g1>[^\/?#]+\/)*messages(?<ep1_2_g2>[?#].*)?$/`,
+		"stats count(*) as " + endpointHits + ", min(@timestamp) as first_seen, max(@timestamp) as last_seen by bin(10m) as t, ip, ua, method, status, ep0_0, ep1_0, ep1_1, ep1_2",
 		"limit 10000",
 	} {
-		if !strings.Contains(q, want) {
-			t.Errorf("query lacks %q:\n%s", want, q)
+		if !strings.Contains(q.Query, want) {
+			t.Errorf("query lacks %q:\n%s", want, q.Query)
+		}
+	}
+	// 印の正規表現は元の glob の正規表現と同じ行に一致する
+	for _, path := range []string{"/messages", "/messages/1?x", "/a/b/messages", "/messages/1/2", "/messagesx", "/signup", "/", "/a", "/a/b?x", "/items/42/edit", "/x/items/42/edit"} {
+		for _, g := range []string{"/messages", "/messages/*", "/**/messages", "/**", "/", "/items/:id/edit", "/**/items/*/edit", "/**/**/messages", "/mess*ges"} {
+			re := EndpointPathRegex("", g)
+			flag := regexp.MustCompile(flagRegex("f", "", g))
+			if regexp.MustCompile(re).MatchString(path) != flag.MatchString(path) {
+				t.Errorf("%s %s: flag regex %s differs", g, path, flag)
+			}
+		}
+	}
+	// strip_path_prefix は印の正規表現でも必須
+	for _, g := range []string{"/signup", "/**/messages"} {
+		flag := regexp.MustCompile(flagRegex("f", "/prod", g))
+		for _, path := range []string{"/prod/signup", "/signup", "/prod/a/messages", "/prod/messages", "/products/messages"} {
+			if regexp.MustCompile(EndpointPathRegex("/prod", g)).MatchString(path) != flag.MatchString(path) {
+				t.Errorf("prefix %s %s: flag regex %s differs", g, path, flag)
+			}
 		}
 	}
 	// UA を出さない形式 (json で ua の対応が無い) は ua で group by しない
 	js := config.Source{ID: "web", Kind: config.KindCloudWatchLogs, LogGroup: "/app/rails", Format: config.FormatJSON, Yields: config.YieldsHTTPAccess,
 		Fields: map[string]string{"ip": "remote_ip", "path": "path", "method": "method"}}
 	jp, _ := ProfileFor(js)
-	if q := EndpointQueries(jp, "web", abuseChecks().EndpointAbuse)[0].Query; !strings.HasSuffix(strings.Split(q, "\n| sort")[0], "as t, ip") {
-		t.Fatalf("json without ua:\n%s", q)
+	if q, _ := EndpointsQuery(jp, "web", abuseChecks().EndpointAbuse); !strings.Contains(q.Query, "as t, ip, method") {
+		t.Fatalf("json without ua:\n%s", q.Query)
 	}
 	js.Fields["ua"] = "user_agent"
 	jp, _ = ProfileFor(js)
-	if q := EndpointQueries(jp, "web", abuseChecks().EndpointAbuse)[0].Query; !strings.Contains(q, "as t, ip, ua") {
-		t.Fatalf("json with ua:\n%s", q)
+	if q, _ := EndpointsQuery(jp, "web", abuseChecks().EndpointAbuse); !strings.Contains(q.Query, "as t, ip, ua") {
+		t.Fatalf("json with ua:\n%s", q.Query)
 	}
 	// endpoints が空なら何も流さない
-	if qs := EndpointQueries(p, "web", config.DefaultChecks().EndpointAbuse); len(qs) != 0 {
-		t.Fatalf("default must be empty: %+v", qs)
+	if _, ok := EndpointsQuery(p, "web", config.DefaultChecks().EndpointAbuse); ok {
+		t.Fatal("default must be empty")
 	}
 }
 
@@ -116,28 +138,10 @@ func hit(bin, ip, ua string, n, firstSec, lastSec int) map[string]string {
 
 const botUA = "Mozilla/5.0 (EvilBot-Test-UA)"
 
+// abuseFake は endpoint_abuse の場面のログ (httpEvents) を Sim で返すフェイク。
 func abuseFake() *cwlogstest.Fake {
 	f := &cwlogstest.Fake{}
-	f.On("as lines_total", linesResp("2026-10-21", "1000", "1000"))
-	var signup, message []map[string]string
-	// 03:20 の幅: 25 IP から 1 件ずつ (同じ UA が 22 IP)。うち 6 IP が 30 分以内にメッセージ送信
-	for i := 0; i < 25; i++ {
-		ua := botUA
-		if i >= 22 {
-			ua = fmt.Sprintf("Browser/%d", i)
-		}
-		ip := fmt.Sprintf("203.0.113.%d", i+1)
-		signup = append(signup, hit("03:20", ip, ua, 1, i*10, i*10))
-		if i < 6 {
-			message = append(message, hit("03:30", ip, ua, 1, 60, 60))
-		}
-	}
-	// 1 IP は登録の 40 分後 (within の外) にメッセージ送信
-	message = append(message, hit("04:10", "203.0.113.7", botUA, 1, 0, 0))
-	// 平常の幅: 2 IP から 3 件。UA は "-" (無い) を数えない
-	signup = append(signup, hit("01:00", "198.51.100.1", "-", 2, 0, 30), hit("01:00", "198.51.100.2", "Browser/1", 1, 5, 5))
-	f.On(`path like /^\/signup`, cwlogstest.Response{RowsFor: inRange(signup)})
-	f.On(`path like /^\/messages`, cwlogstest.Response{RowsFor: inRange(message)})
+	registerHTTP(f, &cwlogstest.Sim{Events: httpEvents()}, httpPreds{c: abuseChecks()})
 	return f
 }
 
@@ -202,8 +206,8 @@ func TestCollectEndpoints(t *testing.T) {
 	if strings.Contains(logs.String(), "EvilBot") {
 		t.Fatalf("raw user agent logged: %s", logs.String())
 	}
-	// 既存の集計 + endpoint 2 本 × 2 日 (UTC の 1 日ずつ。sources が別の endpoint は流さない)
-	if len(f.Started) != 4+2*2 {
+	// 解釈率 + sign-in / 探索 + endpoint (全画面で 1 本。UTC の 1 日ずつ × 2 日)。sources が別の endpoint は流さない
+	if len(f.Started) != 2+2 {
 		t.Fatalf("queries: %d", len(f.Started))
 	}
 }
@@ -212,8 +216,6 @@ func TestCollectEndpoints(t *testing.T) {
 func TestEndpointsKeepExistingAggregates(t *testing.T) {
 	run := func(checks config.Checks) (map[string]float64, []string) {
 		f := abuseFake()
-		f.On("as sign_in_failures", cwlogstest.Response{Rows: []map[string]string{cwlogstest.Rows("day", "2026-10-21 00:00:00.000", "ip", "198.51.100.7", "sign_in_failures", "40")}})
-		f.On("as probe_hits", cwlogstest.Response{Rows: []map[string]string{cwlogstest.Rows("day", "2026-10-21 00:00:00.000", "ip", "198.51.100.8", "probe_hits", "4")}})
 		c, _ := New(nginxSource(), checks, f)
 		c.Sleep = func(context.Context, time.Duration) error { return nil }
 		sink := &sinkRecorder{}
@@ -239,8 +241,8 @@ func TestEndpointsKeepExistingAggregates(t *testing.T) {
 	if fmt.Sprint(base) != fmt.Sprint(with) || strings.Join(baseQ, "\n---\n") != strings.Join(withQ, "\n---\n") {
 		t.Fatalf("existing aggregates changed:\n%v\n%v", base, with)
 	}
-	if len(base) == 0 {
-		t.Fatal("no existing metrics")
+	if base["2026-10-21|sign_in_failures|198.51.100.7"] == 0 || base["2026-10-21|probe_hits|198.51.100.8"] == 0 {
+		t.Fatalf("no existing metrics: %v", base)
 	}
 }
 
@@ -251,13 +253,16 @@ func TestCollectEndpointsSplitOnTruncation(t *testing.T) {
 	full := make([]map[string]string, MaxRows)
 	for i := range full {
 		full[i] = hit("00:00", fmt.Sprintf("10.0.%d.%d", i/256, i%256), "", 1, 0, 0)
+		full[i]["ep0_0"] = "/"
 	}
-	f.On(`path like /^\/signup`, cwlogstest.Response{RowsFor: func(in *cwl.StartQueryInput) []map[string]string {
+	f.On(endpointHits, cwlogstest.Response{RowsFor: func(in *cwl.StartQueryInput) []map[string]string {
 		// 2 時間より長い範囲は上限に当たる
 		if aws.ToInt64(in.EndTime)+1-aws.ToInt64(in.StartTime) > int64(2*time.Hour/time.Second) {
 			return full
 		}
-		return []map[string]string{hit("00:00", "192.0.2.1", "", 1, 0, 0)}
+		r := hit("00:00", "192.0.2.1", "", 1, 0, 0)
+		r["ep0_0"] = "/"
+		return []map[string]string{r}
 	}})
 	c := abuseCollector(t, f, config.EndpointAbuse{Window: "10m", Endpoints: []config.AbuseEndpoint{{Name: "signup", Paths: []string{"/signup"}}}})
 	if err := c.Collect(context.Background(), collect.Window{From: now.Add(-time.Hour), To: now}, &sinkRecorder{}); err != nil {
@@ -278,7 +283,7 @@ func TestCollectEndpointsSplitOnTruncation(t *testing.T) {
 	}
 
 	// 1h まで分けても当たる
-	f.On(`path like /^\/signup`, cwlogstest.Response{Rows: full})
+	f.On(endpointHits, cwlogstest.Response{Rows: full})
 	c = abuseCollector(t, f, config.EndpointAbuse{Window: "10m", Endpoints: []config.AbuseEndpoint{{Name: "signup", Paths: []string{"/signup"}}}})
 	if err := c.Collect(context.Background(), collect.Window{From: now.Add(-time.Hour), To: now}, &sinkRecorder{}); err != nil {
 		t.Fatal(err)

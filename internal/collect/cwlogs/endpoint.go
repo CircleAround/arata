@@ -49,33 +49,32 @@ const idSegment = `([0-9]+|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA
 // EndpointPathRegex は glob を、Insights の /.../ にそのまま入れられ Go の regexp でも同じ意味になる正規表現にする。
 // prefix (strip_path_prefix) はパターンの前に必須で付く。
 func EndpointPathRegex(prefix, glob string) string {
-	var b strings.Builder
-	b.WriteString("^" + regexLiteral(prefix))
-	segs := strings.Split(glob, "/")[1:] // 先頭の空を除く
-	for _, s := range segs {
+	return "^" + regexLiteral(prefix) + strings.Join(globParts(glob), "") + endpointSuffix
+}
+
+// endpointSuffix はクエリ文字列とフラグメントを無視する末尾。
+const endpointSuffix = `([?#].*)?$`
+
+// globParts は glob の区間ごとの正規表現。`**` 以外は必ず `\/` で始まる。
+func globParts(glob string) []string {
+	var out []string
+	for _, s := range strings.Split(glob, "/")[1:] { // 先頭の空を除く
 		switch {
 		case s == "**":
-			b.WriteString(`(\/[^\/?#]+)*`)
+			out = append(out, `(\/[^\/?#]+)*`)
 		case s == "*":
-			b.WriteString(`\/[^\/?#]+`)
+			out = append(out, `\/[^\/?#]+`)
 		case s == ":id" || numRe.MatchString(s) || uuidRe.MatchString(s):
-			b.WriteString(`\/` + idSegment)
+			out = append(out, `\/`+idSegment)
 		default:
 			parts := strings.Split(s, "*")
 			for i, p := range parts {
 				parts[i] = regexLiteral(p)
 			}
-			b.WriteString(`\/` + strings.Join(parts, `[^\/?#]*`))
+			out = append(out, `\/`+strings.Join(parts, `[^\/?#]*`))
 		}
 	}
-	b.WriteString(`([?#].*)?$`)
-	return b.String()
-}
-
-// EndpointQuery は endpoint 1 つ分のクエリ。
-type EndpointQuery struct {
-	Endpoint string
-	Query    string
+	return out
 }
 
 // endpointGroupFields は集計の軸 (時間幅の後ろ)。ip は必須、ua は形式が出すときだけ。
@@ -87,33 +86,131 @@ func endpointGroupFields(p Profile) []string {
 	return out
 }
 
-// EndpointQueries はソース srcID が数える endpoint のクエリ (設定順)。endpoints が空なら空。
-func EndpointQueries(p Profile, srcID string, ea config.EndpointAbuse) []EndpointQuery {
+// endpointAbuse はまとめた endpoint のクエリの名前。
+const endpointAbuse = "endpoint_abuse"
+
+// endpointSpec はソースが数える画面 1 つと、そのパスの glob ごとの印のフィールド (parse の名前付き捕獲)。
+type endpointSpec struct {
+	ep    config.AbuseEndpoint
+	flags []string
+}
+
+// endpointSpecs はソース srcID が数える画面 (設定順)。http_access 以外・endpoints が空なら空。
+func endpointSpecs(p Profile, srcID string, ea config.EndpointAbuse) []endpointSpec {
 	if p.Yields != record.KindHTTPAccess {
 		return nil
+	}
+	var out []endpointSpec
+	for i, ep := range ea.Endpoints {
+		if len(ep.Sources) > 0 && !containsStr(ep.Sources, srcID) {
+			continue
+		}
+		s := endpointSpec{ep: ep}
+		for j := range ep.Paths {
+			s.flags = append(s.flags, "ep"+strconv.Itoa(i)+"_"+strconv.Itoa(j))
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+// flagRegex は glob に一致したときだけ flag に先頭の "/" を捕獲する parse 用の正規表現 (EndpointPathRegex と同じ行に一致する)。
+// 捕獲は常に "/" なので group by の行は増えない。中のグループは名前付きにする (parse は名前付きの捕獲をフィールドにする。
+// 名前の無いグループを parse に入れたときの扱いに頼らない)。
+// 先頭の "/" を捕獲に回すため、先頭の `**` (`(\/s)*\/next`) は同じ意味の `\/(s\/)*next` に書き換える (空のパスには一致しない)。
+func flagRegex(flag, prefix, glob string) string {
+	parts := globParts(glob)
+	var body string
+	switch {
+	case prefix != "":
+		body = strings.TrimPrefix(regexLiteral(prefix), `\/`) + strings.Join(parts, "")
+	default:
+		k := 0
+		for k < len(parts) && strings.HasPrefix(parts[k], "(") {
+			k++
+		}
+		if k == len(parts) {
+			body = `[^\/?#]+(\/[^\/?#]+)*`
+		} else {
+			body = strings.Repeat(`([^\/?#]+\/)*`, k) + strings.TrimPrefix(parts[k], `\/`) + strings.Join(parts[k+1:], "")
+		}
+	}
+	body += endpointSuffix
+	var b strings.Builder
+	b.WriteString("^(?<" + flag + `>\/)`)
+	g := 0
+	for i := 0; i < len(body); i++ {
+		switch {
+		case body[i] == '\\' && i+1 < len(body):
+			b.WriteString(body[i : i+2])
+			i++
+		case body[i] == '(' && (i+1 >= len(body) || body[i+1] != '?'):
+			g++
+			b.WriteString("(?<" + flag + "_g" + strconv.Itoa(g) + ">")
+		default:
+			b.WriteByte(body[i])
+		}
+	}
+	return b.String()
+}
+
+// EndpointsQuery はソース srcID が数える全画面のクエリ (1 本)。endpoints が空なら ok = false。
+//
+// 決定 (ADR 0031): 画面ごとに 1 本流すと画面の数だけ範囲を読むので、1 本にまとめる。filter は画面ごとの条件の和、
+// group by は (時間幅, IP, UA) に、method・status (条件に使う画面があるとき) と glob ごとの印を足し、Go で画面に振り分ける。
+// 除外のパスは全画面に共通なので filter だけで外す。
+func EndpointsQuery(p Profile, srcID string, ea config.EndpointAbuse) (MergedQuery, bool) {
+	specs := endpointSpecs(p, srcID, ea)
+	if len(specs) == 0 {
+		return MergedQuery{}, false
 	}
 	bin := strconv.Itoa(int(ea.WindowDuration()/time.Minute)) + "m"
 	var exclude string
 	if len(ea.ExcludePaths) > 0 {
 		exclude = "path not like /" + pathAlternation(p.StripPrefix, ea.ExcludePaths) + "/"
 	}
-	var out []EndpointQuery
-	for _, ep := range ea.Endpoints {
-		if len(ep.Sources) > 0 && !containsStr(ep.Sources, srcID) {
-			continue
-		}
+	var conds, parses, metrics []string
+	group := endpointGroupFields(p)
+	methods, statuses := false, false
+	var flags []string
+	for _, s := range specs {
 		var paths []string
-		for _, g := range ep.Paths {
-			paths = append(paths, "path like /"+EndpointPathRegex(p.StripPrefix, g)+"/")
+		for j, g := range s.ep.Paths {
+			re := EndpointPathRegex(p.StripPrefix, g)
+			paths = append(paths, "path like /"+re+"/")
+			parses = append(parses, "\n| parse path /"+flagRegex(s.flags[j], p.StripPrefix, g)+"/")
 		}
-		cond := and("("+strings.Join(paths, " or ")+")", inList("method", quoteAll(ep.Methods)), inList("status", intsToStrings(ep.Statuses)), exclude)
-		q := p.Prelude + "\n| filter " + cond +
-			"\n| stats count(*) as " + endpointHits + ", min(@timestamp) as first_seen, max(@timestamp) as last_seen by bin(" + bin + ") as t, " +
-			strings.Join(endpointGroupFields(p), ", ") +
-			"\n| sort " + endpointHits + " desc\n| limit " + strconv.Itoa(MaxRows)
-		out = append(out, EndpointQuery{Endpoint: ep.Name, Query: q})
+		conds = append(conds, "("+and("("+strings.Join(paths, " or ")+")", inList("method", quoteAll(s.ep.Methods)), inList("status", intsToStrings(s.ep.Statuses)))+")")
+		methods = methods || len(s.ep.Methods) > 0
+		statuses = statuses || len(s.ep.Statuses) > 0
+		flags = append(flags, s.flags...)
+		metrics = append(metrics, endpointTruncatedPrefix+s.ep.Name)
 	}
-	return out
+	if methods {
+		group = append(group, "method")
+	}
+	if statuses {
+		group = append(group, "status")
+	}
+	group = append(group, flags...)
+	cond := strings.Join(conds, " or ")
+	if exclude != "" {
+		cond = "(" + cond + ") and " + exclude
+	}
+	q := p.Prelude + "\n| filter " + cond + strings.Join(parses, "") +
+		"\n| stats count(*) as " + endpointHits + ", min(@timestamp) as first_seen, max(@timestamp) as last_seen by bin(" + bin + ") as t, " +
+		strings.Join(group, ", ") +
+		"\n| sort " + endpointHits + " desc\n| limit " + strconv.Itoa(MaxRows)
+	return MergedQuery{Name: endpointAbuse, Query: q, Metrics: metrics}, true
+}
+
+// matches は結果の行がこの画面の条件 (glob のどれか・method・status) に当たるか。
+func (s endpointSpec) matches(r map[string]string) bool {
+	hit := false
+	for _, f := range s.flags {
+		hit = hit || r[f] != ""
+	}
+	return hit && (len(s.ep.Methods) == 0 || containsStr(s.ep.Methods, r["method"])) && statusIn(r["status"], s.ep.Statuses)
 }
 
 func pathAlternation(prefix string, globs []string) string {
@@ -150,30 +247,37 @@ type endpointHit struct {
 	first, last time.Time
 }
 
-// collectEndpoints は endpoint_abuse 用の集計を流して metric を出す。
-func (c *Collector) collectEndpoints(ctx context.Context, from, to time.Time, sink collect.RecordSink) error {
+// collectEndpoints は endpoint_abuse 用の集計 (EndpointsQuery) を流して metric を出す。
+func (c *Collector) collectEndpoints(ctx context.Context, q MergedQuery, from, to time.Time, sink collect.RecordSink) error {
 	ea := c.checks.EndpointAbuse
-	qs := EndpointQueries(c.prof, c.src.ID, ea)
-	if len(qs) == 0 {
-		return nil
+	specs := endpointSpecs(c.prof, c.src.ID, ea)
+	rows, err := c.splitQuery(ctx, q, from, to, ea.WindowDuration(), true)
+	if err != nil {
+		return err
 	}
-	bin := ea.WindowDuration()
 	hits := map[string][]endpointHit{}
-	for _, q := range qs {
-		for d := from; d.Before(to); d = DayStart(d).Add(24 * time.Hour) {
-			end := DayStart(d).Add(24 * time.Hour)
-			if end.After(to) {
-				end = to
+	for _, s := range specs {
+		hits[s.ep.Name] = nil
+	}
+	for _, r := range rows {
+		t, ok := parseTime(r["t"])
+		if !ok || r["ip"] == "" {
+			continue
+		}
+		h := endpointHit{bin: t, ip: r["ip"], n: num(r[endpointHits])}
+		h.first, _ = parseTime(r["first_seen"])
+		h.last, _ = parseTime(r["last_seen"])
+		if ua := r["ua"]; ua != "" && ua != "-" {
+			h.ua = UAHash(ua)
+		}
+		for _, s := range specs {
+			if s.matches(r) {
+				hits[s.ep.Name] = append(hits[s.ep.Name], h)
 			}
-			hs, err := c.endpointQuery(ctx, q, d, end, bin)
-			if err != nil {
-				return err
-			}
-			hits[q.Endpoint] = append(hits[q.Endpoint], hs...)
 		}
 	}
-	for _, q := range qs {
-		if err := c.emitEndpoint(ctx, sink, q.Endpoint, hits[q.Endpoint]); err != nil {
+	for _, s := range specs {
+		if err := c.emitEndpoint(ctx, sink, s.ep.Name, hits[s.ep.Name]); err != nil {
 			return err
 		}
 	}
@@ -188,49 +292,6 @@ func (c *Collector) collectEndpoints(ctx context.Context, from, to time.Time, si
 		}
 	}
 	return nil
-}
-
-// endpointQuery は [from, to) を 1 本流し、行数の上限に当たれば時間幅に揃えて半分に分けて引き直す。
-func (c *Collector) endpointQuery(ctx context.Context, q EndpointQuery, from, to time.Time, bin time.Duration) ([]endpointHit, error) {
-	rows, err := c.Query(ctx, q.Query, from, to)
-	c.stats.BytesScanned = c.scanned
-	if err != nil {
-		return nil, err
-	}
-	if len(rows) >= MaxRows {
-		span := to.Sub(from)
-		mid := from.Add(span / 2).Truncate(bin)
-		if span > minSplit && mid.After(from) && mid.Before(to) {
-			c.Logger.Info("endpoint aggregate hit row limit; splitting the range", "source", c.src.ID, "endpoint", q.Endpoint,
-				"from", from.Format(time.RFC3339), "to", to.Format(time.RFC3339))
-			a, err := c.endpointQuery(ctx, q, from, mid, bin)
-			if err != nil {
-				return nil, err
-			}
-			b, err := c.endpointQuery(ctx, q, mid, to, bin)
-			if err != nil {
-				return nil, err
-			}
-			return append(a, b...), nil
-		}
-		c.Logger.Warn("endpoint aggregate truncated at row limit; counts are lower bounds", "source", c.src.ID, "endpoint", q.Endpoint, "limit", MaxRows)
-		c.stats.AddTruncated(endpointTruncatedPrefix + q.Endpoint)
-	}
-	out := make([]endpointHit, 0, len(rows))
-	for _, r := range rows {
-		t, ok := parseTime(r["t"])
-		if !ok || r["ip"] == "" {
-			continue
-		}
-		h := endpointHit{bin: t, ip: r["ip"], n: num(r[endpointHits])}
-		h.first, _ = parseTime(r["first_seen"])
-		h.last, _ = parseTime(r["last_seen"])
-		if ua := r["ua"]; ua != "" && ua != "-" {
-			h.ua = UAHash(ua)
-		}
-		out = append(out, h)
-	}
-	return out, nil
 }
 
 func parseTime(s string) (time.Time, bool) {

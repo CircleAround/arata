@@ -3,6 +3,7 @@ package cwlogs
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -54,43 +55,43 @@ func TestWAFQueries(t *testing.T) {
 	for _, q := range qs {
 		names = append(names, q.Name)
 	}
-	if strings.Join(names, ",") != "waf_rule_action,waf_block_path,waf_allow_probe,waf_suspect_block_ip,waf_rule_count_match,waf_challenge_issued,waf_challenge_solved,waf_ip_rate" {
+	if strings.Join(names, ",") != "waf_rule_action,waf_actions,waf_rule_count_match" {
 		t.Fatalf("names: %v", names)
 	}
 	acl := `| parse webaclId /webacl\/(?<acl>[^\/]+)\//`
 	trusted := `not isIpInSubnet(ip, "203.0.113.0/24")`
-	for _, q := range qs {
+	for _, q := range append(qs, MergedQuery{Name: "rate", Query: WAFRateQuery(p, c)}) {
 		if !strings.HasPrefix(q.Query, p.Prelude+"\n"+acl) {
 			t.Fatalf("%s: prelude: %s", q.Name, q.Query)
 		}
-		// 規則の数 (ルールごとの件数) は正規の送信元も数える (使われていないルールの判定に使う)。他は外す
+		// 規則の数 (ルールごとの件数) は正規の送信元も数える (使われていないルールの判定に使う)。他は外す (BLOCK の行は Go で外す)
 		if (q.Name == "waf_rule_action") == strings.Contains(q.Query, trusted) {
 			t.Fatalf("%s: trusted filter: %s", q.Name, q.Query)
 		}
-		if strings.Contains(q.Query, "headers") || strings.Contains(q.Query, "args") || strings.Contains(q.Query, "@message |") {
-			t.Fatalf("%s must not read headers / query strings: %s", q.Name, q.Query)
+		if strings.Contains(q.Query, "headers") || strings.Contains(q.Query, "args") || strings.Contains(q.Query, "@message |") || strings.Contains(q.Query, "parse @message") {
+			t.Fatalf("%s must not read headers / query strings / the raw message: %s", q.Name, q.Query)
 		}
 	}
-	bp := qs[1].Query
+	// 解釈率とルールごとの件数は 1 本
+	if !strings.HasSuffix(qs[0].Query, "| stats count(*) as lines_total, count(action) as lines_matched by bin(1d) as day, acl, rule, action\n| sort lines_total desc\n| limit 10000") {
+		t.Fatalf("lines: %s", qs[0].Query)
+	}
+	ac := qs[1].Query
 	for _, want := range []string{
-		`filter action = "BLOCK"`,
-		`(path not like /^(\/\.env|\/wp-login\.php)/ or path like /^(\/\.env\.example)/)`,
-		"| stats count(*) as waf_block_path by bin(1d) as day, acl, rule, terminatingRuleType, ruleGroupList.0.terminatingRule.ruleId, ",
-		"ruleGroupList.7.terminatingRule.ruleId, ruleGroupList.8.ruleGroupId, method, path, ip",
+		`| filter action = "BLOCK" or ((action in ["CHALLENGE", "CAPTCHA"] or (action = "ALLOW" and path like /^(\/\.env|\/wp-login\.php)/ and path not like /^(\/\.env\.example)/) or `,
+		// 文書の説明 (トップレベルの challengeResponse / captchaResponse) と例 (nonTerminatingMatchingRules の中) の両方の形を受け付ける
+		`challengeResponse.solveTimestamp > 0 or captchaResponse.solveTimestamp > 0 or nonTerminatingMatchingRules.0.action in ["CHALLENGE", "CAPTCHA"]`,
+		`ruleGroupList.7.nonTerminatingMatchingRules.0.action in ["CHALLENGE", "CAPTCHA"]) and ` + trusted + ")",
+		"| stats count(*) as waf_actions by bin(1d) as day, acl, rule, action, terminatingRuleType, ruleGroupList.0.terminatingRule.ruleId, ",
+		"ruleGroupList.7.terminatingRule.ruleId, ruleGroupList.8.ruleGroupId, method, path, ip, challengeResponse.solveTimestamp, challengeResponse.failureReason, captchaResponse.solveTimestamp, captchaResponse.failureReason, nonTerminatingMatchingRules.0.action, ",
+		"ruleGroupList.7.nonTerminatingMatchingRules.0.action\n| sort waf_actions desc",
 		"| limit 10000",
 	} {
-		if !strings.Contains(bp, want) {
-			t.Fatalf("block path query lacks %q:\n%s", want, bp)
+		if !strings.Contains(ac, want) {
+			t.Fatalf("actions query lacks %q:\n%s", want, ac)
 		}
 	}
-	if strings.Contains(bp, "parse @message") {
-		t.Fatalf("block path must not parse the raw message: %s", bp)
-	}
-	if ap := qs[2].Query; !strings.Contains(ap, `filter action = "ALLOW" and path like /^(\/\.env|\/wp-login\.php)/ and path not like /^(\/\.env\.example)/`) ||
-		!strings.Contains(ap, "by bin(1d) as day, acl, path, ip") {
-		t.Fatalf("allow probe: %s", ap)
-	}
-	cm := qs[4].Query
+	cm := qs[2].Query
 	for _, want := range []string{
 		"ispresent(nonTerminatingMatchingRules.0.ruleId) or ispresent(nonTerminatingMatchingRules.1.ruleId)",
 		"ispresent(ruleGroupList.7.nonTerminatingMatchingRules.0.ruleId)",
@@ -103,224 +104,109 @@ func TestWAFQueries(t *testing.T) {
 			t.Fatalf("count query lacks %q:\n%s", want, cm)
 		}
 	}
-	sb := qs[3].Query
-	for _, want := range []string{
-		`filter action = "BLOCK" and terminatingRuleType != "RATE_BASED" and rule != "Default_Action" and path not in ["/users/sign_in"] and ` + trusted,
-		"| stats count(*) as waf_suspect_block_ip by bin(1d) as day, ip",
-	} {
-		if !strings.Contains(sb, want) {
-			t.Fatalf("suspect block ip query lacks %q:\n%s", want, sb)
-		}
-	}
-	ci := qs[5].Query
-	for _, want := range []string{
-		`filter action in ["CHALLENGE", "CAPTCHA"] and ` + trusted,
-		"| stats count(*) as waf_challenge_issued by bin(1d) as day, acl, rule, action, terminatingRuleType, ruleGroupList.0.terminatingRule.ruleId, ",
-		"ruleGroupList.8.ruleGroupId, method, path, ip",
-	} {
-		if !strings.Contains(ci, want) {
-			t.Fatalf("challenge issued query lacks %q:\n%s", want, ci)
-		}
-	}
-	cs := qs[6].Query
-	for _, want := range []string{
-		// 文書の説明 (トップレベルの challengeResponse / captchaResponse) と例 (nonTerminatingMatchingRules の中) の両方の形を受け付ける
-		`challengeResponse.solveTimestamp > 0 or captchaResponse.solveTimestamp > 0 or nonTerminatingMatchingRules.0.action in ["CHALLENGE", "CAPTCHA"]`,
-		`ruleGroupList.7.nonTerminatingMatchingRules.0.action in ["CHALLENGE", "CAPTCHA"])`,
-		"| stats count(*) as waf_challenge_solved by bin(1d) as day, acl, action, challengeResponse.solveTimestamp, challengeResponse.failureReason, captchaResponse.solveTimestamp, captchaResponse.failureReason, nonTerminatingMatchingRules.0.action, ",
-		"ruleGroupList.7.nonTerminatingMatchingRules.0.action, method, path, ip",
-	} {
-		if !strings.Contains(cs, want) {
-			t.Fatalf("challenge solved query lacks %q:\n%s", want, cs)
-		}
-	}
-	rate := qs[7]
 	// 長い接頭辞を先に (最長一致)
-	if !rate.PerDay || !strings.Contains(rate.Query, `| parse path /^(?<grp>\/api\/v2\/|\/login|\/api\/)/`) ||
-		!strings.Contains(rate.Query, "| stats count(*) as n by bin(5m) as t, acl, grp, ip\n| stats pct(n, 50) as waf_ip_rate_p50, pct(n, 99) as waf_ip_rate_p99, max(n) as waf_ip_rate_max by acl, grp") {
-		t.Fatalf("rate: %s", rate.Query)
+	if rate := WAFRateQuery(p, c); !strings.Contains(rate, `| parse path /^(?<grp>\/api\/v2\/|\/login|\/api\/)/`) ||
+		!strings.Contains(rate, "| stats count(*) as n by bin(5m) as t, acl, grp, ip\n| stats pct(n, 50) as waf_ip_rate_p50, pct(n, 99) as waf_ip_rate_p99, max(n) as waf_ip_rate_max by acl, grp") {
+		t.Fatalf("rate: %s", rate)
+	}
+	// trusted_cidrs が無ければ BLOCK 以外の条件も括弧だけで並べる
+	c.WAFReview.TrustedCIDRs = nil
+	if ac := WAFQueries(p, c)[1].Query; !strings.Contains(ac, `| filter action = "BLOCK" or action in ["CHALLENGE", "CAPTCHA"] or (action = "ALLOW" and `) {
+		t.Fatalf("actions without trusted: %s", ac)
 	}
 }
 
-// wafLog は WAF のログ 1 行の Insights の結果の行 (公式のログ例の形)。
 func row(kv ...string) map[string]string { return cwlogstest.Rows(kv...) }
 
-func wafFake() *cwlogstest.Fake {
-	f := &cwlogstest.Fake{}
-	f.On("as lines_total", linesResp("2026-10-21", "1000", "1000"))
-	day := "2026-10-21 00:00:00.000"
-	f.On("as waf_block_ip", cwlogstest.Response{Rows: []map[string]string{
-		row("day", day, "ip", "198.51.100.7", "waf_block_ip", "50"),
-		row("day", day, "ip", "198.51.100.8", "waf_block_ip", "1"),
-		row("day", day, "ip", "198.51.100.20", "waf_block_ip", "40"), // レート制限だけで BLOCK された
-	}})
-	// 「BLOCK された IP」はレートベースのルール・既定の action・sign-in のパスでの BLOCK を除く (クエリ側で除く)
-	f.On("as waf_suspect_block_ip", cwlogstest.Response{Rows: []map[string]string{
-		row("day", day, "ip", "198.51.100.7", "waf_suspect_block_ip", "50"),
-		row("day", day, "ip", "198.51.100.8", "waf_suspect_block_ip", "1"),
-	}})
-	f.On("as waf_rule_action", cwlogstest.Response{Rows: []map[string]string{
-		row("day", day, "acl", "prod-waf", "rule", "AWS-AWSManagedRulesCommonRuleSet", "action", "BLOCK", "waf_rule_action", "30"),
-		row("day", day, "acl", "stg-waf", "rule", "AWS-AWSManagedRulesCommonRuleSet", "action", "BLOCK", "waf_rule_action", "5"),
-		row("day", day, "acl", "prod-waf", "rule", "Default_Action", "action", "ALLOW", "waf_rule_action", "900"),
-	}})
-	var bp []map[string]string
-	// 10 人が自分の /users/<id> で同じルールに止められた (正規の画面の誤検知らしい)
-	for i := 0; i < 10; i++ {
-		// 公式のログの形: 前にある KnownBadInputs (グループ全体を COUNT) も一致して terminatingRule が null でない。止めたのは後ろの CommonRuleSet
-		bp = append(bp, row("day", day, "acl", "prod-waf", "rule", "AWS-AWSManagedRulesCommonRuleSet", "terminatingRuleType", "MANAGED_RULE_GROUP",
-			"ruleGroupList.0.terminatingRule.ruleId", "Log4JRCE_HEADER", "ruleGroupList.1.terminatingRule.ruleId", "CrossSiteScripting_BODY",
-			"method", "POST", "path", fmt.Sprintf("/users/%d", i+1), "ip", fmt.Sprintf("192.0.2.%d", i+1), "waf_block_path", "2"))
-	}
-	// 1 IP が /items/<id> を 500 個列挙した (異なり IP は 1)
-	for i := 0; i < 500; i++ {
-		// 普通のルールが止めた。前の COUNT のグループの terminatingRule は中のルール名に使わない
-		bp = append(bp, row("day", day, "acl", "prod-waf", "rule", "block-admin", "terminatingRuleType", "REGULAR", "ruleGroupList.0.terminatingRule.ruleId", "Log4JRCE_HEADER",
-			"method", "GET", "path", fmt.Sprintf("/items/%d", i), "ip", "198.51.100.7", "waf_block_path", "1"))
-	}
-	// 位置の上限より後ろにグループがある行は中のルールを決めない (グループ単位)。位置の上限を超えたことを数える
-	bp = append(bp, row("day", day, "acl", "prod-waf", "rule", "AWS-AWSManagedRulesCommonRuleSet", "terminatingRuleType", "MANAGED_RULE_GROUP",
-		"ruleGroupList.7.terminatingRule.ruleId", "A", "ruleGroupList.8.ruleGroupId", "AWS#X", "method", "GET", "path", "/x", "ip", "192.0.2.99", "waf_block_path", "1"))
-	f.On("as waf_block_path", cwlogstest.Response{Rows: bp})
-	f.On("as waf_allow_probe", cwlogstest.Response{Rows: []map[string]string{
-		row("day", day, "acl", "prod-waf", "path", "/.env", "ip", "198.51.100.9", "waf_allow_probe", "3"),
-		row("day", day, "acl", "prod-waf", "path", "/.env", "ip", "198.51.100.10", "waf_allow_probe", "4"),
-	}})
-	f.On("as waf_rule_count_match", cwlogstest.Response{Rows: []map[string]string{
-		// KnownBadInputs を全体 COUNT にしたときのトップレベルの一致。探索パスで
-		row("day", day, "acl", "prod-waf", "nonTerminatingMatchingRules.0.ruleId", "AWS-AWSManagedRulesKnownBadInputsRuleSet", "probe", "/.env", "ip", "198.51.100.9", "waf_rule_count_match", "6"),
-		// グループの中で COUNT に上書きしたルールと、トップレベルの COUNT の両方に一致。BLOCK された IP から
-		row("day", day, "acl", "prod-waf", "nonTerminatingMatchingRules.0.ruleId", "count-geo",
-			"ruleGroupList.0.ruleGroupId", "AWS#AWSManagedRulesCommonRuleSet", "ruleGroupList.0.nonTerminatingMatchingRules.0.ruleId", "SizeRestrictions_BODY",
-			"ip", "198.51.100.8", "waf_rule_count_match", "4"),
-		// レート制限だけで BLOCK された IP (正規の利用者かもしれない) からの一致は suspect にしない
-		row("day", day, "acl", "prod-waf", "nonTerminatingMatchingRules.0.ruleId", "count-login", "ip", "198.51.100.20", "waf_rule_count_match", "9"),
-		// 正規の IP から。探索パスの除外に当たる
-		row("day", day, "acl", "prod-waf", "nonTerminatingMatchingRules.0.ruleId", "AWS-AWSManagedRulesKnownBadInputsRuleSet", "probe", "/.env", "probe_ex", "/.env.example", "ip", "192.0.2.1", "waf_rule_count_match", "2"),
-	}})
-	// Challenge / CAPTCHA。/search (GET) に 3 IP へ Challenge を出し、うち 2 IP が同じ日・同じパスでトークンを持って来た
-	var ci, cs []map[string]string
-	for i := 1; i <= 3; i++ {
-		ci = append(ci, row("day", day, "acl", "prod-waf", "rule", "challenge-search", "action", "CHALLENGE", "terminatingRuleType", "REGULAR",
-			"method", "GET", "path", fmt.Sprintf("/search/%d", i), "ip", fmt.Sprintf("192.0.2.%d", i), "waf_challenge_issued", "2"))
-	}
-	// グループの中のルール (Bot Control) の CAPTCHA。POST
-	ci = append(ci, row("day", day, "acl", "prod-waf", "rule", "AWS-AWSManagedRulesBotControlRuleSet", "action", "CAPTCHA", "terminatingRuleType", "MANAGED_RULE_GROUP",
-		"ruleGroupList.0.terminatingRule.ruleId", "CategoryHttpLibrary", "method", "POST", "path", "/api/cart", "ip", "198.51.100.30", "waf_challenge_issued", "5"))
-	f.On("as waf_challenge_issued", cwlogstest.Response{Rows: ci})
-	cs = []map[string]string{
-		// 公式の例の形: nonTerminatingMatchingRules の中にだけ CAPTCHA / CHALLENGE がある
-		row("day", day, "acl", "prod-waf", "action", "ALLOW", "nonTerminatingMatchingRules.0.action", "CHALLENGE", "method", "GET", "path", "/search/1", "ip", "192.0.2.1", "waf_challenge_solved", "4"),
-		// フィールドの説明の形: トップレベルの challengeResponse に solveTimestamp があり failureReason が無い
-		row("day", day, "acl", "prod-waf", "action", "ALLOW", "challengeResponse.solveTimestamp", "1792990000", "method", "GET", "path", "/search/2", "ip", "192.0.2.2", "waf_challenge_solved", "1"),
-		// 期限切れ (failureReason がある) は解いたとみなさない
-		row("day", day, "acl", "prod-waf", "action", "CHALLENGE", "challengeResponse.solveTimestamp", "1792900000", "challengeResponse.failureReason", "TOKEN_EXPIRED",
-			"method", "GET", "path", "/search/3", "ip", "192.0.2.3", "waf_challenge_solved", "1"),
-		// 出していない IP がトークンを持って来ても数えない (積集合)
-		row("day", day, "acl", "prod-waf", "action", "ALLOW", "nonTerminatingMatchingRules.0.action", "CHALLENGE", "method", "GET", "path", "/search/9", "ip", "192.0.2.50", "waf_challenge_solved", "1"),
-		// 種類が違う (CAPTCHA のトークン) は Challenge を解いたことにしない
-		row("day", day, "acl", "prod-waf", "action", "ALLOW", "nonTerminatingMatchingRules.0.action", "CAPTCHA", "method", "GET", "path", "/search/3", "ip", "192.0.2.3", "waf_challenge_solved", "1"),
-	}
-	f.On("as waf_challenge_solved", cwlogstest.Response{Rows: cs})
-	f.On("as waf_ip_rate_p50", cwlogstest.Response{RowsFor: func(in *cwl.StartQueryInput) []map[string]string {
-		if aws.ToInt64(in.StartTime) == time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC).Unix() {
-			return []map[string]string{row("acl", "prod-waf", "grp", "/login", "waf_ip_rate_p50", "2", "waf_ip_rate_p99", "8", "waf_ip_rate_max", "300")}
-		}
-		return []map[string]string{row("acl", "prod-waf", "waf_ip_rate_p50", "1", "waf_ip_rate_p99", "20", "waf_ip_rate_max", "40")}
-	}})
-	return f
-}
-
+// 振り分けの値はゴールデン (TestWAFEquivalence) で固定している。ここはクエリの流し方 (本数・範囲) と代表的な値を見る。
 func TestCollectWAF(t *testing.T) {
-	f := wafFake()
-	c, err := New(wafSource(), wafChecks(), f)
-	if err != nil {
-		t.Fatal(err)
-	}
-	c.Sleep = func(context.Context, time.Duration) error { return nil }
-	sink := &sinkRecorder{}
-	if err := c.Collect(context.Background(), collect.Window{From: now.Add(-24 * time.Hour), To: now}, sink); err != nil {
-		t.Fatal(err)
-	}
+	sink, c, f := runWAFEquiv(t, registerWAF)
 	m := sink.metrics()
 	d := "2026-10-21|"
 	for k, want := range map[string]float64{
 		// 既存の waf_block (rule 別) はルールごとの件数から作る (WebACL をまたいで足す)
-		d + "waf_block|AWS-AWSManagedRulesCommonRuleSet":                     35,
-		d + "waf_block_ip|198.51.100.7":                                      50,
-		d + "waf_rule_action|prod-waf|Default_Action|ALLOW":                  900,
-		d + "waf_rule_action|stg-waf|AWS-AWSManagedRulesCommonRuleSet|BLOCK": 5,
-		// 正規化して合算し、異なり IP は (パス, IP) で数える
-		d + "waf_block_path|prod-waf|AWS-AWSManagedRulesCommonRuleSet/CrossSiteScripting_BODY|POST|/users/:id":                  20,
-		d + "waf_block_path_ips|prod-waf|AWS-AWSManagedRulesCommonRuleSet/CrossSiteScripting_BODY|POST|/users/:id":              10,
-		d + "waf_block_path|prod-waf|block-admin|GET|/items/:id":                                                                500,
-		d + "waf_block_path_ips|prod-waf|block-admin|GET|/items/:id":                                                            1,
-		d + "waf_allow_probe|prod-waf|/.env":                                                                                    7,
-		d + "waf_allow_probe_ips|prod-waf|/.env":                                                                                2,
-		d + "waf_rule_count_match|prod-waf|AWS-AWSManagedRulesKnownBadInputsRuleSet":                                            8,
-		d + "waf_rule_count_match_suspect|prod-waf|AWS-AWSManagedRulesKnownBadInputsRuleSet":                                    6,
-		d + "waf_rule_count_match|prod-waf|count-geo":                                                                           4,
-		d + "waf_rule_count_match_suspect|prod-waf|count-geo":                                                                   4,
-		d + "waf_rule_count_match|prod-waf|AWS#AWSManagedRulesCommonRuleSet/SizeRestrictions_BODY":                              4,
-		d + "waf_position_limit|prod-waf|ruleGroupList":                                                                         1,
-		"2026-10-20|waf_ip_rate_max|prod-waf|/login":                                                                            300,
-		"2026-10-20|waf_ip_rate_p99|prod-waf|/login":                                                                            8,
-		d + "waf_ip_rate_p99|prod-waf|*":                                                                                        20,
-		d + "waf_ip_rate_p50|prod-waf|*":                                                                                        1,
-		d + "waf_challenge_issued|prod-waf|challenge|challenge-search|GET|/search/:id":                                          6,
-		d + "waf_challenge_issued_ips|prod-waf|challenge|challenge-search|GET|/search/:id":                                      3,
-		d + "waf_challenge_solved_ips|prod-waf|challenge|challenge-search|GET|/search/:id":                                      2,
-		d + "waf_challenge_issued|prod-waf|captcha|AWS-AWSManagedRulesBotControlRuleSet/CategoryHttpLibrary|POST|/api/cart":     5,
-		d + "waf_challenge_solved_ips|prod-waf|captcha|AWS-AWSManagedRulesBotControlRuleSet/CategoryHttpLibrary|POST|/api/cart": 0,
+		d + "waf_block|AWS-AWSManagedRulesCommonRuleSet": 26,
+		d + "waf_block_ip|198.51.100.7":                  50,
+		// 正規の送信元も BLOCK の IP には数える
+		d + "waf_block_ip|203.0.113.5":                                                                             4,
+		d + "waf_rule_action|stg-waf|AWS-AWSManagedRulesCommonRuleSet|BLOCK":                                       5,
+		d + "waf_block_path|prod-waf|AWS-AWSManagedRulesCommonRuleSet/CrossSiteScripting_BODY|POST|/users/:id":     20,
+		d + "waf_block_path_ips|prod-waf|AWS-AWSManagedRulesCommonRuleSet/CrossSiteScripting_BODY|POST|/users/:id": 10,
+		d + "waf_block_path_ips|prod-waf|block-admin|GET|/items/:id":                                               1,
+		d + "waf_allow_probe|prod-waf|/.env":                                                                       13,
+		d + "waf_rule_count_match_suspect|prod-waf|AWS-AWSManagedRulesKnownBadInputsRuleSet":                       8,
+		d + "waf_rule_count_match_suspect|prod-waf|count-login":                                                    0,
+		d + "waf_challenge_solved_ips|prod-waf|challenge|challenge-search|GET|/search/:id":                         2,
+		"2026-10-20|waf_ip_rate_max|prod-waf|/login":                                                               300,
 	} {
 		if got, ok := m[k]; !ok || got != want {
 			t.Errorf("%s = %v (ok=%v), want %v", k, got, ok, want)
 		}
 	}
-	// 上位 top_paths (2) だけ。/x は 3 位なので残らない
-	n := 0
+	// 上位 top_paths (3) だけ。/y (位置の上限) と探索・正規の送信元の BLOCK は残らない
 	for k := range m {
-		if strings.Contains(k, "|waf_block_path|") {
-			n++
+		if strings.Contains(k, "|waf_block_path|") && (strings.HasSuffix(k, "|/y") || strings.HasSuffix(k, "|/.env") || strings.HasSuffix(k, "|/admin")) {
+			t.Errorf("unexpected %s", k)
 		}
 	}
-	if n != 2 {
-		t.Fatalf("block paths: %d %v", n, m)
+	// 4 本 (解釈率 + ルールごとの件数、止めた・出した系、カウントの一致、レート)。レートだけ UTC の 1 日ずつ
+	if len(f.Started) != 3+2 || c.QueryCount() != 4 {
+		t.Fatalf("queries: %d, count %d", len(f.Started), c.QueryCount())
 	}
-	// レートは UTC の 1 日ずつ (窓の始まりの日の 0 時から、終わりまで)
-	var rate []*cwl.StartQueryInput
-	for _, in := range f.Started {
-		if strings.Contains(aws.ToString(in.QueryString), "waf_ip_rate_p50") {
-			rate = append(rate, in)
+	start := time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC)
+	for i, in := range f.Started[:3] {
+		if aws.ToInt64(in.StartTime) != start.Unix() || aws.ToInt64(in.EndTime) != now.Unix()-1 {
+			t.Fatalf("query %d range: %d..%d", i, aws.ToInt64(in.StartTime), aws.ToInt64(in.EndTime))
 		}
 	}
-	if len(rate) != 2 || aws.ToInt64(rate[0].EndTime) != time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC).Unix()-1 ||
-		aws.ToInt64(rate[1].StartTime) != time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC).Unix() || aws.ToInt64(rate[1].EndTime) != now.Unix()-1 {
-		t.Fatalf("rate queries: %+v", rate)
-	}
-	// waf_block は別のクエリを流さない (lines + waf_block_ip + 7 本 + レート 2 日)
-	if len(f.Started) != 11 {
-		t.Fatalf("queries: %d", len(f.Started))
-	}
-	if len(c.FormatStats().Truncated) != 0 {
-		t.Fatalf("truncated: %v", c.FormatStats().Truncated)
+	if r := f.Started[3]; aws.ToInt64(r.EndTime) != start.Add(24*time.Hour).Unix()-1 || aws.ToInt64(f.Started[4].StartTime) != start.Add(24*time.Hour).Unix() {
+		t.Fatal("rate must be per UTC day")
 	}
 }
 
+// 行数の上限に当たったら範囲を半分に分けて引き直す。1h まで分けても当たれば、まとめた集計から作る metric を全部 truncated に残す。
+// 決定 (ADR 0031): filter を Go に移した集計は Insights から返る行が増える (読む量は同じ) ので、上限の扱いを確かめる。
 func TestCollectWAFTruncated(t *testing.T) {
-	f := wafFake()
-	rows := make([]map[string]string, MaxRows)
-	for i := range rows {
-		rows[i] = row("day", "2026-10-21 00:00:00.000", "acl", "prod-waf", "path", "/.env", "ip", fmt.Sprintf("10.0.%d.%d", i/256, i%256), "waf_allow_probe", "1")
+	full := make([]map[string]string, MaxRows)
+	for i := range full {
+		full[i] = row("day", "2026-10-21 00:00:00.000", "acl", "prod-waf", "action", "ALLOW", "path", "/.env", "ip", fmt.Sprintf("10.0.%d.%d", i/256, i%256), "waf_actions", "1")
 	}
-	f.On("as waf_allow_probe", cwlogstest.Response{Rows: rows})
-	c, _ := New(wafSource(), wafChecks(), f)
-	c.Sleep = func(context.Context, time.Duration) error { return nil }
-	if err := c.Collect(context.Background(), collect.Window{From: now.Add(-24 * time.Hour), To: now}, &sinkRecorder{}); err != nil {
-		t.Fatal(err)
-	}
-	if got := strings.Join(c.FormatStats().Truncated, ","); got != "waf_allow_probe" {
-		t.Fatalf("truncated: %q", got)
+	for _, always := range []bool{false, true} {
+		sink, c, f := runWAFEquiv(t, func(f *cwlogstest.Fake, sim *cwlogstest.Sim, p wafPreds) {
+			registerWAF(f, sim, p)
+			f.On("as waf_actions", cwlogstest.Response{RowsFor: func(in *cwl.StartQueryInput) []map[string]string {
+				// 3 時間より長い範囲は上限に当たる
+				if always || aws.ToInt64(in.EndTime)+1-aws.ToInt64(in.StartTime) > int64(3*time.Hour/time.Second) {
+					return full
+				}
+				return []map[string]string{row("day", "2026-10-21 00:00:00.000", "acl", "prod-waf", "action", "ALLOW", "path", "/.env", "ip", "198.51.100.9", "waf_actions", "1")}
+			}})
+		})
+		var spans []string
+		leaves := 0
+		for _, in := range f.Started {
+			if strings.Contains(aws.ToString(in.QueryString), "as waf_actions") {
+				spans = append(spans, time.Unix(aws.ToInt64(in.StartTime), 0).UTC().Format("02 15:04")+"-"+time.Unix(aws.ToInt64(in.EndTime)+1, 0).UTC().Format("02 15:04"))
+				if aws.ToInt64(in.EndTime)+1-aws.ToInt64(in.StartTime) <= int64(3*time.Hour/time.Second) {
+					leaves++
+				}
+			}
+		}
+		got := strings.Join(c.FormatStats().Truncated, ",")
+		if !always {
+			// 範囲全体 (33h) → 上限 → 時に揃えて半分ずつ、3h 以下になるまで分ける
+			if spans[0] != "20 00:00-21 09:00" || leaves < 11 || got != "" {
+				t.Fatalf("spans: %v, truncated %q", spans, got)
+			}
+			// 分けた範囲の行は足し合わせる (同じ日・同じ key)
+			if v := sink.metrics()["2026-10-21|waf_allow_probe|prod-waf|/.env"]; v != float64(leaves) {
+				t.Fatalf("allow probe: %v, leaves %d", v, leaves)
+			}
+			continue
+		}
+		if got != "waf_block_ip,waf_block_path,waf_allow_probe,waf_suspect_block_ip,waf_challenge_issued,waf_challenge_solved" {
+			t.Fatalf("truncated: %q", got)
+		}
 	}
 }
 
@@ -329,28 +215,70 @@ func TestCollectWAFStripPathPrefix(t *testing.T) {
 	src.StripPathPrefix = "/sandbox"
 	p, _ := ProfileFor(src)
 	qs := WAFQueries(p, wafChecks())
-	if !strings.Contains(qs[1].Query, `path not like /^\/sandbox(\/\.env|\/wp-login\.php)/`) ||
-		!strings.Contains(qs[2].Query, `path like /^\/sandbox(\/\.env|\/wp-login\.php)/`) ||
-		!strings.Contains(qs[4].Query, `| parse path /^\/sandbox(?<probe>\/\.env|\/wp-login\.php)/`) ||
-		!strings.Contains(qs[7].Query, `| parse path /^\/sandbox(?<grp>\/api\/v2\/|\/login|\/api\/)/`) {
-		t.Fatalf("queries:\n%s\n%s\n%s\n%s", qs[1].Query, qs[2].Query, qs[4].Query, qs[7].Query)
+	if !strings.Contains(qs[1].Query, `(action = "ALLOW" and path like /^\/sandbox(\/\.env|\/wp-login\.php)/)`) ||
+		!strings.Contains(qs[2].Query, `| parse path /^\/sandbox(?<probe>\/\.env|\/wp-login\.php)/`) ||
+		!strings.Contains(WAFRateQuery(p, wafChecks()), `| parse path /^\/sandbox(?<grp>\/api\/v2\/|\/login|\/api\/)/`) {
+		t.Fatalf("queries:\n%s\n%s", qs[1].Query, qs[2].Query)
 	}
-	if !strings.Contains(qs[3].Query, `path not in ["/sandbox/users/sign_in"]`) {
-		t.Fatalf("suspect: %s", qs[3].Query)
+	ev := func(action, rule, typ, uri, ip string) cwlogstest.Event {
+		return wafEv(21, 5, "prod-waf", action, rule, typ, "GET", uri, ip, 3)
 	}
-	f := wafFake()
-	f.On("as waf_allow_probe", cwlogstest.Response{Rows: []map[string]string{row("day", "2026-10-21 00:00:00.000", "acl", "prod-waf", "path", "/sandbox/.env", "ip", "198.51.100.9", "waf_allow_probe", "3")}})
+	sim := &cwlogstest.Sim{Events: []cwlogstest.Event{
+		ev("ALLOW", "Default_Action", "REGULAR", "/sandbox/.env", "198.51.100.9"),
+		// 接頭辞の無い探索パスは探索にしない (BLOCK の行は block_path に入る)
+		ev("BLOCK", "block-admin", "REGULAR", "/.env", "198.51.100.8"),
+		// sign-in のパスは接頭辞付きで比べる
+		ev("BLOCK", "block-geo", "REGULAR", "/sandbox/users/sign_in", "198.51.100.21"),
+		ev("ALLOW", "Default_Action", "REGULAR", "/sandbox/login", "198.51.100.21"),
+	}}
+	f := &cwlogstest.Fake{}
+	f.On("as lines_total", sim.Response(nil))
+	f.On("as waf_actions", sim.Response(nil))
+	f.On("as waf_rule_count_match", sim.Response(func(map[string]string) bool { return false }))
 	c, _ := New(src, wafChecks(), f)
 	c.Sleep = func(context.Context, time.Duration) error { return nil }
 	sink := &sinkRecorder{}
 	if err := c.Collect(context.Background(), collect.Window{From: now.Add(-24 * time.Hour), To: now}, sink); err != nil {
 		t.Fatal(err)
 	}
-	if m := sink.metrics(); m["2026-10-21|waf_allow_probe|prod-waf|/.env"] != 3 {
+	m := sink.metrics()
+	if m["2026-10-21|waf_allow_probe|prod-waf|/.env"] != 3 || m["2026-10-21|waf_block_path|prod-waf|block-admin|GET|/.env"] != 3 ||
+		m["2026-10-21|waf_block_path|prod-waf|block-geo|GET|/users/sign_in"] != 3 {
 		t.Fatalf("metrics: %v", m)
 	}
 	if got := StripPrefix("/sandbox", "/sandbox/login"); got != "/login" || StripPrefix("/sandbox", "/sandbox") != "/" || StripPrefix("/sandbox", "/sandboxes/x") != "/sandboxes/x" {
 		t.Fatal(got)
+	}
+}
+
+// 「BLOCK された IP」はレートベースのルール・既定の action・sign-in のパス (接頭辞付き)・正規の送信元の BLOCK を除く (Go で除く)
+func TestSuspectBlockedIPs(t *testing.T) {
+	src := wafSource()
+	src.StripPathPrefix = "/sandbox"
+	c, _ := New(src, wafChecks(), &cwlogstest.Fake{})
+	c.stats = &collect.FormatStats{}
+	day := "2026-10-21 00:00:00.000"
+	b := func(ip, rule, typ, path string) map[string]string {
+		return row("day", day, "acl", "prod-waf", "action", "BLOCK", "rule", rule, "terminatingRuleType", typ, "path", path, "ip", ip, "waf_actions", "1")
+	}
+	blocked, err := c.emitActions(context.Background(), []map[string]string{
+		b("198.51.100.1", "block-admin", "REGULAR", "/sandbox/admin"),
+		b("198.51.100.2", "rate-login", "RATE_BASED", "/sandbox/api"),
+		b("198.51.100.3", "Default_Action", "REGULAR", "/sandbox/x"),
+		b("198.51.100.4", "block-geo", "REGULAR", "/sandbox/users/sign_in"),
+		b("203.0.113.9", "block-admin", "REGULAR", "/sandbox/admin"),
+		b("198.51.100.5", "block-geo", "REGULAR", "/users/sign_in"),
+	}, dayCounts{}, &sinkRecorder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for ip := range blocked["2026-10-21"] {
+		got = append(got, ip)
+	}
+	sort.Strings(got)
+	if strings.Join(got, ",") != "198.51.100.1,198.51.100.5" {
+		t.Fatalf("blocked: %v", got)
 	}
 }
 
@@ -366,7 +294,7 @@ func TestWAFResourcesFilter(t *testing.T) {
 	if p.Prelude != want {
 		t.Fatalf("prelude:\n%s\nwant:\n%s", p.Prelude, want)
 	}
-	if !strings.HasPrefix(LinesQuery(p), want) || !strings.HasPrefix(WAFQueries(p, wafChecks())[0].Query, want) {
+	if !strings.HasPrefix(LinesQuery(p), want) || !strings.HasPrefix(WAFQueries(p, wafChecks())[0].Query, want) || !strings.HasPrefix(WAFRateQuery(p, wafChecks()), want) {
 		t.Fatal("resources filter must be in every query")
 	}
 	if got := GlobRegex("a?b.c*"); got != `a.b\.c.*` {

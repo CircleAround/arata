@@ -7,6 +7,8 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -50,7 +52,6 @@ const (
 type Collector struct {
 	src     config.Source
 	prof    Profile
-	aggs    []Aggregate
 	checks  config.Checks
 	api     API
 	Sleep   func(ctx context.Context, d time.Duration) error
@@ -86,7 +87,7 @@ func New(src config.Source, checks config.Checks, api API) (*Collector, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Collector{src: src, prof: p, aggs: Aggregates(p.Yields, checks), checks: checks, api: api, Sleep: sleepFor, Now: time.Now,
+	return &Collector{src: src, prof: p, checks: checks, api: api, Sleep: sleepFor, Now: time.Now,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), MaxWait: DefaultMaxWait}, nil
 }
 
@@ -101,26 +102,38 @@ func sleepFor(ctx context.Context, d time.Duration) error {
 	}
 }
 
-func (c *Collector) ID() string              { return c.src.ID }
-func (c *Collector) Yields() []record.Kind   { return []record.Kind{c.prof.Yields} }
-func (c *Collector) Profile() Profile        { return c.prof }
-func (c *Collector) Aggregates() []Aggregate { return c.aggs }
+func (c *Collector) ID() string            { return c.src.ID }
+func (c *Collector) Yields() []record.Kind { return []record.Kind{c.prof.Yields} }
+func (c *Collector) Profile() Profile      { return c.prof }
 
-// Queries は Collect が流す集計クエリ (名前 → クエリ。doctor の構文検査用)。解釈率・サンプルは含まない。
+// Queries は Collect が流すクエリ (名前 → クエリ。doctor の構文検査用)。サンプルは含まない。
 func (c *Collector) Queries() map[string]string {
 	out := map[string]string{}
-	for _, a := range c.aggs {
-		out[a.Metric] = AggregateQuery(c.prof, a)
+	for _, q := range c.queries() {
+		out[q.Name] = q.Query
 	}
 	if c.prof.Yields == record.KindWAFAction {
-		for _, q := range WAFQueries(c.prof, c.checks) {
-			out[q.Name] = q.Query
-		}
-	}
-	for _, q := range EndpointQueries(c.prof, c.src.ID, c.checks.EndpointAbuse) {
-		out[endpointTruncatedPrefix+q.Endpoint] = q.Query
+		out["waf_ip_rate"] = WAFRateQuery(c.prof, c.checks)
 	}
 	return out
+}
+
+// queries は Collect が範囲全体に流すクエリ (解釈率を含む。順番どおり。レートは含まない)。
+func (c *Collector) queries() []MergedQuery {
+	switch c.prof.Yields {
+	case record.KindWAFAction:
+		return WAFQueries(c.prof, c.checks)
+	case record.KindHTTPAccess:
+		qs := []MergedQuery{
+			{Name: httpLines, Query: HTTPLinesQuery(c.prof, c.checks), Metrics: []string{MetricProbePaths}},
+			{Name: httpHits, Query: HTTPHitsQuery(c.prof, c.checks), Metrics: []string{MetricSignInFailures, MetricProbeHits}},
+		}
+		if q, ok := EndpointsQuery(c.prof, c.src.ID, c.checks.EndpointAbuse); ok {
+			qs = append(qs, q)
+		}
+		return qs
+	}
+	return []MergedQuery{{Name: MetricLinesTotal, Query: LinesQuery(c.prof)}}
 }
 
 // SetLogGroup は DescribeLogGroups で引き済みのロググループを渡す (doctor が同じ API を 2 回呼ばないため)。
@@ -182,21 +195,12 @@ func (c *Collector) queryRange(ctx context.Context, from, to time.Time) (time.Ti
 // Scanned はこの collector がこれまでに Insights でスキャンした量 (バイト。Statistics.BytesScanned の合計)。doctor の費用の見積もりに使う。
 func (c *Collector) Scanned() float64 { return c.scanned }
 
-// QueryCount は 1 回の Collect で流すクエリの本数 (解釈率 + 集計。日ごとに流すクエリは 1 本と数える。範囲全体のスキャン量で何本分かを表す)。
+// QueryCount は 1 回の Collect で流すクエリの本数 (解釈率 + 集計。範囲全体のスキャン量で何本分かを表す。
+// 日ごとに分けて流すクエリ・行数の上限で分けたクエリも 1 本と数える)。
 func (c *Collector) QueryCount() int {
-	n := 1 + len(c.aggs)
+	n := len(c.queries())
 	if c.prof.Yields == record.KindWAFAction {
-		perDay := false
-		for _, q := range WAFQueries(c.prof, c.checks) {
-			if q.PerDay {
-				perDay = true
-				continue
-			}
-			n++
-		}
-		if perDay {
-			n++
-		}
+		n++ // レート
 	}
 	return n
 }
@@ -214,7 +218,9 @@ func DayStart(t time.Time) time.Time {
 //
 // 決定: 日次集計を置き換えで保存するため、問い合わせは日の頭からにする (同じ日を何度引いても後の値ほど完全で、重複加算しない)。
 // その代わり 1 回のスキャンは最大で窓 + 24h になる。
-// 解釈率が expected_match_rate を下回ったら集計クエリを流さず FORMAT_MISMATCH を返す (誤った集計で平常帯を汚さないため)。
+// 解釈率は最初のクエリ (集計とまとめたもの) で測り、expected_match_rate を下回ったら残りのクエリを流さず、metrics も出さずに
+// FORMAT_MISMATCH を返す (誤った集計で平常帯を汚さないため)。
+// 決定 (ADR 0031): 集計はソースごとに数本にまとめる (MergedQuery)。
 func (c *Collector) Collect(ctx context.Context, w collect.Window, sink collect.RecordSink) error {
 	from, to := DayStart(w.Start()), w.To
 	c.scanned = 0
@@ -226,13 +232,13 @@ func (c *Collector) Collect(ctx context.Context, w collect.Window, sink collect.
 			"reason", reason, "from", from.Format(time.RFC3339), "to", to.Format(time.RFC3339))
 		return nil
 	}
-	rows, err := c.Query(ctx, LinesQuery(c.prof), from, to)
-	c.stats.BytesScanned = c.scanned
+	qs := c.queries()
+	linesRows, err := c.splitQuery(ctx, qs[0], from, to, time.Hour, false)
 	if err != nil {
 		return err
 	}
-	var lines []record.Metric
-	for _, r := range rows {
+	lines := dayCounts{}
+	for _, r := range linesRows {
 		day, ok := parseDay(r["day"])
 		if !ok {
 			continue
@@ -240,9 +246,8 @@ func (c *Collector) Collect(ctx context.Context, w collect.Window, sink collect.
 		total, matched := num(r[MetricLinesTotal]), num(r[MetricLinesMatched])
 		c.stats.Total += int64(total)
 		c.stats.Matched += int64(matched)
-		lines = append(lines,
-			c.metric(day, MetricLinesTotal, "", total),
-			c.metric(day, MetricLinesMatched, "", matched))
+		lines.add(day, MetricLinesTotal, total)
+		lines.add(day, MetricLinesMatched, matched)
 	}
 	if rate, ok := c.stats.Rate(); ok && rate < c.src.ExpectedMatchRate {
 		return c.mismatch(ctx, from, to, rate)
@@ -251,38 +256,149 @@ func (c *Collector) Collect(ctx context.Context, w collect.Window, sink collect.
 		c.Logger.Warn("no log lines in window; check log_group / stream_prefix", "source", c.src.ID, "log_group", c.src.LogGroup,
 			"from", from.Format(time.RFC3339), "to", to.Format(time.RFC3339))
 	}
-	for _, m := range lines {
-		if err := sink.Emit(ctx, m); err != nil {
-			return err
+	for _, day := range sortedDays(lines) {
+		for _, m := range []string{MetricLinesTotal, MetricLinesMatched} {
+			if err := sink.Emit(ctx, c.metric(day, m, "", lines[day][m])); err != nil {
+				return err
+			}
 		}
 	}
 	if c.stats.Total == 0 {
 		return nil
 	}
-	for _, a := range c.aggs {
-		rows, err := c.Query(ctx, AggregateQuery(c.prof, a), from, to)
-		c.stats.BytesScanned = c.scanned
-		if err != nil {
-			return err
-		}
-		if len(rows) >= MaxRows {
-			c.Logger.Warn("aggregate truncated at row limit", "source", c.src.ID, "metric", a.Metric, "limit", MaxRows)
-			c.stats.AddTruncated(a.Metric)
-		}
-		for _, r := range rows {
+	switch c.prof.Yields {
+	case record.KindWAFAction:
+		return c.collectWAF(ctx, qs, linesRows, from, to, sink)
+	case record.KindHTTPAccess:
+		return c.collectHTTP(ctx, qs, linesRows, from, to, sink)
+	}
+	return nil
+}
+
+// collectHTTP は http_access のまとめた集計から sign_in_failures / probe_hits / probe_paths と endpoint_abuse の metric を出す。
+func (c *Collector) collectHTTP(ctx context.Context, qs []MergedQuery, linesRows []map[string]string, from, to time.Time, sink collect.RecordSink) error {
+	lb, pp := c.checks.LoginBruteforce, c.checks.ProbePaths
+	out := map[string]dayCounts{MetricSignInFailures: {}, MetricProbeHits: {}, MetricProbePaths: {}}
+	if len(pp.Paths) > 0 {
+		for _, r := range linesRows {
 			day, ok := parseDay(r["day"])
-			if !ok {
+			if !ok || r["probe_path"] == "" || !statusIn(r["status"], pp.Statuses) || hasPrefixAny(r["probe_path"], "", pp.ExcludePaths) {
 				continue
 			}
-			if err := sink.Emit(ctx, c.metric(day, a.Metric, Mask(r[a.KeyField]), num(r[a.Metric]))); err != nil {
-				return err
+			out[MetricProbePaths].add(day, Mask(r["probe_path"]), num(r[MetricLinesTotal]))
+		}
+	}
+	rows, err := c.splitQuery(ctx, qs[1], from, to, time.Hour, false)
+	if err != nil {
+		return err
+	}
+	for _, r := range rows {
+		day, ok := parseDay(r["day"])
+		if !ok {
+			continue
+		}
+		n, ip := num(r[httpHits]), Mask(r["ip"])
+		if (len(lb.Methods) == 0 || containsStr(lb.Methods, r["method"])) && (len(lb.Paths) == 0 || r["sign_in"] != "") && statusIn(r["status"], lb.FailureStatuses) {
+			out[MetricSignInFailures].add(day, ip, n)
+		}
+		if statusIn(r["status"], pp.Statuses) && (len(pp.Paths) == 0 || r["probe"] != "") && r["probe_ex"] == "" {
+			out[MetricProbeHits].add(day, ip, n)
+		}
+	}
+	for _, m := range []string{MetricSignInFailures, MetricProbeHits, MetricProbePaths} {
+		for _, day := range sortedDays(out[m]) {
+			for _, k := range sortedNames(out[m][day]) {
+				if err := sink.Emit(ctx, c.metric(day, m, k, out[m][day][k])); err != nil {
+					return err
+				}
 			}
 		}
 	}
-	if c.prof.Yields == record.KindWAFAction {
-		return c.collectWAF(ctx, from, to, sink)
+	if len(qs) > 2 {
+		return c.collectEndpoints(ctx, qs[2], from, to, sink)
 	}
-	return c.collectEndpoints(ctx, from, to, sink)
+	return nil
+}
+
+// statusIn は status が l に入るか (l が空なら絞らない。Insights の `status in [...]` と同じく数値として比べる)。
+func statusIn(s string, l []int) bool {
+	if len(l) == 0 {
+		return true
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil {
+		return false
+	}
+	for _, v := range l {
+		if v == n {
+			return true
+		}
+	}
+	return false
+}
+
+// hasPrefixAny は s が prefix + l のどれかで始まるか (`like /^prefix(l1|l2)/` と同じ。l は文字どおり)。
+func hasPrefixAny(s, prefix string, l []string) bool {
+	for _, p := range l {
+		if strings.HasPrefix(s, prefix+p) {
+			return true
+		}
+	}
+	return false
+}
+
+// splitQuery は q を [from, to) に流す (perDay なら UTC の 1 日ずつ)。行数の上限に当たればその範囲を align に揃えて半分に分けて引き直し (1h まで)、
+// それでも当たれば WARN を出して q.Metrics を truncated に残す (件数の多い組が残り、少なめに数える)。
+// 決定 (ADR 0031): スキャン量は範囲に比例するので、分けて流しても増えない。増えるのは上限に当たって引き直した分だけ (INFO に残す)。
+// 日次 (bin(1d)) の集計は範囲全体を 1 本で流し、当たったときだけ分ける (多くの日は上限に遠く、API の呼び出しを増やさない)。
+func (c *Collector) splitQuery(ctx context.Context, q MergedQuery, from, to time.Time, align time.Duration, perDay bool) ([]map[string]string, error) {
+	if !perDay {
+		return c.splitRange(ctx, q, from, to, align)
+	}
+	var out []map[string]string
+	for d := from; d.Before(to); d = DayStart(d).Add(24 * time.Hour) {
+		end := DayStart(d).Add(24 * time.Hour)
+		if end.After(to) {
+			end = to
+		}
+		rows, err := c.splitRange(ctx, q, d, end, align)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, rows...)
+	}
+	return out, nil
+}
+
+func (c *Collector) splitRange(ctx context.Context, q MergedQuery, from, to time.Time, align time.Duration) ([]map[string]string, error) {
+	rows, err := c.Query(ctx, q.Query, from, to)
+	c.stats.BytesScanned = c.scanned
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) < MaxRows {
+		return rows, nil
+	}
+	span := to.Sub(from)
+	mid := from.Add(span / 2).Truncate(align)
+	if span > minSplit && mid.After(from) && mid.Before(to) {
+		c.Logger.Info("aggregate hit row limit; splitting the range", "source", c.src.ID, "query", q.Name,
+			"from", from.Format(time.RFC3339), "to", to.Format(time.RFC3339))
+		a, err := c.splitRange(ctx, q, from, mid, align)
+		if err != nil {
+			return nil, err
+		}
+		b, err := c.splitRange(ctx, q, mid, to, align)
+		if err != nil {
+			return nil, err
+		}
+		return append(a, b...), nil
+	}
+	c.Logger.Warn("aggregate truncated at row limit; counts are lower bounds", "source", c.src.ID, "query", q.Name, "metrics", strings.Join(q.Metrics, ","), "limit", MaxRows)
+	for _, m := range q.Metrics {
+		c.stats.AddTruncated(m)
+	}
+	return rows, nil
 }
 
 func (c *Collector) metric(day, name, key string, v float64) record.Metric {

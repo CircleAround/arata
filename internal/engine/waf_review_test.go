@@ -36,8 +36,8 @@ func TestWAFReviewRun(t *testing.T) {
 		ResourceTypeErrs: map[waftypes.ResourceType]error{waftypes.ResourceTypeCognitioUserPool: accounttest.DeniedCognito}}
 	day := "2026-10-21 00:00:00.000"
 	h.logs.On("as lines_total", linesRows("2026-10-21", 1000, 1000))
-	h.logs.On("as waf_allow_probe", cwlogstest.Response{Rows: []map[string]string{
-		cwlogstest.Rows("day", day, "acl", "prod-waf", "path", "/.env", "ip", "198.51.100.9", "waf_allow_probe", "12"),
+	h.logs.On("as waf_actions", cwlogstest.Response{Rows: []map[string]string{
+		cwlogstest.Rows("day", day, "acl", "prod-waf", "action", "ALLOW", "rule", "Default_Action", "path", "/.env", "ip", "198.51.100.9", "waf_actions", "12"),
 	}})
 	e := h.open(t)
 	ctx := context.Background()
@@ -91,26 +91,26 @@ func TestWAFReviewRun(t *testing.T) {
 	}
 }
 
-// wafv2 の集計が行の上限に当たったら、run の stats と coverage.formats に残す。
+// wafv2 の集計が行の上限に当たったら、run の stats と coverage.formats に残す。止めた・出した系は 1 本にまとめたので、そこから作る集計の名前を全部残す (ADR 0031)。
 func TestWAFTruncatedStats(t *testing.T) {
 	h := newHarnessWith(t, wafSources, "")
 	h.logs.On("as lines_total", linesRows("2026-10-21", 1000, 1000))
 	rows := make([]map[string]string, cwlogs.MaxRows)
 	for i := range rows {
-		rows[i] = cwlogstest.Rows("day", "2026-10-21 00:00:00.000", "acl", "prod-waf", "path", "/.env", "ip", fmt.Sprintf("10.0.%d.%d", i/256, i%256), "waf_allow_probe", "1")
+		rows[i] = cwlogstest.Rows("day", "2026-10-21 00:00:00.000", "acl", "prod-waf", "action", "ALLOW", "path", "/.env", "ip", fmt.Sprintf("10.0.%d.%d", i/256, i%256), "waf_actions", "1")
 	}
-	h.logs.On("as waf_allow_probe", cwlogstest.Response{Rows: rows})
+	h.logs.On("as waf_actions", cwlogstest.Response{Rows: rows})
 	e := h.open(t)
 	res, err := e.Run(context.Background(), "daily")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if f := res.Report.Coverage.Formats; len(f) != 1 || strings.Join(f[0].Truncated, ",") != "waf_allow_probe" {
+	if f := res.Report.Coverage.Formats; len(f) != 1 || strings.Join(f[0].Truncated, ",") != "waf_block_ip,waf_block_path,waf_allow_probe,waf_suspect_block_ip,waf_challenge_issued,waf_challenge_solved" {
 		t.Fatalf("formats: %+v", f)
 	}
 	runs, _ := e.Store().RecentRuns(context.Background(), 1)
 	tr, _ := runs[0].Stats["truncated_aggregates"].(map[string]any)
-	if fmt.Sprint(tr["waf"]) != "[waf_allow_probe]" {
+	if fmt.Sprint(tr["waf"]) != "[waf_block_ip waf_block_path waf_allow_probe waf_suspect_block_ip waf_challenge_issued waf_challenge_solved]" {
 		t.Fatalf("stats: %+v", runs[0].Stats)
 	}
 }

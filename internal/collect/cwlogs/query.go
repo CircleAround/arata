@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/CircleAround/arata/internal/config"
-	"github.com/CircleAround/arata/internal/record"
 )
 
 // 集計の metric 名 (metrics.metric)。チェックはこの名前で metrics を引く。
@@ -22,58 +21,88 @@ const (
 // MaxRows は 1 クエリで受け取る行数の上限 (GetQueryResults の 1 回の上限)。
 const MaxRows = 10000
 
-// Aggregate は正規化レコードに対する日次集計 1 種。前処理の後ろに付ける。
-type Aggregate struct {
-	Metric   string
-	KeyField string // group by する正規化フィールド
-	Filter   string // `filter` の条件式 (空なら絞り込まない)
+// MergedQuery は 1 本の Insights クエリ。1 本の細かい group by の結果から、Go で複数の metric を作る (ADR 0031)。
+// UTC の 1 日ずつ流し、行数の上限に当たればその範囲を半分に分けて引き直す (splitQuery)。分けても当たれば Metrics を truncated に残す。
+type MergedQuery struct {
+	Name    string
+	Query   string
+	Metrics []string // この結果から作る metric の名前 (truncated に残す名前)
 }
 
-// Aggregates は正規化レコードの種類ごとの集計 (= クエリテンプレート集)。パスや閾値はアプリ層チェックの設定から入れる。
-func Aggregates(kind record.Kind, c config.Checks) []Aggregate {
-	switch kind {
-	case record.KindHTTPAccess:
-		lb, pp := c.LoginBruteforce, c.ProbePaths
-		signIn := and(
-			inList("method", quoteAll(lb.Methods)),
-			inList("path", quoteAll(lb.Paths)),
-			inList("status", intsToStrings(lb.FailureStatuses)),
-		)
-		probe := and(
-			inList("status", intsToStrings(pp.Statuses)),
-			"path like /^("+prefixAlternation(pp.Paths)+")/",
-		)
-		if len(pp.ExcludePaths) > 0 {
-			probe = and(probe, "path not like /^("+prefixAlternation(pp.ExcludePaths)+")/")
-		}
-		return []Aggregate{
-			{Metric: MetricSignInFailures, KeyField: "ip", Filter: signIn},
-			{Metric: MetricProbeHits, KeyField: "ip", Filter: probe},
-			{Metric: MetricProbePaths, KeyField: "path", Filter: probe},
-		}
-	case record.KindWAFAction:
-		// waf_block (rule 別) は waf_rule_action (WAFQueries) から作る。ここは IP 別だけ
-		return []Aggregate{{Metric: MetricWAFBlockIP, KeyField: "ip", Filter: `action = "BLOCK"`}}
-	}
-	return nil
-}
+// http_access のまとめた集計の名前 (保存しない。クエリの列名)。
+const (
+	httpLines = "http_lines" // 解釈率 + probe_paths
+	httpHits  = "http_hits"  // sign_in_failures + probe_hits
+)
 
-// LinesQuery は解釈率の計測クエリ。日ごとの総行数と解釈できた行数を返す (設計書 2-2)。
-func LinesQuery(p Profile) string {
-	return p.Prelude + "\n| stats count(*) as " + MetricLinesTotal + ", count(" + p.MatchField + ") as " + MetricLinesMatched + " by bin(1d) as day"
-}
-
-// AggregateQuery は集計 1 種のクエリ。結果の列は day / <KeyField> / <Metric>。
-func AggregateQuery(p Profile, a Aggregate) string {
+// 決定 (ADR 0031): 集計を 1 本ずつ流すと、Insights は 1 本ごとに範囲のログ全体を読む (費用は本数に比例する)。
+// そこで同じソースの集計を細かい group by の 1 本にまとめ、振り分けを Go で行う。行が爆発する組み合わせ (ip × path) はまとめない。
+//   - lines + probe_paths: 全行を (日, status, 探索パスのときだけ値を持つ probe_path) で数える。行は日 × status × (1 + 探索パスの数) 程度
+//   - sign_in_failures + probe_hits: どちらも IP 別。filter で両方の行に絞り、(日, ip, method, status, パスの印) で数える
+//     (パスの印は parse の名前付き捕獲。sign-in は完全一致、探索は接頭辞)
+//
+// HTTPLinesQuery は解釈率と probe_paths のクエリ。結果の列は day / status / probe_path / lines_total / lines_matched。
+func HTTPLinesQuery(p Profile, c config.Checks) string {
 	var b strings.Builder
 	b.WriteString(p.Prelude)
-	if a.Filter != "" {
-		b.WriteString("\n| filter " + a.Filter)
+	group := "day"
+	if pp := c.ProbePaths; len(pp.Paths) > 0 {
+		alts := make([]string, len(pp.Paths))
+		for i, s := range pp.Paths {
+			alts[i] = regexLiteral(s) + ".*"
+		}
+		b.WriteString("\n| parse path /^(?<probe_path>" + strings.Join(alts, "|") + ")/")
+		group += ", status, probe_path"
 	}
-	b.WriteString("\n| stats count(*) as " + a.Metric + " by bin(1d) as day, " + a.KeyField)
-	b.WriteString("\n| sort " + a.Metric + " desc")
+	b.WriteString("\n| stats count(*) as " + MetricLinesTotal + ", count(" + p.MatchField + ") as " + MetricLinesMatched + " by bin(1d) as " + group)
+	b.WriteString("\n| sort " + MetricLinesTotal + " desc")
 	b.WriteString("\n| limit " + strconv.Itoa(MaxRows))
 	return b.String()
+}
+
+// HTTPHitsQuery は sign_in_failures と probe_hits のクエリ。結果の列は day / ip / method / status / sign_in / probe / probe_ex / http_hits。
+func HTTPHitsQuery(p Profile, c config.Checks) string {
+	lb, pp := c.LoginBruteforce, c.ProbePaths
+	signIn := and(
+		inList("method", quoteAll(lb.Methods)),
+		inList("path", quoteAll(lb.Paths)),
+		inList("status", intsToStrings(lb.FailureStatuses)),
+	)
+	probe := and(
+		inList("status", intsToStrings(pp.Statuses)),
+		"path like /^("+prefixAlternation(pp.Paths)+")/",
+	)
+	if len(pp.ExcludePaths) > 0 {
+		probe = and(probe, "path not like /^("+prefixAlternation(pp.ExcludePaths)+")/")
+	}
+	var b strings.Builder
+	b.WriteString(p.Prelude)
+	if signIn != "" && probe != "" {
+		b.WriteString("\n| filter (" + signIn + ") or (" + probe + ")")
+	}
+	group := "day, ip, method, status"
+	if len(lb.Paths) > 0 {
+		b.WriteString("\n| parse path /^(?<sign_in>" + prefixAlternation(lb.Paths) + ")$/")
+		group += ", sign_in"
+	}
+	if len(pp.Paths) > 0 {
+		b.WriteString("\n| parse path /^(?<probe>" + prefixAlternation(pp.Paths) + ")/")
+		group += ", probe"
+	}
+	if len(pp.ExcludePaths) > 0 {
+		b.WriteString("\n| parse path /^(?<probe_ex>" + prefixAlternation(pp.ExcludePaths) + ")/")
+		group += ", probe_ex"
+	}
+	b.WriteString("\n| stats count(*) as " + httpHits + " by bin(1d) as " + group)
+	b.WriteString("\n| sort " + httpHits + " desc")
+	b.WriteString("\n| limit " + strconv.Itoa(MaxRows))
+	return b.String()
+}
+
+// LinesQuery は解釈率だけの計測クエリ。日ごとの総行数と解釈できた行数を返す (設計書 2-2)。
+// Collect は解釈率を集計とまとめたクエリ (HTTPLinesQuery / WAFLinesQuery) で測る。これは doctor の費用の実測に使う。
+func LinesQuery(p Profile) string {
+	return p.Prelude + "\n| stats count(*) as " + MetricLinesTotal + ", count(" + p.MatchField + ") as " + MetricLinesMatched + " by bin(1d) as day"
 }
 
 // SampleQuery は解釈できなかった行の例を最大 n 行返すクエリ (FORMAT_MISMATCH の原因特定用)。

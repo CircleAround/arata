@@ -60,7 +60,7 @@ func dumpMetrics(sink *sinkRecorder, st *collect.FormatStats) string {
 	return b.String()
 }
 
-func inCIDRs(ip string, cidrs []string) bool {
+func testInCIDRs(ip string, cidrs []string) bool {
 	a, err := netip.ParseAddr(ip)
 	if err != nil {
 		return false
@@ -221,24 +221,13 @@ type wafPreds struct {
 	sp string
 }
 
-func (p wafPreds) trusted(f map[string]string) bool { return !inCIDRs(f["ip"], p.c.WAFReview.TrustedCIDRs) }
+func (p wafPreds) trusted(f map[string]string) bool {
+	return !testInCIDRs(f["ip"], p.c.WAFReview.TrustedCIDRs)
+}
 func (p wafPreds) probe(f map[string]string) bool {
 	return hasAnyPrefix(f["path"], p.sp, p.c.ProbePaths.Paths) && !hasAnyPrefix(f["path"], p.sp, p.c.ProbePaths.ExcludePaths)
 }
 func (p wafPreds) block(f map[string]string) bool { return f["action"] == "BLOCK" }
-func (p wafPreds) blockPath(f map[string]string) bool {
-	return p.block(f) && !p.probe(f) && p.trusted(f)
-}
-func (p wafPreds) allowProbe(f map[string]string) bool {
-	return f["action"] == "ALLOW" && p.probe(f) && p.trusted(f)
-}
-func (p wafPreds) suspect(f map[string]string) bool {
-	var signIn []string
-	for _, s := range p.c.LoginBruteforce.Paths {
-		signIn = append(signIn, p.sp+s)
-	}
-	return p.block(f) && f["terminatingRuleType"] != "RATE_BASED" && f["rule"] != "Default_Action" && !strIn(f["path"], signIn) && p.trusted(f)
-}
 func (p wafPreds) countMatch(f map[string]string) bool {
 	for _, k := range countFields() {
 		if strings.HasSuffix(k, ".ruleId") && f[k] != "" {
@@ -247,17 +236,14 @@ func (p wafPreds) countMatch(f map[string]string) bool {
 	}
 	return false
 }
-func (p wafPreds) issued(f map[string]string) bool {
-	return (f["action"] == "CHALLENGE" || f["action"] == "CAPTCHA") && p.trusted(f)
-}
-func (p wafPreds) solved(f map[string]string) bool {
+func (p wafPreds) solvedCond(f map[string]string) bool {
 	ok := num(f["challengeResponse.solveTimestamp"]) > 0 || num(f["captchaResponse.solveTimestamp"]) > 0
 	for _, k := range challengeAcceptedFields() {
 		if f[k] == "CHALLENGE" || f[k] == "CAPTCHA" {
 			ok = true
 		}
 	}
-	return ok && p.trusted(f)
+	return ok
 }
 
 func runWAFEquiv(t *testing.T, register func(f *cwlogstest.Fake, sim *cwlogstest.Sim, p wafPreds)) (*sinkRecorder, *Collector, *cwlogstest.Fake) {
@@ -281,14 +267,11 @@ func runWAFEquiv(t *testing.T, register func(f *cwlogstest.Fake, sim *cwlogstest
 // registerWAF は collector が流すクエリに Sim の応答を登録する (クエリの形ごとに filter を対応させる)。
 func registerWAF(f *cwlogstest.Fake, sim *cwlogstest.Sim, p wafPreds) {
 	f.On("as lines_total", sim.Response(nil))
-	f.On("as waf_block_ip", sim.Response(p.block))
-	f.On("as waf_rule_action", sim.Response(nil))
-	f.On("as waf_block_path", sim.Response(p.blockPath))
-	f.On("as waf_allow_probe", sim.Response(p.allowProbe))
-	f.On("as waf_suspect_block_ip", sim.Response(p.suspect))
+	// action = "BLOCK" or ((CHALLENGE / CAPTCHA or 許可された探索 or トークンの受理) and 正規の送信元でない)
+	f.On("as waf_actions", sim.Response(func(r map[string]string) bool {
+		return p.block(r) || ((r["action"] == "CHALLENGE" || r["action"] == "CAPTCHA" || (r["action"] == "ALLOW" && p.probe(r)) || p.solvedCond(r)) && p.trusted(r))
+	}))
 	f.On("as waf_rule_count_match", sim.Response(p.countMatch))
-	f.On("as waf_challenge_issued", sim.Response(p.issued))
-	f.On("as waf_challenge_solved", sim.Response(p.solved))
 }
 
 func TestWAFEquivalence(t *testing.T) {
@@ -402,14 +385,21 @@ func (p httpPreds) endpoint(ep config.AbuseEndpoint) func(map[string]string) boo
 
 func registerHTTP(f *cwlogstest.Fake, sim *cwlogstest.Sim, p httpPreds) {
 	f.On("as lines_total", sim.Response(nil))
-	f.On("as sign_in_failures", sim.Response(p.signIn))
-	f.On("as probe_hits", sim.Response(p.probe))
-	f.On("as probe_paths", sim.Response(p.probe))
+	f.On("as http_hits", sim.Response(func(r map[string]string) bool { return p.signIn(r) || p.probe(r) }))
+	var eps []func(map[string]string) bool
 	for _, ep := range p.c.EndpointAbuse.Endpoints {
-		if len(ep.Paths) > 0 {
-			f.On(`path like /`+EndpointPathRegex(p.sp, ep.Paths[0])+`/`, sim.Response(p.endpoint(ep)))
+		if len(ep.Sources) == 0 || strIn("web", ep.Sources) {
+			eps = append(eps, p.endpoint(ep))
 		}
 	}
+	f.On("as "+endpointHits, sim.Response(func(r map[string]string) bool {
+		for _, m := range eps {
+			if m(r) {
+				return true
+			}
+		}
+		return false
+	}))
 }
 
 func TestHTTPEquivalence(t *testing.T) {
