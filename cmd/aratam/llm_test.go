@@ -254,6 +254,12 @@ func TestNotifyClaudeCLIProposalsAndContext(t *testing.T) {
 	if n := strings.Count(string(args), "決済画面 /checkout/* はリクエストが多いのが仕様"); n != 2 {
 		t.Fatalf("the context must be in both system prompts, got %d:\n%s", n, args)
 	}
+	// 対処手順 (ADR 0025): 要約の呼び出しには run に出たチェックの、提案の呼び出しには waf_review の playbook が system に入る (偽の claude が受け取った引数で確かめる)
+	for _, want := range []string{`<playbook check="root_usage">`, `<playbook check="waf_review">`} {
+		if n := strings.Count(string(args), want); n != 1 {
+			t.Fatalf("%s must appear once in the system prompts, got %d", want, n)
+		}
+	}
 	stdin, _ := os.ReadFile(filepath.Join(c.rec, "stdin_proposals"))
 	if !strings.Contains(string(stdin), `"id": "p1"`) || strings.Contains(string(stdin), "observation") || strings.Contains(string(stdin), "findings") {
 		t.Fatalf("the proposals call gets the proposals only:\n%s", stdin)
