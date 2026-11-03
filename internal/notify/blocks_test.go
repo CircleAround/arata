@@ -434,3 +434,37 @@ func TestPlainTextOfTextMessage(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
+
+// challenge_on_app_path (提案) と challenge_impact (Challenge / CAPTCHA の状況。observation) も見出し・主な数字・根拠を規則で書く (ADR 0028)。
+func TestBlocksProposalsChallenge(t *testing.T) {
+	ps := []schema.Proposal{
+		{Kind: "challenge_on_app_path", Stage: "review", WebACL: "prod-waf", Rule: "AWS-AWSManagedRulesBotControlRuleSet", RuleInGroup: "CategoryHttpLibrary",
+			Method: "GET", Path: "/products/:id", Summary: "長い概要",
+			Evidence: map[string]any{"kind": "challenge", "issued": 160.0, "distinct_ips_max_per_day": 30.0, "solve_ratio": 0.8, "days": 7.0}},
+		{Kind: "observation", About: "challenge_on_app_path", Reason: "below_threshold", Stage: "none", WebACL: "prod-waf", Rule: "captcha-login",
+			Method: "GET", Path: "/login", Summary: "閾値未満", Evidence: map[string]any{"kind": "captcha", "issued": 12.0, "solve_ratio": 0.5, "days": 7.0}},
+		{Kind: "observation", About: "challenge_impact", Reason: "informational", Stage: "none", WebACL: "prod-waf", Rule: "challenge-all",
+			Summary: "状況", Evidence: map[string]any{"kind": "challenge", "issued": 900.0, "solve_ratio": 0.05, "issued_non_get": 40.0,
+				"paths": []any{"GET /a (500 件、2%)", "POST /b (300 件、0%)", "GET /c (50 件、10%)", "GET /d (50 件、10%)"}, "days": 7.0}},
+	}
+	dir := inputDir(t, withProposals(t, goldenRun(t), ps), "")
+	s := &fakeSender{}
+	run(t, dir, s, withBlocks)
+	m := s.got[1].msg
+	checkLimits(t, m)
+	txt := allText(m)
+	for _, want := range []string{
+		"🛡️ *正規の画面に Challenge / CAPTCHA* — `CategoryHttpLibrary` が GET /products/:id で Challenge 160 件 / 7 日・解かれた 80%\n→ このパスを `CategoryHttpLibrary` の対象から外す (scope-down) か条件を絞る",
+		"IP 最大 30/日・ACL prod-waf",
+		"• 正規の画面に Challenge / CAPTCHA (閾値未満) — `captcha-login` が GET /login で CAPTCHA 12 件 / 7 日・解かれた 50%",
+		"*Challenge / CAPTCHA*",
+		"• `challenge-all` Challenge 900 件・解かれた 5%・GET 以外 40",
+	} {
+		if !strings.Contains(txt, want) {
+			t.Errorf("missing %q\n%s", want, txt)
+		}
+	}
+	if strings.Contains(txt, "長い概要") {
+		t.Error("the long summary must not be in slack")
+	}
+}

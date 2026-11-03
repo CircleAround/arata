@@ -262,7 +262,10 @@ LLM に求める出力:
   - **`waf-proposals.md` の書き出し (notify の副作用)**: slack.format: blocks で提案があるとき、入力ディレクトリ (`--in`) に書く (一時ファイルから置き換え、0640)。
     提案ごとの種類・対象・概要・根拠・次の一手・何を・なぜ・進め方・設定例の全文と、観察・COUNT のルールの状況。`--dry-run` では書かない (パスは出す)。
     書けなければ WARN `PROPOSALS_FILE_FAILED` を出し、context は report.md を案内する (通知は続ける。終了コードは変えない)
-  - 提案が入らなければ「ほか N 件の提案は waf-proposals.md」。観察と COUNT のルールは合わせて 10 行まで
+  - 提案が入らなければ「ほか N 件の提案は waf-proposals.md」。観察・Challenge / CAPTCHA の状況・COUNT のルールは合わせて 10 行まで
+  - ADR 0028 の種類: `challenge_on_app_path` = 「正規の画面に Challenge / CAPTCHA — `ルール` が GET /x で Challenge 160 件 / 7 日・解かれた 80%」、
+    「→ このパスを `ルール` の対象から外す (scope-down) か条件を絞る」(BLOCK に変えることは勧めない)。
+    `challenge_impact` (observation) は「*Challenge / CAPTCHA*」の節に 1 ルール 1 行 (「`ルール` Challenge 900 件・解かれた 5%・GET 以外 40」。割合は解釈しない)
 - 静か (`on_quiet: short`): header `✅ arata <profile> — <name>` と 1 行。入力の問題: header `⚠️ arata の出力が無いか古い — <name>`、理由・code・入力のパス
 - `--dry-run`: `--format text` (既定) は人が読む簡易表示 (`[通知] <text>`、header は `# `、divider は `---`、context は `(小) `、fields は ` | ` でつなぐ)。
   `--format json` は Webhook に送る payload そのもの。`--format` は `--dry-run` のときだけ指定できる

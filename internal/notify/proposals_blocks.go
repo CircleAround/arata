@@ -31,7 +31,13 @@ var proposalKindLabels = map[string]string{
 	"rate_limit_loose":   "レート制限が緩い",
 	"rate_limit_tight":   "レート制限が厳しい",
 	"unused_rule":        "一致していないルール",
+	// ADR 0028
+	"challenge_on_app_path": "正規の画面に Challenge / CAPTCHA",
+	"challenge_impact":      "Challenge / CAPTCHA の状況",
 }
+
+// aboutChallengeImpact は Challenge / CAPTCHA の状況 (observation の about。ADR 0028)。COUNT のルールの状況と同じく 1 ルール 1 行で出す。
+const aboutChallengeImpact = "challenge_impact"
 
 var observationReasonLabels = map[string]string{
 	"below_threshold":    "閾値未満",
@@ -113,6 +119,26 @@ func proposalNumbers(kind string, p schema.Proposal) (head, basis string) {
 			withUnit(evNum(p, "max_per_5min"), "観測の最大 %s"))
 		basis = joinNonEmptyWith("・", withUnit(evNum(p, "p99_per_5min"), "p99 %s"), withUnit(evNum(p, "proposed_limit"), "提案 limit %s"),
 			withUnit(Escape(fmt.Sprint(p.Evidence["path_group"])), "パスの群 %s"))
+	case "challenge_on_app_path":
+		target := code(ruleName(p))
+		if p.Path != "" {
+			target += " が " + Escape(strings.TrimSpace(p.Method+" "+p.Path)) + " で"
+		}
+		head = joinNonEmptyWith("・", joinNonEmptyWith(" ", target, challengeKind(p)+withUnit(evNum(p, "issued"), " %s 件")+withUnit(days, " / %s 日")), solveRatio(p))
+		basis = joinNonEmptyWith("・", withUnit(evNum(p, "distinct_ips_max_per_day"), "IP 最大 %s/日"), withUnit(Escape(p.WebACL), "ACL %s"))
+	case aboutChallengeImpact:
+		head = joinNonEmptyWith("・", code(ruleName(p))+" "+challengeKind(p)+withUnit(evNum(p, "issued"), " %s 件"), solveRatio(p),
+			withUnit(evNum(p, "issued_non_get"), "GET 以外 %s"))
+		paths, _ := p.Evidence["paths"].([]any)
+		var ps []string
+		for i, x := range paths {
+			if i == maxListItems {
+				ps = append(ps, fmt.Sprintf("ほか %d", len(paths)-maxListItems))
+				break
+			}
+			ps = append(ps, Escape(fmt.Sprint(x)))
+		}
+		basis = strings.Join(ps, "・")
 	case "unused_rule":
 		head = joinNonEmptyWith(" ", code(ruleName(p)), withUnit(evNum(p, "days_without_match"), "%s 日一致なし"))
 		action, _ := p.Evidence["action"].(string)
@@ -121,6 +147,28 @@ func proposalNumbers(kind string, p schema.Proposal) (head, basis string) {
 		basis = evidenceText(p)
 	}
 	return head, basis
+}
+
+// challengeKind は evidence の kind (challenge / captcha) の表示。
+func challengeKind(p schema.Proposal) string {
+	switch k, _ := p.Evidence["kind"].(string); strings.ToLower(k) {
+	case "challenge":
+		return "Challenge"
+	case "captcha":
+		return "CAPTCHA"
+	case "":
+		return "Challenge / CAPTCHA"
+	default:
+		return Escape(k)
+	}
+}
+
+// solveRatio は「解かれた 80%」(無ければ空)。
+func solveRatio(p schema.Proposal) string {
+	if v, ok := p.Evidence["solve_ratio"].(float64); ok {
+		return fmt.Sprintf("解かれた %.0f%%", v*100)
+	}
+	return ""
 }
 
 var pathCount = regexp.MustCompile(`\s*\((\d+) 件\)$`)
@@ -139,6 +187,8 @@ func ruleNext(p schema.Proposal) string {
 		return "limit " + Escape(limit) + " への見直しを検討する"
 	case "unused_rule":
 		return "残す理由を確かめる (削除は勧めない)"
+	case "challenge_on_app_path":
+		return "このパスを " + code(ruleName(p)) + " の対象から外す (scope-down) か条件を絞る"
 	}
 	if s, ok := stageLabels[p.Stage]; ok {
 		return s
@@ -150,6 +200,16 @@ func ruleNext(p schema.Proposal) string {
 func observationShortLines(obs, status []schema.Proposal) []string {
 	var lines []string
 	n, shown := len(obs)+len(status), 0
+	var challenge []schema.Proposal
+	var others []schema.Proposal
+	for _, p := range obs {
+		if p.About == aboutChallengeImpact {
+			challenge = append(challenge, p)
+		} else {
+			others = append(others, p)
+		}
+	}
+	obs = others
 	if len(obs) > 0 {
 		lines = append(lines, "*観察* (提案はしないが気づいたこと)")
 		for _, p := range obs {
@@ -162,6 +222,17 @@ func observationShortLines(obs, status []schema.Proposal) []string {
 				reason = p.Reason
 			}
 			lines = append(lines, fmt.Sprintf("• %s (%s)%s", Escape(kindLabel(p.About)), Escape(reason), withUnit(head, " — %s")))
+			shown++
+		}
+	}
+	if len(challenge) > 0 && shown < maxObservationLines {
+		lines = append(lines, "*Challenge / CAPTCHA* (提案ではない。解かれた割合は解釈せず数字だけ)")
+		for _, p := range challenge {
+			if shown == maxObservationLines {
+				break
+			}
+			head, _ := proposalNumbers(aboutChallengeImpact, p)
+			lines = append(lines, "• "+head)
 			shown++
 		}
 	}

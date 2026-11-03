@@ -50,6 +50,6 @@
 | [0024](0024-aratam-waf-proposals.md) | aratam は WAF の修正提案の候補を 2 通目として通常用に送り、LLM には候補だけを渡して書き起こさせる (アプリの事情は `llm.context_file`) | 採用 |
 | [0025](0025-check-playbooks.md) | チェックごとの対処手順 (playbook) を `docs/ai/playbooks/<check>.md` としてバイナリに埋め込み、全チェックに必須にする | 採用 |
 | [0026](0026-defense-evasion-public-exposure.md) | 監査・検知の無効化 (`defense_evasion`) と公開設定の変更 (`public_exposure`) を、CloudTrail の注目イベントと要求の内容だけで判定する | 採用 |
-| [0028](0028-waf-resources-challenge-cost.md) | WAF の分析を資源で絞り、Challenge / CAPTCHA の影響を「解かれた割合」で評価し、Insights の費用を doctor で見積もる | 採用 |
 | [0027](0027-principal-new-source-secret-access.md) | 既知の主体の初めての送信元・リージョン (`principal_new_source`) と秘匿値の読み取りの異常 (`secret_access`) を、CloudTrail の主体の活動の日次集計と注目イベントで判定する | 採用 |
+| [0028](0028-waf-resources-challenge-cost.md) | WAF の分析を資源で絞り、Challenge / CAPTCHA の影響を「解かれた割合」で評価し、Insights の費用を doctor で見積もる | 採用 |
 | [0029](0029-aratam-block-kit.md) | aratam の Slack 通知を Block Kit にし、同じチェックの指摘は規則でまとめ、LLM は要約と「→ 何をするか」だけを書く | 採用 |
