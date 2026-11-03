@@ -9,6 +9,7 @@ import (
 
 	"github.com/CircleAround/arata/internal/collect"
 	"github.com/CircleAround/arata/internal/collect/cloudtrail/cloudtrailtest"
+	"github.com/CircleAround/arata/internal/collect/cwlogs/cwlogstest"
 	"github.com/CircleAround/arata/internal/store"
 )
 
@@ -125,5 +126,36 @@ func TestInitInterrupted(t *testing.T) {
 	res, err = e.Init(context.Background(), InitOptions{Resume: true})
 	if err != nil || !res.Complete {
 		t.Fatalf("%+v %v", res, err)
+	}
+}
+
+// 作ったばかりのロググループをソースにして init しても、作成より前の日は「データなし」として進み、止まらない。
+func TestInitLogGroupCreatedRecently(t *testing.T) {
+	h := newHarnessWith(t, nginxSource, "")
+	ctx := context.Background()
+	h.logs.Groups = map[string]cwlogstest.Group{"/app/nginx": {Created: h.now.Add(-time.Hour)}}
+	h.logs.Now = func() time.Time { return h.now }
+	h.logs.On("as lines_total", cwlogstest.Response{Rows: []map[string]string{cwlogstest.Rows("day", "2026-10-21 00:00:00.000", "lines_total", "10", "lines_matched", "10")}})
+	e := h.open(t)
+	res, err := e.Init(ctx, InitOptions{Window: 3 * 24 * time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Complete || len(res.SourcesFailed) != 0 {
+		t.Fatalf("init must finish: %+v", res)
+	}
+	r, _ := e.Store().LastRun(ctx, InitProfile, nil)
+	oor, _ := r.Stats["logs_out_of_range"].(map[string]any)
+	days, _ := oor["web"].([]any)
+	if r.Status != "ok" || len(days) != 3 || days[0] != "2026-10-18" || days[2] != "2026-10-20" {
+		t.Fatalf("skipped days must be recorded: %+v", r.Stats)
+	}
+	// 飛ばした日は metrics を持たない (min_baseline_days の「データのある日」に数えない)
+	ms, _ := e.Store().Metrics(ctx, store.MetricFilter{Metric: "lines_total"})
+	if len(ms) != 1 || ms[0].Date != "2026-10-21" {
+		t.Fatalf("metrics: %+v", ms)
+	}
+	if codes := h.logCodes(t); len(codes) != 0 {
+		t.Fatalf("no error codes: %v", codes)
 	}
 }

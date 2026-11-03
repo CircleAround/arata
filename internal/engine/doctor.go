@@ -199,6 +199,7 @@ func (d *doctor) logs(ctx context.Context, src config.Source) {
 		return
 	}
 	c.Logger = d.deps.Logger
+	c.Now = func() time.Time { return d.now }
 	if d.deps.Sleep != nil {
 		c.Sleep = d.deps.Sleep
 	}
@@ -210,7 +211,10 @@ func (d *doctor) logs(ctx context.Context, src config.Source) {
 	}
 	found := false
 	for _, g := range out.LogGroups {
-		found = found || aws.ToString(g.LogGroupName) == src.LogGroup
+		if aws.ToString(g.LogGroupName) == src.LogGroup {
+			found = true
+			c.SetLogGroup(g) // 作成時刻と保持期間で問い合わせ範囲を判定する (cwlogs.queryRange)
+		}
 	}
 	if !found {
 		d.add(src, "log_group", DoctorNG, collect.CodeLogGroupMissing, src.LogGroup+" が "+src.Regions[0]+" に無い")

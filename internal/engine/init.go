@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/CircleAround/arata/internal/collect"
+	"github.com/CircleAround/arata/internal/record"
 	"github.com/CircleAround/arata/internal/report"
 	"github.com/CircleAround/arata/internal/store"
 )
@@ -150,6 +151,7 @@ func (e *Engine) Init(ctx context.Context, o InitOptions) (*InitResult, error) {
 		for _, s := range cr.SourcesOK {
 			sourcesOK[s] = true
 		}
+		addOutOfRange(stats, cr.outOfRange, w.From)
 		res.ChunksDone++
 		res.DoneUntil = w.To
 		stats["chunks_done"] = res.ChunksDone
@@ -179,6 +181,32 @@ func (e *Engine) Init(ctx context.Context, o InitOptions) (*InitResult, error) {
 	}
 	e.log.Info("init finished", "run_id", run.ID, "status", "ok", "records", res.Records, "chunks", res.ChunksTotal)
 	return res, nil
+}
+
+// addOutOfRange は、範囲がロググループの作成前 / 保持期間外で問い合わせなかった日を stats["logs_out_of_range"] (ソース → 日付の配列) に足す。
+// 決定: report.json のスキーマは変えず、init の run の記録とログ (INFO) にだけ残す。daily などの run は窓の終わりが今なので該当しない。
+func addOutOfRange(stats map[string]any, oor map[string]string, day time.Time) {
+	if len(oor) == 0 {
+		return
+	}
+	m, _ := stats["logs_out_of_range"].(map[string]any)
+	if m == nil {
+		m = map[string]any{}
+	}
+	d := day.UTC().Format(record.DateLayout)
+	for src := range oor {
+		var days []any
+		switch l := m[src].(type) {
+		case []any:
+			days = l
+		case []string:
+			for _, s := range l {
+				days = append(days, s)
+			}
+		}
+		m[src] = append(days, d)
+	}
+	stats["logs_out_of_range"] = m
 }
 
 // formatTotals は日ごとの解釈率を合算して解釈率を計算し直す。

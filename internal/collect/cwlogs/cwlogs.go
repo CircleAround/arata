@@ -2,6 +2,7 @@ package cwlogs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -54,10 +55,24 @@ type Collector struct {
 	Sleep   func(ctx context.Context, d time.Duration) error
 	Logger  *slog.Logger
 	MaxWait time.Duration
+	// Now は保持期間の判定に使う今。
+	Now func() time.Time
 
 	stats   *collect.FormatStats
 	scanned float64
+	// group はロググループの作成時刻と保持期間 (DescribeLogGroups から 1 回だけ引く。取れなければ nil で範囲を判定しない)。
+	group       *types.LogGroup
+	groupLoaded bool
 }
+
+// 問い合わせ範囲が Insights に拒否される理由 (FormatStats.OutOfRange)。
+const (
+	OutOfRangeBeforeCreation = "before_log_group_creation"
+	OutOfRangeRetention      = "beyond_retention"
+)
+
+// ErrOutOfRange は問い合わせの終わりがロググループの作成時刻より前、または保持期間より古いため問い合わせなかったことを表す。
+var ErrOutOfRange = errors.New("query range is outside the log group's lifetime")
 
 var (
 	_ collect.Collector      = (*Collector)(nil)
@@ -70,7 +85,7 @@ func New(src config.Source, checks config.Checks, api API) (*Collector, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Collector{src: src, prof: p, aggs: Aggregates(p.Yields, checks), api: api, Sleep: sleepFor,
+	return &Collector{src: src, prof: p, aggs: Aggregates(p.Yields, checks), api: api, Sleep: sleepFor, Now: time.Now,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), MaxWait: DefaultMaxWait}, nil
 }
 
@@ -90,6 +105,62 @@ func (c *Collector) Yields() []record.Kind   { return []record.Kind{c.prof.Yield
 func (c *Collector) Profile() Profile        { return c.prof }
 func (c *Collector) Aggregates() []Aggregate { return c.aggs }
 
+// SetLogGroup は DescribeLogGroups で引き済みのロググループを渡す (doctor が同じ API を 2 回呼ばないため)。
+func (c *Collector) SetLogGroup(g types.LogGroup) {
+	c.group, c.groupLoaded = &g, true
+}
+
+// loadGroup はロググループの作成時刻と保持期間を引く。失敗・見つからないときは WARN を出し、範囲を判定しない (従来どおり問い合わせる)。
+func (c *Collector) loadGroup(ctx context.Context) {
+	if c.groupLoaded {
+		return
+	}
+	c.groupLoaded = true
+	// 名前の前方一致で引くと、完全一致の名前は最も短いので名前順の先頭のページに入る
+	out, err := c.api.DescribeLogGroups(ctx, &cwl.DescribeLogGroupsInput{LogGroupNamePrefix: aws.String(c.src.LogGroup)})
+	if err != nil {
+		c.Logger.Warn("failed to describe log group; querying without range check", "source", c.src.ID, "log_group", c.src.LogGroup,
+			"action", ActionDescribeLogGroups, "error", err.Error())
+		return
+	}
+	for _, g := range out.LogGroups {
+		if aws.ToString(g.LogGroupName) == c.src.LogGroup {
+			g := g
+			c.group = &g
+			return
+		}
+	}
+	c.Logger.Warn("log group not found by DescribeLogGroups; querying without range check", "source", c.src.ID, "log_group", c.src.LogGroup)
+}
+
+// queryRange は [from, to) を Insights が受け付ける範囲にする。
+//
+// 決定: Insights は問い合わせの終わり (EndTime) がロググループの作成時刻より前、または保持期間 (今 - retentionInDays) より古いと
+// MalformedQueryException で拒否する。始まりがそれより前でも終わりが範囲内なら受理される (2026-11 に実 AWS で確認)。
+// そこで判定は終わりだけで行い、外れていれば reason を返して問い合わせない (データなし。エラーにしない)。
+// 始まりは作成時刻までは寄せる (作成前のデータは無いので結果は同じ)。保持期間の境界には寄せない
+// (日次集計は後の値で置き換えるので、日の頭を寄せると完全な日の値を一部だけの値で上書きし得る)。
+func (c *Collector) queryRange(ctx context.Context, from, to time.Time) (time.Time, string) {
+	c.loadGroup(ctx)
+	if c.group == nil {
+		return from, ""
+	}
+	end := time.Unix(to.Unix()-1, 0) // start() の EndTime と同じ
+	if ms := aws.ToInt64(c.group.CreationTime); ms > 0 {
+		created := time.UnixMilli(ms)
+		if end.Before(created) {
+			return from, OutOfRangeBeforeCreation
+		}
+		if from.Before(created) {
+			from = created
+		}
+	}
+	if days := aws.ToInt32(c.group.RetentionInDays); days > 0 && end.Before(c.Now().Add(-time.Duration(days)*24*time.Hour)) {
+		return from, OutOfRangeRetention
+	}
+	return from, ""
+}
+
 // FormatStats は直近の Collect で計測した解釈率。計測前なら nil。
 func (c *Collector) FormatStats() *collect.FormatStats { return c.stats }
 
@@ -108,6 +179,13 @@ func (c *Collector) Collect(ctx context.Context, w collect.Window, sink collect.
 	from, to := DayStart(w.Start()), w.To
 	c.scanned = 0
 	c.stats = &collect.FormatStats{Source: c.src.ID, Format: c.src.Format, LogGroup: c.src.LogGroup, Expected: c.src.ExpectedMatchRate}
+	from, reason := c.queryRange(ctx, from, to)
+	if reason != "" {
+		c.stats.OutOfRange = reason
+		c.Logger.Info("query range is outside the log group's lifetime; treating as no data", "source", c.src.ID, "log_group", c.src.LogGroup,
+			"reason", reason, "from", from.Format(time.RFC3339), "to", to.Format(time.RFC3339))
+		return nil
+	}
 	rows, err := c.Query(ctx, LinesQuery(c.prof), from, to)
 	c.stats.BytesScanned = c.scanned
 	if err != nil {
@@ -190,7 +268,13 @@ func (c *Collector) mismatch(ctx context.Context, from, to time.Time, rate float
 
 // Query は Insights クエリを 1 本流し、結果の行 (フィールド名 → 値、@ptr は除く) を返す。
 // 同時実行上限は待って再試行し、それでも駄目なら QUERY_LIMIT。スキャン量が max_scan_gb を超えたら StopQuery して QUERY_LIMIT。
+//
+// 範囲がロググループの作成前 / 保持期間外なら問い合わせず ErrOutOfRange を返す (queryRange)。
 func (c *Collector) Query(ctx context.Context, query string, from, to time.Time) ([]map[string]string, error) {
+	from, reason := c.queryRange(ctx, from, to)
+	if reason != "" {
+		return nil, fmt.Errorf("%w (%s)", ErrOutOfRange, reason)
+	}
 	id, err := c.start(ctx, query, from, to)
 	if err != nil {
 		return nil, err
@@ -325,7 +409,12 @@ func num(s string) float64 {
 func round(f float64) float64 { return math.Round(f*1000) / 1000 }
 
 // Validate はクエリを StartQuery して直ちに StopQuery する。Insights の構文検査と StartQuery / StopQuery の権限だけを確かめる (doctor 用)。
+// 範囲がロググループの作成前 / 保持期間外なら検査できないので ErrOutOfRange を返す。
 func (c *Collector) Validate(ctx context.Context, query string, from, to time.Time) error {
+	from, reason := c.queryRange(ctx, from, to)
+	if reason != "" {
+		return fmt.Errorf("%w (%s)", ErrOutOfRange, reason)
+	}
 	id, err := c.start(ctx, query, from, to)
 	if err != nil {
 		return err

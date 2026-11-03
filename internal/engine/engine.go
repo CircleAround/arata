@@ -251,6 +251,8 @@ type CollectResult struct {
 	unavailable map[record.Kind]string
 	// partialItems は一部の項目が取れなかったソースがある (posture の権限不足など。終了コード 3)。
 	partialItems bool
+	// outOfRange は範囲がロググループの作成前 / 保持期間外で問い合わせなかったソースと理由 (データなしとして成功扱い)。
+	outOfRange map[string]string
 }
 
 func (r CollectResult) partial() bool { return len(r.SourcesFailed) > 0 || r.partialItems }
@@ -280,7 +282,7 @@ func (e *Engine) Collect(ctx context.Context, w collect.Window, o CollectOptions
 		w.CollectedAt = e.deps.Now()
 	}
 	res := CollectResult{SourcesOK: []string{}, SourcesFailed: []string{}, Errors: []report.CollectError{}, Formats: []report.FormatCoverage{},
-		yielded: map[string][]record.Kind{}, attempted: map[string]bool{}, unavailable: map[record.Kind]string{}}
+		yielded: map[string][]record.Kind{}, attempted: map[string]bool{}, unavailable: map[record.Kind]string{}, outOfRange: map[string]string{}}
 	want := map[string]bool{}
 	for _, id := range o.SourceIDs {
 		want[id] = true
@@ -317,6 +319,9 @@ func (e *Engine) Collect(ctx context.Context, w collect.Window, o CollectOptions
 			err = c.Collect(ctx, sw, sink)
 			res.Records += n
 			if fr, ok := c.(collect.FormatReporter); ok && fr.FormatStats() != nil {
+				if r := fr.FormatStats().OutOfRange; r != "" {
+					res.outOfRange[src.ID] = r
+				}
 				res.Formats = append(res.Formats, e.formatCoverage(ctx, *fr.FormatStats(), err, o.RunID))
 			}
 			if err == nil {
@@ -446,6 +451,7 @@ func (e *Engine) collector(ctx context.Context, src config.Source) (collect.Coll
 		if e.deps.Sleep != nil {
 			c.Sleep = e.deps.Sleep
 		}
+		c.Now = e.deps.Now
 		c.Logger = e.log
 		return c, nil
 	case config.KindCloudTrailLookup:
