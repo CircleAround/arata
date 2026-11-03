@@ -185,6 +185,7 @@ LookupEvents は毎秒 2 リクエストが上限なので、7 日分で数時�
 
 func newDoctorCmd(d *Deps, g *globalFlags) *subcmd.Command {
 	var window, format string
+	var measureScan bool
 	cmd := &subcmd.Command{
 		Use:   "doctor",
 		Short: "権限・ロググループ・形式プロファイルの解釈率を検査する (問題があれば終了コード 2)",
@@ -194,7 +195,9 @@ func newDoctorCmd(d *Deps, g *globalFlags) *subcmd.Command {
   - log_group   ロググループがあるか (LOG_GROUP_MISSING)
   - match_rate  直近 100 行を形式プロファイルで解釈できた割合 (閾値未満なら FORMAT_MISMATCH)
   - queries     集計クエリのテンプレートを Logs Insights が受理するか (QUERY_INVALID。regex の方言違いもここで分かる)
-  - check       必要なレコードを出すソースが無く skip されるチェック (warn)`,
+  - check       必要なレコードを出すソースが無く skip されるチェック (warn)
+  - cost        wafv2 のソースの Logs Insights の費用の概算。max_scan_gb が無ければ warn (--measure-scan で 1 日のスキャン量を実測)
+  - resources   wafv2 のソースの resources が、ログの宛先が同じ WebACL の資源に見当たるか (warn)`,
 		Run: func(ctx context.Context, _ []string) error {
 			w, err := config.ParseDuration(window)
 			if err != nil {
@@ -205,7 +208,7 @@ func newDoctorCmd(d *Deps, g *globalFlags) *subcmd.Command {
 			if err != nil {
 				return err
 			}
-			res := engine.Doctor(ctx, cfg, d.Engine, w)
+			res := engine.Doctor(ctx, cfg, d.Engine, w, engine.DoctorOptions{MeasureScan: measureScan})
 			switch format {
 			case "table":
 				err = res.WriteTable(d.Stdout)
@@ -230,6 +233,7 @@ func newDoctorCmd(d *Deps, g *globalFlags) *subcmd.Command {
 	}
 	cmd.StringVar(&window, "window", "24h", "解釈率のサンプル (直近 100 行) を探す期間")
 	cmd.StringVar(&format, "format", "table", "出力形式 (table|json)")
+	cmd.BoolVar(&measureScan, "measure-scan", false, "wafv2 のソースの 1 日のスキャン量を直近 24h の集計で実測する (1 日分のスキャンの費用がかかる)")
 	return cmd
 }
 

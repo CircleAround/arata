@@ -67,9 +67,12 @@ func (r *DoctorResult) Problems() bool {
 //
 // 決定: 集計クエリのテンプレートは StartQuery して直ちに StopQuery し、Insights の構文検査 (MalformedQueryException) だけを受ける。
 // スキャンはほぼ発生しない。
-func Doctor(ctx context.Context, cfg *config.Config, deps Deps, window time.Duration) *DoctorResult {
+func Doctor(ctx context.Context, cfg *config.Config, deps Deps, window time.Duration, opts ...DoctorOptions) *DoctorResult {
 	deps.fill(cfg)
 	d := &doctor{cfg: cfg, deps: deps, now: deps.Now(), window: window, res: &DoctorResult{Rows: []DoctorRow{}}}
+	if len(opts) > 0 {
+		d.opts = opts[0]
+	}
 	d.allowlist()
 	actions := map[string]bool{}
 	for _, src := range cfg.Sources {
@@ -109,7 +112,15 @@ func Doctor(ctx context.Context, cfg *config.Config, deps Deps, window time.Dura
 	return d.res
 }
 
+// DoctorOptions は doctor の任意の動き。
+type DoctorOptions struct {
+	// MeasureScan は wafv2 のソースの 1 日のスキャン量を、直近 24h に解釈率の集計 (stats) を流して実測する (1 日分のスキャンの費用がかかる)。
+	// false なら解釈率のサンプルのクエリのスキャン量から推定する (追加の費用なし。ADR 0028)。
+	MeasureScan bool
+}
+
 type doctor struct {
+	opts   DoctorOptions
 	cfg    *config.Config
 	deps   Deps
 	now    time.Time
@@ -261,6 +272,10 @@ func (d *doctor) logs(ctx context.Context, src config.Source) {
 		d.addErr(src, "match_rate", err)
 	} else {
 		d.matchRate(src, prof, rows)
+	}
+	if prof.Yields == record.KindWAFAction {
+		d.wafCost(ctx, src, c)
+		d.wafResources(ctx, src)
 	}
 }
 

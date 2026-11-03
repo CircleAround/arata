@@ -1,0 +1,220 @@
+package engine
+
+import (
+	"context"
+	"fmt"
+	"math"
+	"regexp"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/CircleAround/arata/internal/collect"
+	"github.com/CircleAround/arata/internal/collect/cwlogs"
+	"github.com/CircleAround/arata/internal/config"
+	"github.com/CircleAround/arata/internal/record"
+)
+
+// InsightsUSDPerGB は Logs Insights のスキャン量の単価 (ap-northeast-1、USD/GB)。doctor の費用の概算に使う。
+// 決定 (ADR 0028): 単価はリージョンで違い、改定もあるので設定にはせず、表示に「東京の単価」と明記する (概算であることを示す)。
+const InsightsUSDPerGB = 0.0076
+
+// maxScanMargin は max_scan_gb の推奨値を 1 回の見積もりの何倍にするか (日による量の揺れの余裕)。
+const maxScanMargin = 1.5
+
+// wafCost は wafv2 のソースの Insights の費用を見積もり、max_scan_gb が無ければ warn にする (ADR 0028)。
+//
+// 決定:
+//   - 1 日のログの量は、解釈率のサンプルのクエリ (直近 --window) のスキャン量から推定する (追加の費用なし)。
+//     --measure-scan なら直近 24h に解釈率の集計 (stats) を流して実測する (1 日分のスキャンの費用がかかる)
+//   - 1 回の run のスキャン = 1 日の量 × 範囲の日数 × クエリの本数。範囲は窓 + ingest_delay + 日の頭への寄せ (最大 24h) で、上限側で見積もる
+//   - プロファイルごとに、wafv2 を引くプロファイル (チェックが waf_action を必要とする) だけを、1 日の run 数 (24h / 窓) を掛けて足す
+func (d *doctor) wafCost(ctx context.Context, src config.Source, c *cwlogs.Collector) {
+	var daily float64
+	how := ""
+	if d.opts.MeasureScan {
+		before := c.Scanned()
+		if _, err := c.Query(ctx, cwlogs.LinesQuery(c.Profile()), d.now.Add(-24*time.Hour), d.now); err != nil {
+			d.addErr(src, "cost", err)
+			return
+		}
+		daily, how = c.Scanned()-before, "直近 24h に解釈率の集計を流した実測"
+	} else if d.window > 0 {
+		daily = c.Scanned() * float64(24*time.Hour) / float64(d.window)
+		how = fmt.Sprintf("解釈率のサンプルのクエリの直近 %s のスキャン量から推定。少なく出る疑いがあれば --measure-scan で実測する", d.window)
+	}
+	n := c.QueryCount()
+	var parts []string
+	perRunMax, perDayUSD := 0.0, 0.0
+	for _, name := range sortedProfiles(d.cfg) {
+		prof := d.cfg.Profiles[name]
+		if !d.profileNeeds(prof, record.KindWAFAction) || prof.Window <= 0 {
+			continue
+		}
+		span := prof.Window + src.IngestDelay + 24*time.Hour
+		perRun := daily / 1e9 * span.Hours() / 24 * float64(n)
+		runs := math.Max(1, math.Floor(float64(24*time.Hour)/float64(prof.Window)))
+		perRunMax = math.Max(perRunMax, perRun)
+		perDayUSD += perRun * runs * InsightsUSDPerGB
+		parts = append(parts, fmt.Sprintf("%s: 1 回最大 %.2f GB (クエリ %d 本 × 範囲最大 %.1f 時間) × 1 日 %.0f 回", name, perRun, n, span.Hours(), runs))
+	}
+	detail := fmt.Sprintf("1 日のログ 約 %.2f GB (%s)", daily/1e9, how)
+	if len(parts) == 0 {
+		detail += "。wafv2 を引くプロファイルが無い"
+	} else {
+		detail += "。" + strings.Join(parts, "、") + fmt.Sprintf(" → 約 %.2f USD/日・%.2f USD/30 日 (Logs Insights の東京の単価 %.4f USD/GB)", perDayUSD, perDayUSD*30, InsightsUSDPerGB)
+	}
+	status := DoctorOK
+	switch {
+	case src.MaxScanGB <= 0:
+		status = DoctorWarn
+		detail += "。max_scan_gb が未設定: WAF のような大きなロググループでは必ず設定する"
+		if perRunMax > 0 {
+			detail += fmt.Sprintf(" (推奨 %.0f)", math.Ceil(perRunMax*maxScanMargin))
+		}
+	case perRunMax > src.MaxScanGB:
+		status = DoctorWarn
+		detail += fmt.Sprintf("。max_scan_gb %.0f が 1 回の見積もり %.2f GB より小さい: 集計が QUERY_LIMIT で欠けることがある (推奨 %.0f)", src.MaxScanGB, perRunMax, math.Ceil(perRunMax*maxScanMargin))
+	default:
+		detail += fmt.Sprintf("。max_scan_gb %.0f", src.MaxScanGB)
+	}
+	d.add(src, "cost", status, "", detail)
+}
+
+func sortedProfiles(cfg *config.Config) []string {
+	out := make([]string, 0, len(cfg.Profiles))
+	for n := range cfg.Profiles {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// profileNeeds はプロファイルのチェックが k を収集させるか (保存済みだけを読む StoredNeeds は数えない)。
+func (d *doctor) profileNeeds(prof config.Profile, k record.Kind) bool {
+	for _, name := range prof.ExpandChecks(d.deps.Registry.Defaults()) {
+		if c, ok := d.deps.Registry.Get(name); ok {
+			for _, n := range c.Needs() {
+				if n == k {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// wafResources は wafv2 のソースの resources を、ログの宛先がこのロググループの WebACL の資源 (ListResourcesForWebACL) と突き合わせる (ADR 0028)。
+//
+// 決定:
+//   - waf-config のソースが設定に無くても、wafv2 のソースのリージョンで waf-config の collector を一時的に作って読む (読み取りだけ)
+//   - ログの httpSourceId と資源の ARN の対応は公式文書の説明と例で食い違う (ALB は load-balancer-id、API Gateway は説明が api-id で
+//     例が <アカウント>:<api-id>:<ステージ>)。両方の形を候補にして照合し、どれにも当たらなければ warn (照合は推定なので ng にしない)
+func (d *doctor) wafResources(ctx context.Context, src config.Source) {
+	if len(src.Resources) == 0 {
+		return
+	}
+	e := &Engine{cfg: d.cfg, deps: d.deps, log: d.deps.Logger}
+	wsrc := config.Source{ID: src.ID, Kind: config.KindWAFConfig, Regions: src.Regions}
+	c, err := e.collector(ctx, wsrc)
+	if err != nil {
+		d.add(src, "resources", DoctorWarn, "", "WebACL の資源を読めない: "+err.Error())
+		return
+	}
+	var items []record.SnapshotItem
+	sink := collect.SinkFunc(func(_ context.Context, rec record.Record) error {
+		switch it := rec.(type) {
+		case record.SnapshotItem:
+			items = append(items, it)
+		case *record.SnapshotItem:
+			items = append(items, *it)
+		}
+		return nil
+	})
+	if err := c.Collect(ctx, collect.Window{From: d.now.Add(-time.Hour), To: d.now}, sink); err != nil {
+		ce := collect.Classify(src.ID, "", err)
+		d.add(src, "resources", DoctorWarn, "", "WebACL の資源を読めない (waf-config と同じ wafv2 の読み取りが要る): "+ce.Err.Error())
+		return
+	}
+	var acls, unknown []string
+	candidates := map[string]bool{}
+	for _, it := range items {
+		if it.String("item") != "web_acl" || !contains(strings.Split(it.String("log_destinations"), ","), src.LogGroup) {
+			continue
+		}
+		acls = append(acls, it.String("acl"))
+		account := arnAccount(it.String("arn"))
+		for _, arn := range strings.Split(it.String("resources"), ",") {
+			for _, id := range sourceIDCandidates(arn, account) {
+				candidates[id] = true
+			}
+		}
+		if u := it.String("resources_unknown"); u != "" {
+			unknown = append(unknown, u)
+		}
+	}
+	if len(acls) == 0 {
+		d.add(src, "resources", DoctorWarn, "", "ログの宛先が "+src.LogGroup+" の WebACL が見つからない ("+strings.Join(src.Regions, ",")+")。resources を突き合わせられない")
+		return
+	}
+	var missing []string
+	for _, pat := range src.Resources {
+		re := regexp.MustCompile("^" + strings.NewReplacer(`\*`, ".*", `\?`, ".").Replace(regexp.QuoteMeta(pat)) + "$")
+		found := false
+		for id := range candidates {
+			if re.MatchString(id) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			missing = append(missing, pat)
+		}
+	}
+	detail := "WebACL " + strings.Join(acls, ", ")
+	if len(unknown) > 0 {
+		detail += " (読めなかった資源の種類: " + strings.Join(unknown, "; ") + ")"
+	}
+	if len(missing) > 0 {
+		d.add(src, "resources", DoctorWarn, "", "resources の "+strings.Join(missing, ", ")+" が "+detail+" の資源に見当たらない "+
+			"(ログの httpSourceId の形は推定で照合している。doctor の解釈率のサンプルか Insights で httpSourceId を確かめる)")
+		return
+	}
+	d.add(src, "resources", DoctorOK, "", "resources がすべて "+detail+" の資源に一致")
+}
+
+// arnAccount は ARN のアカウント ID (5 番目の欄)。
+func arnAccount(arn string) string {
+	parts := strings.SplitN(arn, ":", 6)
+	if len(parts) < 6 {
+		return ""
+	}
+	return parts[4]
+}
+
+// sourceIDCandidates は資源の ARN から、WAF のログの httpSourceId になり得る値を作る (公式文書の説明と例の両方の形)。
+func sourceIDCandidates(arn, account string) []string {
+	if arn == "" {
+		return nil
+	}
+	out := []string{arn}
+	_, res, _ := strings.Cut(arn, ":loadbalancer/")
+	switch {
+	case res != "": // ALB: loadbalancer/app/<name>/<id>
+		segs := strings.Split(res, "/")
+		if len(segs) == 3 {
+			out = append(out, segs[2], segs[1]+"/"+segs[2], res, account+"-"+res)
+		}
+	case strings.Contains(arn, ":apigateway:"): // REST API: /restapis/<api-id>/stages/<stage>
+		segs := strings.Split(arn, "/")
+		if len(segs) >= 5 && segs[1] == "restapis" && segs[3] == "stages" {
+			api, stage := segs[2], segs[4]
+			out = append(out, api, api+":"+stage, account+":"+api+":"+stage)
+		}
+	default:
+		if i := strings.LastIndex(arn, "/"); i >= 0 {
+			out = append(out, arn[i+1:])
+		}
+	}
+	return out
+}
