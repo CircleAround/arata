@@ -31,6 +31,7 @@ func (r *Report) Markdown() string {
 	if len(r.Info) > 0 {
 		section(&b, "情報", r.Info, "")
 	}
+	proposals(&b, r.Proposals)
 	b.WriteString("## カバレッジ\n\n")
 	fmt.Fprintf(&b, "- 取得できたソース: %s\n", orNone(r.Coverage.SourcesOK))
 	if len(r.Coverage.SourcesFailed) == 0 {
@@ -64,6 +65,9 @@ func (r *Report) Markdown() string {
 			if f.Code != "" {
 				fmt.Fprintf(&b, " `%s`", f.Code)
 			}
+			if len(f.Truncated) > 0 {
+				fmt.Fprintf(&b, "、行の上限に当たった集計 (件数は少なめ): %s", strings.Join(f.Truncated, ", "))
+			}
 			b.WriteString("\n")
 		}
 	}
@@ -77,6 +81,56 @@ func (r *Report) Markdown() string {
 		}
 	}
 	return b.String()
+}
+
+// proposals は WAF の修正提案の候補 (waf_review) の節。候補が無い run (waf_review が走らない run) では出さない。
+func proposals(b *strings.Builder, l []Proposal) {
+	if len(l) == 0 {
+		return
+	}
+	var props, obs []Proposal
+	for _, p := range l {
+		if p.Kind == "observation" {
+			obs = append(obs, p)
+		} else {
+			props = append(props, p)
+		}
+	}
+	fmt.Fprintf(b, "## WAF の修正提案の候補 (%d)\n\n", len(props))
+	b.WriteString("arata が決まった規則で作った候補。適用するかは人が判断する (段階: count_first = まず COUNT で様子を見る、block = BLOCK に上げる、review = 見直す)。\n\n")
+	if len(props) == 0 {
+		b.WriteString("提案はありません。\n\n")
+	}
+	for _, p := range props {
+		fmt.Fprintf(b, "- **[%s / %s]** %s\n", p.Kind, p.Stage, p.Summary)
+		evidence(b, p.Evidence)
+	}
+	if len(props) > 0 {
+		b.WriteString("\n")
+	}
+	if len(obs) > 0 {
+		fmt.Fprintf(b, "### 観察 (提案なし) (%d)\n\n", len(obs))
+		for _, p := range obs {
+			fmt.Fprintf(b, "- **[%s / %s]** %s\n", p.About, p.Reason, p.Summary)
+			evidence(b, p.Evidence)
+		}
+		b.WriteString("\n")
+	}
+}
+
+func evidence(b *strings.Builder, ev map[string]any) {
+	keys := make([]string, 0, len(ev))
+	for k := range ev {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%v", k, ev[k]))
+	}
+	if len(parts) > 0 {
+		fmt.Fprintf(b, "  - 根拠: %s\n", strings.Join(parts, ", "))
+	}
 }
 
 func section(b *strings.Builder, title string, l []Finding, empty string) {
