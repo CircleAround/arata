@@ -18,7 +18,8 @@ AWS のログと設定を定期的に改め、**前回から新しく発生し�
   `credential_hygiene`, `guardduty_findings`, `posture`, `access_analyzer` (weekly)
 - ストア: `dir://` (JSONL 原本 + SQLite)
 - CLI: `config init` (推奨設定の雛形と `--diff`) / `profiles` (効いているチェックとパラメータ) / `init` (日単位の分割と `--resume`) / `doctor` / `run` / `collect` / `evaluate` / `report` (`--from --to` / `--month` で期間レポート) / `review` / `approve` / `ack` / `snooze` / `resolve` / `help ai`
-- allowlist: `principals[]` の `arn` / `account` (アカウント単位) / `arn_pattern` (glob)、`tags` は `deploy` / `ai`
+- allowlist: `principals[]` の `arn` / `account` (アカウント単位) / `arn_pattern` (glob)、`tags` は `deploy` / `ai`、`expected_denied` (access_denied で数えない想定済みの拒否。ADR 0022)
+- ack / snooze 中の finding も、重大度が上がれば changed として再報告する (ADR 0022)
 
 ## AI (LLM) から使う
 

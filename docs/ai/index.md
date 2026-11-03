@@ -86,6 +86,9 @@ principals:                       # 主体の指定は arn / account / arn_patte
     note: SaaS の監視連携
   - arn_pattern: arn:aws:iam::123456789012:role/ci-*   # glob (* は / も含む)
     expires: 2026-12-31           # 期限付き。過ぎたら expired として再報告
+  - arn: arn:aws:iam::123456789012:role/ai-investigation-readonly
+    note: 個人情報を含むロググループは IAM で Deny している
+    expected_denied: ["logs:StartQuery", "logs:Get*"]   # access_denied で数えない拒否 (サービス:操作の glob。note 必須)
 source_ips:
   - cidr: 203.0.113.0/24          # アプリ層チェックの対象外にする IP
     note: 本社

@@ -2,12 +2,39 @@
 # 外部アカウント (SaaS 役) から外部用ロールを引き受け、権限の無い読み取り API を 8 種類呼ぶ (権限の列挙の真似)。
 # ロールは権限を持たないので、どの呼び出しも拒否される。
 #
-#   SANDBOX_ACCOUNT=123456789012 EXTERNAL_PROFILE=<外部アカウントの profile> [EXTERNAL_ID=...] ./05-access-denied-enumeration.sh
+#   SANDBOX_ACCOUNT=123456789012 EXTERNAL_PROFILE=<外部アカウントの profile> [EXTERNAL_ID=...] ./05-access-denied-enumeration.sh [--apis N]
+#
+#   --apis N  呼ぶ API の種類 (既定 8、最大 24)。どれも権限の無い読み取り (List / Describe) だけで、書き込みは含めない
 #
 # arata で出るはず (daily): access_denied medium (外部用ロールの ARN、`threshold: breadth`、distinct_apis 8)。
-#   拒否の種類が既定の min_distinct_apis (5) 以上・high_distinct_apis (20) 未満なので medium。
-#   外部用ロールを allowlist で承認しても出る (承認は主体が居ることを認めるだけで、列挙は止めない。止めるなら ack / snooze)
+#   拒否の種類が既定の min_distinct_apis (5) 以上・high_distinct_apis (20) 未満なので medium。--apis 20 以上なら high。
+#   外部用ロールを allowlist で承認しても出る (承認は主体が居ることを認めるだけで、列挙は止めない)。
+#   想定内の拒否なら allowlist の expected_denied で除く (除いた件数は expected_denied_excluded)。ack しても high に上がれば changed で再報告
 # 書き込む: なし (sts:AssumeRole と、拒否される読み取りだけ。一時認証情報は表示せず、このスクリプトのプロセスの中でだけ使う)
+# 呼ぶ読み取り API (先頭から --apis 個)。すべて List / Describe
+CALLS=(
+  "iam list-users" "s3api list-buckets" "ec2 describe-instances" "secretsmanager list-secrets"
+  "kms list-keys" "dynamodb list-tables" "lambda list-functions" "rds describe-db-instances"
+  "iam list-roles" "ec2 describe-vpcs" "ec2 describe-security-groups" "sns list-topics"
+  "sqs list-queues" "logs describe-log-groups" "cloudtrail describe-trails" "ssm describe-parameters"
+  "ecr describe-repositories" "ecs list-clusters" "cloudformation list-stacks" "cloudwatch describe-alarms"
+  "elbv2 describe-load-balancers" "route53 list-hosted-zones" "acm list-certificates" "kinesis list-streams"
+)
+n_apis=8
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --apis)
+      n_apis="${2:-}"
+      shift 2 || { echo "中止: --apis に数を指定してください" >&2; exit 2; }
+      ;;
+    *) echo "中止: 不明な引数 $1 (使えるのは --apis N)" >&2; exit 2 ;;
+  esac
+done
+if ! [[ "$n_apis" =~ ^[0-9]+$ ]] || (( n_apis < 1 || n_apis > ${#CALLS[@]} )); then
+  echo "中止: --apis は 1〜${#CALLS[@]} (指定: $n_apis)" >&2
+  exit 2
+fi
+
 source "$(dirname "$0")/lib.sh"
 : "${EXTERNAL_PROFILE:?EXTERNAL_PROFILE (外部アカウントの AWS profile) を指定してください}"
 require_sandbox_account
@@ -43,13 +70,9 @@ as_role() {
 }
 
 echo "拒否される読み取りを呼ぶ ($ROLE_ARN):"
-as_role iam list-users
-as_role s3api list-buckets
-as_role ec2 describe-instances
-as_role secretsmanager list-secrets
-as_role kms list-keys
-as_role dynamodb list-tables
-as_role lambda list-functions
-as_role rds describe-db-instances
+for call in "${CALLS[@]:0:n_apis}"; do
+  # shellcheck disable=SC2086 # "サービス 操作" を 2 語に分ける
+  as_role $call
+done
 unset key secret token
-echo "完了: 8 種類 (CloudTrail への記録は 5〜15 分遅れる。arata の CloudTrail ソースの regions に $REGION と us-east-1 が入っていること)"
+echo "完了: $n_apis 種類 (CloudTrail への記録は 5〜15 分遅れる。arata の CloudTrail ソースの regions に $REGION と us-east-1 が入っていること)"

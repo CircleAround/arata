@@ -211,3 +211,81 @@ func TestDiffRecurredIgnoresRescan(t *testing.T) {
 		})
 	}
 }
+
+// ack / 期日前の snooze 中でも、観測の重大度が ack / snooze したときより重くなったら changed として再報告する (ADR 0022)。
+func TestDiffEscalation(t *testing.T) {
+	window := collect.Window{From: now.Add(-24 * time.Hour), To: now}
+	earlier := now.Add(-2 * time.Hour)
+	dormant := now.Add(-3 * 24 * time.Hour)
+	suppressed := func(status, sev, suppressedSev string, last time.Time) store.Finding {
+		f := store.Finding{ID: "x", Check: "c", Key: "k1", Severity: sev, SuppressedSeverity: suppressedSev, Status: status, Summary: "old",
+			FirstSeen: dormant, LastSeen: last, LastChanged: dormant, ReportedAt: dormant, Fingerprint: sev + "|1.1.1.1", Data: map[string]any{"count": 1}}
+		if status == store.FindingSnoozed {
+			f.SnoozeUntil = now.Add(48 * time.Hour)
+		}
+		return f
+	}
+	obs := func(sev Severity) Observation {
+		return Observation{Check: "c", Key: "k1", Severity: sev, Summary: "拒否された API 呼び出し", Fingerprint: string(sev) + "|2.2.2.2", Data: map[string]any{"count": 30}}
+	}
+	cases := []struct {
+		name     string
+		mode     Mode
+		existing store.Finding
+		obs      Observation
+		want     Class
+		prefix   string
+	}{
+		{"acked medium → high", ModeEvent, suppressed(store.FindingAcked, "medium", "medium", earlier), obs(High), ClassChanged, "(確認済み (ack) だったが重大度が medium → high に上昇) "},
+		{"acked medium, dormant → high (escalation wins over recurred)", ModeEvent, suppressed(store.FindingAcked, "medium", "medium", dormant), obs(High), ClassChanged, "(確認済み (ack) だったが重大度が medium → high に上昇) "},
+		{"snoozed medium → critical", ModeState, suppressed(store.FindingSnoozed, "medium", "medium", earlier), obs(Critical), ClassChanged, "(snooze 中だったが重大度が medium → critical に上昇) "},
+		{"acked medium, stays medium (other IPs) → suppressed", ModeEvent, suppressed(store.FindingAcked, "medium", "medium", earlier), obs(Medium), ClassSuppressed, ""},
+		{"acked high → medium → suppressed", ModeEvent, suppressed(store.FindingAcked, "high", "high", earlier), obs(Medium), ClassSuppressed, ""},
+		// 観測で severity が high に上書きされていても、比べるのは ack したときの重大度
+		{"acked at medium, severity already overwritten to high → high", ModeEvent, suppressed(store.FindingAcked, "high", "medium", earlier), obs(High), ClassChanged, "(確認済み (ack) だったが重大度が medium → high に上昇) "},
+		// 移行し損ねた行 (suppressed_severity が空) は今の severity と比べる
+		{"acked, no suppressed_severity, medium → high", ModeEvent, suppressed(store.FindingAcked, "medium", "", earlier), obs(High), ClassChanged, "(確認済み (ack) だったが重大度が medium → high に上昇) "},
+		{"acked, no suppressed_severity, same → suppressed", ModeEvent, suppressed(store.FindingAcked, "high", "", earlier), obs(High), ClassSuppressed, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newStore(t)
+			ctx := context.Background()
+			if err := st.UpsertFinding(ctx, tc.existing); err != nil {
+				t.Fatal(err)
+			}
+			res, err := Diff(ctx, st, DiffParams{Check: "c", Mode: tc.mode, Window: window, Now: now, NewID: seqID()}, []Observation{tc.obs})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(res) != 1 || res[0].Class != tc.want {
+				t.Fatalf("res: %+v", res)
+			}
+			f, _ := st.Finding(ctx, "x")
+			if tc.want == ClassSuppressed {
+				if f.Status != tc.existing.Status || f.SuppressedSeverity != tc.existing.SuppressedSeverity || f.Data["escalated_from_suppressed"] != nil {
+					t.Fatalf("suppressed must stay: %+v", f)
+				}
+				return
+			}
+			wantFrom := tc.existing.SuppressedSeverity
+			if wantFrom == "" {
+				wantFrom = tc.existing.Severity
+			}
+			if f.Status != store.FindingOpen || !f.SnoozeUntil.IsZero() || f.SuppressedSeverity != "" || !f.LastChanged.Equal(now) || f.Severity != string(tc.obs.Severity) {
+				t.Fatalf("escalated finding must reopen: %+v", f)
+			}
+			if f.Data["escalated_from_suppressed"] != true || f.Data["suppressed_status"] != tc.existing.Status || f.Data["suppressed_severity"] != wantFrom || f.Data["count"] != float64(30) {
+				t.Fatalf("escalation data: %+v", f.Data)
+			}
+			if f.Summary != tc.prefix+"拒否された API 呼び出し" || res[0].Finding.Summary != f.Summary {
+				t.Fatalf("summary: %q", f.Summary)
+			}
+			// 次の run で同じ観測なら still_open (印は Data に残るが再報告はしない)
+			res, err = Diff(ctx, st, DiffParams{Check: "c", Mode: tc.mode, Window: window, Now: now.Add(time.Hour), NewID: seqID()}, []Observation{tc.obs})
+			if err != nil || len(res) != 1 || res[0].Class != ClassStillOpen {
+				t.Fatalf("next run: %+v %v", res, err)
+			}
+		})
+	}
+}

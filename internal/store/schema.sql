@@ -66,6 +66,8 @@ CREATE TABLE IF NOT EXISTS findings (
   snooze_until TEXT,
   fingerprint  TEXT NOT NULL DEFAULT '',
   data         TEXT NOT NULL DEFAULT '{}',
+  -- ack / snooze したときの重大度。観測がこれより重くなったら再報告する (ADR 0022)。open / resolved では空
+  suppressed_severity TEXT NOT NULL DEFAULT '',
   UNIQUE ("check", key)
 );
 CREATE INDEX IF NOT EXISTS findings_status ON findings(status);

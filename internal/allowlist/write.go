@@ -20,6 +20,8 @@ type NewEntry struct {
 	ApprovedAt string // YYYY-MM-DD
 	Expires    string // YYYY-MM-DD、空なら無期限
 	Tags       []string
+	// ExpectedDenied は access_denied で数えない拒否 (「サービス:操作」の glob。ADR 0022)。
+	ExpectedDenied []string
 }
 
 // principals[].tags の語彙。
@@ -194,6 +196,11 @@ func (e NewEntry) validate() error {
 	if n != 1 {
 		return fmt.Errorf("allowlist: exactly one of arn, account, arn_pattern is required")
 	}
+	for _, g := range e.ExpectedDenied {
+		if err := CheckDeniedGlob(g); err != nil {
+			return fmt.Errorf("allowlist: expected_denied %w", err)
+		}
+	}
 	for _, t := range e.Tags {
 		ok := false
 		for _, k := range KnownTags {
@@ -232,6 +239,9 @@ func (e NewEntry) render(indent string) string {
 	}
 	if len(e.Tags) > 0 {
 		fields = append(fields, kv{"tags", "[" + strings.Join(e.Tags, ", ") + "]"})
+	}
+	if len(e.ExpectedDenied) > 0 {
+		fields = append(fields, kv{"expected_denied", FormatExpectedDenied(e.ExpectedDenied)})
 	}
 	var b strings.Builder
 	for i, f := range fields {

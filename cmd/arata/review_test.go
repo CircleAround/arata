@@ -107,6 +107,9 @@ func TestReviewAndApprove(t *testing.T) {
 	if code := c.run("approve", np.ID, "--config", c.cfg, "--note", "x"); code != 2 {
 		t.Fatalf("approve resolved exit %d", code)
 	}
+	if code := c.run("approve", root.ID, "--config", c.cfg, "--note", "x", "--expected-denied", "s3:*"); code != 2 || !strings.Contains(c.stderr.String(), "only for access_denied") {
+		t.Fatalf("--expected-denied on root_usage exit %d: %s", code, c.stderr)
+	}
 	if code := c.run("approve", "nope", "--config", c.cfg, "--note", "x"); code != 2 {
 		t.Fatalf("approve unknown id exit %d", code)
 	}

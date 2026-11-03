@@ -19,6 +19,13 @@ principals:
     note: GitHub Actions のロール群
     approved_at: 2026-10-21
     tags: [deploy]
+  - arn: arn:aws:iam::123456789012:role/ai-investigation-readonly
+    note: AI 調査用の読み取りロール。個人情報を含むロググループは IAM で Deny しているので、その読み取りの拒否は想定内
+    approved_by: alice
+    approved_at: 2026-11-03
+    tags: [ai]
+    # access_denied で数えない拒否 (サービス:操作の glob。ADR 0022)。想定外の API の拒否は数え続ける。note 必須
+    expected_denied: ["logs:StartQuery", "logs:GetLogEvents", "logs:FilterLogEvents"]
 source_ips:
   - cidr: 203.0.113.0/24
     note: 本社オフィス
