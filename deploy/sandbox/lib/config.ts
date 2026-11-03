@@ -27,6 +27,8 @@ export interface SandboxConfig {
   guardDuty: { enabled: boolean };
   accessAnalyzer: { enabled: boolean };
   bedrock: { enabled: boolean; modelSourceArn?: string };
+  /** 試験用の WAF (API Gateway + WebACL)。費用がかかるので試験のときだけ有効にする。 */
+  waf: { enabled: boolean };
 }
 
 export class ConfigError extends Error {
@@ -156,6 +158,7 @@ export function parseConfig(raw: unknown): SandboxConfig {
     'guardDuty',
     'accessAnalyzer',
     'bedrock',
+    'waf',
   ]);
   if (!top) throw new ConfigError(c.problems);
   // トップレベルの未知のキーは「(トップレベル).x」ではなく「x」と出す
@@ -243,7 +246,7 @@ export function parseConfig(raw: unknown): SandboxConfig {
   }
 
   // 任意の機能。暗黙の既定を持たないよう enabled は必須
-  const toggle = (key: 'guardDuty' | 'accessAnalyzer'): boolean | undefined => {
+  const toggle = (key: 'guardDuty' | 'accessAnalyzer' | 'waf'): boolean | undefined => {
     const v = c.required(top, key, '');
     if (v === undefined) return undefined;
     const o = c.object(v, key, ['enabled']);
@@ -251,6 +254,7 @@ export function parseConfig(raw: unknown): SandboxConfig {
   };
   const guardDuty = toggle('guardDuty');
   const accessAnalyzer = toggle('accessAnalyzer');
+  const waf = toggle('waf');
 
   let bedrockEnabled: boolean | undefined;
   let modelSourceArn: string | undefined;
@@ -279,5 +283,6 @@ export function parseConfig(raw: unknown): SandboxConfig {
     guardDuty: { enabled: guardDuty! },
     accessAnalyzer: { enabled: accessAnalyzer! },
     bedrock: modelSourceArn === undefined ? { enabled: bedrockEnabled! } : { enabled: bedrockEnabled!, modelSourceArn },
+    waf: { enabled: waf! },
   };
 }
