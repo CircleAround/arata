@@ -22,6 +22,10 @@ export const COMMON_RULES_IN_COUNT = ['NoUserAgent_HEADER', 'SizeRestrictions_QU
 export interface SandboxWafProps {
   prefix: string;
   retentionDays: number;
+  /** GET /search に Challenge を出すルールを足す (Challenge / CAPTCHA の影響評価の素材。ADR 0028)。 */
+  challenge: boolean;
+  /** /contact に CAPTCHA を出すルールを足す。 */
+  captcha: boolean;
 }
 
 export class SandboxWaf extends Construct {
@@ -77,6 +81,21 @@ export class SandboxWaf extends Construct {
       },
       visibilityConfig: visibility(`${p}-${name}`),
     });
+    // URI の末尾で一致させるルール (REST API の URI にはステージ名が付く)
+    const endsWith = (name: string, priority: number, suffix: string, action: wafv2.CfnWebACL.RuleActionProperty): wafv2.CfnWebACL.RuleProperty => ({
+      name,
+      priority,
+      action,
+      statement: {
+        byteMatchStatement: {
+          fieldToMatch: { uriPath: {} },
+          positionalConstraint: 'ENDS_WITH',
+          searchString: suffix,
+          textTransformations: [{ priority: 0, type: 'LOWERCASE' }],
+        },
+      },
+      visibilityConfig: visibility(`${p}-${name}`),
+    });
     const acl = new wafv2.CfnWebACL(this, 'WebAcl', {
       name: p,
       description: 'arata sandbox: test WebACL for WAF review proposals',
@@ -108,6 +127,9 @@ export class SandboxWaf extends Construct {
         },
         managed('AWSManagedRulesKnownBadInputsRuleSet', 1, { countAll: true }),
         managed('AWSManagedRulesCommonRuleSet', 2, { countRules: COMMON_RULES_IN_COUNT }),
+        // Challenge / CAPTCHA (config の waf.challenge / waf.captcha)。curl ではトークンを得られないので「解かれない」側だけがログに出る
+        ...(props.challenge ? [endsWith('search-challenge', 3, '/search', { challenge: {} })] : []),
+        ...(props.captcha ? [endsWith('contact-captcha', 4, '/contact', { captcha: {} })] : []),
       ],
     });
 

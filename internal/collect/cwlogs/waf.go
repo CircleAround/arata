@@ -33,12 +33,23 @@ const (
 	MetricWAFIPRateP50         = "waf_ip_rate_p50"              // key = <WebACL>|<パスの群> (1 IP あたり 5 分間の件数)
 	MetricWAFIPRateP99         = "waf_ip_rate_p99"
 	MetricWAFIPRateMax         = "waf_ip_rate_max"
+	// Challenge / CAPTCHA の影響 (ADR 0028)。key = <WebACL>|<challenge|captcha>|<ルール>[/<グループの中のルール>]|<method>|<正規化パス>
+	MetricWAFChallengeIssued    = "waf_challenge_issued"     // 出した (トークンが無い・無効で止めた) 件数
+	MetricWAFChallengeIssuedIPs = "waf_challenge_issued_ips" // 出した異なり IP 数
+	// MetricWAFChallengeSolvedIPs は出した IP のうち、同じ日・同じ method とパスで同じ種類のトークンが受理された (解いた) 異なり IP 数。
+	MetricWAFChallengeSolvedIPs = "waf_challenge_solved_ips"
 	// MetricWAFPositionLimit は配列の位置の上限を超えた (それより後ろを数えていない) リクエストの数。key = <WebACL>|<配列の名前>
 	MetricWAFPositionLimit = "waf_position_limit"
 )
 
 // suspectBlockIP は「BLOCK された IP」の集計の名前 (保存しない)。
 const suspectBlockIP = "waf_suspect_block_ip"
+
+// challengeSolved は「トークンが受理された行」の集計の名前 (保存しない。出した IP との積集合を waf_challenge_solved_ips にする)。
+const challengeSolved = "waf_challenge_solved"
+
+// ChallengeKinds は Challenge / CAPTCHA の種類 (key の 2 番目)。ログの action は大文字。
+var ChallengeKinds = []string{"challenge", "captcha"}
 
 // SuspectBlockExcludes は suspect の「BLOCK された IP」から除く BLOCK (evidence に残す)。
 const SuspectBlockExcludes = "rate_based_rules,default_action,sign_in_paths"
@@ -143,12 +154,30 @@ func WAFQueries(p Profile, c config.Checks) []WAFQuery {
 	suspectIP := head + filter(`action = "BLOCK"`, `terminatingRuleType != "RATE_BASED"`, `rule != "Default_Action"`, notSignIn, trusted) +
 		"\n| stats count(*) as " + suspectBlockIP + " by bin(1d) as day, ip" + tail(suspectBlockIP)
 
+	// Challenge / CAPTCHA (ADR 0028)。出した行 (action が CHALLENGE / CAPTCHA = トークンが無い・無効で止めた) と、
+	// トークンが受理された行 (解いた後の再訪) を別の集計にする (行の上限をそれぞれに持たせ、group by の数を抑える)。
+	// 決定: 受理の形は公式文書の説明 (トップレベルの challengeResponse / captchaResponse に solveTimestamp があり failureReason が無い) と
+	// 例 (nonTerminatingMatchingRules の要素の action が CHALLENGE / CAPTCHA) が食い違うので、両方を受け付ける。グループの中の一致も位置で見る
+	kinds := `["CHALLENGE", "CAPTCHA"]`
+	issued := head + filter(`action in `+kinds, trusted) +
+		"\n| stats count(*) as " + MetricWAFChallengeIssued + " by bin(1d) as day, acl, rule, action, terminatingRuleType, " + strings.Join(terms, ", ") + ", " + groupSentinel + ", method, path, ip" + tail(MetricWAFChallengeIssued)
+	accepted := challengeAcceptedFields()
+	conds := []string{"challengeResponse.solveTimestamp > 0", "captchaResponse.solveTimestamp > 0"}
+	for _, f := range accepted {
+		conds = append(conds, f+" in "+kinds)
+	}
+	solved := head + filter("("+strings.Join(conds, " or ")+")", trusted) +
+		"\n| stats count(*) as " + challengeSolved + " by bin(1d) as day, acl, action, challengeResponse.solveTimestamp, challengeResponse.failureReason, captchaResponse.solveTimestamp, captchaResponse.failureReason, " +
+		strings.Join(accepted, ", ") + ", method, path, ip" + tail(challengeSolved)
+
 	return []WAFQuery{
 		{Name: MetricWAFRuleAction, Query: ruleAction},
 		{Name: MetricWAFBlockPath, Query: blockPath},
 		{Name: MetricWAFAllowProbe, Query: allowProbe},
 		{Name: suspectBlockIP, Query: suspectIP},
 		{Name: MetricWAFCountMatch, Query: count},
+		{Name: MetricWAFChallengeIssued, Query: issued},
+		{Name: challengeSolved, Query: solved},
 		{Name: "waf_ip_rate", Query: rate, PerDay: true},
 	}
 }
@@ -162,6 +191,36 @@ func countFields() []string {
 	for i := 0; i < groupPositions; i++ {
 		g := "ruleGroupList." + strconv.Itoa(i)
 		out = append(out, g+".ruleGroupId", g+".nonTerminatingMatchingRules.0.ruleId")
+	}
+	return out
+}
+
+// challengeAcceptedFields はトークンが受理された一致 (CHALLENGE / CAPTCHA が終了しなかった) の action を見る位置。
+func challengeAcceptedFields() []string {
+	var out []string
+	for i := 0; i < countTopPositions; i++ {
+		out = append(out, "nonTerminatingMatchingRules."+strconv.Itoa(i)+".action")
+	}
+	for i := 0; i < groupPositions; i++ {
+		out = append(out, "ruleGroupList."+strconv.Itoa(i)+".nonTerminatingMatchingRules.0.action")
+	}
+	return out
+}
+
+// solvedKinds はトークンが受理された行の種類 (challenge / captcha)。
+// トップレベルの <kind>Response は solveTimestamp があり failureReason が無く、その種類で止めていないとき。位置の action はそのまま。
+func solvedKinds(r map[string]string) map[string]bool {
+	out := map[string]bool{}
+	for _, k := range ChallengeKinds {
+		ts := r[k+"Response.solveTimestamp"]
+		if ts != "" && ts != "0" && r[k+"Response.failureReason"] == "" && r["action"] != strings.ToUpper(k) {
+			out[k] = true
+		}
+	}
+	for _, f := range challengeAcceptedFields() {
+		if v := strings.ToLower(r[f]); v == "challenge" || v == "captcha" {
+			out[v] = true
+		}
 	}
 	return out
 }
@@ -257,6 +316,27 @@ func (a pathAgg) add(day, key, ip string, n float64) {
 	}
 }
 
+// topKeys は 1 日分の key を件数の多い順に top 個返す。
+func (c *Collector) topKeys(m map[string]*struct {
+	n   float64
+	ips map[string]bool
+}, top int) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if m[keys[i]].n != m[keys[j]].n {
+			return m[keys[i]].n > m[keys[j]].n
+		}
+		return keys[i] < keys[j]
+	})
+	if len(keys) > top {
+		keys = keys[:top]
+	}
+	return keys
+}
+
 // emitTop は日ごとに件数の多い順に top 個の key の件数と異なり IP 数を出す。
 func (c *Collector) emitTop(ctx context.Context, sink collect.RecordSink, a pathAgg, top int, count, ips string) error {
 	days := make([]string, 0, len(a))
@@ -265,20 +345,7 @@ func (c *Collector) emitTop(ctx context.Context, sink collect.RecordSink, a path
 	}
 	sort.Strings(days)
 	for _, d := range days {
-		keys := make([]string, 0, len(a[d]))
-		for k := range a[d] {
-			keys = append(keys, k)
-		}
-		sort.Slice(keys, func(i, j int) bool {
-			if a[d][keys[i]].n != a[d][keys[j]].n {
-				return a[d][keys[i]].n > a[d][keys[j]].n
-			}
-			return keys[i] < keys[j]
-		})
-		if len(keys) > top {
-			keys = keys[:top]
-		}
-		for _, k := range keys {
+		for _, k := range c.topKeys(a[d], top) {
 			if err := sink.Emit(ctx, c.metric(d, count, k, a[d][k].n)); err != nil {
 				return err
 			}
@@ -292,7 +359,9 @@ func (c *Collector) emitTop(ctx context.Context, sink collect.RecordSink, a path
 
 // collectWAF は waf_review 用の集計を流して metric を出す。
 func (c *Collector) collectWAF(ctx context.Context, from, to time.Time, sink collect.RecordSink) error {
-	blocked := map[string]map[string]bool{} // 日 → BLOCK された IP (suspectBlockIP)
+	blocked := map[string]map[string]bool{}           // 日 → BLOCK された IP (suspectBlockIP)
+	issued := pathAgg{}                               // Challenge / CAPTCHA を出した (key → 件数と IP)
+	solved := map[string]map[string]map[string]bool{} // 日 → <WebACL>|<種類>|<method>|<パス> → トークンが受理された IP
 	wr := c.checks.WAFReview
 	limits := dayCounts{} // 位置の上限を超えたリクエストの数 (waf_position_limit)
 	for _, q := range WAFQueries(c.prof, c.checks) {
@@ -396,9 +465,73 @@ func (c *Collector) collectWAF(ctx context.Context, from, to time.Time, sink col
 			if err := c.emitCountMatches(ctx, rows, blocked, limits, sink); err != nil {
 				return err
 			}
+		case MetricWAFChallengeIssued:
+			for _, r := range rows {
+				day, ok := parseDay(r["day"])
+				if !ok {
+					continue
+				}
+				rule := r["rule"]
+				inner, limited := blockInner(r)
+				if inner != "" {
+					rule += "/" + inner
+				}
+				if limited {
+					limits.add(day, r["acl"]+"|ruleGroupList", num(r[MetricWAFChallengeIssued]))
+				}
+				issued.add(day, r["acl"]+"|"+strings.ToLower(r["action"])+"|"+rule+"|"+r["method"]+"|"+c.normalize(r["path"]), r["ip"], num(r[MetricWAFChallengeIssued]))
+			}
+		case challengeSolved:
+			for _, r := range rows {
+				day, ok := parseDay(r["day"])
+				if !ok {
+					continue
+				}
+				for k := range solvedKinds(r) {
+					key := r["acl"] + "|" + k + "|" + r["method"] + "|" + c.normalize(r["path"])
+					if solved[day] == nil {
+						solved[day] = map[string]map[string]bool{}
+					}
+					if solved[day][key] == nil {
+						solved[day][key] = map[string]bool{}
+					}
+					solved[day][key][r["ip"]] = true
+				}
+			}
 		}
 	}
+	if err := c.emitChallenges(ctx, sink, issued, solved); err != nil {
+		return err
+	}
 	return limits.emit(ctx, c, sink)
+}
+
+// emitChallenges は日ごとに出した件数の多い順に top_paths 個の key について、出した件数・異なり IP と、そのうち解いた IP の数を出す。
+// 決定 (ADR 0028): 解いた IP は「出した IP」との積集合 (同じ日・同じ method とパス・同じ種類)。トークンは WebACL のルールで共有されるので
+// ルールでは突き合わせない。後からトークンを持って別の画面に来た IP は数えない (割合が 1 を超えない)
+func (c *Collector) emitChallenges(ctx context.Context, sink collect.RecordSink, issued pathAgg, solved map[string]map[string]map[string]bool) error {
+	if err := c.emitTop(ctx, sink, issued, c.checks.WAFReview.TopPaths, MetricWAFChallengeIssued, MetricWAFChallengeIssuedIPs); err != nil {
+		return err
+	}
+	for _, d := range sortedDays(issued) {
+		for _, k := range c.topKeys(issued[d], c.checks.WAFReview.TopPaths) {
+			parts := strings.SplitN(k, "|", 5)
+			if len(parts) != 5 {
+				continue
+			}
+			got := solved[d][parts[0]+"|"+parts[1]+"|"+parts[3]+"|"+parts[4]]
+			n := 0
+			for ip := range issued[d][k].ips {
+				if got[ip] {
+					n++
+				}
+			}
+			if err := sink.Emit(ctx, c.metric(d, MetricWAFChallengeSolvedIPs, k, float64(n))); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (c *Collector) normalize(p string) string {

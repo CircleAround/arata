@@ -95,6 +95,9 @@ var paramComments = map[string]string{
 	"waf_review.rate_loose_factor":           "既存のレート制限が観測の最大のこの倍より高ければ緩すぎる (p99 より低ければ厳しすぎる)",
 	"waf_review.unused_days":                 "使われていないルールとみなす一致 0 の日数 (この日数分のデータが要る)",
 	"waf_review.max_proposals":               "候補の種類ごとに出す上限 (根拠の強い順)",
+	"waf_review.challenge_min_distinct_ips":  "正規の画面への Challenge / CAPTCHA の提案に要る、出した異なり IP (日ごとの最大)",
+	"waf_review.challenge_solve_ratio":       "同じ提案に要る、解かれた割合 (解いた IP / 出した IP) の下限。高い = 人が解いている",
+	"waf_review.challenge_top_rules":         "Challenge / CAPTCHA の状況 (challenge_impact) を毎回載せるルールの数",
 }
 
 // Profile は雛形のプロファイル 1 つ。
@@ -191,7 +194,9 @@ func Generate(reg *checks.Registry) []byte {
 	w("  #   kind: %s\n", config.KindCloudWatchLogs)
 	w("  #   log_group: aws-waf-logs-my-app\n")
 	w("  #   format: wafv2\n")
-	cm("  #   # strip_path_prefix: /prod", "API Gateway の REST API はパスの前にステージ名が付く。探索パス・パスの群の判定の前に外す\n")
+	cm("  #   max_scan_gb: 50", "WAF のログは大きい。必ず設定する (目安は arata doctor の cost の推奨値)")
+	cm("  #   # strip_path_prefix: /prod", "API Gateway の REST API はパスの前にステージ名が付く。探索パス・パスの群の判定の前に外す")
+	cm("  #   # resources: [\"app/app-alb/*\"]", "集計する資源 (ログの httpSourceId。glob 可)。WebACL を staging と共有するとき本番だけを見る。費用は減らない\n")
 
 	w("# チェック一覧 (周期 / 型 / 必要なレコード)。event 型は窓内の出来事、state 型は今の状態を報告する。\n")
 	width := 0
