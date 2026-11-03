@@ -26,5 +26,6 @@
   "waf": { "enabled": false, "challenge": false, "captcha": false },
   "secretAccess": { "enabled": false },
   "costAnomaly": { "enabled": false },
-  "storeBucket": { "enabled": false }
+  "storeBucket": { "enabled": false },
+  "githubOidc": { "enabled": false }
 }

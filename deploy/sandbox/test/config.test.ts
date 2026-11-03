@@ -229,3 +229,57 @@ test('storeBucket は必須で、enabled は真偽値 (暗黙の既定を持た�
   on.storeBucket = { enabled: true };
   assert.equal(parseConfig(on).storeBucket.enabled, true);
 });
+
+function githubOidc(raw: Record<string, any>): void {
+  raw.storeBucket = { enabled: true };
+  raw.githubOidc = { enabled: true, repository: 'example-org/example-audit', branch: 'main', createProvider: true, storePrefix: 'example' };
+}
+
+test('githubOidc: 無効なら他のキーは要らず、有効なら値を返す', () => {
+  assert.deepEqual(parseConfig(example()).githubOidc, { enabled: false });
+  const raw = example();
+  githubOidc(raw);
+  assert.deepEqual(parseConfig(raw).githubOidc, raw.githubOidc);
+});
+
+test('githubOidc: 書き忘れは必須のエラーにする (暗黙の既定を持たない)', () => {
+  const raw = example();
+  delete raw.githubOidc;
+  assert.ok(errorsOf(() => parseConfig(raw)).some((p) => p.includes('githubOidc') && p.includes('必須')));
+});
+
+test('githubOidc: 有効なら repository / branch / createProvider / storePrefix が必須', () => {
+  const raw = example();
+  raw.storeBucket = { enabled: true };
+  raw.githubOidc = { enabled: true };
+  const problems = errorsOf(() => parseConfig(raw));
+  for (const k of ['repository', 'branch', 'createProvider', 'storePrefix']) {
+    assert.ok(problems.some((p) => p.startsWith(`githubOidc.${k}:`) && p.includes('必須')), problems.join('\n'));
+  }
+});
+
+test('githubOidc: 信頼を広げるワイルドカードは受け付けない', () => {
+  for (const [key, value] of [['repository', 'example-org/*'], ['repository', 'example-audit'], ['branch', '*'], ['branch', 'release/*'], ['storePrefix', 'a/*'], ['storePrefix', 'a/']]) {
+    const raw = example();
+    githubOidc(raw);
+    raw.githubOidc[key] = value;
+    const problems = errorsOf(() => parseConfig(raw));
+    assert.ok(problems.some((p) => p.startsWith(`githubOidc.${key}:`)), `${key}=${value}: ${problems.join('\n')}`);
+  }
+});
+
+test('githubOidc: ストアのバケットが無ければエラーにする', () => {
+  const raw = example();
+  githubOidc(raw);
+  raw.storeBucket = { enabled: false };
+  assert.ok(errorsOf(() => parseConfig(raw)).some((p) => p.startsWith('githubOidc.enabled:') && p.includes('storeBucket')));
+});
+
+test('githubOidc: 読み取り専用ロールがアカウントを信頼していなければエラーにする (実行用ロールが引き受けられない)', () => {
+  const raw = example();
+  githubOidc(raw);
+  raw.readonlyRole.trustedPrincipalArn = 'arn:aws:iam::123456789012:role/developer';
+  assert.ok(errorsOf(() => parseConfig(raw)).some((p) => p.startsWith('githubOidc.enabled:') && p.includes('trustedPrincipalArn')));
+  raw.readonlyRole.trustedPrincipalArn = 'arn:aws:iam::111122223333:root';
+  assert.ok(errorsOf(() => parseConfig(raw)).some((p) => p.startsWith('githubOidc.enabled:') && p.includes('trustedPrincipalArn')));
+});

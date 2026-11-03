@@ -544,3 +544,92 @@ test('storeBucket: 読み取り専用ロールにストアへの書き込みを�
   const text = JSON.stringify(t.findResources('AWS::IAM::Role'));
   assert.ok(!text.includes('s3:PutObject'));
 });
+
+function withGithubOidc(createProvider = true): (raw: Record<string, any>) => void {
+  return (raw) => {
+    raw.storeBucket = { enabled: true };
+    raw.githubOidc = { enabled: true, repository: 'example-org/example-audit', branch: 'main', createProvider, storePrefix: 'example' };
+  };
+}
+
+function runnerRole(t: Template): any {
+  const roles = Object.values(t.findResources('AWS::IAM::Role', { Properties: { RoleName: 'arata-sandbox-github-actions' } })) as any[];
+  assert.equal(roles.length, 1);
+  return roles[0];
+}
+
+function runnerStatements(t: Template): any[] {
+  const policies = Object.values(t.findResources('AWS::IAM::Policy')) as any[];
+  const mine = policies.filter((p) => JSON.stringify(p.Properties.Roles).includes('GithubActionsRole'));
+  assert.equal(mine.length, 1);
+  return mine[0].Properties.PolicyDocument.Statement;
+}
+
+test('githubOidc が無効なら OIDC のプロバイダも実行用ロールも作らない', () => {
+  const t = synth();
+  assert.equal(resourcesOf(t, 'AWS::IAM::OIDCProvider').length, 0);
+  assert.ok(!JSON.stringify(t.toJSON()).includes('token.actions.githubusercontent.com'));
+  assert.ok(!Object.keys(t.findOutputs('*')).includes('GithubActionsRoleArn'));
+});
+
+test('githubOidc: 信頼は OIDC の 1 つの repo と branch に限る (完全一致)', () => {
+  const t = synth(withGithubOidc());
+  const [statement, ...rest] = runnerRole(t).Properties.AssumeRolePolicyDocument.Statement;
+  assert.equal(rest.length, 0);
+  assert.equal(statement.Action, 'sts:AssumeRoleWithWebIdentity');
+  assert.deepEqual(statement.Condition, {
+    StringEquals: {
+      'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com',
+      'token.actions.githubusercontent.com:sub': 'repo:example-org/example-audit:ref:refs/heads/main',
+    },
+  });
+  assert.ok(Object.keys(t.findOutputs('*')).includes('GithubActionsRoleArn'));
+});
+
+test('githubOidc: createProvider なら GitHub のプロバイダを作る', () => {
+  const t = synth(withGithubOidc(true));
+  t.hasResourceProperties('AWS::IAM::OIDCProvider', {
+    Url: 'https://token.actions.githubusercontent.com',
+    ClientIdList: ['sts.amazonaws.com'],
+  });
+});
+
+test('githubOidc: createProvider が false なら既存のプロバイダを ARN で指し、作らない', () => {
+  const t = synth(withGithubOidc(false));
+  assert.equal(resourcesOf(t, 'AWS::IAM::OIDCProvider').length, 0);
+  const [statement] = runnerRole(t).Properties.AssumeRolePolicyDocument.Statement;
+  assert.match(JSON.stringify(statement.Principal.Federated), /:iam::123456789012:oidc-provider\/token\.actions\.githubusercontent\.com/);
+});
+
+test('githubOidc: 権限は読み取り専用ロールの引き受けと、ストアの prefix の読み書きだけ', () => {
+  const statements = runnerStatements(synth(withGithubOidc()));
+  assert.equal(statements.length, 3, JSON.stringify(statements));
+  const by = (a: string) => statements.filter((s) => [s.Action].flat().includes(a));
+
+  const [assume] = by('sts:AssumeRole');
+  assert.match(JSON.stringify(assume.Resource), /ReadonlyRole|Role/);
+  assert.ok(!JSON.stringify(assume.Resource).includes('*'), 'ロールを 1 つに限る');
+
+  const [objects] = by('s3:PutObject');
+  assert.deepEqual([objects.Action].flat().sort(), ['s3:GetObject', 's3:PutObject']);
+  assert.ok(JSON.stringify(objects.Resource).includes('/example/*'), JSON.stringify(objects.Resource));
+
+  // 決定: ListBucket は s3:prefix で絞らない。無いキーが 403 になると arata が「無い」と区別できず止まり得る
+  const [list] = by('s3:ListBucket');
+  assert.deepEqual([list.Action].flat(), ['s3:ListBucket']);
+  assert.equal(list.Condition, undefined);
+  assert.ok(!JSON.stringify(list.Resource).includes('/*'), 'バケットだけを指す');
+
+  assert.ok(!JSON.stringify(statements).includes('s3:DeleteObject'));
+  assert.ok(!JSON.stringify(statements).includes('"s3:*"'));
+});
+
+test('githubOidc: 読み取り専用ロールにはストアへの書き込みを足さない', () => {
+  const t = synth(withGithubOidc());
+  const policies = Object.values(t.findResources('AWS::IAM::Policy')) as any[];
+  for (const p of policies) {
+    if (JSON.stringify(p.Properties).includes('s3:PutObject')) {
+      assert.ok(JSON.stringify(p.Properties.Roles).includes('GithubActionsRole'));
+    }
+  }
+});

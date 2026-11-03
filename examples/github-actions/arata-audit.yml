@@ -1,0 +1,160 @@
+# arata と aratam を GitHub Actions で定期実行する見本。
+# 利用者のリポジトリの .github/workflows/ に写して使う (arata のリポジトリの CI では動かさない)。
+# 用意するもの・費用・注意は同じディレクトリの README.md。例の値はすべて架空。
+#
+# 利用者のリポジトリに置くもの:
+#   arata/arata.yaml         store: s3://... と aws.profile: arata-audit を書く
+#   arata/aratam.yaml        slack.webhook_env などを書く
+#   arata/allowlist.yaml
+#   arata/aratam-context.md  (任意。llm.context_file)
+name: arata-audit
+
+on:
+  schedule:
+    # 時刻は UTC。毎時ちょうどは GitHub の定時実行が混み、遅れたり落ちたりするので避ける。
+    # daily を UTC 0 時台の後半にするのは、Logs Insights のスキャンの範囲が半分ほどになるため (arata doctor の cost の行の案内)。
+    # 「UTC 0 時 + 窓 (24h) + ingest_delay (15m) + 余裕 15 分」= 00:30 より後ならよい。遅れは費用を増やさない。
+    - cron: '40 0 * * *'   # daily (JST 09:40)
+    - cron: '10 1 * * 1'   # weekly (月曜 JST 10:10)。下の PROFILE の文字列と揃える
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: 実行するプロファイル
+        type: choice
+        options: [daily, weekly]
+        default: daily
+
+# 同じストアへの同時実行を止める。走っている run は中断しない (中断すると収集を捨てることになる)。
+# 止めきれなくても、後から終わったほうが STORE_CONFLICT で失敗するだけで、ストアは壊れない (ADR 0034)。
+# ストアごとに 1 つの group にする。
+concurrency:
+  group: arata-audit-example
+  cancel-in-progress: false
+
+permissions:
+  id-token: write   # OIDC で実行用ロールを引き受ける
+  contents: read    # 設定ファイルの checkout
+
+defaults:
+  run:
+    shell: bash     # -eo pipefail で動く
+
+env:
+  ARATA_VERSION: v0.4.0        # S3 ストアを含む版が要る (v0.4.0 以降)。固定し、上げるときは PR で
+  ARATA_CONFIG_DIR: arata
+  ARATA_STORE_URL: s3://example-arata-store/example   # arata.yaml の store: と同じ値
+  AWS_REGION: ap-northeast-1
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.profile || (github.event.schedule == '10 1 * * 1' && 'weekly' || 'daily') }}
+    steps:
+      - id: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # バイナリは認証より先に取る。OIDC が失敗しても aratam で「実行されていない」と知らせるため。
+      # 照合の SHA256SUMS は同じリリースのものなので、壊れた取得は防げるがリリース自体のすり替えは防げない。
+      # 公開リポジトリのリリースなら gh attestation verify で来歴も確かめられる (arata の README「来歴の検証」)。
+      - id: install
+        name: arata と aratam を取得する
+        env:
+          # arata のリポジトリが公開なら github.token で読める。非公開の間は、arata の contents: read だけの
+          # fine-grained token を ARATA_RELEASE_TOKEN に入れる。このステップ以外には渡さない
+          GH_TOKEN: ${{ secrets.ARATA_RELEASE_TOKEN || github.token }}
+        run: |
+          dir="$RUNNER_TEMP/arata-bin"
+          mkdir -p "$dir"
+          gh release download "$ARATA_VERSION" -R CircleAround/arata -D "$dir" \
+            -p arata-linux-amd64 -p aratam-linux-amd64 -p SHA256SUMS
+          cd "$dir"
+          for name in arata aratam; do
+            grep " ${name}-linux-amd64\$" SHA256SUMS | sha256sum --check --strict --quiet -
+            install -m 0755 "${name}-linux-amd64" "$name"
+          done
+          echo "$dir" >>"$GITHUB_PATH"
+
+      # 実行用ロール。権限は監査ロールの引き受けとストアのバケットの読み書きだけにする。
+      # ロールの ARN はアカウント ID を含むので secrets に置く (secrets はログで自動的に隠される)。
+      - id: aws
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.ARATA_RUNNER_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: arata-audit
+          role-duration-seconds: 3600
+          mask-aws-account-id: true
+
+      # 2 つの認証を分ける:
+      #   監査対象: arata.yaml の aws.profile: arata-audit → 実行用ロールから読み取り専用ロールへ連鎖する
+      #   ストア:   arata.yaml の store_profile は書かない → SDK の標準の連鎖で実行用ロールのまま書く
+      # バケットを別のロールで書くなら、ここに [profile arata-store] (role_arn と credential_source) を足し、
+      # store_profile: arata-store と書く。credential_source は role_arn なしでは使えない。
+      - id: aws-config
+        name: 監査ロールのプロファイルを書く
+        env:
+          AUDIT_ROLE_ARN: ${{ secrets.ARATA_AUDIT_ROLE_ARN }}
+        run: |
+          cfg="$RUNNER_TEMP/aws-config"
+          umask 077
+          cat >"$cfg" <<CONFIG
+          [profile arata-audit]
+          role_arn = $AUDIT_ROLE_ARN
+          credential_source = Environment
+          role_session_name = arata-audit
+          CONFIG
+          echo "AWS_CONFIG_FILE=$cfg" >>"$GITHUB_ENV"
+
+      # ログの方針: 出力は実行環境の一時ファイルに書き、Actions には INFO 以外の level / code / source だけを出す。
+      # msg と error には ARN・アカウント ID などが入り得る。Actions のログはリポジトリを読める人に見えるので、
+      # 値を ::add-mask:: で列挙して隠すのではなく、そもそも出さない (監査の結果に何が出るかは列挙できない)。
+      # 原因を詳しく見るときは手元で同じコマンドを実行する。
+      # 時間切れは認証の期限 (1 時間) より短くする。切れたら確定せず、次の run がやり直す。
+      - id: audit
+        name: arata run
+        timeout-minutes: 50
+        run: |
+          log="$RUNNER_TEMP/arata.log"
+          status=0
+          arata run -c "$ARATA_CONFIG_DIR/arata.yaml" --profile "$PROFILE" --out "$RUNNER_TEMP/arata-out" >"$log" 2>&1 || status=$?
+          jq -Rc 'fromjson? | objects | select(.level != "INFO") | {level, code, source}' "$log" || true
+          echo "arata exit=$status"
+          exit "$status"
+
+      # arata が失敗しても aratam は必ず動かす (バイナリが取れていれば)。
+      # 実行環境は毎回消えるので、STORE_CONFLICT・INTERRUPTED・設定の誤り・OIDC の失敗のどれでも report.json が無く、
+      # aratam は max_age を待たずに「arata の出力が無いか古い」を緊急用に送る (終了コード 4)。
+      # max_age が効くのは --out が残る環境だけなので、ここでは daily と weekly で同じ aratam.yaml を使える。
+      # 一部のソースが取れなかったとき (arata の終了コード 3) は report.json があるので、通常の通知が緊急用に届く。
+      # どちらもジョブは失敗 (赤) のままにする。
+      - id: notify
+        name: aratam notify
+        if: always() && steps.install.outcome == 'success'
+        timeout-minutes: 5
+        env:
+          ARATAM_SLACK_WEBHOOK: ${{ secrets.ARATAM_SLACK_WEBHOOK }}
+          ARATAM_SLACK_URGENT_WEBHOOK: ${{ secrets.ARATAM_SLACK_URGENT_WEBHOOK }}
+        run: |
+          log="$RUNNER_TEMP/aratam.log"
+          status=0
+          aratam notify -c "$ARATA_CONFIG_DIR/aratam.yaml" --in "$RUNNER_TEMP/arata-out" >"$log" 2>&1 || status=$?
+          jq -Rc 'fromjson? | objects | select(.level != "INFO") | {level, code, source}' "$log" || true
+          echo "aratam exit=$status"
+          exit "$status"
+
+      # WAF の提案の全文は --in のディレクトリにしか書かれず、実行環境と一緒に消えるのでストアのバケットに残す。
+      # report の本文は arata が reports/<profile>.md として既に置いている。
+      # Actions の artifacts はリポジトリを読める人に見えるので使わない。
+      - id: save-proposals
+        name: WAF の提案の全文をストアへ置く
+        if: always() && steps.aws.outcome == 'success'
+        timeout-minutes: 5
+        run: |
+          file="$RUNNER_TEMP/arata-out/waf-proposals.md"
+          if [ -f "$file" ]; then
+            aws s3 cp "$file" "$ARATA_STORE_URL/reports/waf-proposals.md" --only-show-errors >/dev/null 2>&1
+          fi

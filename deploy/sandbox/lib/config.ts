@@ -43,7 +43,17 @@ export interface SandboxConfig {
    * arata の S3 ストア (`store: s3://`。ADR 0034) の試験用のバケット。読み取り専用ロールには権限を足さず、開発者のプロファイルで書く。
    */
   storeBucket: { enabled: boolean };
+  /**
+   * GitHub Actions の実行用ロール (examples/github-actions の試験用)。無効なら enabled だけを書く。
+   * createProvider: GitHub の OIDC プロバイダはアカウントに 1 つだけなので、既にあるアカウントでは false にする。
+   * storePrefix: ストアのバケットの中で読み書きを許す prefix (arata の `store: s3://<bucket>/<prefix>`)。
+   */
+  githubOidc: GithubOidc;
 }
+
+export type GithubOidc =
+  | { enabled: false }
+  | { enabled: true; repository: string; branch: string; createProvider: boolean; storePrefix: string };
 
 export class ConfigError extends Error {
   readonly problems: string[];
@@ -152,6 +162,10 @@ const PRINCIPAL_ARN = /^arn:aws[a-z-]*:(iam|sts)::\d{12}:.+$/;
 const ARN = /^arn:aws[a-z-]*:[a-z0-9-]+:.*$/;
 const LOG_GROUP = /^[\w\-./#]{1,512}$/;
 const EXTERNAL_ID = /^[\w+=,.@:/-]{2,1224}$/;
+// 信頼と権限の範囲を広げないよう、* や ? は通さない
+const GITHUB_REPOSITORY = /^[\w.-]+\/[\w.-]+$/;
+const GIT_BRANCH = /^[\w.-]+(\/[\w.-]+)*$/;
+const STORE_PREFIX = /^[\w.-]+(\/[\w.-]+)*$/;
 
 /** IAM ユーザー名の上限。 */
 const MAX_USER_NAME = 64;
@@ -176,6 +190,7 @@ export function parseConfig(raw: unknown): SandboxConfig {
     'secretAccess',
     'costAnomaly',
     'storeBucket',
+    'githubOidc',
   ]);
   if (!top) throw new ConfigError(c.problems);
   // トップレベルの未知のキーは「(トップレベル).x」ではなく「x」と出す
@@ -275,6 +290,28 @@ export function parseConfig(raw: unknown): SandboxConfig {
   const costAnomaly = toggle('costAnomaly');
   const storeBucket = toggle('storeBucket');
 
+  // GitHub Actions の実行用ロール。読み取り専用ロールの信頼は配布用テンプレートの 1 主体だけなので、アカウントごと信頼しているときだけ使える
+  let githubOidc: GithubOidc | undefined;
+  const go = c.required(top, 'githubOidc', '');
+  if (go !== undefined) {
+    const o = c.object(go, 'githubOidc', ['enabled', 'repository', 'branch', 'createProvider', 'storePrefix']);
+    const enabled = o ? c.boolean(o, 'enabled', 'githubOidc') : undefined;
+    if (enabled === false) githubOidc = { enabled: false };
+    if (o && enabled === true) {
+      const repository = c.string(o, 'repository', 'githubOidc', { pattern: GITHUB_REPOSITORY, hint: '<owner>/<repo>。ワイルドカードは使えません' });
+      const branch = c.string(o, 'branch', 'githubOidc', { pattern: GIT_BRANCH, hint: 'ブランチ名。ワイルドカードは使えません' });
+      const createProvider = c.boolean(o, 'createProvider', 'githubOidc');
+      const storePrefix = c.string(o, 'storePrefix', 'githubOidc', { pattern: STORE_PREFIX, hint: '例 example。前後の / とワイルドカードは使えません' });
+      if (storeBucket === false) c.add('githubOidc.enabled', 'storeBucket.enabled が true のときだけ使えます');
+      if (account !== undefined && trustedPrincipalArn !== undefined && !new RegExp(`^arn:aws[a-z-]*:iam::${account}:root$`).test(trustedPrincipalArn)) {
+        c.add('githubOidc.enabled', `readonlyRole.trustedPrincipalArn を arn:aws:iam::${account}:root にしてください (実行用ロールが読み取り専用ロールを引き受けられません)`);
+      }
+      if (repository !== undefined && branch !== undefined && createProvider !== undefined && storePrefix !== undefined) {
+        githubOidc = { enabled: true, repository, branch, createProvider, storePrefix };
+      }
+    }
+  }
+
   // WAF。challenge / captcha は WAF の試験の追加のルール (省略時は false)。waf.enabled が false のまま true にしても効かないので誤りにする
   let waf: boolean | undefined;
   let challenge = false;
@@ -326,5 +363,6 @@ export function parseConfig(raw: unknown): SandboxConfig {
     secretAccess: { enabled: secretAccess! },
     costAnomaly: { enabled: costAnomaly! },
     storeBucket: { enabled: storeBucket! },
+    githubOidc: githubOidc!,
   };
 }

@@ -912,8 +912,12 @@ arata rebuild   [--from-scratch [--baseline]] [--format text|json]   # raw JSONL
 |---|---|---|
 | オンプレ cron | `cron → arata run → 終了コードと report.json で Slack 投稿 / claude -p で要約` | CircleAround が運用を預かる顧客。監視対象の外で動く |
 | Lambda | `EventBridge Scheduler → arata-lambda (S3 ストア) → SNS` | 顧客アカウント内で完結させたい顧客。**ストアと SNS は別の監査用アカウントか Object Lock バケット**に置き、侵害時に改ざんされにくくする |
-| GitHub Actions | `schedule → arata run (S3 ストア。5-5) → aratam notify` | サーバーを持たずに定期実行したい顧客。ストアのバケットは監査対象とは別のアカウントが望ましい。同時実行は `concurrency:` でも止める (衝突しても後のほうが失敗するだけ) |
+| GitHub Actions | `schedule → arata run (S3 ストア。5-5) → aratam notify` | サーバーを持たずに定期実行したい顧客。ストアのバケットは監査対象とは別のアカウントが望ましい。同時実行は `concurrency:` でも止める (衝突しても後のほうが失敗するだけ)。見本は [examples/github-actions](../examples/github-actions/README.md) |
 | AgentConsole タイマー | 一時的な追跡のみ | 恒常運用には使わない |
+
+決定 (GitHub Actions の見本): 認証は OIDC の実行用ロール 1 つから分ける。監査は `aws.profile` で読み取り専用ロールへ連鎖し、ストアは `store_profile` を書かず実行用ロールのまま書く (`credential_source` は `role_arn` なしでは使えない)。
+Actions のログには arata / aratam の `level`・`code`・`source` と終了コードだけを出す。`::add-mask::` で値を列挙する案は、監査の結果に何が出るかを列挙できないので採らない。
+aratam は arata の失敗後も動かす (`if: always()`)。実行環境が毎回消えるので report.json が無く、`max_age` を待たずに緊急用に届く。`waf-proposals.md` は実行環境と一緒に消えるのでストアの `reports/` に置く。artifacts はリポジトリを読める人に見えるので使わない。
 
 LLM 要約は `arata help ai report` (バイナリに埋め込んだ手順) に従い、`report.json` を入力に「新規 / 変化 / 再発 / 解消 / 未対応 / 取れなかったもの」の順で書く。
 approve は人の判断を経て実行する。

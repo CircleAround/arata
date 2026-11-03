@@ -22,10 +22,11 @@
 | 試験用の WAF (任意) | API `<prefix>-waf`、WebACL `<prefix>`、ロググループ `aws-waf-logs-<prefix>` | `waf.enabled`。WAF の修正提案を本物の WAF のログで確かめる用。下の「試験用の WAF」。**費用がかかる** (月 8 USD 程度) ので試験のときだけ有効にする |
 | 秘匿値の読み取りの試験用 (任意) | シークレット 3 つ (名前は CloudFormation が付ける)、ロール `<prefix>-secret-reader` | `secretAccess.enabled`。シナリオ 10 (secret_access) 用。シークレットの値は生成した無意味な文字列。読み手のロールは `readonlyRole.trustedPrincipalArn` を信頼し、権限はこのシークレットと `/<prefix>/scenario-10` のパラメータの読み取りだけ (テストで固定)。シークレットは月 1.2 USD 程度かかるので試験のときだけ有効にする |
 | S3 ストアの試験用のバケット (任意) | バケット (名前は CloudFormation が付ける) | `storeBucket.enabled`。`store: s3://` の試験用 (ADR 0034)。バージョニング・SSE-S3・パブリックアクセスブロック・TLS の強制あり。`cdk destroy` で中身ごと消える (消すための Lambda のカスタムリソースが 1 つ付く)。読み取り専用ロールには権限を足さないので、arata の `store_profile` に開発者のプロファイルを書いて書き込む |
+| GitHub Actions の実行用ロール (任意) | `<prefix>-github-actions`、OIDC プロバイダ (`createProvider` のとき) | `githubOidc.enabled`。[examples/github-actions](../../examples/github-actions/README.md) の試験用。信頼は 1 つの repo と branch に限る。権限は読み取り専用ロールの引き受けと、ストアのバケットの `storePrefix` の読み書きだけ (`s3:ListBucket` はバケットに対して) |
 | Cost Anomaly Detection のモニター (任意) | `<prefix>` | `costAnomaly.enabled`。cost_anomaly 用 (AWS のサービスごとのモニター。無料。通知の購読は作らない)。AWS のサービスのモニターはアカウントに 1 つしか作れないので、既にあるアカウントでは `false` (既存のモニターを arata がそのまま読む)。異常の発生は試験できないので、doctor の権限とモニターの検出だけを確かめる |
 
 スタック名は `prefix` (既定 `arata-sandbox`)。出力: `ReadonlyRoleArn`、`NginxLogGroupName`、`ExternalRoleArn`、`TestUserNames`、(Bedrock を有効にしたとき) `InferenceProfileArn`、
-(WAF を有効にしたとき) `ApiUrl`・`WebAclArn`・`WafLogGroupName`、(secretAccess を有効にしたとき) `SecretReaderRoleArn`・`ScenarioSecretArns`・`ScenarioParameterPath`、(storeBucket を有効にしたとき) `StoreBucketName`。
+(WAF を有効にしたとき) `ApiUrl`・`WebAclArn`・`WafLogGroupName`、(secretAccess を有効にしたとき) `SecretReaderRoleArn`・`ScenarioSecretArns`・`ScenarioParameterPath`、(storeBucket を有効にしたとき) `StoreBucketName`、(githubOidc を有効にしたとき) `GithubActionsRoleArn`。
 
 ## 必要なもの
 
@@ -65,6 +66,10 @@ cp config.example.json ~/arata-sandbox/config.json
 | `testUsers[]` | `name` (prefix の後ろ)、`consolePassword`、`accessKey`。要らなければ `[]` |
 | `externalRole.trustedAccountId` / `externalId` | 外部用ロールを引き受けてよい外部アカウントと、要求する ExternalId (省略可) |
 | `guardDuty.enabled` / `accessAnalyzer.enabled` / `bedrock.enabled` / `waf.enabled` / `secretAccess.enabled` / `costAnomaly.enabled` / `storeBucket.enabled` | 任意の機能。暗黙の既定は持たないので、7 つとも書く (`waf`・`secretAccess` は例でも `false`。費用がかかる)。以前の設定ファイルには `"secretAccess": { "enabled": false }`・`"costAnomaly": { "enabled": false }`・`"storeBucket": { "enabled": false }` を足す |
+| `githubOidc.enabled` | 必須。無効なら `{ "enabled": false }` だけを書く。以前の設定ファイルにも足す。有効にするには `storeBucket.enabled: true` と、`readonlyRole.trustedPrincipalArn` が `arn:aws:iam::<account>:root` であることが要る (読み取り専用ロールの信頼は 1 主体だけなので、実行用ロールが引き受けられるようにアカウントを信頼する) |
+| `githubOidc.repository` / `branch` | 信頼するリポジトリ (`<owner>/<repo>`) とブランチ。完全一致で、ワイルドカードは使えない |
+| `githubOidc.createProvider` | GitHub の OIDC プロバイダを作るか。アカウントに 1 つだけなので、既にあれば `false`。`true` で作ると `cdk destroy` で消えるので、ほかが使っているアカウントでは `false` にする |
+| `githubOidc.storePrefix` | 読み書きを許す prefix。arata の `store: s3://<StoreBucketName>/<storePrefix>` と揃える |
 | `waf.challenge` / `waf.captcha` | 任意 (省略時は false)。試験用の WAF に Challenge (GET /search) と CAPTCHA (/contact) のルールを足す (ADR 0028)。`waf.enabled` が true のときだけ書ける。ルール 1 つにつき月 1 USD |
 | `bedrock.modelSourceArn` | `bedrock.enabled: true` のとき必須 |
 
