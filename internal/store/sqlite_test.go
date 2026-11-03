@@ -507,3 +507,79 @@ func TestFindingEventsAndHistory(t *testing.T) {
 		t.Fatal("unknown finding must fail")
 	}
 }
+
+// ack / snooze はその時点の重大度を suppressed_severity に記録する。resolve では空にする (ADR 0022)。
+func TestSuppressedSeverity(t *testing.T) {
+	st, _ := open(t)
+	ctx := context.Background()
+	f := Finding{ID: "f1", Check: "access_denied", Key: "arn:x", Severity: "medium", FirstSeen: ts, LastSeen: ts, LastChanged: ts, Status: FindingOpen}
+	if err := st.UpsertFinding(ctx, f); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetFindingStatus(ctx, "f1", FindingAcked, time.Time{}, ts); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := st.Finding(ctx, "f1")
+	if got.SuppressedSeverity != "medium" {
+		t.Fatalf("ack: %+v", got)
+	}
+	// suppressed の間に観測で severity が上書きされても suppressed_severity は残る
+	got.Severity = "low"
+	if err := st.UpsertFinding(ctx, *got); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := st.Finding(ctx, "f1"); got.Severity != "low" || got.SuppressedSeverity != "medium" {
+		t.Fatalf("upsert: %+v", got)
+	}
+	// snooze し直すとその時点の重大度
+	if err := st.SetFindingStatus(ctx, "f1", FindingSnoozed, ts.Add(72*time.Hour), ts); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := st.Finding(ctx, "f1"); got.SuppressedSeverity != "low" {
+		t.Fatalf("snooze: %+v", got)
+	}
+	if err := st.SetFindingStatus(ctx, "f1", FindingResolved, time.Time{}, ts); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := st.Finding(ctx, "f1"); got.SuppressedSeverity != "" {
+		t.Fatalf("resolve: %+v", got)
+	}
+}
+
+// schema 4 のストア (suppressed_severity 列が無い) は、acked / snoozed の行に今の severity を入れて移行する。
+func TestMigrateAddsSuppressedSeverity(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.Exec(`ALTER TABLE findings DROP COLUMN suppressed_severity`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.Exec(`UPDATE schema_version SET version=4`); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range []struct{ id, sev, status string }{{"a", "medium", FindingAcked}, {"s", "high", FindingSnoozed}, {"o", "low", FindingOpen}, {"r", "medium", FindingResolved}} {
+		if _, err := st.db.Exec(`INSERT INTO findings(id, "check", key, severity, first_seen, last_seen, last_changed, status) VALUES (?, 'access_denied', ?, ?, ?, ?, ?, ?)`,
+			r.id, "k-"+r.id, r.sev, fmtTime(ts), fmtTime(ts), fmtTime(ts), r.status); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st.Close()
+	st, err = Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	var v int
+	if err := st.db.QueryRow(`SELECT version FROM schema_version`).Scan(&v); err != nil || v != schemaVersion || schemaVersion < 5 {
+		t.Fatalf("version %d (%v)", v, err)
+	}
+	want := map[string]string{"a": "medium", "s": "high", "o": "", "r": ""}
+	for id, w := range want {
+		f, err := st.Finding(context.Background(), id)
+		if err != nil || f == nil || f.SuppressedSeverity != w {
+			t.Fatalf("%s: %+v %v (want %q)", id, f, err, w)
+		}
+	}
+}

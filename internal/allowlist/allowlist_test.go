@@ -3,6 +3,7 @@ package allowlist
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -181,5 +182,78 @@ func TestExampleAllowlist(t *testing.T) {
 	}
 	if _, st := l.Principal("arn:aws:iam::111122223333:root", time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)); st != StatusApproved {
 		t.Fatalf("account entry: %v", st)
+	}
+	if !l.DeniedExpected("arn:aws:iam::123456789012:role/ai-investigation-readonly", "logs:StartQuery", time.Date(2026, 11, 3, 0, 0, 0, 0, time.UTC)) {
+		t.Fatal("expected_denied example")
+	}
+}
+
+func TestExpectedDenied(t *testing.T) {
+	const ai = "arn:aws:iam::123456789012:role/ai-investigation-readonly"
+	l := load(t, `
+principals:
+  - arn: arn:aws:iam::123456789012:role/ai-investigation-readonly
+    tags: [ai]
+    note: 個人情報を含むロググループは IAM で Deny している
+    expected_denied: ["logs:StartQuery", "logs:Get*"]
+  - arn_pattern: arn:aws:iam::123456789012:role/ai-*
+    note: AI 用ロール共通
+    expected_denied: ["secretsmanager:*"]
+  - arn: arn:aws:iam::123456789012:role/legacy-batch
+    note: 移行中の旧ロール
+    expires: 2026-10-31
+    expected_denied: ["s3:*"]
+  - arn: arn:aws:iam::123456789012:role/no-denied
+    note: 主体の承認だけ
+`)
+	at := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	cases := []struct {
+		arn, api string
+		want     bool
+	}{
+		{ai, "logs:StartQuery", true},
+		{ai, "logs:GetLogEvents", true},             // glob
+		{ai, "logs:FilterLogEvents", false},         // 書いていない
+		{ai, "secretsmanager:GetSecretValue", true}, // arn_pattern の項目との和
+		{ai, "logs:startquery", false},              // 大文字小文字は区別する
+		{"arn:aws:iam::123456789012:role/ai-other", "logs:StartQuery", false},
+		{"arn:aws:iam::123456789012:role/ai-other", "secretsmanager:ListSecrets", true},
+		{"arn:aws:iam::123456789012:role/legacy-batch", "s3:GetObject", false}, // 期限切れは除かない
+		{"arn:aws:iam::123456789012:role/no-denied", "s3:GetObject", false},
+		{"arn:aws:iam::123456789012:role/unknown", "logs:StartQuery", false},
+	}
+	for _, tc := range cases {
+		if got := l.DeniedExpected(tc.arn, tc.api, at); got != tc.want {
+			t.Errorf("DeniedExpected(%s, %s) = %v, want %v", tc.arn, tc.api, got, tc.want)
+		}
+	}
+	// 期限内なら除く
+	if !l.DeniedExpected("arn:aws:iam::123456789012:role/legacy-batch", "s3:GetObject", time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC)) {
+		t.Error("legacy-batch before expires should be expected")
+	}
+	if !l.HasExpectedDenied() {
+		t.Error("HasExpectedDenied")
+	}
+	if load(t, sample).HasExpectedDenied() {
+		t.Error("sample has no expected_denied")
+	}
+}
+
+func TestExpectedDeniedValidation(t *testing.T) {
+	cases := []struct{ name, body, want string }{
+		{"no colon", "principals:\n  - arn: arn:aws:iam::1:user/x\n    note: x\n    expected_denied: [\"StartQuery\"]\n", `principals[0]: expected_denied[0] "StartQuery": want service:Action`},
+		{"empty glob", "principals:\n  - arn: arn:aws:iam::1:user/x\n    note: x\n    expected_denied: [\"logs:StartQuery\", \"\"]\n", `principals[0]: expected_denied[1] "": want service:Action`},
+		{"empty action", "principals:\n  - arn: arn:aws:iam::1:user/x\n    note: x\n    expected_denied: [\"logs:\"]\n", `expected_denied[0] "logs:"`},
+		{"space", "principals:\n  - arn: arn:aws:iam::1:user/x\n    note: x\n    expected_denied: [\"logs: StartQuery\"]\n", `expected_denied[0] "logs: StartQuery"`},
+		{"empty list", "principals:\n  - arn: arn:aws:iam::1:user/x\n    note: x\n    expected_denied: []\n", `principals[0]: expected_denied is empty`},
+		{"no note", "principals:\n  - arn: arn:aws:iam::1:user/x\n    expected_denied: [\"logs:StartQuery\"]\n", `principals[0]: note is required with expected_denied`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Parse([]byte(tc.body))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want %q", err, tc.want)
+			}
+		})
 	}
 }

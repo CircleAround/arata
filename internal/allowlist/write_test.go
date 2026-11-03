@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 var entry = NewEntry{ARN: "arn:aws:iam::123456789012:user/mallory", Note: "外注: 調査用 #2", ApprovedBy: "alice", ApprovedAt: "2026-10-21", Expires: "2026-12-31", Tags: []string{"deploy"}}
@@ -138,5 +139,24 @@ func TestAppendFile(t *testing.T) {
 	b, _ := os.ReadFile(p)
 	if !strings.HasPrefix(string(b), "# head\n") {
 		t.Fatalf("%s", b)
+	}
+}
+
+func TestAppendExpectedDenied(t *testing.T) {
+	const ai = "arn:aws:iam::123456789012:role/ai-investigation-readonly"
+	got, added, err := AppendBytes(nil, NewEntry{ARN: ai, Note: "個人情報のロググループは Deny", ApprovedBy: "alice", ApprovedAt: "2026-11-03",
+		ExpectedDenied: []string{"logs:StartQuery", "logs:Get*", "secretsmanager:*"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(added, `    expected_denied: ["logs:StartQuery", "logs:Get*", "secretsmanager:*"]`+"\n") {
+		t.Fatalf("added:\n%s", added)
+	}
+	l, err := Parse(got)
+	if err != nil || !l.DeniedExpected(ai, "logs:GetLogEvents", time.Date(2026, 11, 3, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("round trip: %v\n%s", err, got)
+	}
+	if _, _, err := AppendBytes(nil, NewEntry{ARN: ai, Note: "x", ExpectedDenied: []string{"StartQuery"}}); err == nil || !strings.Contains(err.Error(), `expected_denied "StartQuery": want service:Action`) {
+		t.Fatalf("bad glob: %v", err)
 	}
 }

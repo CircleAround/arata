@@ -21,7 +21,7 @@ import (
 //go:embed schema.sql
 var schemaSQL string
 
-const schemaVersion = 4
+const schemaVersion = 5
 
 // Dir は dir:// バックエンド。<dir>/audit.sqlite と <dir>/raw/ を持つ。
 type Dir struct {
@@ -78,6 +78,13 @@ func (s *Dir) migrate() error {
 	case n < schemaVersion:
 		// 追加したテーブルは schema.sql の CREATE IF NOT EXISTS で作られている。追加した列はここで足す
 		if err := s.addColumn("events", "collected_at", `TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("store: migrate: %w", err)
+		}
+		// schema 5: 既存の acked / snoozed は、今の重大度で ack / snooze したものとみなす (ADR 0022)
+		if err := s.addColumn("findings", "suppressed_severity", `TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("store: migrate: %w", err)
+		}
+		if _, err := s.db.Exec(`UPDATE findings SET suppressed_severity=severity WHERE status IN (?, ?) AND suppressed_severity=''`, FindingAcked, FindingSnoozed); err != nil {
 			return fmt.Errorf("store: migrate: %w", err)
 		}
 		_, err = s.db.Exec(`UPDATE schema_version SET version=?`, schemaVersion)
@@ -471,11 +478,12 @@ func (s *Dir) Metrics(ctx context.Context, f MetricFilter) ([]record.Metric, err
 // --- findings ---
 
 func (s *Dir) UpsertFinding(ctx context.Context, f Finding) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO findings(id, "check", key, severity, summary, first_seen, last_seen, last_changed, status, reported_at, snooze_until, fingerprint, data)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO findings(id, "check", key, severity, summary, first_seen, last_seen, last_changed, status, reported_at, snooze_until, fingerprint, data, suppressed_severity)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT("check", key) DO UPDATE SET severity=excluded.severity, summary=excluded.summary, first_seen=excluded.first_seen, last_seen=excluded.last_seen,
-		  last_changed=excluded.last_changed, status=excluded.status, reported_at=excluded.reported_at, snooze_until=excluded.snooze_until, fingerprint=excluded.fingerprint, data=excluded.data`,
-		f.ID, f.Check, f.Key, f.Severity, f.Summary, fmtTime(f.FirstSeen), fmtTime(f.LastSeen), fmtTime(f.LastChanged), f.Status, nullableTime(f.ReportedAt), nullableTime(f.SnoozeUntil), f.Fingerprint, toJSON(f.Data))
+		  last_changed=excluded.last_changed, status=excluded.status, reported_at=excluded.reported_at, snooze_until=excluded.snooze_until, fingerprint=excluded.fingerprint, data=excluded.data,
+		  suppressed_severity=excluded.suppressed_severity`,
+		f.ID, f.Check, f.Key, f.Severity, f.Summary, fmtTime(f.FirstSeen), fmtTime(f.LastSeen), fmtTime(f.LastChanged), f.Status, nullableTime(f.ReportedAt), nullableTime(f.SnoozeUntil), f.Fingerprint, toJSON(f.Data), f.SuppressedSeverity)
 	return wrap(err)
 }
 
@@ -515,7 +523,11 @@ func (s *Dir) SetFindingStatus(ctx context.Context, id, status string, snoozeUnt
 		return wrap(err)
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `UPDATE findings SET status=?, snooze_until=?, last_changed=? WHERE id=?`, status, nullableTime(snoozeUntil), fmtTime(at), id); err != nil {
+	suppressed := ""
+	if status == FindingAcked || status == FindingSnoozed {
+		suppressed = f.Severity
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE findings SET status=?, snooze_until=?, last_changed=?, suppressed_severity=? WHERE id=?`, status, nullableTime(snoozeUntil), fmtTime(at), suppressed, id); err != nil {
 		return wrap(err)
 	}
 	if status == FindingResolved && f.Status != FindingResolved {
@@ -663,7 +675,7 @@ func (s *Dir) Findings(ctx context.Context, check string, statuses []string) ([]
 }
 
 func (s *Dir) queryFindings(ctx context.Context, where string, args []any) ([]Finding, error) {
-	q := `SELECT id, "check", key, severity, summary, first_seen, last_seen, last_changed, status, COALESCE(reported_at,''), COALESCE(snooze_until,''), fingerprint, data FROM findings WHERE 1=1` + where + ` ORDER BY "check", key`
+	q := `SELECT id, "check", key, severity, summary, first_seen, last_seen, last_changed, status, COALESCE(reported_at,''), COALESCE(snooze_until,''), fingerprint, data, suppressed_severity FROM findings WHERE 1=1` + where + ` ORDER BY "check", key`
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, wrap(err)
@@ -673,7 +685,7 @@ func (s *Dir) queryFindings(ctx context.Context, where string, args []any) ([]Fi
 	for rows.Next() {
 		var f Finding
 		var first, last, changed, reported, snooze, data string
-		if err := rows.Scan(&f.ID, &f.Check, &f.Key, &f.Severity, &f.Summary, &first, &last, &changed, &f.Status, &reported, &snooze, &f.Fingerprint, &data); err != nil {
+		if err := rows.Scan(&f.ID, &f.Check, &f.Key, &f.Severity, &f.Summary, &first, &last, &changed, &f.Status, &reported, &snooze, &f.Fingerprint, &data, &f.SuppressedSeverity); err != nil {
 			return nil, wrap(err)
 		}
 		f.FirstSeen, f.LastSeen, f.LastChanged, f.ReportedAt, f.SnoozeUntil = parseTime(first), parseTime(last), parseTime(changed), parseTime(reported), parseTime(snooze)

@@ -326,6 +326,7 @@ type Observation struct {
 - `Fingerprint` が空でなければ changed 判定は Fingerprint の比較のみ (空なら Data 全体を比較)。イベント型は重大度 + 送信元 IP 集合 (+ 対象) のような安定した要素だけを Fingerprint に入れ、count / first_time / last_time は Data に残す。
 - `event` の finding は窓内に観測されなくても resolved にせず open のまま沈黙する (レポートの still_open にも出さない)。前回の窓より前が last_seen の finding が再観測されたら **recurred** として報告し Data を更新する。`state` は従来どおり未観測で resolved。
 - resolved だった finding が再観測されたら new。acked は再報告しない。snoozed は期日を過ぎた再観測で new として再報告する。
+- 決定 (ADR 0022): acked / 期日前の snoozed でも、観測の重大度が ack / snooze したときの重大度 (`suppressed_severity`) より重ければ **changed** として再報告し open に戻す (全チェック共通)。Data に `escalated_from_suppressed: true`・`suppressed_status`・`suppressed_severity` を、Summary の先頭に「(確認済み (ack) だったが重大度が medium → high に上昇)」を付ける。event 型の recurred の条件と重なっても changed。重大度が同じか軽ければ suppressed のまま。Fingerprint の変化 (IP の増減) では解かない
 - 判定に使う時刻は実行時刻 (now)。finding の `first_seen` / `last_changed` もこれで記録する。
 - recurred の境界は `last_seen < 今回の窓の From` (last_seen は前回観測した run の実行時刻)。前回の窓と今回の窓が連続していれば still_open、途切れていれば recurred。
   From は再走査 (3 章、ADR 0013) を含まない本来の From。
@@ -350,7 +351,7 @@ S3 の条件付き書き込みでロック)。SQLite ファイルは数十 MB �
 | `principal_ips` | arn, ip, country, first_seen, last_seen, count | 主体 × IP の初出判定。決定: count は各 run の窓 [From, To) の件数の和 (再走査の重なり区間は行を初めて作るときだけ数える。3 章) |
 | `events` | time, source, name, principal_arn, ip, region, resource, data | 「注目イベント」のみ (ルート利用、IAM 変更など)。全 CloudTrail は保存しない。決定: 注目の判定は collector 側 (`cloudtrail.DefaultNotable`) で行い、ルート利用・AssumeRole*・IAM / CloudTrail / GuardDuty / Organizations の書き込み・秘匿値取得・SSM セッション・公開設定変更を残す。決定: 拒否された呼び出し (errorCode が `checks.access_denied.error_codes` に入るもの) も読み取りを含めて残す (access_denied の元。コードは設定から `cloudtrail.NotableWith` に渡す。ADR 0021)。`event_id` で重複を排除する (複数リージョンを引いた場合の二重も同じ仕組みで防ぐ。collector 側でも同一 Collect 内の event_id は 1 回だけ数える)。決定: `collected_at` (最初に収集した run の時刻) を持ち、再走査で遅れて届いたイベントを見分ける (3 章、ADR 0013) |
 | `metrics` | date, source, metric, key, value | 日次集計 (`sign_in_failures` by ip、`admin_404` by ip、`waf_block` by rule)。平常帯の計算元。決定: 集計元のレコード種類 `from` 列を追加。主キーは (date, source, metric, key) で、後から来た値で**置き換える** (3 章の決定により後の値ほど完全)。raw JSONL には追記されるので rebuild は行順に適用すれば同じ結果になる。日は UTC |
-| `findings` | id, check, key, severity, first_seen, last_seen, last_changed, status (open/resolved/acked/snoozed), reported_at, fingerprint, data | 差分判定の中核。決定: `fingerprint` 列を追加 (4-2) |
+| `findings` | id, check, key, severity, first_seen, last_seen, last_changed, status (open/resolved/acked/snoozed), reported_at, fingerprint, data, suppressed_severity | 差分判定の中核。決定: `fingerprint` 列を追加 (4-2)。決定: `suppressed_severity` (ack / snooze したときの重大度。open / resolved では空) を追加 (schema 5、ADR 0022)。移行では既存の acked / snoozed の行に今の severity を入れる |
 | `posture` | check, resource, value, first_seen, last_changed | 姿勢チェックの現在値。決定: 作らず `snapshot_items` にまとめた (ADR 0015) |
 | `snapshot_items` | kind, source, key, data, collected_at | 決定: アカウント単位の状態 (認証情報レポート・GuardDuty・Access Analyzer・姿勢) の最新のスナップショット。収集が成功したときだけ (kind, source) 単位で丸ごと置き換える (ADR 0015) |
 | `finding_events` | finding_id, check, key, class, severity, summary, at, run_id, profile, data | 決定: finding の状態遷移 (new / changed / recurred / resolved) の履歴。run の差分判定、人の resolve / approve、allowlist の編集による解消で追記する。期間レポートの元 (ADR 0016) |
@@ -384,6 +385,12 @@ principals:
   - arn: arn:aws:iam::123456789012:user/contractor-x
     approved_at: 2026-10-21
     expires: 2026-12-31          # 期限付き承認。過ぎたら expired として再報告
+  - arn: arn:aws:iam::123456789012:role/ai-investigation-readonly
+    tags: [ai]
+    note: 個人情報を含むロググループは IAM で Deny している。その読み取りの拒否は想定内
+    expected_denied: ["logs:StartQuery", "logs:GetLogEvents", "logs:FilterLogEvents"]  # access_denied で数えない拒否 (ADR 0022)
+    approved_by: alice
+    approved_at: 2026-11-03
 source_ips:
   - cidr: 203.0.113.0/24
     note: 本社オフィス
@@ -401,6 +408,10 @@ secrets_access:
 - CloudTrail の `userIdentity.type` が `AWSAccount` (他アカウントからのクロスアカウント AssumeRole) の主体は `arn:aws:iam::<アカウント>:root` (kind は unknown) に正規化される。
   レポートの文面ではこれを「外部アカウント NNN」と書き、Data に `external_account` を添える。自アカウントの Root (kind=root、root_usage が扱う) とは区別する。
 - `tags` の語彙は `deploy` (ADR 0008) と `ai` (決定: Step 3。監査ロール・AI 用の主体。ai_path_usage が利用を毎回 info に出す)。approve は語彙外のタグを拒否する。
+- 決定 (ADR 0022): `expected_denied` は access_denied で数えない「想定済みの拒否」(「サービス:操作」の glob。`*` は任意の文字列、`?` は 1 文字、大文字小文字を区別)。
+  主体に一致する期限内の項目すべての `expected_denied` の和で判定する (項目ごとに理由と期限が違ってよいため。タグの判定に使う項目の選び方と、同じ arn の重複の後勝ちは変えない)。
+  期限切れの項目の分は除かない。空のリスト・空の要素・コロンの無いもの・空白を含むものは読み込みエラー。`expected_denied` を持つ項目は `note` が必須。
+  項目そのものは主体も承認する (expected_denied のためだけに項目を作ると new_principal なども止まる)。
 
 ### 6-2. 状態遷移
 
@@ -411,7 +422,7 @@ secrets_access:
    │     → allowlist.yaml に追記 (approved_by は OS ユーザーか --by)、finding は resolved
    │     → 追記後の allowlist で対象主体が承認済みになる他の finding (new_principal / unknown_assume_role) も resolved
    │     → git への commit は人が行う (--commit で代行も可)
-   ├─ arata ack <finding-id>         → acked。再報告しないが週次の未対応一覧には残る
+   ├─ arata ack <finding-id>         → acked。再報告しないが週次の未対応一覧には残る (重大度が上がれば changed で再報告)
    ├─ arata snooze <finding-id> --until 2026-11-01   → 期日まで沈黙、期日に再報告
    ├─ arata resolve <finding-id>     → resolved。再び観測されたら new
    └─ 放置                              → still_open。週次の未対応一覧に残り続ける
@@ -435,6 +446,10 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
   allowlist で承認済みのものを resolved にし、Data に `resolved_reason: allowlisted` と `allowlist_subject` を残す。evaluate で解消したものはレポートの `resolved` に出る。
   unknown_assume_role は event 型で、観測されなくても resolved にならないため、これが無いと承認後も未対応一覧に残り続ける。
   iam_changes は対象外 (承認済みでも deploy タグの無い主体の IAM 変更は報告するチェックなので、承認を理由に解消すると次の観測で new に戻る)。approve した 1 件だけを resolved にする。
+- 決定 (ADR 0022): access_denied は `approve <id> --expected-denied <glob>` (複数可) でだけ approve できる。主体 (外部アカウントの root なら `account:`) の項目を
+  `expected_denied` 付きで追記し、finding は resolved にしない (次の run で除いて数え直す。event 型なので閾値を下回れば open のまま沈黙する)。
+  主体の項目が既にあれば書き換えずに止まり、足す行 (`expected_denied: [...]`) をエラーに示す。`--expected-denied` を付けない approve は拒否する。
+- 決定 (ADR 0022): ack / snooze はその時点の重大度を `suppressed_severity` に記録する。それより重い観測で再報告される (4-2)。
 - `snooze --until YYYY-MM-DD` はその日の 0 時 (UTC) まで沈黙し、以後の再観測で new として再報告する。`resolve` / `ack` / `snooze` は resolved の finding には使えない。
 - `review` は既定で open / acked を重大度の高い順 → 初出の古い順に出す。`--status` で snoozed / resolved も出せる。approve できるものは対象 (`approve`) を示す。`--format table|json`。
 
@@ -494,7 +509,8 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 - 評価するのは窓のイベント (再走査で遅れて届いた分を含む。ADR 0013)。UTC の日では分けない (日をまたぐ列挙が割れないように)。平常帯は窓の始まりの日の前日から baseline_days 日の、その主体自身の日ごとの件数・種類 (無い日は 0) の中央値 × factor。拒否のある過去日が min_baseline_days 未満なら平常帯 0
 - 決定: 平常帯は丸 1 日と比べるので、daily (窓 24h) を前提とする。窓が 24h より短いプロファイル (hourly に入れた場合) では窓が短い分だけ鳴りにくい (いまは daily だけ。hourly は将来の課題)
 - 決定: error_codes は保存 (events) の条件なので overrides では変えられない。後から足したコードは、足す前の拒否が保存されていないので平常帯 0 から始まる
-- サービス主体と root は対象外。allowlist で承認済みでも対象 (止めるのは ack / snooze)。Data: principal, principal_kind, allowlist_status, external_account, count, distinct_apis, apis (件数の多い順に最大 10 個、`iam:ListUsers × 3`), error_codes, ips, first_time, last_time, baseline_median_count, baseline_median_distinct, threshold (`breadth` / `volume`)
+- 決定 (ADR 0022): 想定済みの拒否 (allowlist の `expected_denied`。窓の終わりの時点で期限内の項目) は数える前に除く。窓にも平常帯の過去分にも同じく適用する (平常帯に残すと、ふだんの想定内の拒否で平常帯が膨らみ想定外の拒否を吸収するため)。窓で除いた件数は Data の `expected_denied_excluded`
+- サービス主体と root は対象外。allowlist で承認済みでも対象 (想定内の拒否は `expected_denied` で除く。主体ごと止めるなら ack / snooze だが、重大度が上がれば再報告される)。Data: principal, principal_kind, allowlist_status, external_account, count, distinct_apis, expected_denied_excluded, apis (件数の多い順に最大 10 個、`iam:ListUsers × 3`), error_codes, ips, first_time, last_time, baseline_median_count, baseline_median_distinct, threshold (`breadth` / `volume`)
 
 決定 (週次チェックと ai_path_usage。Step 3、ADR 0015):
 
@@ -575,7 +591,7 @@ arata rebuild                  # raw JSONL から SQLite を再構築
 - `summary.max_severity` は new / changed / recurred の最大。still_open を含めると毎回鳴るため含めない。
 - severity=info の finding は new / changed でも `findings` には入れず `info` に入れ、summary のカウントにも含めない。
 - `already_reported` は still_open のうち first_seen が窓内かつ reported_at が付いているもの (hourly で報告済みの事象が daily に現れた場合)。
-- acked / snoozed 中の finding はレポートに出さない。
+- acked / snoozed 中の finding はレポートに出さない。決定 (ADR 0022): ただし重大度が ack / snooze したときより上がったものは `changed` に出す (Data の `escalated_from_suppressed`)。
 - `coverage.checks_run` を追加し、実際に走ったチェック名を出す。
 - 決定 (Step 3): `coverage.sources_failed` / `summary.collect_errors` に `action` (不足した IAM action) と `partial` (一部の項目だけ取れず、取れた項目で評価した) を足す。
 

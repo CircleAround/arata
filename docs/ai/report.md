@@ -51,6 +51,10 @@
   `breadth` は乗っ取りや侵害の疑い、`volume` だけなら設定ミスのアプリの可能性が高い
 - access_denied は allowlist で承認済みの主体 (`allowlist_status: approved`) でも出る。承認は「その主体が居ること」を認めるもので、権限を探ってよいという意味ではない。
   承認済みの主体の列挙は乗っ取り・SaaS 側の侵害の疑いとして扱う
+- access_denied の data の `expected_denied_excluded` は、allowlist の `expected_denied` (想定済みの拒否) に一致して数えなかった件数。
+  数に含まれていない分があることを書き添える。想定内の拒否が多い主体なら `expected_denied` を提案する (`arata help ai approve`)
+- data に `escalated_from_suppressed: true` がある changed は、人が ack / snooze していた finding の重大度が上がったもの
+  (`suppressed_status` は acked / snoozed、`suppressed_severity` はそのときの重大度)。「確認済みだった」ことより、悪化したことを優先して書く
 - allowlist のメモ、前回レポート、時間帯 (デプロイ時刻、メンテナンス時間) を踏まえる
 
 ## 分類の基準

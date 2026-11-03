@@ -75,6 +75,8 @@ type Finding struct {
 	SnoozeUntil time.Time // snoozed のときの期日
 	Fingerprint string
 	Data        map[string]any
+	// SuppressedSeverity は ack / snooze したときの重大度 (ADR 0022)。観測がこれより重くなったら再報告する。open / resolved では空。
+	SuppressedSeverity string
 }
 
 // FindingEvent は finding の状態遷移 1 件 (finding_events)。Severity / Summary / Data はその時点の値。
@@ -161,6 +163,7 @@ type Store interface {
 	// Finding は ID で 1 件引く。無ければ nil。
 	Finding(ctx context.Context, id string) (*Finding, error)
 	// SetFindingStatus は人の判断 (approve / ack / snooze / resolve) で状態を変える。snoozeUntil は snoozed のときだけ使う。
+	// acked / snoozed にしたときはその時点の重大度を suppressed_severity に記録し、それ以外では空にする。
 	// resolved にしたときは finding_events にも resolved を記録する (run_id 空)。
 	SetFindingStatus(ctx context.Context, id, status string, snoozeUntil, at time.Time) error
 	MarkReported(ctx context.Context, ids []string, at time.Time) error

@@ -24,6 +24,9 @@ import (
 //   - 幅: 拒否された API (eventSource:eventName) の種類が min_distinct_apis 以上かつ平常帯を超える → medium。high_distinct_apis 以上なら high。
 //   - 量: 件数が max(min_count, 中央値 × factor) を超える → medium。両方満たせば重い方を 1 件 (Data の threshold は breadth)。
 //   - サービス主体と root (root_usage が扱う) は除く。allowlist で承認済みでも除かない (承認は「居ること」を認めるもので、権限を探ってよいではない)。
+//   - 想定済みの拒否 (allowlist の expected_denied。窓の終わりの時点で期限内の項目) は数える前に除く。窓にも平常帯にも同じく適用する
+//     (平常帯に残すと、ふだんの想定内の拒否で平常帯が膨らみ、想定外の拒否が吸収されるため)。窓で除いた件数は Data の
+//     expected_denied_excluded に残す (ADR 0022)。
 type AccessDenied struct {
 	Config config.AccessDenied
 }
@@ -60,9 +63,15 @@ func (c AccessDenied) Evaluate(ctx context.Context, q store.Query, w collect.Win
 		apis  map[string]int
 		codes map[string]bool
 	}
+	expected := func(e record.TrailEvent) bool { return al.DeniedExpected(e.PrincipalARN, deniedAPI(e), w.To) }
 	byP := map[string]*cur{}
+	excluded := map[string]int{}
 	for _, e := range evs {
 		if !deniedTarget(e) {
+			continue
+		}
+		if expected(e) {
+			excluded[e.PrincipalARN]++
 			continue
 		}
 		p, ok := byP[e.PrincipalARN]
@@ -94,7 +103,7 @@ func (c AccessDenied) Evaluate(ctx context.Context, q store.Query, w collect.Win
 	for _, e := range past {
 		date := e.Time.UTC().Format(record.DateLayout)
 		datesWithData[date] = true
-		if !deniedTarget(e) {
+		if !deniedTarget(e) || expected(e) {
 			continue
 		}
 		if hist[e.PrincipalARN] == nil {
@@ -154,6 +163,7 @@ func (c AccessDenied) Evaluate(ctx context.Context, q store.Query, w collect.Win
 		a.extra["principal_kind"] = string(p.kind)
 		a.extra["allowlist_status"] = string(status)
 		a.extra["distinct_apis"] = distinct
+		a.extra["expected_denied_excluded"] = excluded[arn]
 		a.extra["apis"] = topAPIs(p.apis, maxDeniedAPIs)
 		a.extra["error_codes"] = sortedKeys(p.codes)
 		a.extra["baseline_median_count"] = medCount

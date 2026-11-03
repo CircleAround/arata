@@ -38,9 +38,18 @@ type PrincipalEntry struct {
 	ApprovedAt string   `yaml:"approved_at"`
 	Expires    string   `yaml:"expires"`
 	Tags       []string `yaml:"tags"` // 決定: 任意のタグ。`deploy` なら iam_changes を info に下げる
+	// ExpectedDenied は access_denied で数えない「想定済みの拒否」(「サービス:操作」の glob。ADR 0022)。
+	// 主体の承認とは独立に評価するが、項目そのものは主体を承認する (expected_denied だけの項目でも new_principal などは止まる)。
+	ExpectedDenied []string `yaml:"expected_denied"`
 
 	expires time.Time
 	pattern *regexp.Regexp
+	denied  []*regexp.Regexp
+}
+
+// active は at 時点で期限内か。
+func (e *PrincipalEntry) active(at time.Time) bool {
+	return e.expires.IsZero() || at.Before(e.expires)
 }
 
 // Subject はエントリが承認する対象の表示 (arn / account:NNN / arn_pattern)。
@@ -88,6 +97,26 @@ func AccountOf(arn string) string {
 }
 
 var accountRe = regexp.MustCompile(`^\d{12}$`)
+
+// deniedGlobRe は expected_denied の書式 (サービス:操作。空白なし、両側とも空でない)。
+var deniedGlobRe = regexp.MustCompile(`^[^:\s]+:[^:\s]+$`)
+
+// CheckDeniedGlob は expected_denied の 1 件の書式を確かめる。
+func CheckDeniedGlob(g string) error {
+	if !deniedGlobRe.MatchString(g) {
+		return fmt.Errorf("%q: want service:Action (the form of access_denied apis, e.g. logs:StartQuery, logs:Get*, secretsmanager:*)", g)
+	}
+	return nil
+}
+
+// FormatExpectedDenied は expected_denied の値を YAML のフロー形式 (["logs:StartQuery", "logs:Get*"]) で書く。
+func FormatExpectedDenied(globs []string) string {
+	q := make([]string, len(globs))
+	for i, g := range globs {
+		q[i] = fmt.Sprintf("%q", g)
+	}
+	return "[" + strings.Join(q, ", ") + "]"
+}
 
 // MatchPattern は arn_pattern (glob) が arn に一致するか。
 func MatchPattern(pattern, arn string) (bool, error) {
@@ -214,6 +243,24 @@ func Parse(b []byte) (*List, error) {
 			// 期限日の終わりまで有効
 			e.expires = t.Add(24 * time.Hour)
 		}
+		if e.ExpectedDenied != nil {
+			if len(e.ExpectedDenied) == 0 {
+				return nil, fmt.Errorf("principals[%d]: expected_denied is empty (remove it or list service:Action globs such as logs:StartQuery)", i)
+			}
+			if strings.TrimSpace(e.Note) == "" {
+				return nil, fmt.Errorf("principals[%d]: note is required with expected_denied (why these denials are expected)", i)
+			}
+			for j, g := range e.ExpectedDenied {
+				if err := CheckDeniedGlob(g); err != nil {
+					return nil, fmt.Errorf("principals[%d]: expected_denied[%d] %w", i, j, err)
+				}
+				re, err := globToRegexp(g)
+				if err != nil {
+					return nil, fmt.Errorf("principals[%d]: expected_denied[%d]: %w", i, j, err)
+				}
+				e.denied = append(e.denied, re)
+			}
+		}
 		if e.ARN != "" {
 			l.byARN[e.ARN] = e
 		} else {
@@ -245,7 +292,7 @@ func (l *List) Principal(arn string, at time.Time) (*PrincipalEntry, Status) {
 	}
 	var approved, expired *PrincipalEntry
 	for _, e := range matched {
-		if !e.expires.IsZero() && !at.Before(e.expires) {
+		if !e.active(at) {
 			if expired == nil || e.specificity() > expired.specificity() {
 				expired = e
 			}
@@ -262,6 +309,35 @@ func (l *List) Principal(arn string, at time.Time) (*PrincipalEntry, Status) {
 		return expired, StatusExpired
 	}
 	return nil, StatusUnknown
+}
+
+// DeniedExpected は、arn の api (「サービス:操作」) の拒否が、at 時点で期限内の項目の expected_denied に一致するか。
+//
+// 決定: 主体に一致する期限内の項目すべての expected_denied の和で判定する。Principal は同じ arn の重複項目を後勝ちで 1 つだけ見るが、
+// 想定済みの拒否は項目ごとに理由 (note) と期限が違ってよいので、どれか 1 つの項目に書いてあれば除く。Principal の後勝ちは変えない。
+func (l *List) DeniedExpected(arn, api string, at time.Time) bool {
+	for i := range l.Principals {
+		e := &l.Principals[i]
+		if len(e.denied) == 0 || !e.active(at) || !e.matches(arn) {
+			continue
+		}
+		for _, re := range e.denied {
+			if re.MatchString(api) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// HasExpectedDenied は expected_denied を持つ項目が 1 つでもあるか。
+func (l *List) HasExpectedDenied() bool {
+	for i := range l.Principals {
+		if len(l.Principals[i].denied) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // SourceIPAllowed は IP が source_ips のいずれかに含まれるか。
