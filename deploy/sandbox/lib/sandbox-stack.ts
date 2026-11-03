@@ -12,6 +12,7 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import type { Construct } from 'constructs';
 import { loadConfig, type SandboxConfig } from './config.ts';
+import { SandboxWaf } from './waf.ts';
 
 /** 顧客に配る読み取り専用ロール。sandbox はこれをそのまま取り込む (定義は 1 か所。ADR 0020)。 */
 export const READONLY_ROLE_TEMPLATE = fileURLToPath(new URL('../../iam/readonly-role.yaml', import.meta.url));
@@ -98,6 +99,10 @@ export class SandboxStack extends Stack {
         modelSource: { copyFrom: config.bedrock.modelSourceArn! },
       });
       new CfnOutput(this, 'InferenceProfileArn', { value: profile.attrInferenceProfileArn });
+    }
+    if (config.waf.enabled) {
+      // WAF の修正提案の試験用 (費用がかかる。試験のときだけ。lib/waf.ts)。ログの保持は nginx のロググループと同じ日数
+      new SandboxWaf(this, 'Waf', { prefix: p, retentionDays: config.nginxLogGroup.retentionDays });
     }
 
     new CfnOutput(this, 'ReadonlyRoleArn', { value: readonlyRole.attrArn });

@@ -135,3 +135,27 @@ test('loadConfig: ファイルが無い・JSON でない場合はパスを含む
 test('loadConfig: パスが指定されていなければ渡し方を案内する', () => {
   assert.throws(() => loadConfig(undefined), (e: unknown) => e instanceof ConfigError && e.message.includes('-c config='));
 });
+
+test('waf は必須で、enabled は真偽値 (暗黙の既定を持たない)', () => {
+  assert.equal(parseConfig(example()).waf.enabled, false, 'config.example.json は false (費用がかかるので試験のときだけ有効にする)');
+
+  const missing = example();
+  delete missing.waf;
+  assert.ok(errorsOf(() => parseConfig(missing)).some((p) => p.startsWith('waf:') && p.includes('必須')));
+
+  const noEnabled = example();
+  noEnabled.waf = {};
+  assert.ok(errorsOf(() => parseConfig(noEnabled)).some((p) => p.startsWith('waf.enabled:') && p.includes('必須')));
+
+  const wrongType = example();
+  wrongType.waf = { enabled: 'yes' };
+  assert.ok(errorsOf(() => parseConfig(wrongType)).some((p) => p.startsWith('waf.enabled:') && p.includes('真偽値')));
+
+  const unknown = example();
+  unknown.waf = { enabled: true, rateLimit: 10 };
+  assert.ok(errorsOf(() => parseConfig(unknown)).some((p) => p.startsWith('waf.rateLimit:') && p.includes('未知')));
+
+  const on = example();
+  on.waf = { enabled: true };
+  assert.equal(parseConfig(on).waf.enabled, true);
+});
