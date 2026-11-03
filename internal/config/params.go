@@ -22,7 +22,9 @@ const (
 var CollectionParams = map[string]bool{"paths": true, "methods": true, "failure_statuses": true, "statuses": true, "exclude_paths": true, "error_codes": true,
 	"top_paths": true, "rate_path_groups": true, "trusted_cidrs": true,
 	// endpoint_abuse の画面・時間幅・連鎖も日次集計の条件 (ADR 0030)
-	"endpoints": true, "window": true, "follow_ups": true}
+	"endpoints": true, "window": true, "follow_ups": true,
+	// cost_anomaly の GetAnomalies の範囲と下限も問い合わせの条件 (スナップショットは全プロファイル共有。ADR 0032)
+	"lookback_days": true, "min_impact_usd": true}
 
 // Param はチェックのパラメータ 1 つ (checks.<Check>.<Key>)。
 type Param struct {

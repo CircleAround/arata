@@ -16,12 +16,16 @@ github.com/aws/aws-sdk-go-v2/internal/v4a v1.5.6 h1:Qmn60RWuk9+bd2ddvJJqwf3Cpac3
 github.com/aws/aws-sdk-go-v2/internal/v4a v1.5.6/go.mod h1:h/YJhe4AVyQxEUMluph10iqV7mjajH7A9L+BHF5ppis=
 github.com/aws/aws-sdk-go-v2/service/accessanalyzer v1.57.4 h1:0ilOs5ir/t7JD0uCA/4usYr0uPB8yoZ5TvfDt8/+KE0=
 github.com/aws/aws-sdk-go-v2/service/accessanalyzer v1.57.4/go.mod h1:5FS7RUepH0zfSJC5qs64HngPQ2cbkZ/t9V+70ckudxA=
+github.com/aws/aws-sdk-go-v2/service/account v1.42.3 h1:kBUSY0FR4aj/R5VosjNDafKU6wuxiMnr08iufcgsuL8=
+github.com/aws/aws-sdk-go-v2/service/account v1.42.3/go.mod h1:GZNZXV81nkkHpUsbxnuiwjuniZxzJbvPf5QWBweoDb4=
 github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.63.4 h1:XW1H5pGqfSKa9S5+G9ICFBTKy3nmThAYwjYEhcTQ3zI=
 github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.63.4/go.mod h1:FLNP7RBDx4uMBFj96X6r6zNZiuxFVzuaMJZoGdwBQ5o=
 github.com/aws/aws-sdk-go-v2/service/cloudtrail v1.65.4 h1:X+AYJ7DKcCpvq2dnY4oNPlL6NqMga+aLq3V7Ei8bAeU=
 github.com/aws/aws-sdk-go-v2/service/cloudtrail v1.65.4/go.mod h1:VU2PgU7YTdvw3xr65f7PWgCT2oWNIBZE7zj2M5rW2Ic=
 github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs v1.89.3 h1:Ko7t4Gcbo6KG3EHz+aE7mNmkGeTnFOCweeqCM8v3k/o=
 github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs v1.89.3/go.mod h1:EPgYb5ANskWf9TqjokpS+1yEMgClBO15HdGU29JiiSM=
+github.com/aws/aws-sdk-go-v2/service/costexplorer v1.74.1 h1:TK+Hfn2ayR5g1ZrOHHFVg033F0brKyiKk16VDXn9ZIw=
+github.com/aws/aws-sdk-go-v2/service/costexplorer v1.74.1/go.mod h1:KwwGgz0pLqX+tuHBZzvQMh8rHgm2m/SYRIdYyufDmb8=
 github.com/aws/aws-sdk-go-v2/service/guardduty v1.99.1 h1:d2tyBBUAd5B5I4LU8mXWJhfNmT/yJNsEsE8XU/WCTkk=
 github.com/aws/aws-sdk-go-v2/service/guardduty v1.99.1/go.mod h1:l3W5Wgp0RS0VEP77x9Pp90oYoAh4p41rmZVu/6ynwbo=
 github.com/aws/aws-sdk-go-v2/service/iam v1.64.4 h1:28xB3Sghdz+BOBpar3ksuZ6vdoGRxmcgowF/TRxvgsI=

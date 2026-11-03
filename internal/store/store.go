@@ -100,6 +100,11 @@ type EventFilter struct {
 	EventSources   []string
 	PrincipalKinds []record.PrincipalKind
 	WriteOnly      bool // read_only=false のみ
+	// Sources は events.source (収集したソースの ID) がこの集合に入るもの、ExcludeSources は入らないもの。
+	// 決定 (ADR 0032): ふだん使わないリージョン (cloudtrail-unused-regions) のイベントは unused_region_activity だけが見る。
+	// engine が他のチェックに渡す Query は ExcludeSources でそのソースを除く (二重の報告と既存チェックの結果の変化を防ぐ)。
+	Sources        []string
+	ExcludeSources []string
 	// ErrorCodes は error_code がこの集合に入るもの (完全一致)。拒否された呼び出し (access_denied) に使う。
 	ErrorCodes []string
 	// LateFrom と CollectedSince が両方あれば、[LateFrom, from) のうち collected_at >= CollectedSince のもの

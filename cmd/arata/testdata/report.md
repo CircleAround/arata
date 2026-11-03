@@ -55,7 +55,9 @@
 - 取得に失敗したソース: なし
 - 実行したチェック: access_denied, ai_path_usage, defense_evasion, iam_changes, new_principal, principal_new_source, public_exposure, root_usage, secret_access, unknown_assume_role
 - スキップしたチェック:
+  - cost_anomaly: no cost_anomaly source
   - endpoint_abuse: no http_access source
   - login_bruteforce: no http_access source
   - probe_paths: no http_access source
+  - unused_region_activity: no unused_region_event source
   - waf_block_trend: no waf_action source
