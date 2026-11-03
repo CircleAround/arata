@@ -97,7 +97,7 @@ func proposals(b *strings.Builder, l []Proposal) {
 		}
 	}
 	fmt.Fprintf(b, "## WAF の修正提案の候補 (%d)\n\n", len(props))
-	b.WriteString("arata が決まった規則で作った候補。適用するかは人が判断する (段階: count_first = まず COUNT で様子を見る、block = BLOCK に上げる、review = 見直す)。\n\n")
+	b.WriteString("arata が決まった規則で作った候補。適用するかは人が判断する (段階: count_first = まず COUNT で様子を見る、review = 見直す)。\n\n")
 	if len(props) == 0 {
 		b.WriteString("提案はありません。\n\n")
 	}
@@ -109,7 +109,7 @@ func proposals(b *strings.Builder, l []Proposal) {
 		b.WriteString("\n")
 	}
 	if len(obs) > 0 {
-		fmt.Fprintf(b, "### 観察 (提案なし) (%d)\n\n", len(obs))
+		fmt.Fprintf(b, "### 観察 (提案なし。COUNT のルールの状況を含む) (%d)\n\n", len(obs))
 		for _, p := range obs {
 			fmt.Fprintf(b, "- **[%s / %s]** %s\n", p.About, p.Reason, p.Summary)
 			evidence(b, p.Evidence)

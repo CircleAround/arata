@@ -151,7 +151,6 @@ func TestWAFReview(t *testing.T) {
 	want := []string{
 		"false_positive:AWS-AWSManagedRulesCommonRuleSet/CrossSiteScripting_BODY:POST /posts/:id",
 		"false_positive:block-admin/:GET /admin/reports",
-		"count_to_block:AWS-AWSManagedRulesKnownBadInputsRuleSet/: ",
 		"probe_allowed:/: ",
 		"rate_limit_missing:/: *",
 		"rate_limit_loose:rate-login/: /login",
@@ -161,7 +160,10 @@ func TestWAFReview(t *testing.T) {
 		"observation:AWS-AWSManagedRulesCommonRuleSet/SizeRestrictions_QUERYSTRING:POST /users/sign_in (false_positive, excluded_by_rule)",
 		"observation:deleted-rule/:GET /home (false_positive, undetermined)",
 		"observation:rate-login/:POST /login (false_positive, excluded_by_rule)",
-		"observation:count-geo/:  (count_to_block, below_threshold)",
+		// COUNT のルールの状況 (計画の材料。提案ではない)
+		"observation:AWS-AWSManagedRulesCommonRuleSet/SizeRestrictions_BODY:  (count_rule_status, informational)",
+		"observation:AWS-AWSManagedRulesKnownBadInputsRuleSet/:  (count_rule_status, informational)",
+		"observation:count-geo/:  (count_rule_status, informational)",
 		"observation:/: /api/ (rate_limit_missing, excluded_by_config)",
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
@@ -176,10 +178,25 @@ func TestWAFReview(t *testing.T) {
 	if byKind["false_positive"][1].FindingKey != "" {
 		t.Fatalf("12 IP は finding にしない: %+v", byKind["false_positive"][1])
 	}
-	cb := byKind["count_to_block"][0]
-	if cb.Stage != StageBlock || cb.Evidence["matching_days"] != 14 || cb.Evidence["matches"] != 280.0 || cb.Evidence["suspect_ratio"] != 1.0 ||
-		cb.Evidence["suspect_blocked_ip_excludes"] != "rate_based_rules,default_action,sign_in_paths" || !strings.Contains(cb.Summary, "レート制限以外で BLOCK") {
-		t.Fatalf("count: %+v", cb)
+	status := map[string]schema.Proposal{}
+	for _, p := range byKind[ProposalObservation] {
+		if p.About == AboutCountRuleStatus {
+			status[p.Rule+"/"+p.RuleInGroup] = p
+		}
+	}
+	kbi := status["AWS-AWSManagedRulesKnownBadInputsRuleSet/"]
+	if kbi.Reason != ReasonInformational || kbi.Evidence["matching_days"] != 7 || kbi.Evidence["days"] != 7 || kbi.Evidence["matches"] != 140.0 ||
+		kbi.Evidence["suspect_ratio"] != 1.0 || kbi.Evidence["suspect_blocked_ip_excludes"] != "rate_based_rules,default_action,sign_in_paths" ||
+		kbi.Summary != "prod-waf: COUNT の AWS-AWSManagedRulesKnownBadInputsRuleSet: 直近 7 日で 140 件一致、うち怪しい通信 100%、一致した日 7 / 7 日" {
+		t.Fatalf("count status: %+v", kbi)
+	}
+	if crs := status["AWS-AWSManagedRulesCommonRuleSet/SizeRestrictions_BODY"]; crs.Evidence["suspect_ratio"] != 0.25 {
+		t.Fatalf("crs: %+v", crs)
+	}
+	for _, p := range props {
+		if strings.Contains(p.Summary, "BLOCK に上げ") || strings.Contains(p.Summary, "BLOCK に変え") {
+			t.Fatalf("COUNT → BLOCK は勧めない: %+v", p)
+		}
 	}
 	pa := byKind["probe_allowed"][0]
 	if pa.Stage != StageCountFirst || pa.Evidence["count"] != 14.0 || strings.Join(pa.Evidence["paths"].([]string), ",") != "/.env (13 件),/.git/config (1 件)" ||
@@ -206,11 +223,10 @@ func TestWAFReview(t *testing.T) {
 }
 
 func TestWAFReviewQuiet(t *testing.T) {
-	// 導入直後 (データの日数が足りない) は、使われていないルールもカウントの昇格も提案しない。
-	// 探索や BLOCK された IP にだけ当たっているカウントのルールは observation で伝える
+	// 導入直後 (データの日数が足りない) は、使われていないルールを提案しない。COUNT のルールの状況は一致 0 でも毎回載せる
 	st := newStore(t)
 	snapshot(t, st, record.KindWAFConfig, wafACL("prod-waf"), wafRule("prod-waf", "unused-rule", account.WAFRuleRegular, "BLOCK"),
-		wafRule("prod-waf", "count-geo", account.WAFRuleRegular, "COUNT"))
+		wafRule("prod-waf", "count-geo", account.WAFRuleRegular, "COUNT"), wafRule("prod-waf", "count-zero", account.WAFRuleRegular, "COUNT"))
 	m := metricSeed{st: st, t: t}
 	for _, d := range days("2026-10-21", 3) {
 		m.put(d, "waf", cwlogs.MetricWAFRuleAction, "prod-waf|Default_Action|ALLOW", 1000)
@@ -218,7 +234,8 @@ func TestWAFReviewQuiet(t *testing.T) {
 		m.put(d, "waf", cwlogs.MetricWAFCountMatchSuspect, "prod-waf|count-geo", 50)
 	}
 	props, obs := reviewWAF(t, st)
-	if len(props) != 1 || props[0].Kind != ProposalObservation || props[0].Reason != ReasonBelowThreshold || props[0].Evidence["matching_days"] != 3 || len(obs) != 0 {
+	if len(props) != 2 || len(obs) != 0 || props[0].Rule != "count-geo" || props[0].Evidence["matching_days"] != 3 || props[0].Reason != ReasonInformational ||
+		props[1].Rule != "count-zero" || props[1].Summary != "prod-waf: COUNT の count-zero: 直近 7 日で一致なし" || props[1].Evidence["matches"] != 0.0 {
 		t.Fatalf("%+v %+v", props, obs)
 	}
 }
@@ -272,7 +289,7 @@ func TestWAFReviewObservations(t *testing.T) {
 			t.Fatalf("incomplete: %+v", p)
 		}
 	}
-	want := "observation:false_positive:below_threshold:/reports,observation:probe_allowed:below_threshold:,observation:rate_limit_missing:undetermined:/login,observation:count_to_block:position_limit:"
+	want := "observation:false_positive:below_threshold:/reports,observation:probe_allowed:below_threshold:,observation:rate_limit_missing:undetermined:/login,observation:count_rule_status:position_limit:"
 	if strings.Join(got, ",") != want || len(obs) != 0 {
 		t.Fatalf("got %s", strings.Join(got, ","))
 	}

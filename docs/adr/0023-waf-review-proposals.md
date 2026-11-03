@@ -20,10 +20,12 @@ arata は LLM を使わず (ADR 0001)、aratam は判定を LLM に任せない 
   - 新しいソース種類 `waf-config` (ListWebACLs / GetWebACL / GetLoggingConfiguration / ListResourcesForWebACL。REGIONAL は regions、CLOUDFRONT は us-east-1) で
     WebACL とルールの要約を `snapshot_items` に置く (ADR 0015)。Statement の全体は保存しない。読み取りロールに wafv2 の 4 つを足す。
     ListResourcesForWebACL は資源の種類ごとにサービス側の権限 (例 `cognito-idp:ListResourcesForWebACL`) も要るが、それは足さず、呼べない種類は「不明」として記録して続ける
-- weekly のチェック `waf_review` が、保存済みの日次集計と設定から 6 種類の候補 (誤検知の疑い・BLOCK に上げてよいカウントルール・すり抜けている探索・レート制限の不足 / 値の見直し・
+- weekly のチェック `waf_review` が、保存済みの日次集計と設定から候補 (誤検知の疑い・すり抜けている探索・レート制限の不足 / 値の見直し・
   使われていないルール) を作り、report.json の新しい節 `proposals` に出す。**finding ではない** (差分判定に乗せず、毎週その時点の候補を出す)。
   重大な候補 (正規の画面で多数の IP が BLOCK された誤検知の疑い) だけ low の finding にもする
-- 「BLOCK に上げてよいカウントルール」の根拠の「BLOCK された IP」は、レートベースのルール・既定の action・sign-in のパスでの BLOCK を除いたものに限る
+- **COUNT → BLOCK の切り替えは提案しない**。代わりに COUNT のルールの状況 (一致件数・怪しい通信の割合・一致した日数) を、計画の材料として
+  `kind: observation`、`about: count_rule_status`、`reason: informational` で毎回載せる。Summary は事実だけを書く
+- 「怪しい通信」の「BLOCK された IP」は、レートベースのルール・既定の action・sign-in のパスでの BLOCK を除いたものに限る
   (正規の利用者も一時的にレート制限に当たり得る。sandbox で、レート制限で止まった IP のせいで COUNT の一致が 100% 不審と数えられた)
 - 閾値と、利用者ごとの事情 (`trusted_cidrs` = 正規の送信元、`expected_high_rate_paths` = リクエストが多いのが仕様のパス) は `checks.waf_review` の設定 (雛形と `config init --diff` に出る。ADR 0014)。
   集計に効くもの (`top_paths` / `rate_path_groups` / `trusted_cidrs`、ソースの `strip_path_prefix`) は集計条件で、overrides では変えられない
@@ -36,6 +38,10 @@ arata は LLM を使わず (ADR 0001)、aratam は判定を LLM に任せない 
   位置の上限を超えたら決めずにグループ単位にし、数え漏れの可能性を observation で伝える
 
 ## 検討した選択肢
+
+- **COUNT のルールを、条件 (一致が続いた日数・怪しい通信の割合) を満たしたら BLOCK に上げるよう提案する (当初の `count_to_block`)**: 却下 (一度実装して sandbox で確かめた後、ユーザーと合意して廃止)。
+  COUNT → BLOCK の切り替えは運用で計画して行う作業 (COUNT で入れるときに期間を決めて様子を見る) で、アプリの事情も絡む。ログの数字だけで勧めると正規の利用者を止める危険がある
+  (sandbox では、レート制限で止まった 1 IP のせいで一致が 100% 怪しいと数えられた)。状況だけを毎回載せ、判断は人に任せる
 
 - **LLM に生のログか集計を渡して修正案を考えさせる**: 却下。ADR 0001 (arata は LLM を使わない) と aratam の原則 (判定を LLM に任せない) に反する。
   提案の根拠が再現できず、テストで固定できない。生のログを渡すとヘッダーやクエリの値が LLM と通知に流れる

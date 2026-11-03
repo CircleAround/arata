@@ -94,12 +94,6 @@ type WAFReview struct {
 	MinDistinctIPs float64 `yaml:"min_distinct_ips"`
 	// FindingDistinctIPs は「誤検知の疑い」を low の finding にもする異なり IP 数。
 	FindingDistinctIPs float64 `yaml:"finding_distinct_ips"`
-	// CountDays は「ブロックに上げてよいカウントルール」に要る、一致が続いた日数。
-	CountDays int `yaml:"count_days"`
-	// CountRatio は一致のうち探索パスか BLOCK された IP からのものの割合の下限。
-	CountRatio float64 `yaml:"count_ratio"`
-	// CountMinMatches は CountDays の間の一致の合計の下限 (少なすぎる一致で判断しない)。
-	CountMinMatches float64 `yaml:"count_min_matches"`
 	// MinCount は「すり抜けている探索」に要る、許可された探索の件数 (Days の合計)。
 	MinCount float64 `yaml:"min_count"`
 	// RateFactor は「レート制限が無い」とみなす条件: 5 分あたりの最大が p99 のこの倍を超える。
@@ -225,9 +219,6 @@ func (c *Checks) applyDefaults() {
 	setInt(&wr.Days, 7)
 	setFloat(&wr.MinDistinctIPs, 10)
 	setFloat(&wr.FindingDistinctIPs, 50)
-	setInt(&wr.CountDays, 14)
-	setFloat(&wr.CountRatio, 0.95)
-	setFloat(&wr.CountMinMatches, 100)
 	setFloat(&wr.MinCount, 10)
 	setFloat(&wr.RateFactor, 10)
 	setFloat(&wr.RateMargin, 3)
@@ -306,14 +297,11 @@ func setFloat(p *float64, v float64) {
 }
 
 func (w WAFReview) validate() error {
-	if w.TopPaths < 1 || w.Days < 1 || w.CountDays < 1 || w.UnusedDays < 1 || w.MaxProposals < 1 {
-		return fmt.Errorf("top_paths, days, count_days, unused_days, max_proposals >= 1")
+	if w.TopPaths < 1 || w.Days < 1 || w.UnusedDays < 1 || w.MaxProposals < 1 {
+		return fmt.Errorf("top_paths, days, unused_days, max_proposals >= 1")
 	}
-	if w.CountRatio <= 0 || w.CountRatio > 1 {
-		return fmt.Errorf("0 < count_ratio <= 1")
-	}
-	if w.MinDistinctIPs < 1 || w.FindingDistinctIPs < w.MinDistinctIPs || w.MinCount < 1 || w.CountMinMatches < 0 {
-		return fmt.Errorf("min_distinct_ips >= 1, finding_distinct_ips >= min_distinct_ips, min_count >= 1, count_min_matches >= 0")
+	if w.MinDistinctIPs < 1 || w.FindingDistinctIPs < w.MinDistinctIPs || w.MinCount < 1 {
+		return fmt.Errorf("min_distinct_ips >= 1, finding_distinct_ips >= min_distinct_ips, min_count >= 1")
 	}
 	if w.RateFactor <= 1 || w.RateMargin <= 0 || w.RateFloor < 1 || w.RateLooseFactor <= 1 {
 		return fmt.Errorf("rate_factor > 1, rate_margin > 0, rate_floor >= 1, rate_loose_factor > 1")

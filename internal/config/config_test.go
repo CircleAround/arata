@@ -418,14 +418,14 @@ func TestWAFReviewConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	wr := cfg.Checks.WAFReview
-	if wr.TopPaths != 50 || strings.Join(wr.RatePathGroups, ",") != "/login,/api/" || wr.Days != 7 || wr.MinDistinctIPs != 10 || wr.CountDays != 14 ||
-		wr.CountRatio != 0.95 || wr.UnusedDays != 30 || len(wr.TrustedCIDRs) != 0 || cfg.Sources[1].Regions[0] != "ap-northeast-1" {
+	if wr.TopPaths != 50 || strings.Join(wr.RatePathGroups, ",") != "/login,/api/" || wr.Days != 7 || wr.MinDistinctIPs != 10 ||
+		wr.UnusedDays != 30 || len(wr.TrustedCIDRs) != 0 || cfg.Sources[1].Regions[0] != "ap-northeast-1" {
 		t.Fatalf("defaults: %+v %v", wr, cfg.Sources[1].Regions)
 	}
 	for _, bad := range []string{
 		"  waf_review:\n    trusted_cidrs: [203.0.113.1]\n",
 		"  waf_review:\n    rate_path_groups: [login]\n",
-		"  waf_review:\n    count_ratio: 1.5\n",
+		"  waf_review:\n    unused_days: -1\n",
 		"  waf_review:\n    min_distinct_ips: 60\n",
 	} {
 		if _, err := Load(write(t, minimal+"checks:\n"+bad)); err == nil || !strings.Contains(err.Error(), "waf_review") {
@@ -456,5 +456,13 @@ func TestStripPathPrefix(t *testing.T) {
 	nginx := "  - id: web\n    kind: cloudwatch-logs\n    log_group: prod-nginx-access\n    format: nginx_access\n    strip_path_prefix: /prod\nprofiles:"
 	if _, err := Load(write(t, strings.Replace(minimal, "profiles:", nginx, 1))); err == nil || !strings.Contains(err.Error(), "only for format wafv2") {
 		t.Fatalf("nginx: %v", err)
+	}
+}
+
+// count_to_block の提案を廃止したので、その閾値は知らないキー (config init --diff に unknown_key として出る)。
+func TestWAFReviewRemovedKeys(t *testing.T) {
+	got, err := UnknownKeys([]byte(minimal + "checks:\n  waf_review:\n    count_days: 14\n    count_ratio: 0.95\n    count_min_matches: 100\n"))
+	if err != nil || strings.Join(got, ",") != "checks.waf_review.count_days,checks.waf_review.count_ratio,checks.waf_review.count_min_matches" {
+		t.Fatalf("%v %v", got, err)
 	}
 }

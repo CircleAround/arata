@@ -20,7 +20,6 @@ import (
 // 提案の段階 (schema.Proposal.Stage)。
 const (
 	StageCountFirst = "count_first" // まず COUNT で様子を見る
-	StageBlock      = "block"       // COUNT から BLOCK に上げる
 	StageReview     = "review"      // 人が見直す (変更は勧めない)
 	StageNone       = "none"        // observation (提案なし)
 )
@@ -28,7 +27,6 @@ const (
 // 候補の種類 (schema.Proposal.Kind)。
 const (
 	ProposalFalsePositive = "false_positive"
-	ProposalCountToBlock  = "count_to_block"
 	ProposalProbeAllowed  = "probe_allowed"
 	ProposalRateMissing   = "rate_limit_missing"
 	ProposalRateLoose     = "rate_limit_loose"
@@ -44,9 +42,14 @@ const (
 	ReasonExcludedByConfig = "excluded_by_config"
 	ReasonExcludedByRule   = "excluded_by_rule"
 	ReasonPositionLimit    = "position_limit"
+	// ReasonInformational は提案の候補ではない情報 (COUNT のルールの状況)。
+	ReasonInformational = "informational"
 )
 
-var proposalOrder = map[string]int{ProposalFalsePositive: 0, ProposalCountToBlock: 1, ProposalProbeAllowed: 2, ProposalRateMissing: 3,
+// AboutCountRuleStatus は COUNT のルールの状況 (observation の about)。提案ではなく計画の材料。
+const AboutCountRuleStatus = "count_rule_status"
+
+var proposalOrder = map[string]int{ProposalFalsePositive: 0, ProposalProbeAllowed: 2, ProposalRateMissing: 3,
 	ProposalRateLoose: 4, ProposalRateTight: 5, ProposalUnusedRule: 6, ProposalObservation: 7}
 
 // Proposer は finding のほかに report.json の proposals を返すチェックが満たす (waf_review)。engine は Evaluate の代わりに呼ぶ。
@@ -64,6 +67,7 @@ type StoredNeeder interface {
 // (snapshot) から、決まった規則で候補を作り、report.json の proposals に出す。候補は人が判断して適用する。
 //
 // 決定:
+//   - COUNT → BLOCK の切り替えは勧めない (計画して行う作業)。COUNT のルールの状況を observation (count_rule_status) で載せる
 //   - 候補は finding ではない (差分判定に乗せず、毎回その時点の候補を出す)。重大な候補 (正規の画面での多数の IP の BLOCK) だけ low の finding にもする
 //   - 「迷ったら提案しない」: 設定と突き合わせられない (WebACL が見つからない・同じ名前が複数ある・ルールが設定に無い・scope-down を解釈できない) ときは提案しない。
 //     ただし不審な観測は observation (提案なし) として、提案しなかった理由と根拠の数字を添えて残す (不審な事実は必ず伝える)
@@ -156,7 +160,7 @@ func (c WAFReview) Propose(ctx context.Context, q store.Query, w collect.Window)
 		return nil, nil, err
 	}
 	r := &reviewer{c: c, q: q, acls: loadWAFConfig(items), end: dates[len(dates)-1]}
-	for _, f := range []func(context.Context) error{r.falsePositives, r.countToBlock, r.probeAllowed, r.rateLimits, r.unusedRules, r.positionLimits} {
+	for _, f := range []func(context.Context) error{r.falsePositives, r.countRuleStatus, r.probeAllowed, r.rateLimits, r.unusedRules, r.positionLimits} {
 		if err := f(ctx); err != nil {
 			return nil, nil, err
 		}
@@ -368,19 +372,24 @@ func countRules(a *wafACLConf) map[string]countRule {
 	return out
 }
 
-// countToBlock は「ブロックに上げてよいカウントルール」: count_days 日続けて一致し、一致の大半が探索パスか BLOCK された IP から。
-func (r *reviewer) countToBlock(ctx context.Context) error {
+// countRuleStatus は COUNT のルールの状況を、計画の材料として毎回 observation (about: count_rule_status、reason: informational) で載せる。
+//
+// 決定 (ADR 0023): COUNT → BLOCK の切り替えは運用で計画して行う作業 (COUNT で入れるときに期間を決めて様子を見る) で、アプリの事情も絡むので、
+// ログの数字だけで BLOCK を勧めない (count_to_block の提案は廃止した)。事実 (一致件数・怪しい通信の割合・一致した日数) だけを書く。
+// 一致 0 のルールも載せる (使われていないルールの候補からは COUNT のルールを外し、重ならないようにする)。
+// 怪しい通信 = 探索パスか、同じ日にレートベース以外のルールで BLOCK された IP からの一致 (既定の action と sign-in のパスの BLOCK も除く)。
+func (r *reviewer) countRuleStatus(ctx context.Context) error {
 	cfg := r.c.Config
-	total, err := r.load(ctx, cwlogs.MetricWAFCountMatch, cfg.CountDays)
+	total, err := r.load(ctx, cwlogs.MetricWAFCountMatch, cfg.Days)
 	if err != nil {
 		return err
 	}
-	suspect, err := r.load(ctx, cwlogs.MetricWAFCountMatchSuspect, cfg.CountDays)
+	suspect, err := r.load(ctx, cwlogs.MetricWAFCountMatchSuspect, cfg.Days)
 	if err != nil {
 		return err
 	}
 	ta, sa := aggregate(total), aggregate(suspect)
-	var props, notes []schema.Proposal
+	var notes []schema.Proposal
 	acls := make([]string, 0, len(r.acls))
 	for n := range r.acls {
 		acls = append(acls, n)
@@ -398,47 +407,31 @@ func (r *reviewer) countToBlock(ctx context.Context) error {
 		}
 		sort.Strings(ids)
 		for _, id := range ids {
-			t := ta[acl+"|"+id]
-			if t == nil || t.sum == 0 {
-				continue
+			cr := rules[id]
+			n, s, matched := 0.0, 0.0, 0
+			if t := ta[acl+"|"+id]; t != nil {
+				n, matched = t.sum, t.days
 			}
-			s := 0.0
 			if x := sa[acl+"|"+id]; x != nil {
 				s = x.sum
 			}
-			ratio := math.Round(s/t.sum*1000) / 1000
-			cr := rules[id]
-			p := r.proposal(ProposalCountToBlock, StageBlock, acl)
-			p.Rule, p.RuleInGroup = cr.rule, cr.inner
-			// suspect = 探索パスか、同じ日にレートベース以外のルールで BLOCK された IP からの一致 (既定の action と sign-in のパスの BLOCK も除く)
-			p.Evidence = map[string]any{"matching_days": t.days, "count_days": cfg.CountDays, "matches": t.sum, "suspect_matches": s, "suspect_ratio": ratio,
-				"suspect_blocked_ip_excludes": cwlogs.SuspectBlockExcludes}
 			label := cr.rule
 			if cr.inner != "" {
 				label += " の " + cr.inner
 			}
-			switch {
-			case ratio < cfg.CountRatio:
-				continue // 正規の通信にも当たっている。BLOCK にしないのが正しい (不審ではない)
-			case t.days < cfg.CountDays || t.sum < cfg.CountMinMatches:
-				o := r.observation(ProposalCountToBlock, ReasonBelowThreshold, acl)
-				o.Rule, o.RuleInGroup, o.Evidence = p.Rule, p.RuleInGroup, p.Evidence
-				o.Summary = fmt.Sprintf("%s: COUNT の %s の一致の %.0f%% が探索パスか、レート制限以外で BLOCK された IP から (%.0f 件)。一致した日数 %d / %d 日 (または件数が count_min_matches 未満) のため、まだ BLOCK を提案しない",
-					acl, label, ratio*100, t.sum, t.days, cfg.CountDays)
-				notes = append(notes, o)
-			default:
-				how := "BLOCK に変える"
-				if cr.inner != "" {
-					how = "グループの中の " + cr.inner + " の COUNT の上書きを外す (BLOCK に戻す)"
-				} else if a.rules[cr.rule].String("type") == account.WAFRuleManagedGroup || a.rules[cr.rule].String("type") == account.WAFRuleGroup {
-					how = "グループの OverrideAction を COUNT から None にする (BLOCK に上げる)"
-				}
-				p.Summary = fmt.Sprintf("%s: COUNT の %s が %d 日続けて一致し、一致 %.0f 件の %.0f%% が探索パスか、レート制限以外で BLOCK された IP から。%s", acl, label, t.days, t.sum, ratio*100, how)
-				props = append(props, p)
+			o := r.observation(AboutCountRuleStatus, ReasonInformational, acl)
+			o.Rule, o.RuleInGroup = cr.rule, cr.inner
+			o.Evidence = map[string]any{"matches": n, "suspect_matches": s, "matching_days": matched, "days": cfg.Days, "suspect_blocked_ip_excludes": cwlogs.SuspectBlockExcludes}
+			if n == 0 {
+				o.Summary = fmt.Sprintf("%s: COUNT の %s: 直近 %d 日で一致なし", acl, label, cfg.Days)
+			} else {
+				ratio := math.Round(s/n*1000) / 1000
+				o.Evidence["suspect_ratio"] = ratio
+				o.Summary = fmt.Sprintf("%s: COUNT の %s: 直近 %d 日で %.0f 件一致、うち怪しい通信 %.0f%%、一致した日 %d / %d 日", acl, label, cfg.Days, n, ratio*100, matched, cfg.Days)
 			}
+			notes = append(notes, o)
 		}
 	}
-	r.add(props)
 	r.add(notes)
 	return nil
 }
@@ -512,7 +505,7 @@ func (r *reviewer) probeAllowed(ctx context.Context) error {
 		p.Evidence = ev
 		how := "マネージドルール (AWSManagedRulesKnownBadInputsRuleSet など) か、探索パスをブロックするルールを COUNT で追加して様子を見る"
 		if len(countNames) > 0 {
-			how += "。COUNT のルール (" + strings.Join(countNames, ", ") + ") があれば、それを BLOCK に上げることも検討する"
+			how += "。COUNT で動いているルール: " + strings.Join(countNames, ", ") + " (状況は count_rule_status)"
 		}
 		p.Summary = fmt.Sprintf("%s: 探索パスへのリクエストが WAF で許可された (直近 %d 日で %.0f 件: %s)。%s", acl, cfg.Days, total, strings.Join(paths, ", "), how)
 		props = append(props, p)
@@ -740,8 +733,8 @@ func (r *reviewer) unusedRules(ctx context.Context) error {
 		sort.Strings(names)
 		for _, name := range names {
 			rc := a.rules[name]
-			if used[acl+"|"+name] {
-				continue
+			if used[acl+"|"+name] || rc.String("action") == "COUNT" {
+				continue // COUNT のルールは count_rule_status が一致 0 も含めて載せる
 			}
 			if gid := groupID(rc); gid != "" && usedPrefix(used, acl+"|"+gid+"/") {
 				continue
@@ -782,7 +775,7 @@ func (r *reviewer) positionLimits(ctx context.Context) error {
 	var notes []schema.Proposal
 	for _, k := range keys {
 		acl, field, _ := strings.Cut(k, "|")
-		o := r.observation(ProposalCountToBlock, ReasonPositionLimit, acl)
+		o := r.observation(AboutCountRuleStatus, ReasonPositionLimit, acl)
 		o.Evidence = map[string]any{"field": field, "requests": agg[k].sum, "days": r.c.Config.Days}
 		o.Summary = fmt.Sprintf("%s: %s の最後の位置まで埋まったリクエストが直近 %d 日で %.0f 件。それより後ろの一致は数えていない (カウントの一致・止めたグループの中のルールが少なめ)",
 			acl, field, r.c.Config.Days, agg[k].sum)

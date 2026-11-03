@@ -59,9 +59,6 @@ profile weekly (window 7d, max_catchup 7d)
   waf_review.days                      既定値  7
   waf_review.min_distinct_ips          既定値  10
   waf_review.finding_distinct_ips      既定値  50
-  waf_review.count_days                既定値  14
-  waf_review.count_ratio               既定値  0.95
-  waf_review.count_min_matches         既定値  100
   waf_review.min_count                 既定値  10
   waf_review.rate_factor               既定値  10
   waf_review.rate_margin               既定値  3

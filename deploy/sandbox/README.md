@@ -120,7 +120,7 @@ sources:
 ```
 
   waf_review は daily が貯めた日次集計を読む (weekly は WAF のログを引かない)。候補を見るには先に daily を回す。
-  `count_days` (14) や `unused_days` (30) は試験では満たないので、その候補は `observation` (提案なし) として出る
+  `unused_days` (30) は試験では満たないので「使われていないルール」は出ない。COUNT のルールの状況は `observation` (`about: count_rule_status`) として毎回出る
 
 ```sh
 arata doctor -c arata.yaml                   # 権限・ロググループ・解釈率

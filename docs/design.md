@@ -154,8 +154,8 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
   前にある COUNT のグループのものを取り違える (実ログで確認) のでやめた
 - 決定 (カウントの一致の suspect の「BLOCK された IP」): 専用のクエリ (保存しない) で、レートベースのルール (`terminatingRuleType` が RATE_BASED)・既定の action (`Default_Action`)・
   sign-in のパス (`login_bruteforce.paths`) での BLOCK を除いた BLOCK の IP を日ごとに取る。正規の利用者も一時的にレート制限に当たり得て (決済などリクエストが多いのが仕様の画面がある)、
-  それを「悪い IP」とみなすと正規の利用者に当たる COUNT ルールを BLOCK に上げる提案をしかねない (危ない方向に間違える)。sandbox で、/login のレート制限で止まった 1 IP のせいで
-  COUNT の一致が 100% suspect になって判明した。候補の evidence に `suspect_blocked_ip_excludes` (除いた BLOCK) を残す
+  それを「悪い IP」とみなすと、正規の利用者に当たっている COUNT ルールを「怪しい通信ばかり」と見せてしまう (危ない方向に間違える)。sandbox で、/login のレート制限で止まった 1 IP のせいで
+  COUNT の一致が 100% suspect になって判明した。count_rule_status の evidence に `suspect_blocked_ip_excludes` (除いた BLOCK) を残す
 - 決定 (1 IP あたりの件数): `stats count(*) as n by bin(5m), acl, grp, ip | stats pct(n, 50), pct(n, 99), max(n) by acl, grp` を UTC の 1 日ずつ流す (2 段目で日を切る書き方に頼らない。
   1 日ずつでもスキャン量は同じ)。2 段の stats と pct は sandbox で確認済み
 - 決定: `checks.waf_review.trusted_cidrs` (監視・開発会社など) は `isIpInSubnet` で `waf_rule_action` 以外の新しい集計から外す (`waf_rule_action` は「使われていないルール」の判定に使うので外さない)。
@@ -563,13 +563,18 @@ arata は LLM を使わず候補だけを作り、aratam の LLM は候補を文
 | 候補 (`kind`) | 段階 (`stage`) | 条件 (閾値はすべて `checks.waf_review`) |
 |---|---|---|
 | `false_positive` (誤検知の疑い) | count_first | 探索パスではない正規化パスで、ルールの BLOCK の異なり IP (日ごとの最大) が `min_distinct_ips` (10) 以上。`finding_distinct_ips` (50) 以上は low の finding にも (key `false_positive\|<WebACL>\|<ルール>\|<method> <path>`、state 型) |
-| `count_to_block` (BLOCK に上げてよいカウントルール) | block | COUNT のルール (グループ全体の COUNT、グループの中の COUNT の上書きを含む) が直近 `count_days` (14) 日すべてで一致し、合計 `count_min_matches` (100) 件以上、そのうち探索パスか、レート制限・既定の action・sign-in のパス以外で BLOCK された IP からが `count_ratio` (0.95) 以上 |
 | `probe_allowed` (すり抜けている探索) | count_first | 探索パスへの ALLOW が直近 `days` (7) 日で `min_count` (10) 件以上 (WebACL ごとに 1 件、パスは上位 10) |
 | `rate_limit_missing` (レート制限の不足) | count_first | パスの群を受け持つレートベースのルールが無く、5 分あたりの最大が p99 の `rate_factor` (10) 倍超え、かつ提案する limit より大きい。limit = max(p99 × `rate_margin` (3), `rate_floor` (100)) |
 | `rate_limit_loose` / `rate_limit_tight` | review | 受け持つルールが 1 つで解釈できるとき、limit (5 分あたりに換算) が観測の最大の `rate_loose_factor` (10) 倍より高い / 観測の p99 より低い |
-| `unused_rule` (使われていないルール) | review | 直近 `unused_days` (30) 日すべてにデータがあり、終了ルールにもカウントの一致にもならなかった。削除は勧めない |
+| `unused_rule` (使われていないルール) | review | 直近 `unused_days` (30) 日すべてにデータがあり、終了ルールにもカウントの一致にもならなかった (COUNT のルールは除く)。削除は勧めない |
 | `observation` (提案なし) | none | 下の「不審な事実は必ず伝える」。`about` (関わる候補) と `reason` (提案しなかった理由) を持つ |
+| `observation` / about `count_rule_status` (COUNT のルールの状況) | none | COUNT で動いているルール (グループ全体の COUNT、グループの中の COUNT の上書きを含む) ごとに毎回 1 件 (`reason: informational`)。直近 `days` 日の一致件数・怪しい通信の割合・一致した日数。一致 0 も載せる |
 
+- 決定: COUNT → BLOCK の切り替えは提案しない (当初の `count_to_block` は廃止)。切り替えは運用で計画して行う作業 (COUNT で入れるときに期間を決めて様子を見る) で、
+  アプリの事情も絡むので、ログの数字だけで勧めると正規の利用者を止める危険がある。代わりに COUNT のルールの状況を計画の材料として毎回載せ、Summary は事実だけを書く
+  (例「COUNT の X: 直近 7 日で 6 件一致、うち怪しい通信 100%、一致した日 1 / 7 日」)。怪しい通信 = 探索パスか、レート制限・既定の action・sign-in のパス以外で BLOCK された IP からの一致。
+  COUNT のルールは一致 0 でも count_rule_status に載るので、`unused_rule` の対象から外す (重ならないように)。閾値 `count_days` / `count_ratio` / `count_min_matches` は設定から外した
+  (書いたままの設定は `config init --diff` で unknown_key と出る。Load は未知のキーで止まるので消す)
 - 決定: 「迷ったら提案しない」。設定と突き合わせられない (WebACL が waf-config に無い・同じ名前の WebACL が複数ある・ルールが設定に無い)、scope-down を解釈できない、
   IP 以外の集約のレートベースのルール、複数の条件の scope-down、群の一部だけを受け持つルール、データの日数が足りない、のどれでも提案しない
 - 決定: 誤検知の候補から外すもの: 探索パス、sign-in のパス (`login_bruteforce.paths`。多数の IP からの BLOCK はクレデンシャルスタッフィングかもしれない)、

@@ -138,9 +138,6 @@ checks:
     days: 7                                      # 候補を作るのに見る直近の日数 (daily が貯めた日次集計を読む。weekly は wafv2 を引かない)
     min_distinct_ips: 10                         # 誤検知の疑いに要る異なり IP 数 (日ごとの最大。下限の見積もり)
     finding_distinct_ips: 50                     # 誤検知の疑いを low の finding にもする異なり IP 数
-    count_days: 14                               # BLOCK に上げてよいカウントルールに要る、一致が続いた日数
-    count_ratio: 0.95                            # その一致のうち探索パスか BLOCK された IP からの割合の下限
-    count_min_matches: 100                       # count_days の間の一致の合計の下限
     min_count: 10                                # すり抜けている探索の件数の下限。誤検知の observation (異なり IP が足りない) の件数の下限にも使う
     rate_factor: 10                              # レート制限が無いとみなす条件: 1 IP の 5 分あたりの最大が p99 のこの倍を超える
     rate_margin: 3                               # 提案する limit = max(p99 × rate_margin, rate_floor) (5 分あたり)
