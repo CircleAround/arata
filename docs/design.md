@@ -399,8 +399,8 @@ S3 の条件付き書き込みでロック)。SQLite ファイルは数十 MB �
 | `runs` | id, profile, window_from, window_to, started_at, status, stats | 実行履歴。欠損 (走らなかった日) の検出にも使う |
 | `principals` | arn, kind (user/role/assumed-role/root), first_seen, last_seen, status (unknown/approved/expired/baseline) | 主体の初出判定。決定: `init` のベースライン収集で初出した主体は `baseline` とし new_principal の対象外。evaluate 時に allowlist から approved / expired を同期する |
 | `principal_ips` | arn, ip, country, first_seen, last_seen, count | 主体 × IP の初出判定。決定: count は各 run の窓 [From, To) の件数の和 (再走査の重なり区間は行を初めて作るときだけ数える。3 章) |
-| `events` | time, source, name, principal_arn, ip, region, resource, data | 「注目イベント」のみ (ルート利用、IAM 変更など)。全 CloudTrail は保存しない。決定: 注目の判定は collector 側 (`cloudtrail.DefaultNotable`) で行い、ルート利用・AssumeRole*・IAM / CloudTrail / GuardDuty / Access Analyzer / Organizations の書き込み・秘匿値取得・SSM セッション・公開設定変更を残す。決定: defense_evasion / public_exposure が見る操作 (ログの削除・保持期間、フローログの削除、Config・Security Hub の停止、WAF のログ設定、S3 のバケットポリシーの削除・ライフサイクル、スナップショットの共有、Lambda の AddPermission など) だけを足し、全書き込みは足さない。一覧はチェック側 (`checks.DefenseEvasionAPIs` / `PublicExposureAPIs`) にあり、collector のテストで突き合わせる。該当する操作だけ requestParameters から判定に要る値を `data` に取り出す (ポリシー全文は残さない。ADR 0026)。決定: 拒否された呼び出し (errorCode が `checks.access_denied.error_codes` に入るもの) も読み取りを含めて残す (access_denied の元。コードは設定から `cloudtrail.NotableWith` に渡す。ADR 0021)。`event_id` で重複を排除する (複数リージョンを引いた場合の二重も同じ仕組みで防ぐ。collector 側でも同一 Collect 内の event_id は 1 回だけ数える)。決定: `collected_at` (最初に収集した run の時刻) を持ち、再走査で遅れて届いたイベントを見分ける (3 章、ADR 0013) |
-| `metrics` | date, source, metric, key, value | 日次集計 (`sign_in_failures` by ip、`admin_404` by ip、`waf_block` by rule)。平常帯の計算元。決定: 集計元のレコード種類 `from` 列を追加。主キーは (date, source, metric, key) で、後から来た値で**置き換える** (3 章の決定により後の値ほど完全)。raw JSONL には追記されるので rebuild は行順に適用すれば同じ結果になる。日は UTC |
+| `events` | time, source, name, principal_arn, ip, region, resource, data | 「注目イベント」のみ (ルート利用、IAM 変更など)。全 CloudTrail は保存しない。決定: 注目の判定は collector 側 (`cloudtrail.DefaultNotable`) で行い、ルート利用・AssumeRole*・IAM / CloudTrail / GuardDuty / Access Analyzer / Organizations の書き込み・秘匿値取得・SSM セッション・公開設定変更を残す。決定: defense_evasion / public_exposure が見る操作 (ログの削除・保持期間、フローログの削除、Config・Security Hub の停止、WAF のログ設定、S3 のバケットポリシーの削除・ライフサイクル、スナップショットの共有、Lambda の AddPermission など) だけを足し、全書き込みは足さない。一覧はチェック側 (`checks.DefenseEvasionAPIs` / `PublicExposureAPIs`) にあり、collector のテストで突き合わせる。該当する操作だけ requestParameters から判定に要る値を `data` に取り出す (ポリシー全文は残さない。ADR 0026)。決定: 拒否された呼び出し (errorCode が `checks.access_denied.error_codes` に入るもの) も読み取りを含めて残す (access_denied の元。コードは設定から `cloudtrail.NotableWith` に渡す。ADR 0021)。決定 (ADR 0027): 秘匿値の読み取り (GetSecretValue・BatchGetSecretValue・GetParameter(s)・GetParametersByPath) は名前 / ARN・パス・`recursive`・`with_decryption` (常に残す。無いのは以前の版で集めたもの) だけを `data` に取り出す (値は CloudTrail に入らない)。BatchGetSecretValue も注目イベントに足した (一覧は `checks.SecretReadAPIs`)。`event_id` で重複を排除する (複数リージョンを引いた場合の二重も同じ仕組みで防ぐ。collector 側でも同一 Collect 内の event_id は 1 回だけ数える)。決定: `collected_at` (最初に収集した run の時刻) を持ち、再走査で遅れて届いたイベントを見分ける (3 章、ADR 0013) |
+| `metrics` | date, source, metric, key, value | 日次集計 (`sign_in_failures` by ip、`admin_404` by ip、`waf_block` by rule)。平常帯の計算元。決定: 集計元のレコード種類 `from` 列を追加。主キーは (date, source, metric, key) で、後から来た値で**置き換える** (3 章の決定により後の値ほど完全)。raw JSONL には追記されるので rebuild は行順に適用すれば同じ結果になる。日は UTC。決定 (ADR 0027): cloudtrail collector も主体の活動の日次集計を出す: `principal_source` (key `<主体 ARN>\|<送信元の /24・/48>`)、`principal_source_writes` (同じ key の成功した書き込み)、`principal_write_region` (key `<主体 ARN>\|<リージョン>` の成功した書き込み)。対象は IAM ユーザーとロール (のセッション)、送信元は IP のときだけ。cloudtrail は日の頭から引き直さないので、置き換えの規則のため値は「その日を最後に引いた run が見た件数」(下限) になる。判定は「その日に有ったか」と下限値にだけ使う。期間レポートの推移表には出さない。Yields に metric は足さない (http_access / waf_action のチェックの skip 判定を変えないため)。行数の見積もり: 1 日あたり (主体数 × その日の送信元の数) × 2 + (主体数 × 書き込みのリージョン数)。主体 50・送信元 2 なら 1 日 250 行、400 日で 10 万行 (数十 MB 未満)。Lambda などサービスが引き受けるロールは送信元が多く、数十のロールが 1 日数十の /24 を使う環境では年 100 万行に近づく。多ければ prune を入れるときに `principal_*` の保持を baseline_days の数倍 (例 90 日) に短くする (判定は 30 日しか見ない) |
 | `findings` | id, check, key, severity, first_seen, last_seen, last_changed, status (open/resolved/acked/snoozed), reported_at, fingerprint, data, suppressed_severity | 差分判定の中核。決定: `fingerprint` 列を追加 (4-2)。決定: `suppressed_severity` (ack / snooze したときの重大度。open / resolved では空) を追加 (schema 5、ADR 0022)。移行では既存の acked / snoozed の行に今の severity を入れる |
 | `posture` | check, resource, value, first_seen, last_changed | 姿勢チェックの現在値。決定: 作らず `snapshot_items` にまとめた (ADR 0015) |
 | `snapshot_items` | kind, source, key, data, collected_at | 決定: アカウント単位の状態 (認証情報レポート・GuardDuty・Access Analyzer・姿勢・WAF の WebACL の設定) の最新のスナップショット。収集が成功したときだけ (kind, source) 単位で丸ごと置き換える (ADR 0015) |
@@ -460,6 +460,8 @@ secrets_access:
 - 決定: `userIdentity.type` も `arn` も無い記録は、`invokedBy` があればそのサービス、`sourceIPAddress` か `userAgent` が `AWS Internal` なら `eventSource` のサービスを主体 (kind=service) にする。
   監査対象アカウントの accountId だけが入った ECR の `PolicyExecutionEvent` などが、自アカウントの `:root` (unknown) として new_principal に出るのを避けるため。
   サービスの主体は principal_seen にも new_principal にも出ない。本物の root は `type=Root` で root_usage が扱う。`type=AWSAccount` の外部アカウントは従来どおり `外部アカウント NNN`。
+- 決定 (ADR 0027): 主体の項目の `dynamic_source: true` は「送信元が毎回変わる主体」(CI のランナーなど)。principal_new_source の low (新しい送信元だけ) を出さない (medium 以上は出す)。
+- 決定 (ADR 0027): `secrets_access` は「主体 (ARN の完全一致) × 読んでよい秘匿値 (名前・パスの glob)」。secret_access は一致する秘匿値を初出に数えない (一括読み出しの数には数える)。シークレットの ARN はシークレット名の部分でも比べる。空の `secrets`・空の要素・`principal` の無い項目は読み込みエラー。
 - `tags` の語彙は `deploy` (ADR 0008) と `ai` (決定: Step 3。監査ロール・AI 用の主体。ai_path_usage が利用を毎回 info に出す)。approve は語彙外のタグを拒否する。
 - 決定 (ADR 0022): `expected_denied` は access_denied で数えない「想定済みの拒否」(「サービス:操作」の glob。`*` は任意の文字列、`?` は 1 文字、大文字小文字を区別)。
   主体に一致する期限内の項目すべての `expected_denied` の和で判定する (項目ごとに理由と期限が違ってよいため。タグの判定に使う項目の選び方と、同じ arn の重複の後勝ちは変えない)。
@@ -513,13 +515,13 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 | root_usage | hourly | trail_event | Root の利用 | critical |
 | defense_evasion (決定: 当初の trail_tampering を置き換え。daily) | daily | trail_event | 監査・検知の仕組み (CloudTrail・GuardDuty・Access Analyzer・ログ・フローログ・Config・Security Hub・WAF のログ・証跡の宛先バケット) を止める・弱める操作の成功。決定: ADR 0026 | critical / high (deploy タグなら 1 段下げる) |
 | unknown_assume_role | hourly | trail_event | 呼び出し元 ARN が allowlist に無い AssumeRole。決定: AWS サービス主体 (EC2 / Lambda がインスタンスロールを引き受けるもの) は対象外 | high |
-| secret_access_unknown | hourly | trail_event | 主体 × シークレットの組が allowlist に無い GetSecretValue / GetParameter(decrypt) | high |
+| secret_access (決定: 当初の secret_access_unknown を置き換え。daily) | daily | trail_event | 秘匿値 (Secrets Manager・SSM SecureString) の「主体 × 秘匿値」の初出と一括読み出し。決定: ADR 0027 | low / medium / high |
 | guardduty_findings | hourly (High) / daily (他)。決定: Step 3 は weekly のみ (state) | guardduty | finding ID 初出、count 増加 | severity 準拠 |
 | iam_changes | daily | trail_event | CreateAccessKey / CreateUser / Attach*Policy / Put*Policy / UpdateAssumeRolePolicy / CreateLoginProfile | medium (既知デプロイ主体なら info。決定: 既知デプロイ主体 = allowlist の principals で `tags: [deploy]` を持つもの) |
 | access_denied | daily | trail_event | 拒否された API 呼び出しの主体ごとの種類 (幅) と件数 (量) が平常帯超え。権限の列挙の兆候。決定: ADR 0021 | 幅は medium (種類が多ければ high)、量は medium |
 | console_login | daily | trail_event | 失敗が閾値超え、MFA 無し成功 | medium / high |
 | new_principal | daily | principal_seen | allowlist にも principals にも無い主体。決定: principals.status が unknown / expired の主体を毎回観測する (承認されるまで still_open として残る)。root は root_usage が扱うので対象外 | medium |
-| new_source_ip | daily | principal_seen | 主体 × IP (国) の初出 | low (国外なら medium) |
+| principal_new_source (決定: 当初の new_source_ip を置き換え。国の判定はしない) | daily | trail_event, principal_seen (+ 主体の活動の日次集計) | 既知の主体の初めての送信元 (/24・/48)・書き込みのリージョン。決定: ADR 0027 | low / medium / high |
 | foreign_region | daily | trail_event | ap-northeast-1 以外のイベント | medium |
 | public_exposure (決定: 当初の network_exposure を置き換え) | daily | trail_event | SG の 0.0.0.0/0・::/0 開放、S3 の公開 (ポリシー・ACL・Public Access Block)、RDS PubliclyAccessible、スナップショット / AMI の公開共有、Lambda の Principal `*`。決定: ADR 0026 | high / medium / low (deploy タグでも下げない) |
 | ssm_session | daily | trail_event | StartSession の主体が allowlist 外、または深夜帯 | medium |
@@ -608,6 +610,36 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 
 - 決定: deploy タグでも下げない (公開は意図していても毎回見るべき)。止めたいときは ack (重大度が上がれば再報告される)
 - 決定: 2 つとも成功した呼び出しだけを見る (失敗は access_denied)。注目イベントの追加で既存のチェック・principal_seen の結果が変わらないことをテストで固定する
+
+決定 (principal_new_source / secret_access。ADR 0027):
+
+| チェック | Mode | Key | Fingerprint | 判定 |
+|---|---|---|---|---|
+| principal_new_source | event | `<主体 ARN>` | 重大度 + 新しい送信元の集合 + 新しいリージョンの集合 | 既知の主体 (allowlist で承認済み、または principals が baseline / approved) の窓の日 (UTC) の送信元・書き込みのリージョンが、窓の始まりの日の前日から `baseline_days` (30) 日に無い |
+| secret_access | event | `<主体 ARN>` | 重大度 + 一括読み出しか + 初めて読む秘匿値の集合 | 窓の成功した秘匿値の読み取り (ssm は復号したもの) の初出と異なり数 |
+
+- principal_new_source の重大度: 新しい送信元だけ → low。新しい送信元からの書き込み (窓の日の下限値の和) が `min_writes` (5) 以上、または新しいリージョンでの書き込み → medium。
+  新しい送信元 + 同じ窓で access_denied の観測もある → high
+- 決定: access_denied との相関は、principal_new_source の中で AccessDenied の Evaluate を同じ (store, 窓, allowlist) で呼んで得る (チェックは互いの結果を見られないため。順序にも依らない)。
+  access_denied がプロファイルに入っていなくても相関の材料として呼ぶ (読むだけで、access_denied の finding は出さない。ADR 0014 の「設定に書いたものだけ動かす」は finding の話で、判定の材料は含まない)
+- 決定: 導入直後 (CloudTrail のデータのある過去日 = `principal_source` のある日が `min_baseline_days` (既定は baseline_days の半分) 未満) は報告しない。
+  版を上げた既存のストアには過去の日次集計が無いので、15 日経つまで報告しない (init し直せば即時)
+- 決定: 過去 `baseline_days` に活動が無く、その間に初めて現れた主体 (principals.first_seen が期間の始まり以降) は「すべてが初めて」なので報告しない (new_principal と承認の流れが扱う)。
+  それより前から居て活動の無かった主体 (休眠していたキー) は報告する (`active_in_baseline: false`)
+- 決定: allowlist の `source_ips` の内の送信元は新しい送信元にしない。allowlist の `dynamic_source: true` の主体と、AWS のサービスが引き受けるロール
+  (保存済みの AssumeRole の呼び出し元がサービス主体。Lambda・ECS のタスク・EC2 のインスタンスプロファイル。`service_assumed: true`) は low を出さない (medium 以上は出す)。
+  サービスのロールの送信元は AWS の管理する NAT などで毎回変わるため。持ち出したセッションの悪用は、書き込み・新しいリージョン・拒否で拾う
+- 決定: 送信元が IP でないもの (サービス名・"AWS Internal") と root (root_usage が扱う)・サービス主体は数えない。リージョンは成功した書き込み (readOnly=false、errorCode なし) のあったリージョン
+  (送信元が IP でない書き込みも数える)。LookupEvents で引くのは `cloudtrail-lookup` の `regions` だけなので、それ以外のリージョンは見えない (P-D の unused_region_activity で扱う)
+- secret_access の対象: 成功した GetSecretValue / BatchGetSecretValue と、`with_decryption=true` の GetParameter / GetParameters / GetParametersByPath。サービス主体と root は除く
+- secret_access の重大度: 初めて読む秘匿値 (窓の前 `baseline_days` (14) 日にその主体が読んでいない) → low。その主体が秘匿値を読むこと自体が初めて → medium。
+  窓に読んだ異なる秘匿値の数が `max(min_distinct (10), その主体の日ごとの異なり数の中央値 × factor (3))` を超えた → high (一括読み出し)。主体ごとに 1 件 (重い方)
+- 決定: GetParametersByPath はパス単位で 1 と数え、Data の `paths` に `(recursive)` を残す。BatchGetSecretValue のフィルタ指定は名前が分からないので `(filters)` を 1 と数える
+- 決定: 初出の履歴は日の区切りに依らず窓の直前まで見る。「その名前を読んだことがある」には復号しない読み取りも数え、「秘匿値を読んだことがある」は復号した読み取りか、
+  `with_decryption` の無い (以前の版で集めた) ssm の読み取り。導入直後 (データのある過去日が `min_baseline_days` (7) 未満) は初出を報告しない (一括読み出しは報告する)
+- 決定: allowlist の `secrets_access` に一致する秘匿値は初出に数えない。それを読む主体は「初めての読み手」として重くしない。承認済みの主体でも下げない
+- 決定: 保存量 (秘匿値の読み取りとして出した trail_event の数) を run の stats の `secret_read_events` に残す。GetParameter はアプリの起動ごとに呼ばれて多い
+- 2 つとも追加の権限は要らない (`cloudtrail:LookupEvents` だけ)。日次集計と秘匿値の取り出しで既存のチェックの結果が変わらないことをテストで固定する
 
 決定 (週次チェックと ai_path_usage。Step 3、ADR 0015):
 
