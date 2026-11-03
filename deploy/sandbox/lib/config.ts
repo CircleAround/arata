@@ -39,6 +39,10 @@ export interface SandboxConfig {
    * AWS のサービスのモニターはアカウントに 1 つしか作れないので、既にあるアカウントでは false にする。
    */
   costAnomaly: { enabled: boolean };
+  /**
+   * arata の S3 ストア (`store: s3://`。ADR 0034) の試験用のバケット。読み取り専用ロールには権限を足さず、開発者のプロファイルで書く。
+   */
+  storeBucket: { enabled: boolean };
 }
 
 export class ConfigError extends Error {
@@ -171,6 +175,7 @@ export function parseConfig(raw: unknown): SandboxConfig {
     'waf',
     'secretAccess',
     'costAnomaly',
+    'storeBucket',
   ]);
   if (!top) throw new ConfigError(c.problems);
   // トップレベルの未知のキーは「(トップレベル).x」ではなく「x」と出す
@@ -258,7 +263,7 @@ export function parseConfig(raw: unknown): SandboxConfig {
   }
 
   // 任意の機能。暗黙の既定を持たないよう enabled は必須
-  const toggle = (key: 'guardDuty' | 'accessAnalyzer' | 'secretAccess' | 'costAnomaly'): boolean | undefined => {
+  const toggle = (key: 'guardDuty' | 'accessAnalyzer' | 'secretAccess' | 'costAnomaly' | 'storeBucket'): boolean | undefined => {
     const v = c.required(top, key, '');
     if (v === undefined) return undefined;
     const o = c.object(v, key, ['enabled']);
@@ -268,6 +273,7 @@ export function parseConfig(raw: unknown): SandboxConfig {
   const accessAnalyzer = toggle('accessAnalyzer');
   const secretAccess = toggle('secretAccess');
   const costAnomaly = toggle('costAnomaly');
+  const storeBucket = toggle('storeBucket');
 
   // WAF。challenge / captcha は WAF の試験の追加のルール (省略時は false)。waf.enabled が false のまま true にしても効かないので誤りにする
   let waf: boolean | undefined;
@@ -319,5 +325,6 @@ export function parseConfig(raw: unknown): SandboxConfig {
     waf: { enabled: waf!, challenge, captcha },
     secretAccess: { enabled: secretAccess! },
     costAnomaly: { enabled: costAnomaly! },
+    storeBucket: { enabled: storeBucket! },
   };
 }

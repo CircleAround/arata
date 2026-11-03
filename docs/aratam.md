@@ -32,6 +32,8 @@ aratam notify --in /var/lib/arata/out/daily
 1. **入力の検査** (LLM を使わない)
    - `report.json` が無い、読めない、`generated_at` が `max_age` より古い → 「arata が実行されていない / 失敗した」と緊急用に直接送って終了 (終了コード 4)。
      cron 側で `arata run ... ; aratam notify ...` とつなげば、arata が出力すら書けなかった場合もここで拾える。
+     S3 ストアの `STORE_CONFLICT` もこの経路で人に届く (arata は確定していない結果を出さない)。毎回消える環境では `report.json` が無いので直ちに緊急用に送る。
+     `--out` が残る環境では前回の `report.json` が `max_age` を超えたときに送る (それまでは同じ `run_id` なので送らない)。
    - `.aratam-notified` に同じ `run_id` がある → 送らずに終了 (`--force` で再送)。
 2. **規則による振り分け** (LLM を使わない)
    - 送り先: `summary.max_severity` が `urgent_severity` (既定 high) 以上、または `coverage.sources_failed` がある → 緊急用。それ以外 → 通常用。

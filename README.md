@@ -17,7 +17,7 @@ AWS のログと設定を定期的に改め、**前回から新しく発生し�
   `cloudtrail-unused-regions` (ふだん使わないリージョンの書き込み)、`cost-anomaly` (AWS Cost Anomaly Detection の異常)
 - チェック: `root_usage`, `unknown_assume_role`, `new_principal`, `iam_changes`, `access_denied`, `defense_evasion`, `public_exposure`, `principal_new_source`, `secret_access`, `unused_region_activity`, `cost_anomaly`, `login_bruteforce`, `probe_paths`, `endpoint_abuse`, `waf_block_trend`, `ai_path_usage` (daily)、
   `credential_hygiene`, `guardduty_findings`, `posture`, `access_analyzer`, `waf_review` (weekly。WAF の修正提案の候補を report.json の `proposals` に)
-- ストア: `dir://` (JSONL 原本 + SQLite)
+- ストア: `dir://` (JSONL 原本 + SQLite)、`s3://` (毎回消える実行環境向けのオプション。「S3 ストア」の節)
 - CLI: `config init` (推奨設定の雛形と `--diff`) / `profiles` (効いているチェックとパラメータ) / `init` (日単位の分割と `--resume`) / `doctor` / `run` / `collect` / `evaluate` / `report` (`--from --to` / `--month` で期間レポート) / `review` / `approve` / `ack` / `snooze` / `resolve` / `help ai`
 - allowlist: `principals[]` の `arn` / `account` (アカウント単位) / `arn_pattern` (glob)、`tags` は `deploy` / `ai`、`expected_denied` (access_denied で数えない想定済みの拒否。ADR 0022)
 - ack / snooze 中の finding も、重大度が上がれば changed として再報告する (ADR 0022)
@@ -271,6 +271,26 @@ arata report --from 2026-10-01 --to 2026-12-31 --out /tmp/arata-q4
 期間レポートには期間内の new / recurred / changed / resolved、重大度別件数、新規主体、未対応の残存、アプリ層の日次推移、取れなかった run (partial / failed / RUN_MISSED) が入る。
 状態遷移の履歴はこの版で最初に run した時点から記録されるので、それより前にかかる期間は先頭に注意書きが出る。
 
+### S3 ストア (任意)
+
+GitHub Actions のように毎回消える環境で定期実行するときだけ使います。`dir://` のままなら準備は要りません。
+
+```yaml
+store: s3://example-arata-store/my-service
+# store_profile: arata-store   # バケットを書く認証。省略時は SDK の標準の連鎖 (aws.profile は使わない)
+# store_region: ap-northeast-1 # 省略時は aws.region
+```
+
+実行のたびに SQLite (`audit.sqlite.gz`) と `reports/` を一時ディレクトリへ取得し、raw は追記する日のファイルだけを取得します。
+成功したら変わったものを条件付きで書き戻し、失敗・中断したら何も送りません (S3 は開始前のまま。次の run がやり直します)。
+
+- **読み取り専用との区別**: 「arata は読み取り専用」は**監査対象のアカウント**への約束です。ストアのバケットは arata を動かす側が用意するもので、arata はここに書きます。できれば監査対象とは別のアカウントに置いてください
+- **権限** (バケットに対して。prefix に限定): `s3:GetObject`、`s3:PutObject`、`s3:ListBucket`。条件付きの書き込みにも `s3:GetObject` が要ります。監査対象の読み取りロールには付けません
+- **バケットの推奨**: バージョニング (誤った上書きから戻す)、暗号化 (SSE-S3 か SSE-KMS)、パブリックアクセスブロック。Object Lock は任意です。`arata doctor` が満たしていないものを warn で示します (確かめる権限が無ければ飛ばします。書き込みは試しません)
+- **同時に動いたとき**: 後から終わったほうが `STORE_CONFLICT` (終了コード 2) で失敗し、何も上書きしません。もう一度実行してください。人の `ack` と定時の run が重なったときも同じです。衝突した run は report を出さないので、aratam が「出力が無いか古い」として緊急用に知らせます (`--out` が残る環境では `max_age` を超えたとき)
+- **SQLite が壊れた・失われた**: `arata rebuild --from-scratch` で raw から作り直せます。バージョニングがあれば前の版にも戻せます。raw があるのに SQLite が無いと、書き込み系のコマンド (`init` を含む) は `STORE_CORRUPT` で止まります (状態を空で上書きしないため)。`report` / `review` は警告して続き、`doctor` は ng で示します。最初の `init` で SQLite の送信だけが失敗したときも同じ状態になるので、`arata rebuild --from-scratch --baseline` で続けてください
+- **中断したとき**: `INTERRUPTED` (終了コード 2) で止まり、S3 には保存しません。もう一度実行してください
+
 ### アプリ層 (CloudWatch Logs) を足す
 
 `sources` に `kind: cloudwatch-logs` を足し、ロググループと形式プロファイルを紐付ける (examples/arata.yaml)。生ログは引かず、
@@ -297,7 +317,7 @@ cmd/aratam/             arata の出力を要約して通知するコマンド (
 internal/subcmd/        標準の flag の上の小さなコマンド層 (arata と aratam が共有)
 internal/config/        YAML 設定
 internal/scaffold/      設定の雛形 (config init) と雛形との差分
-internal/store/         Store インターフェース、SQLite + JSONL の dir バックエンド
+internal/store/         Store インターフェース、SQLite + JSONL の dir バックエンド、それを出し入れする s3 バックエンド
 internal/collect/       Collector インターフェース、cloudtrail/ (LookupEvents)、cwlogs/ (Logs Insights・形式プロファイル)、account/ (認証情報レポート・GuardDuty・Access Analyzer・姿勢)
 internal/record/        正規化レコード (trail_event, principal_seen, metric)
 internal/checks/        Check インターフェース、差分判定、各チェック (1 ファイル 1 チェック)

@@ -22,6 +22,7 @@ import (
 	"github.com/CircleAround/arata/internal/collect/cwlogs/cwlogstest"
 	"github.com/CircleAround/arata/internal/config"
 	"github.com/CircleAround/arata/internal/engine"
+	"github.com/CircleAround/arata/internal/store"
 )
 
 var update = flag.Bool("update", false, "ゴールデンファイルを更新する")
@@ -40,7 +41,11 @@ type cli struct {
 	stdout *bytes.Buffer
 	stderr *bytes.Buffer
 	nextID int
-	env    map[string]string // Getenv が返す環境変数 (テストを動かす環境の ARATA_CONFIG を見ない)
+	s3     store.S3API     // s3:// のストアのテストで偽の S3 につなぐ
+	ctx    context.Context // 中断のテスト用。nil なら中断しない
+	// onCollect は CloudTrail のクライアントを作るときに呼ばれる (収集の途中の中断の再現)。
+	onCollect func()
+	env       map[string]string // Getenv が返す環境変数 (テストを動かす環境の ARATA_CONFIG を見ない)
 }
 
 func newCLI(t *testing.T) *cli {
@@ -87,6 +92,9 @@ func (c *cli) run(args ...string) int {
 		Now:     func() time.Time { return c.now },
 		NewID:   func() string { c.nextID++; return fmt.Sprintf("id-%03d", c.nextID) },
 		CloudTrail: func(ctx context.Context, cfg *config.Config, src config.Source, region string) (cloudtrail.API, error) {
+			if c.onCollect != nil {
+				c.onCollect()
+			}
 			return c.fake, nil
 		},
 		CloudWatchLogs: func(ctx context.Context, cfg *config.Config, src config.Source, region string) (cwlogs.API, error) {
@@ -95,9 +103,19 @@ func (c *cli) run(args ...string) int {
 		Account: func(ctx context.Context, cfg *config.Config, src config.Source, region string) (account.Clients, error) {
 			return c.acct.Clients(region), nil
 		},
+		S3Store: func(context.Context, *config.Config) (store.S3API, error) {
+			if c.s3 == nil {
+				c.t.Fatal("this test must not reach S3")
+			}
+			return c.s3, nil
+		},
 		Sleep: func(context.Context, time.Duration) error { return nil },
 	}
-	return Execute(args, d)
+	ctx := c.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return execute(ctx, args, d)
 }
 
 type noLimit struct{}
@@ -132,7 +150,7 @@ func (c *cli) codes() []string {
 
 var vocabulary = map[string]bool{
 	"FORMAT_MISMATCH": true, "FORMAT_DRIFT": true, "LOG_GROUP_MISSING": true, "ACCESS_DENIED": true, "QUERY_LIMIT": true, "QUERY_INVALID": true,
-	"STORE_LOCKED": true, "STORE_CORRUPT": true, "RUN_MISSED": true, "COLLECT_FAILED": true, "CONFIG_INVALID": true, "CHECK_UNUSED": true, "REPORT_NOT_FOUND": true,
+	"STORE_LOCKED": true, "STORE_CORRUPT": true, "STORE_CONFLICT": true, "STORE_UNAVAILABLE": true, "INTERRUPTED": true, "RUN_MISSED": true, "COLLECT_FAILED": true, "CONFIG_INVALID": true, "CHECK_UNUSED": true, "REPORT_NOT_FOUND": true,
 }
 
 func (c *cli) assertCodesInVocabulary() {

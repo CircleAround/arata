@@ -146,7 +146,7 @@ type Query interface {
 	HistorySince(ctx context.Context) (time.Time, error)
 }
 
-// Store は読み書き全体。dir バックエンド (SQLite + JSONL) が実装する。S3 バックエンドは後続 Step。
+// Store は読み書き全体。dir バックエンド (Dir: SQLite + JSONL) と s3 バックエンド (S3: Dir の作業用の複製を出し入れする) が実装する。
 type Store interface {
 	Query
 	BeginRun(ctx context.Context, r Run) error
@@ -177,5 +177,11 @@ type Store interface {
 	ReplaceSnapshot(ctx context.Context, kind record.Kind, source string, items []record.SnapshotItem, at time.Time) error
 	// AddFindingEvents は状態遷移を追記する。
 	AddFindingEvents(ctx context.Context, evs []FindingEvent) error
+	// Path はストアのファイルがあるローカルのディレクトリ (s3 では一時ディレクトリ)。
+	Path() string
+	// Commit は書き込みを確定する。書き込み系のコマンドが成功したときだけ呼ぶ。dir では何もしない。
+	// s3 では S3 へ書き戻し、以後は読み書きできない (Close だけ)。呼ばずに Close すれば S3 は開始前のまま。
+	// 別の実行が先に書いていたら ErrConflict で、何も上書きしない。
+	Commit(ctx context.Context) error
 	Close() error
 }

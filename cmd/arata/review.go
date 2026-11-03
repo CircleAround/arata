@@ -22,7 +22,7 @@ func newReviewCmd(d *Deps, g *globalFlags) *subcmd.Command {
 		Use:   "review",
 		Short: "未対応 (open / acked) の finding を一覧する (対話なし。approve できるものは対象を示す)",
 		Run: func(ctx context.Context, _ []string) error {
-			e, _, err := openEngine(d, g)
+			e, err := openEngineForRead(ctx, d, g)
 			if err != nil {
 				return err
 			}
@@ -81,13 +81,17 @@ func newApproveCmd(d *Deps, g *globalFlags) *subcmd.Command {
 LLM は approve を実行せず、人に提案するだけにすること (arata help ai approve)。`,
 		Args: subcmd.ExactArgs(1),
 		Run: func(ctx context.Context, args []string) error {
-			e, cfg, err := openEngine(d, g)
+			e, cfg, err := openEngine(ctx, d, g)
 			if err != nil {
 				return err
 			}
 			defer e.Close()
 			res, err := e.Approve(ctx, args[0], o)
 			if res != nil {
+				if cerr := e.Commit(ctx); cerr != nil {
+					fmt.Fprintf(d.Stdout, "%s には追記しましたが、finding の状態はストアに保存できませんでした。arata resolve %s で片付けてください。\n", cfg.Allowlist, res.Finding.ID)
+					return cerr
+				}
 				fmt.Fprintf(d.Stdout, "%s に追記しました (%s):\n%s", cfg.Allowlist, res.Entry.Subject(), res.Added)
 				if res.KeptOpen {
 					fmt.Fprintf(d.Stdout, "finding %s (access_denied) は open のままです。次の run で想定済みの拒否を除いて数え直します。\n", res.Finding.ID)
@@ -136,13 +140,16 @@ func newStatusCmd(d *Deps, g *globalFlags, use, status, short string) *subcmd.Co
 				}
 				u = t
 			}
-			e, _, err := openEngine(d, g)
+			e, _, err := openEngine(ctx, d, g)
 			if err != nil {
 				return err
 			}
 			defer e.Close()
 			f, err := e.SetStatus(ctx, args[0], status, u)
 			if err != nil {
+				return err
+			}
+			if err := e.Commit(ctx); err != nil {
 				return err
 			}
 			msg := fmt.Sprintf("finding %s (%s) を %s にしました。", f.ID, f.Check, f.Status)

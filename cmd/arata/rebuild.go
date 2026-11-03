@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -62,7 +61,7 @@ raw に無いもの (runs・findings・finding_events・meta・主体の状態 a
 				d.Engine.Logger.Warn("rebuilt from raw only: findings, runs and their history start empty; every open finding is reported again as new on the next run",
 					"principal_status", principalStatus(o))
 			}
-			out := rebuildOutput{Database: filepath.Join(res.Dir, "audit.sqlite"), FromScratch: res.FromScratch, PrincipalStatus: principalStatus(o), CarriedOver: []string{},
+			out := rebuildOutput{Database: res.Database, FromScratch: res.FromScratch, PrincipalStatus: principalStatus(o), CarriedOver: []string{},
 				Files: res.Files, Records: map[string]int{}, Malformed: res.Malformed, UnknownKinds: res.UnknownKinds, Warnings: res.Warnings, Backup: res.Backup}
 			if !o.FromScratch {
 				out.CarriedOver = carriedOver

@@ -27,6 +27,8 @@ type Deps struct {
 	Stderr io.Writer
 	// Getenv は環境変数 (ARATA_CONFIG) の読み取り。テストはテストを動かす環境に左右されないよう差し替える。
 	Getenv func(string) string
+	// s3Store は読み込んだ設定のストアが s3:// か (中断の案内に使う)。
+	s3Store bool
 }
 
 // DefaultDeps は実行時の依存 (実 AWS SDK、現在時刻、標準出力 / 標準エラー)。
@@ -36,6 +38,13 @@ func DefaultDeps() Deps {
 
 // Execute は引数で CLI を実行し終了コードを返す (設計書 8: 0 / 2 / 3)。
 func Execute(args []string, d Deps) int {
+	// SIGINT / SIGTERM で context を止める。init はそこまでの進捗を記録して終わる (init --resume で再開)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return execute(ctx, args, d)
+}
+
+func execute(ctx context.Context, args []string, d Deps) int {
 	if d.Stdout == nil {
 		d.Stdout = os.Stdout
 	}
@@ -49,9 +58,6 @@ func Execute(args []string, d Deps) int {
 		d.Engine.Logger = slog.New(slog.NewJSONHandler(d.Stderr, nil))
 	}
 	root := NewRootCmd(&d)
-	// SIGINT / SIGTERM で context を止める。init はそこまでの進捗を記録して終わる (init --resume で再開)
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	if err := root.Execute(ctx, args); err != nil {
 		var xe *engine.ExitError
 		if errors.As(err, &xe) {
@@ -60,11 +66,23 @@ func Execute(args []string, d Deps) int {
 		if errors.Is(err, errPartial) {
 			return engine.ExitPartial
 		}
+		// 決定: 中断はエラーの型ではなく ctx で見る (SQLite の実行中の中断は context.Canceled を包まないことがある)
+		if ctx.Err() != nil {
+			d.Engine.Logger.Error(interruptedMessage(&d), "code", engine.CodeInterrupted, "error", err.Error())
+			return engine.ExitConfig
+		}
 		// フラグ / 引数のエラーや予期しない失敗は設定エラー扱い
 		d.Engine.Logger.Error(err.Error(), "code", engine.CodeConfigInvalid)
 		return engine.ExitConfig
 	}
 	return engine.ExitOK
+}
+
+func interruptedMessage(d *Deps) string {
+	if d.s3Store {
+		return "interrupted: the results were not saved to the S3 store; run the same command again"
+	}
+	return "interrupted: run the same command again"
 }
 
 var errPartial = errors.New("collection partially failed")
@@ -123,20 +141,30 @@ func loadConfig(d *Deps, g *globalFlags) (*config.Config, error) {
 		d.Engine.Logger.Error("invalid configuration", "code", engine.CodeConfigInvalid, "path", path, "error", err.Error())
 		return nil, &engine.ExitError{Code: engine.CodeConfigInvalid, Exit: engine.ExitConfig, Err: err}
 	}
+	d.s3Store = cfg.Store.Scheme == "s3"
 	return cfg, nil
 }
 
 // openEngine は設定を読み、エンジンを開く。設定エラーは CONFIG_INVALID (exit 2)。
-func openEngine(d *Deps, g *globalFlags) (*engine.Engine, *config.Config, error) {
+func openEngine(ctx context.Context, d *Deps, g *globalFlags) (*engine.Engine, *config.Config, error) {
 	cfg, err := loadConfig(d, g)
 	if err != nil {
 		return nil, nil, err
 	}
-	e, err := engine.Open(cfg, d.Engine)
+	e, err := engine.OpenContext(ctx, cfg, d.Engine)
 	if err != nil {
 		return nil, nil, err
 	}
 	return e, cfg, nil
+}
+
+// openEngineForRead は Commit しないコマンド (report / review) 用。書き込み系は openEngine を使う。
+func openEngineForRead(ctx context.Context, d *Deps, g *globalFlags) (*engine.Engine, error) {
+	cfg, err := loadConfig(d, g)
+	if err != nil {
+		return nil, err
+	}
+	return engine.OpenForRead(ctx, cfg, d.Engine)
 }
 
 func newInitCmd(d *Deps, g *globalFlags) *subcmd.Command {
@@ -156,7 +184,7 @@ LookupEvents は毎秒 2 リクエストが上限なので、7 日分で数時�
 				d.Engine.Logger.Error("invalid --window", "code", engine.CodeConfigInvalid, "error", err.Error())
 				return &engine.ExitError{Code: engine.CodeConfigInvalid, Exit: engine.ExitConfig, Err: err}
 			}
-			e, cfg, err := openEngine(d, g)
+			e, cfg, err := openEngine(ctx, d, g)
 			if err != nil {
 				return err
 			}
@@ -169,8 +197,15 @@ LookupEvents は毎秒 2 リクエストが上限なので、7 日分で数時�
 				fmt.Fprintln(d.Stdout, "再開する init はありません (直近の init は完了しています)。")
 				return nil
 			}
+			// 決定: init は中断・部分失敗でも進捗を書いて戻り、--resume で再開する作りなので、ここまでの分を確定する (中断の ctx では送れないので外す。ADR 0034)
+			cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), initCommitTimeout)
+			defer cancel()
+			if err := e.Commit(cctx); err != nil {
+				fmt.Fprintf(d.Stdout, "収集した %d/%d 日分をストアに保存できず、この実行の収集は失われました。arata init --resume (保存済みの init が無ければ arata init) でやり直してください。\n", res.ChunksDone, res.ChunksTotal)
+				return err
+			}
 			fmt.Fprintf(d.Stdout, "store: %s\ndays: %d/%d (until %s)\nsources ok: %s\nsources failed: %s\nrecords: %d\n",
-				cfg.Store.Dir, res.ChunksDone, res.ChunksTotal, res.DoneUntil.UTC().Format(time.RFC3339), orNone(res.SourcesOK), orNone(res.SourcesFailed), res.Records)
+				cfg.Store, res.ChunksDone, res.ChunksTotal, res.DoneUntil.UTC().Format(time.RFC3339), orNone(res.SourcesOK), orNone(res.SourcesFailed), res.Records)
 			if !res.Complete {
 				fmt.Fprintln(d.Stdout, "init は途中で止まりました。原因を直してから arata init --resume で続きから再開してください。")
 				return errPartial
@@ -182,6 +217,9 @@ LookupEvents は毎秒 2 リクエストが上限なので、7 日分で数時�
 	cmd.BoolVar(&resume, "resume", false, "途中で止まった init を続きから再開する")
 	return cmd
 }
+
+// initCommitTimeout は中断された init の進捗をストアへ確定するのに待つ上限。
+const initCommitTimeout = 5 * time.Minute
 
 func newDoctorCmd(d *Deps, g *globalFlags) *subcmd.Command {
 	var window, format string
@@ -197,7 +235,9 @@ func newDoctorCmd(d *Deps, g *globalFlags) *subcmd.Command {
   - queries     集計クエリのテンプレートを Logs Insights が受理するか (QUERY_INVALID。regex の方言違いもここで分かる)
   - check       必要なレコードを出すソースが無く skip されるチェック (warn)
   - cost        wafv2 のソースの Logs Insights の費用の概算。max_scan_gb が無ければ warn (1 日のスキャン量は直近 24h の集計で実測。1 日分の読み取りの費用がかかる。--no-measure-scan で推定)
-  - resources   wafv2 のソースの resources が、ログの宛先が同じ WebACL の資源に見当たるか (warn)`,
+  - resources   wafv2 のソースの resources が、ログの宛先が同じ WebACL の資源に見当たるか (warn)
+  - store_*     s3:// のストアのバケットを読めるか (書き込みは試さない) と、推奨 (バージョニング・暗号化・パブリックアクセスブロック。warn)。
+                読み取り専用は監査対象のアカウントへの約束で、ストアのバケットは別`,
 		Run: func(ctx context.Context, _ []string) error {
 			w, err := config.ParseDuration(window)
 			if err != nil {
@@ -276,13 +316,17 @@ func newRunCmd(d *Deps, g *globalFlags) *subcmd.Command {
 		Use:   "run",
 		Short: "collect → evaluate → report を実行する",
 		Run: func(ctx context.Context, _ []string) error {
-			e, _, err := openEngine(d, g)
+			e, _, err := openEngine(ctx, d, g)
 			if err != nil {
 				return err
 			}
 			defer e.Close()
 			res, err := e.Run(ctx, profile)
 			if err != nil {
+				return err
+			}
+			// 決定: 確定してからレポートを出す。STORE_CONFLICT のときに確定していない結果を aratam が通知しないように (ADR 0034)
+			if err := e.Commit(ctx); err != nil {
 				return err
 			}
 			if err := o.emit(d, res.Report); err != nil {
@@ -311,13 +355,16 @@ func newCollectCmd(d *Deps, g *globalFlags) *subcmd.Command {
 				d.Engine.Logger.Error("invalid --window", "code", engine.CodeConfigInvalid, "error", err.Error())
 				return &engine.ExitError{Code: engine.CodeConfigInvalid, Exit: engine.ExitConfig, Err: err}
 			}
-			e, _, err := openEngine(d, g)
+			e, _, err := openEngine(ctx, d, g)
 			if err != nil {
 				return err
 			}
 			defer e.Close()
 			cr, err := e.CollectOnly(ctx, w, sources)
 			if err != nil {
+				return err
+			}
+			if err := e.Commit(ctx); err != nil {
 				return err
 			}
 			fmt.Fprintf(d.Stdout, "sources ok: %s\nsources failed: %s\nrecords: %d\n", orNone(cr.SourcesOK), orNone(cr.SourcesFailed), cr.Records)
@@ -339,13 +386,16 @@ func newEvaluateCmd(d *Deps, g *globalFlags) *subcmd.Command {
 		Use:   "evaluate",
 		Short: "収集せずにチェックを走らせ、レポートを出す",
 		Run: func(ctx context.Context, _ []string) error {
-			e, _, err := openEngine(d, g)
+			e, _, err := openEngine(ctx, d, g)
 			if err != nil {
 				return err
 			}
 			defer e.Close()
 			res, err := e.EvaluateOnly(ctx, profile)
 			if err != nil {
+				return err
+			}
+			if err := e.Commit(ctx); err != nil {
 				return err
 			}
 			return o.emit(d, res.Report)
@@ -380,7 +430,7 @@ func newReportCmd(d *Deps, g *globalFlags) *subcmd.Command {
 			if (from == "") != (to == "") {
 				return configErr(d, fmt.Errorf("--from and --to must be given together"))
 			}
-			e, _, err := openEngine(d, g)
+			e, err := openEngineForRead(ctx, d, g)
 			if err != nil {
 				return err
 			}

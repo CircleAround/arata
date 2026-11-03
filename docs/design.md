@@ -237,6 +237,8 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
 | `QUERY_LIMIT` | Insights のスキャン上限・同時実行上限に当たった |
 | `QUERY_INVALID` | クエリ / 設定の不備 (Insights の構文エラー、不正な時間範囲など)。決定: 上限 (`QUERY_LIMIT`) とは区別する |
 | `STORE_LOCKED` / `STORE_CORRUPT` | ストアの排他失敗 / SQLite 破損 (rebuild を促す。`arata rebuild` で既存の SQLite が読めないときもこれで、`--from-scratch` を案内する) |
+| `STORE_CONFLICT` / `STORE_UNAVAILABLE` | 決定: `s3://` のストアを別の実行が先に書いた / S3 に問い合わせられない (権限・通信。破損ではない)。どちらも終了コード 2 (5-5、ADR 0034) |
+| `INTERRUPTED` | 決定: SIGINT / SIGTERM で止まった (終了コード 2。設定の誤りとは区別する。`dir://` でも同じ。init は除く: 進捗を確定して終了コード 3) |
 | `RUN_MISSED` | 前回実行から profile の周期の 2 倍以上空いた (起動側の障害) |
 | `COLLECT_FAILED` | 決定: 上記に分類できない収集エラー (ネットワーク断など) |
 | `CONFIG_INVALID` | 決定: 設定ファイルの読み込み・検証エラー (終了コード 2) |
@@ -415,8 +417,8 @@ type Observation struct {
 - `audit.sqlite` — raw から再構築可能な派生物。差分判定と期間集計のためのインデックス。`arata rebuild` で raw から作り直せる (ただし raw に無いものがある。5-4)。
 - `allowlist.yaml` — 人が承認した既知リスト。**git 管理**。エンジンは読むだけ (approve コマンドは書く)。
 
-バックエンドは 2 種類。`dir:///var/lib/arata/<name>` (オンプレ) と `s3://bucket/prefix` (Lambda。実行開始時に取得、終了時に書き戻し、
-S3 の条件付き書き込みでロック)。SQLite ファイルは数十 MB 程度に収まる想定 (集計のみ保存するため)。
+バックエンドは 2 種類。`dir:///var/lib/arata/<name>` (オンプレ) と `s3://bucket/prefix` (GitHub Actions など毎回消える実行環境。5-5)。
+SQLite ファイルは数十 MB 程度に収まる想定 (集計のみ保存するため)。
 
 ### 5-2. テーブル
 
@@ -470,6 +472,32 @@ retention:
 - 決定: 一時ファイル (`audit.sqlite.rebuild-tmp`、journal は DELETE) に作り、元のファイルを `audit.sqlite.bak` にハードリンク (できなければコピー) してから
   rename で入れ替える。途中で失敗・中断しても `audit.sqlite` は元のまま。`.bak` は 1 世代 (次の rebuild で上書き)。ロック (`audit.lock`) を取ってから行う
 - 決定: rebuild の規則と記録の規則の一致は、engine を通したテスト (`internal/engine/rebuild_test.go`) で「run を重ねたストアと rebuild したストアの全テーブルが一致する」として固定する
+
+### 5-5. S3 ストア (`store: s3://<bucket>/<prefix>`)
+
+決定 (ADR 0034): 実行のたびに一時ディレクトリへ作業用の複製を出し入れし、読み書きは `dir://` の実装がそのまま担う。`s3://` と書いたときだけ有効で、`dir://` の動きは変わらない。
+
+| オブジェクト (prefix の下) | 取得 | 書き戻し |
+|---|---|---|
+| `audit.sqlite.gz` | 開始時 | 最後に。書けたら確定 |
+| `raw/<source>/<日付>.jsonl` | その日のファイルに初めて追記するとき | 変わったものだけ、丸ごと置き換え |
+| `reports/<profile>.{json,md}` | 開始時 | 変わったものだけ |
+
+- 決定: 書き戻しはすべて条件付き (`If-Match: <開始時の ETag>`、開始時に無ければ `If-None-Match: *`)。先に SQLite の ETag を HeadObject で確かめ、raw・reports、SQLite の順に送る。
+  別の実行が先に書いていたら `STORE_CONFLICT` (終了コード 2) で失敗し、何も上書きしない。もう一度実行すればよい
+- 決定: 確定は `Engine.Commit` が行い、書き込み系のコマンド (`init` / `run` / `collect` / `evaluate` / `approve` / `ack` / `snooze` / `resolve`) が成功したときだけ呼ぶ。`rebuild` は自分で書き戻す。
+  呼ばずに終われば (失敗・中断・パニック、読むだけの `report` / `review`) S3 は開始前のまま。一時ディレクトリは最後に消す
+- 決定: `run` の partial は Commit する。`init` は中断・部分失敗でも Commit する (`--resume` のため)。Commit に失敗したら、その実行の収集が失われたことと再実行の手順を出す
+- 決定: `run` / `evaluate` は Commit してからレポートを出す。衝突したら `--out` に何も書かないので、aratam が入力の問題として知らせる (`docs/aratam.md` 2 章)
+- 決定: S3 に問い合わせられない (権限・通信) ときは `STORE_UNAVAILABLE`。404 だけを「まだ無い」と扱う
+- 決定: S3 に SQLite が無いのに raw があれば、消えた可能性が高いので `init` / `run` / `collect` / `evaluate` / `approve` / `ack` / `snooze` / `resolve` は `STORE_CORRUPT` (終了コード 2) で止め、`arata rebuild --from-scratch` (とバージョニングからの復元) を案内する。
+  続けると空の SQLite を Commit して findings・承認・ack の状態を空で上書きし、次からは気づけない。止まれば aratam が「実行されていない」と知らせる。`init` も止める (raw があるのに init するのは rebuild の誤用の可能性が高い)。`report` / `review` は警告して続け、doctor は `store_read` を ng にする。`rebuild` は止めない。
+  最初の `init` で SQLite の送信だけが失敗したときも同じ状態になる。そのときは `arata rebuild --from-scratch --baseline` で、収集した主体を baseline にして続ける
+- 決定: raw だけが先に進む (SQLite の書き込みが失敗する) ことは受け入れる。次の run は古い SQLite から同じ窓を引き直すので SQLite では二重に数えない。
+  rebuild でも events・metrics・スナップショットは同じ結果で、`principal_ips.count` だけが増え得る (判定に使わない。ADR 0011・0034)
+- 決定: `rebuild` は raw を全部取得して作り直し、SQLite だけを条件付きで置き換える。`.bak` は残さない (世代はバケットのバージョニング)
+- 決定: バケットの認証は `store_profile` (省略時は SDK の標準の連鎖) と `store_region` (省略時は `aws.region`) で監査対象の `aws:` と分ける
+- 決定: 「読み取り専用」は監査対象のアカウントへの約束で、ストアのバケットは別 (8 章)。必要な権限は `s3:GetObject`・`s3:PutObject`・`s3:ListBucket` で、prefix に限定する
 
 ## 6. 既知リスト (allowlist) と承認フロー (質問 8 への回答)
 
@@ -822,6 +850,7 @@ arata rebuild   [--from-scratch [--baseline]] [--format text|json]   # raw JSONL
 - 出力は `report.json` (機械向け、LLM 要約の入力) と `report.md` (人向け)。Slack / Issue への投稿はしない。
 
 決定 (`doctor`):
+- 決定 (ADR 0034): `s3://` のストアでは `store_scope` (読み取り専用は監査対象への約束で、ストアのバケットは別という表示)、`store_read` (ListObjectsV2 と HeadObject。書き込みは試さない。読めなければ ng)、`store_versioning`・`store_encryption`・`store_public_access` (推奨。満たさなければ warn、確かめる権限が無ければ skip) を足す。バケットに要る action は監査用の action とは別に出す (`store_actions`)
 - ストアを開かない (ロックを取らないので run と並行でき、ストアが無くても動く)。`--window` (既定 24h) は解釈率のサンプルを探す範囲、`--format table|json`。
 - 検査項目: `permission` (LookupEvents を 1 件だけ引く / 各 API の AccessDenied に不足 action を添える)、`log_group` (DescribeLogGroups で完全一致を探す)、
   `match_rate` (直近 100 行を `fields @timestamp, @message, ispresent(<判定フィールド>) as arata_matched | sort @timestamp desc | limit 100` で取り、手元で数える。生ログを引くのはここだけ)、
@@ -883,6 +912,7 @@ arata rebuild   [--from-scratch [--baseline]] [--format text|json]   # raw JSONL
 |---|---|---|
 | オンプレ cron | `cron → arata run → 終了コードと report.json で Slack 投稿 / claude -p で要約` | CircleAround が運用を預かる顧客。監視対象の外で動く |
 | Lambda | `EventBridge Scheduler → arata-lambda (S3 ストア) → SNS` | 顧客アカウント内で完結させたい顧客。**ストアと SNS は別の監査用アカウントか Object Lock バケット**に置き、侵害時に改ざんされにくくする |
+| GitHub Actions | `schedule → arata run (S3 ストア。5-5) → aratam notify` | サーバーを持たずに定期実行したい顧客。ストアのバケットは監査対象とは別のアカウントが望ましい。同時実行は `concurrency:` でも止める (衝突しても後のほうが失敗するだけ) |
 | AgentConsole タイマー | 一時的な追跡のみ | 恒常運用には使わない |
 
 LLM 要約は `arata help ai report` (バイナリに埋め込んだ手順) に従い、`report.json` を入力に「新規 / 変化 / 再発 / 解消 / 未対応 / 取れなかったもの」の順で書く。

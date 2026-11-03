@@ -1,6 +1,6 @@
 // sandbox = arata の試験用に条件を整えた、開発用 AWS アカウント上の環境。
 // arata の各チェックに中身が出る状態 (MFA の無いユーザー、外部アカウントから引き受けられるロール、nginx のロググループなど) を作る。
-// 置くものには実権限を付けない (漏れても何もできない)。cdk destroy で全部消える (Retain / Snapshot を持たない。CDK の既定が Retain のロググループとシークレットだけ明示で DESTROY)。
+// 置くものには実権限を付けない (漏れても何もできない)。cdk destroy で全部消える (Retain / Snapshot を持たない。CDK の既定が Retain のロググループ・シークレット・バケットは明示で DESTROY)。
 import { fileURLToPath } from 'node:url';
 import { App, CfnOutput, Fn, RemovalPolicy, SecretValue, Stack, Tags, type StackProps } from 'aws-cdk-lib';
 import { CfnInclude } from 'aws-cdk-lib/cloudformation-include';
@@ -10,6 +10,7 @@ import * as ce from 'aws-cdk-lib/aws-ce';
 import * as guardduty from 'aws-cdk-lib/aws-guardduty';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import type { Construct } from 'constructs';
 import { loadConfig, type SandboxConfig } from './config.ts';
@@ -151,6 +152,20 @@ export class SandboxStack extends Stack {
       new CfnOutput(this, 'SecretReaderRoleArn', { value: reader.roleArn });
       new CfnOutput(this, 'ScenarioSecretArns', { value: Fn.join(',', secrets.map((s) => s.secretArn)) });
       new CfnOutput(this, 'ScenarioParameterPath', { value: `/${p}/scenario-10` });
+    }
+
+    // arata の S3 ストアの試験用 (ADR 0034)。推奨どおりの設定にして、arata doctor の推奨の検査が ok になることも確かめる。
+    // 読み取り専用ロールには権限を足さない (読み取り専用は監査対象への約束で、ストアへは開発者のプロファイルで書く)
+    if (config.storeBucket.enabled) {
+      const storeBucket = new s3.Bucket(this, 'StoreBucket', {
+        versioned: true,
+        encryption: s3.BucketEncryption.S3_MANAGED,
+        blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+        enforceSSL: true,
+        removalPolicy: RemovalPolicy.DESTROY,
+        autoDeleteObjects: true,
+      });
+      new CfnOutput(this, 'StoreBucketName', { value: storeBucket.bucketName });
     }
 
     new CfnOutput(this, 'ReadonlyRoleArn', { value: readonlyRole.attrArn });

@@ -52,6 +52,8 @@ type DoctorResult struct {
 	Rows []DoctorRow `json:"rows"`
 	// RequiredActions は設定のソースに必要な IAM action (読み取りロールに付ける)。
 	RequiredActions []string `json:"required_actions"`
+	// StoreActions は s3:// のストアのバケットに必要な IAM action。監査対象の読み取りロールには付けない (ADR 0034)。
+	StoreActions []string `json:"store_actions,omitempty"`
 }
 
 // Problems は ng の項目があるか。
@@ -65,7 +67,7 @@ func (r *DoctorResult) Problems() bool {
 }
 
 // Doctor は設定のソースごとに権限・ロググループ・形式プロファイルの解釈率を実際に問い合わせて検査する (設計書 2 / 8 章)。
-// ストアは開かない (run と並行して実行でき、ロックを取らない)。window は解釈率のサンプルを取る範囲 (直近 100 行)。
+// ストアは開かない (run と並行して実行でき、ロックを取らない)。s3:// のストアはバケットを読めるかだけを確かめる。window は解釈率のサンプルを取る範囲 (直近 100 行)。
 //
 // 決定: 集計クエリのテンプレートは StartQuery して直ちに StopQuery し、Insights の構文検査 (MalformedQueryException) だけを受ける。
 // スキャンはほぼ発生しない。
@@ -76,6 +78,7 @@ func Doctor(ctx context.Context, cfg *config.Config, deps Deps, window time.Dura
 		d.opts = opts[0]
 	}
 	d.allowlist()
+	d.store(ctx)
 	actions := map[string]bool{}
 	for _, src := range cfg.Sources {
 		switch src.Kind {
@@ -449,6 +452,9 @@ func (r *DoctorResult) WriteTable(w io.Writer) error {
 		if a == account.ActionGenerateCredentialReport {
 			fmt.Fprintf(w, "  (%s だけは書き込み系: 認証情報レポートの生成のみ。拒否されても 4 時間以内に生成済みのレポートがあれば使う)\n", a)
 		}
+	}
+	if len(r.StoreActions) > 0 {
+		fmt.Fprintf(w, "ストアのバケットに必要な IAM action (監査対象の読み取りロールとは別): %s\n", strings.Join(r.StoreActions, ", "))
 	}
 	ng, warn := 0, 0
 	for _, row := range r.Rows {

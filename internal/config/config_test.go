@@ -120,7 +120,7 @@ func TestValidation(t *testing.T) {
 		want string
 	}{
 		{"unknown kind", strings.Replace(minimal, "cloudtrail-lookup", "cloudwatch-logz", 1), "unsupported kind"},
-		{"bad store scheme", strings.Replace(minimal, "dir://", "s3://", 1), "store"},
+		{"bad store scheme", strings.Replace(minimal, "dir://", "ftp://", 1), "store"},
 		{"no sources", strings.Replace(minimal, "    kind: cloudtrail-lookup\n", "    kind: cloudtrail-lookup\n", 1) + "", ""},
 		{"duplicate id", minimal + "  - id: trail\n    kind: cloudtrail-lookup\n", ""},
 		{"unknown check", strings.Replace(minimal, "root_usage", "nope", 1), ""},
@@ -682,5 +682,66 @@ func TestUnusedRegionAndCostAnomalySources(t *testing.T) {
 	ov := minimal + "    overrides:\n      cost_anomaly:\n        lookback_days: 3\n"
 	if _, err := Load(write(t, ov)); err == nil {
 		t.Fatal("lookback_days must not be overridable")
+	}
+}
+
+func TestParseS3Store(t *testing.T) {
+	s3 := func(url string) string { return strings.Replace(minimal, "dir:///var/lib/arata/acme", url, 1) }
+	cases := []struct {
+		name, body, bucket, prefix string
+	}{
+		{"bucket and prefix", s3("s3://example-arata-store/audit/acme"), "example-arata-store", "audit/acme"},
+		{"trailing slash", s3("s3://example-arata-store/audit/acme/"), "example-arata-store", "audit/acme"},
+		{"bucket only", s3("s3://example-arata-store"), "example-arata-store", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := Load(write(t, tc.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Store.Scheme != "s3" || cfg.Store.Bucket != tc.bucket || cfg.Store.Prefix != tc.prefix || cfg.Store.Dir != "" {
+				t.Fatalf("store: %+v", cfg.Store)
+			}
+		})
+	}
+}
+
+func TestStoreCredentials(t *testing.T) {
+	s3 := strings.Replace(minimal, "dir:///var/lib/arata/acme", "s3://example-arata-store/acme", 1)
+	cfg, err := Load(write(t, "store_profile: arata-store\nstore_region: us-west-2\n"+s3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.StoreProfile != "arata-store" || cfg.StoreRegion != "us-west-2" {
+		t.Fatalf("store credentials: %q %q", cfg.StoreProfile, cfg.StoreRegion)
+	}
+	// 省略時: プロファイルは標準の連鎖 (空)、リージョンは aws.region
+	cfg, err = Load(write(t, s3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.StoreProfile != "" || cfg.StoreRegion != "ap-northeast-1" {
+		t.Fatalf("store defaults: %q %q", cfg.StoreProfile, cfg.StoreRegion)
+	}
+}
+
+func TestStoreInvalid(t *testing.T) {
+	s3 := func(url string) string { return strings.Replace(minimal, "dir:///var/lib/arata/acme", url, 1) }
+	cases := []struct{ name, body, want string }{
+		{"empty bucket", s3("s3://"), "bucket"},
+		{"empty bucket with prefix", s3("s3:///acme"), "bucket"},
+		{"double slash in prefix", s3("s3://example-arata-store/a//b"), "prefix"},
+		// dir:// では使われない設定を黙って無視しない
+		{"store_profile on dir", "store_profile: arata-store\n" + minimal, "store_profile"},
+		{"store_region on dir", "store_region: us-west-2\n" + minimal, "store_region"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Load(write(t, tc.body))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("want error with %q, got %v", tc.want, err)
+			}
+		})
 	}
 }

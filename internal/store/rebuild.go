@@ -32,7 +32,9 @@ type RebuildOptions struct {
 
 // RebuildResult は Rebuild の結果。
 type RebuildResult struct {
-	Dir         string
+	Dir string
+	// Database は作り直した SQLite の場所 (ファイルのパスか s3:// の URL)。
+	Database    string
 	FromScratch bool
 	Files       int
 	// Records は適用した行の数 (種類ごと)。スナップショットの項目は、表に入らなかった (後の収集で置き換えられた) ものも数える。
@@ -116,7 +118,7 @@ func Rebuild(ctx context.Context, dir string, o RebuildOptions) (*RebuildResult,
 	if err := nd.migrate(); err != nil {
 		return nil, err
 	}
-	res := &RebuildResult{Dir: dir, FromScratch: o.FromScratch, Records: map[record.Kind]int{}, UnknownKinds: map[string]int{}}
+	res := &RebuildResult{Dir: dir, Database: dbPath, FromScratch: o.FromScratch, Records: map[record.Kind]int{}, UnknownKinds: map[string]int{}}
 	status := PrincipalUnknown
 	if o.Baseline {
 		status = PrincipalBaseline

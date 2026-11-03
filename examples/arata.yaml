@@ -4,7 +4,7 @@
 
 name: example
 
-# ストア。Step 1 は dir:// のみ (JSONL 原本 + SQLite)。s3:// は後続 Step。
+# ストア (JSONL 原本 + SQLite)。毎回消える実行環境では s3://example-arata-store/example (README「S3 ストア」)。
 store: dir:///var/lib/arata/example
 
 # 既知リスト。相対パスはこの設定ファイルからの相対。無ければ空として扱う。
