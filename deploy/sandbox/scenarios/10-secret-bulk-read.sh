@@ -13,7 +13,7 @@
 #   3. (実行する主体で) パラメータを消す
 # arata で出るはず (daily): secret_access high (Key は arn:aws:iam::<アカウント>:role/<stack>-secret-reader)
 #   - distinct_secrets 13 (シークレット 3 + パラメータ 9 + パス 1。GetParametersByPath はパス単位で 1 と数える) > min_distinct 10 → bulk: true
-#   - paths に "/<stack>/scenario-10 (recursive)"。ストアに CloudTrail のデータのある日が 7 日 (min_baseline_days) 以上あれば
+#   - paths に "/<stack>/scenario-10 (recursive)"。arata が CloudTrail を収集し終えた日が 7 日 (min_baseline_days) 以上あれば
 #     new_secrets に 13 個、first_reader: true (読み手のロールが秘匿値を読むのは初めて)
 #   - 読み手のロールは deploy で初めて現れた主体なので new_principal medium も出る (承認すれば止まる)
 #   - パラメータの作成・削除 (ssm:PutParameter / DeleteParameter) はほかのチェックに出ない。run の stats の secret_read_events が増える

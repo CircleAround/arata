@@ -152,7 +152,7 @@ type PublicExposure struct {
 type PrincipalNewSource struct {
 	// BaselineDays は「初めて」とみなすために比べる過去の日数 (窓の始まりの日の前日から)。
 	BaselineDays int `yaml:"baseline_days"`
-	// MinBaselineDays は判定に要る、CloudTrail のデータのある過去日数 (導入直後に全部が初めてになるのを防ぐ)。既定は baseline_days の半分。
+	// MinBaselineDays は判定に要る、CloudTrail を収集し終えた過去日数 (活動の有無ではない) (導入直後に全部が初めてになるのを防ぐ)。既定は baseline_days の半分。
 	MinBaselineDays int `yaml:"min_baseline_days"`
 	// MinWrites は新しい送信元からの書き込みがこれ以上なら medium (それ未満は low)。
 	MinWrites int `yaml:"min_writes"`
@@ -162,7 +162,7 @@ type PrincipalNewSource struct {
 type SecretAccess struct {
 	// BaselineDays は「主体 × 秘匿値」の初出と、一括読み出しの平常帯に使う過去の日数。
 	BaselineDays int `yaml:"baseline_days"`
-	// MinBaselineDays は初出の判定に要る、CloudTrail のデータのある過去日数 (導入直後は初出を報告しない)。
+	// MinBaselineDays は初出の判定に要る、CloudTrail を収集し終えた過去日数 (活動の有無ではない) (導入直後は初出を報告しない)。
 	MinBaselineDays int `yaml:"min_baseline_days"`
 	// Factor は一括読み出しの平常帯の倍率 (その主体の日ごとの異なる秘匿値の数の中央値 × factor)。
 	Factor float64 `yaml:"factor"`

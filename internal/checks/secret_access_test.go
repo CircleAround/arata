@@ -38,15 +38,28 @@ func (s *secretSeed) secret(arn string, kind record.PrincipalKind, at time.Time,
 	s.read(arn, kind, at, "secretsmanager:GetSecretValue", "", map[string]any{"secret_id": id})
 }
 
-// coverage は CloudTrail のデータがある日 (主体の活動の日次集計) を days 日分 (10-19 から遡って) 入れる。
+// coverage は arata が CloudTrail を収集し終えた日を、10-19 から遡って days 日分の init の run として入れる (活動の有無とは別)。
 func coverage(t *testing.T, st *store.Dir, days int) {
 	t.Helper()
-	for i := 0; i < days; i++ {
-		d := time.Date(2026, 10, 19-i, 0, 0, 0, 0, time.UTC).Format(record.DateLayout)
-		if err := st.UpsertMetric(context.Background(), record.Metric{Date: d, Source: "trail", From: record.KindTrailEvent,
-			Metric: record.MetricPrincipalSource, Key: record.ActivityKey("arn:aws:iam::123456789012:role/example-any", "198.51.100.0/24"), Value: 1}); err != nil {
-			t.Fatal(err)
-		}
+	collectedRun(t, st, "init", time.Date(2026, 10, 20-days, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC), "ok", trailOK())
+}
+
+var runSeq int
+
+// trailOK は CloudTrail の収集が成功した run の stats。
+func trailOK() map[string]any { return map[string]any{TrailCollectedStat: true} }
+
+// collectedRun は窓 [from, to) を収集した run を入れる。started_at は窓の終わり。
+func collectedRun(t *testing.T, st *store.Dir, profile string, from, to time.Time, status string, stats map[string]any) {
+	t.Helper()
+	runSeq++
+	id := fmt.Sprintf("run-%03d", runSeq)
+	ctx := context.Background()
+	if err := st.BeginRun(ctx, store.Run{ID: id, Profile: profile, WindowFrom: from, WindowTo: to, StartedAt: to, Status: "running"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.FinishRun(ctx, id, status, stats); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -212,7 +225,7 @@ func TestSecretAccessPath(t *testing.T) {
 	}
 }
 
-// 導入直後 (データのある過去日が min_baseline_days 未満) は初出を報告しない。一括読み出しは絶対の閾値で報告する。
+// 導入直後 (CloudTrail を収集し終えた過去日が min_baseline_days 未満) は初出を報告しない。一括読み出しは絶対の閾値で報告する。
 func TestSecretAccessWarmup(t *testing.T) {
 	st := newStore(t)
 	s := &secretSeed{st: st, t: t}

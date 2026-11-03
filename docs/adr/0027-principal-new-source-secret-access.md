@@ -23,7 +23,7 @@ last_seen が今日の観測で上書きされるので「過去 30 日に同じ
   新しい送信元だけ → low、新しい送信元からの書き込みが `min_writes` (5) 以上か新しいリージョンでの書き込み → medium、新しい送信元 + 同じ窓の access_denied → high
 - access_denied との相関は、principal_new_source の中で AccessDenied の Evaluate を同じ入力で呼んで得る。access_denied がプロファイルに無くても材料として呼ぶ (finding は出さない)
 - ノイズ対策: allowlist の主体の `dynamic_source: true` と、AWS のサービスが引き受けるロール (保存済みの AssumeRole の呼び出し元がサービス) は low を出さない (medium 以上は出す)。
-  allowlist の `source_ips` の内の送信元は新しくない。導入直後 (データのある過去日が `min_baseline_days` 未満) と、過去 30 日の間に初めて現れた主体は報告しない
+  allowlist の `source_ips` の内の送信元は新しくない。導入直後 (CloudTrail を収集し終えた過去日 (runs の窓の和) が `min_baseline_days` 未満。活動の有無では数えない) と、過去 30 日の間に初めて現れた主体は報告しない
 - `secret_access` (daily、event): 成功した GetSecretValue / BatchGetSecretValue と、復号した GetParameter(s) / GetParametersByPath を主体ごとに見る。
   初めて読む秘匿値 → low (読むこと自体が初めてなら medium)、窓の異なる秘匿値の数が `max(min_distinct, 中央値 × factor)` を超えた → high。
   GetParametersByPath はパス単位で 1 と数える。allowlist の `secrets_access` (Step 1 から読むだけだった) に一致する秘匿値は初出に数えない
@@ -45,6 +45,8 @@ last_seen が今日の観測で上書きされるので「過去 30 日に同じ
 
 - 追加の権限なしで、既知の主体の悪用 (漏洩したキーの利用・休眠キーの再利用・使わないリージョンでの書き込み) と秘匿値の持ち出しを日次に知らせられる。
   日次集計と取り出しの追加で既存のチェックの結果が変わらないことはテストで固定した
-- 版を上げた既存のストアには過去の日次集計が無いので、principal_new_source は 15 日、secret_access の初出は 7 日の間報告しない (init し直せば即時)
+- 導入直後の判定は「CloudTrail を収集し終えた日」(stats に `trail_collected` の印のある run の窓の和) で数え、データのある日では数えない
+  (操作の少ないアカウントほど判定しない、を避ける。sandbox で 30 日を収集して活動が 7 日だけの例があった)。印の無い過去の版の run は数えないので、
+  版を上げた既存のストアは principal_new_source は 15 日、secret_access の初出は 7 日の間報告しない (init し直せば即時)
 - metrics の行が増える (1 日あたり主体数 × 送信元数 × 2 + 主体数 × リージョン数)。サービスのロールが多い環境では年 100 万行に近づくので、prune を入れるときに `principal_*` の保持を短くする
 - 判定は `cloudtrail-lookup` の `regions` のリージョンだけ。使っていないリージョンでの書き込みは P-D (unused_region_activity) で扱う

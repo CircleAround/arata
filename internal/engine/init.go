@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/CircleAround/arata/internal/checks"
 	"github.com/CircleAround/arata/internal/collect"
 	"github.com/CircleAround/arata/internal/record"
 	"github.com/CircleAround/arata/internal/report"
@@ -150,6 +151,10 @@ func (e *Engine) Init(ctx context.Context, o InitOptions) (*InitResult, error) {
 		}
 		for _, s := range cr.SourcesOK {
 			sourcesOK[s] = true
+		}
+		// done_until までの CloudTrail を収集し終えた印 (ADR 0027)。途中で止まっても done_until までは数えられる
+		if e.trailCollected(cr.SourcesOK) {
+			stats[checks.TrailCollectedStat] = true
 		}
 		addOutOfRange(stats, cr.outOfRange, w.From)
 		res.ChunksDone++

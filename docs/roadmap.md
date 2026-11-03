@@ -15,7 +15,7 @@
   credential_hygiene / posture / access_denied がシナリオどおりに出ること、posture の不備を直すと次の weekly で「解消」になることを、本物の AWS で確認済み
 - 監査・検知の無効化 `defense_evasion` と公開設定の変更 `public_exposure` (ADR 0026) を実装した。sandbox の `scenarios/07`・`08` での確認はこれから
 - 既知の主体の初めての送信元・リージョン `principal_new_source` と秘匿値の読み取りの異常 `secret_access` (ADR 0027) を実装した。
-  sandbox の `scenarios/09`・`10` での確認はこれから (09 は CloudTrail のデータのある日が 15 日以上要る)
+  sandbox の `scenarios/09`・`10` での確認はこれから (09 は CloudTrail を収集し終えた日が 15 日以上要る)
 - 未確認: aratam の Slack への実送信と `bedrock`、`report --month`
 
 ## 2. すぐにやること

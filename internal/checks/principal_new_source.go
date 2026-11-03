@@ -34,7 +34,8 @@ import (
 //   - allowlist の主体の dynamic_source: true (CI のランナーなど送信元が毎回変わる主体) は low を出さない (medium 以上は出す)。
 //     AWS のサービスが引き受けるロール (保存済みの AssumeRole の呼び出し元がサービス主体。Lambda・ECS のタスク・EC2 のインスタンスプロファイル) も同じ扱い
 //     (送信元が AWS の管理する NAT などで毎回変わるため。持ち出したセッションの悪用は、書き込み・新しいリージョン・拒否で medium 以上として拾う)
-//   - CloudTrail のデータのある過去日 (日次集計のある日) が min_baseline_days 未満の間 (導入直後) は報告しない
+//   - CloudTrail を収集し終えた過去日 (collectedDays。活動の有無ではない) が min_baseline_days 未満の間 (導入直後) は報告しない。
+//     収集済みで日次集計の無い日は「活動なし」(操作の少ないアカウントでも判定する)
 //   - 国の判定はしない (未決)。new_sources の要素は map なので、将来 country を足せる
 type PrincipalNewSource struct {
 	Config       config.PrincipalNewSource
@@ -70,7 +71,7 @@ func (c PrincipalNewSource) Evaluate(ctx context.Context, q store.Query, w colle
 	b := c.Config
 	day0 := dates[0]
 	bds := baseDates(day0, b.BaselineDays)
-	withData, err := trailDataDays(ctx, q, bds)
+	withData, err := collectedDays(ctx, q, bds)
 	if err != nil {
 		return nil, err
 	}

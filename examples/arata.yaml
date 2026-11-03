@@ -124,11 +124,11 @@ checks:
     sensitive_ports: [22, 3389, 3306, 5432, 1433, 1521, 6379, 11211, 27017, 9200, 5601, 2375]   # 0.0.0.0/0 に開けたら high
   principal_new_source:                        # 既知の主体の初めての送信元 (/24・/48)・リージョン (ADR 0027)
     baseline_days: 30                          # 「初めて」とみなすために比べる過去の日数
-    min_baseline_days: 15                      # データのある過去日がこれ未満 (導入直後) は報告しない
+    min_baseline_days: 15                      # CloudTrail を収集し終えた過去日がこれ未満 (導入直後) は報告しない
     min_writes: 5                              # 新しい送信元からの書き込みがこれ以上で medium
   secret_access:                               # 秘匿値の読み取りの異常 (ADR 0027)
     baseline_days: 14                          # 「主体 × 秘匿値」の初出と一括読み出しの平常帯の日数
-    min_baseline_days: 7                       # 初出の判定に要るデータのある過去日数
+    min_baseline_days: 7                       # 初出の判定に要る、収集し終えた過去日数
     factor: 3                                  # 一括読み出しの平常帯の倍率
     min_distinct: 10                           # 1 日に読んだ異なる秘匿値の数がこれを超えたら high
 

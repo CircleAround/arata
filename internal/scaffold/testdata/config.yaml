@@ -168,11 +168,11 @@ checks:
     sensitive_ports: [22, 3389, 3306, 5432, 1433, 1521, 6379, 11211, 27017, 9200, 5601, 2375] # 0.0.0.0/0・::/0 に開けたら high にするポート (範囲が重なれば該当。全ポートは常に high、他のポートは low)
   principal_new_source:
     baseline_days: 30                            # 「初めて」とみなすために比べる過去の日数 (送信元は /24・/48、リージョンは書き込みのあったもの)
-    min_baseline_days: 15                        # 判定に要る、CloudTrail のデータのある過去日数 (導入直後は報告しない。既定は baseline_days の半分)
+    min_baseline_days: 15                        # 判定に要る、CloudTrail を収集し終えた過去日数 (活動の無い日も数える (導入直後は報告しない。既定は baseline_days の半分)
     min_writes: 5                                # 新しい送信元からの書き込みがこれ以上なら medium (未満は low。allowlist の dynamic_source: true の主体は low を出さない)
   secret_access:
     baseline_days: 14                            # 「主体 × 秘匿値」の初出と、一括読み出しの平常帯に使う過去の日数
-    min_baseline_days: 7                         # 初出の判定に要る、CloudTrail のデータのある過去日数 (導入直後は初出を報告しない。一括読み出しは報告する)
+    min_baseline_days: 7                         # 初出の判定に要る、CloudTrail を収集し終えた過去日数 (活動の無い日も数える (導入直後は初出を報告しない。一括読み出しは報告する)
     factor: 3                                    # 一括読み出しの平常帯 = その主体の日ごとの異なる秘匿値の数の中央値 × factor
     min_distinct: 10                             # 1 日に読んだ異なる秘匿値の数がこれを超えたら一括読み出し (high)。GetParametersByPath はパス単位で 1 と数える
   credential_hygiene:

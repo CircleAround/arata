@@ -565,6 +565,7 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 - 評価するのは窓のイベント (再走査で遅れて届いた分を含む。ADR 0013)。UTC の日では分けない (日をまたぐ列挙が割れないように)。平常帯は窓の始まりの日の前日から baseline_days 日の、その主体自身の日ごとの件数・種類 (無い日は 0) の中央値 × factor。拒否のある過去日が min_baseline_days 未満なら平常帯 0
 - 決定: 平常帯は丸 1 日と比べるので、daily (窓 24h) を前提とする。窓が 24h より短いプロファイル (hourly に入れた場合) では窓が短い分だけ鳴りにくい (いまは daily だけ。hourly は将来の課題)
 - 決定: error_codes は保存 (events) の条件なので overrides では変えられない。後から足したコードは、足す前の拒否が保存されていないので平常帯 0 から始まる
+- 決定 (ADR 0027 で見直し、変えない): 平常帯を使うかは「拒否のある過去日」で数えたまま (principal_new_source / secret_access の「収集し終えた日」にしない)。拒否の少ない主体は収集済みの日で数えても中央値 0 で同じ閾値になり、拒否の多い主体は拒否のある日が min_baseline_days に届くので結果は実質変わらない (足りない間は平常帯 0 = 絶対の閾値で、鳴りやすい側に倒れる)
 - 決定 (ADR 0022): 想定済みの拒否 (allowlist の `expected_denied`。窓の終わりの時点で期限内の項目) は数える前に除く。窓にも平常帯の過去分にも同じく適用する (平常帯に残すと、ふだんの想定内の拒否で平常帯が膨らみ想定外の拒否を吸収するため)。窓で除いた件数は Data の `expected_denied_excluded`
 - サービス主体と root は対象外。allowlist で承認済みでも対象 (想定内の拒否は `expected_denied` で除く。主体ごと止めるなら ack / snooze だが、重大度が上がれば再報告される)。Data: principal, principal_kind, allowlist_status, external_account, count, distinct_apis, expected_denied_excluded, apis (件数の多い順に最大 10 個、`iam:ListUsers × 3`), error_codes, ips, first_time, last_time, baseline_median_count, baseline_median_distinct, threshold (`breadth` / `volume`)
 
@@ -622,8 +623,11 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
   新しい送信元 + 同じ窓で access_denied の観測もある → high
 - 決定: access_denied との相関は、principal_new_source の中で AccessDenied の Evaluate を同じ (store, 窓, allowlist) で呼んで得る (チェックは互いの結果を見られないため。順序にも依らない)。
   access_denied がプロファイルに入っていなくても相関の材料として呼ぶ (読むだけで、access_denied の finding は出さない。ADR 0014 の「設定に書いたものだけ動かす」は finding の話で、判定の材料は含まない)
-- 決定: 導入直後 (CloudTrail のデータのある過去日 = `principal_source` のある日が `min_baseline_days` (既定は baseline_days の半分) 未満) は報告しない。
-  版を上げた既存のストアには過去の日次集計が無いので、15 日経つまで報告しない (init し直せば即時)
+- 決定: 導入直後 (CloudTrail を収集し終えた過去日が `min_baseline_days` (既定は baseline_days の半分) 未満) は報告しない。
+  「収集し終えた日」は、stats に `trail_collected: true` のある run の窓の和で、日の全体が覆われた日を数える (init は stats の `done_until` まで)。
+  engine は cloudtrail-lookup のソースの収集が成功した run と init のチャンクにこの印を付ける (CloudTrail を引かない weekly・CloudTrail が失敗した run には付かない)。
+  収集済みで日次集計の無い日は「活動なし」。データ (日次集計) のある日で数えると、操作の少ないアカウント (漏れたキーが使われると目立つはずのアカウント) ほどいつまでも判定しないため。
+  印の無い過去の版の run は数えないので、版を上げた既存のストアは 15 日経つまで報告しない (日次集計の無い過去を「活動なし」とみなして全部を新しいとしないため。init し直せば即時)
 - 決定: 過去 `baseline_days` に活動が無く、その間に初めて現れた主体 (principals.first_seen が期間の始まり以降) は「すべてが初めて」なので報告しない (new_principal と承認の流れが扱う)。
   それより前から居て活動の無かった主体 (休眠していたキー) は報告する (`active_in_baseline: false`)
 - 決定: allowlist の `source_ips` の内の送信元は新しい送信元にしない。allowlist の `dynamic_source: true` の主体と、AWS のサービスが引き受けるロール
@@ -636,7 +640,7 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
   窓に読んだ異なる秘匿値の数が `max(min_distinct (10), その主体の日ごとの異なり数の中央値 × factor (3))` を超えた → high (一括読み出し)。主体ごとに 1 件 (重い方)
 - 決定: GetParametersByPath はパス単位で 1 と数え、Data の `paths` に `(recursive)` を残す。BatchGetSecretValue のフィルタ指定は名前が分からないので `(filters)` を 1 と数える
 - 決定: 初出の履歴は日の区切りに依らず窓の直前まで見る。「その名前を読んだことがある」には復号しない読み取りも数え、「秘匿値を読んだことがある」は復号した読み取りか、
-  `with_decryption` の無い (以前の版で集めた) ssm の読み取り。導入直後 (データのある過去日が `min_baseline_days` (7) 未満) は初出を報告しない (一括読み出しは報告する)
+  `with_decryption` の無い (以前の版で集めた) ssm の読み取り。導入直後 (CloudTrail を収集し終えた過去日が `min_baseline_days` (7) 未満。数え方は principal_new_source と同じ) は初出を報告しない (一括読み出しは報告する)
 - 決定: allowlist の `secrets_access` に一致する秘匿値は初出に数えない。それを読む主体は「初めての読み手」として重くしない。承認済みの主体でも下げない
 - 決定: 保存量 (秘匿値の読み取りとして出した trail_event の数) を run の stats の `secret_read_events` に残す。GetParameter はアプリの起動ごとに呼ばれて多い
 - 2 つとも追加の権限は要らない (`cloudtrail:LookupEvents` だけ)。日次集計と秘匿値の取り出しで既存のチェックの結果が変わらないことをテストで固定する

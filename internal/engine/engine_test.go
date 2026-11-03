@@ -16,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	cwl "github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 
+	"github.com/CircleAround/arata/internal/checks"
 	"github.com/CircleAround/arata/internal/collect/account"
 	"github.com/CircleAround/arata/internal/collect/account/accounttest"
 	"github.com/CircleAround/arata/internal/collect/cloudtrail"
@@ -285,6 +286,10 @@ func TestPartialFailureExit3(t *testing.T) {
 	r, err := e.Run(context.Background(), "daily")
 	if err != nil {
 		t.Fatal(err)
+	}
+	// CloudTrail の収集に失敗した run には「収集し終えた」印を付けない (ADR 0027)
+	if last, _ := e.Store().RecentRuns(context.Background(), 1); last[0].Stats[checks.TrailCollectedStat] != nil {
+		t.Fatalf("failed trail must not be marked: %+v", last[0].Stats)
 	}
 	if r.Exit != ExitPartial || len(r.Report.Coverage.SourcesFailed) != 1 || r.Report.Summary.CollectErrors[0].Code != "ACCESS_DENIED" {
 		t.Fatalf("exit=%d report=%+v", r.Exit, r.Report.Coverage)
@@ -857,6 +862,13 @@ func TestRunNewSourceAndSecretAccess(t *testing.T) {
 		t.Fatalf("findings:\n%s\nwant\n%s", strings.Join(found, ";"), want)
 	}
 	last, _ := e.Store().RecentRuns(ctx, 1)
+	// CloudTrail の収集が成功した run と init には印が付く (導入直後の判定で「収集し終えた日」に数える。ADR 0027)
+	runs, _ := e.Store().Runs(ctx, time.Time{}, h.now.Add(time.Hour))
+	for _, run := range runs {
+		if run.Stats[checks.TrailCollectedStat] != true {
+			t.Fatalf("%s run must be marked: %+v", run.Profile, run.Stats)
+		}
+	}
 	if last[0].Stats["secret_read_events"] != float64(11) {
 		t.Fatalf("secret_read_events: %+v", last[0].Stats)
 	}

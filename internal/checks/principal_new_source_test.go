@@ -92,6 +92,7 @@ func TestPrincipalNewSource(t *testing.T) {
 		fnBusy   = "arn:aws:iam::123456789012:role/example-fn-busy"
 	)
 	const home, day1, day2 = "203.0.113.0/24", "2026-10-20", "2026-10-21"
+	coverage(t, st, 30)
 	// alice: いつもの /24 の別の IP は新しくない。新しい /24 から読み取りと書き込み 1 件 → low
 	a.principal(alice, record.PrincipalUser, old, store.PrincipalBaseline, "198.51.100.7", "203.0.113.99")
 	a.history(alice, home, "ap-northeast-1", 30)
@@ -199,28 +200,72 @@ func TestPrincipalNewSource(t *testing.T) {
 	}
 }
 
-// 導入直後 (CloudTrail のデータのある過去日が min_baseline_days 未満) は報告しない。
+// 導入直後 (arata が CloudTrail を収集し終えた過去日が min_baseline_days 未満) は報告しない。
+// 判定は収集済みの範囲で行い、活動の有無では行わない (操作の少ないアカウントほど検知できない、を避ける)。
 func TestPrincipalNewSourceWarmup(t *testing.T) {
 	st := newStore(t)
 	a := activitySeed{st: st, t: t}
 	const alice = "arn:aws:iam::123456789012:user/alice"
 	a.principal(alice, record.PrincipalUser, time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), store.PrincipalBaseline)
-	a.history(alice, "203.0.113.0/24", "ap-northeast-1", 14)
+	a.history(alice, "203.0.113.0/24", "ap-northeast-1", 30) // 活動は毎日あるが、収集の記録 (run) が足りない
 	a.source("2026-10-21", alice, "198.51.100.0/24", 30, 30)
-	obs, err := newSourceCheck().Evaluate(context.Background(), st, appWindow, &allowlist.List{})
-	if err != nil {
-		t.Fatal(err)
+	coverage(t, st, 14)
+	eval := func() []Observation {
+		t.Helper()
+		obs, err := newSourceCheck().Evaluate(context.Background(), st, appWindow, &allowlist.List{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return obs
 	}
-	if len(obs) != 0 {
+	if obs := eval(); len(obs) != 0 {
 		t.Fatalf("warmup must not report: %+v", obs)
 	}
-	a.history(alice, "203.0.113.0/24", "ap-northeast-1", 15)
-	obs, err = newSourceCheck().Evaluate(context.Background(), st, appWindow, &allowlist.List{})
+	coverage(t, st, 15)
+	if obs := eval(); len(obs) != 1 || obs[0].Severity != Medium || obs[0].Data["baseline_days_with_data"] != 15 {
+		t.Fatalf("after warmup: %+v", obs)
+	}
+}
+
+// 30 日を収集し終えていて活動が 7 日しか無い (操作の少ない) アカウントでも、新しいリージョンの書き込みを報告する。
+// 収集済みで日次集計の無い日は「活動なし」。
+func TestPrincipalNewSourceQuietAccount(t *testing.T) {
+	st := newStore(t)
+	a := activitySeed{st: st, t: t}
+	const ops = "arn:aws:iam::123456789012:user/example-ops"
+	a.principal(ops, record.PrincipalUser, time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), store.PrincipalBaseline)
+	a.history(ops, "203.0.113.0/24", "ap-northeast-1", 7)
+	a.source("2026-10-21", ops, "203.0.113.0/24", 2, 2)
+	a.put("2026-10-21", record.MetricPrincipalWriteRegion, ops, "us-west-2", 2)
+	// init は 30 日を 2 回に分けて収集した (1 回目は途中で止まり done_until まで)。失敗した run は数えない
+	collectedRun(t, st, "init", time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC), "partial",
+		map[string]any{TrailCollectedStat: true, "done_until": "2026-10-05T00:00:00Z"})
+	collectedRun(t, st, "init", time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC), "ok", trailOK())
+	collectedRun(t, st, "daily", time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC), "failed", trailOK())
+	c := newSourceCheck()
+	obs, err := c.Evaluate(context.Background(), st, appWindow, &allowlist.List{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(obs) != 1 || obs[0].Severity != Medium {
-		t.Fatalf("after warmup: %+v", obs)
+	if len(obs) != 1 || obs[0].Severity != Medium || obs[0].Data["baseline_days_with_data"] != 30 || fmt.Sprint(obs[0].Data["new_regions"]) != "[map[region:us-west-2 writes:2]]" {
+		t.Fatalf("obs: %+v", obs)
+	}
+	// CloudTrail を引かない run (weekly)・CloudTrail の収集に失敗した run・日次集計を出す前の版の run (印が無い) は収集済みに数えない。
+	// 版を上げた既存のストアで、日次集計の無い過去を「活動なし」とみなして全部を新しいとしないため
+	st2 := newStore(t)
+	a2 := activitySeed{st: st2, t: t}
+	a2.principal(ops, record.PrincipalUser, time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), store.PrincipalBaseline)
+	a2.source("2026-10-21", ops, "198.51.100.0/24", 2, 2)
+	a2.put("2026-10-21", record.MetricPrincipalWriteRegion, ops, "us-west-2", 2)
+	collectedRun(t, st2, "init", time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), "ok", map[string]any{"records": 10})
+	for d := 0; d < 5; d++ {
+		collectedRun(t, st2, "weekly", time.Date(2026, 9, 20+7*d, 0, 0, 0, 0, time.UTC), time.Date(2026, 9, 27+7*d, 0, 0, 0, 0, time.UTC), "ok", nil)
+	}
+	for d := 1; d < 20; d++ {
+		collectedRun(t, st2, "daily", time.Date(2026, 10, d, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, d+1, 0, 0, 0, 0, time.UTC), "partial", map[string]any{TrailCollectedStat: false})
+	}
+	if obs, err := c.Evaluate(context.Background(), st2, appWindow, &allowlist.List{}); err != nil || len(obs) != 0 {
+		t.Fatalf("runs without the mark must not count: %+v %v", obs, err)
 	}
 }
 
@@ -229,6 +274,7 @@ func TestPrincipalNewSourceWarmup(t *testing.T) {
 func TestActivityDoesNotAffectExistingChecks(t *testing.T) {
 	st := newStore(t)
 	a := activitySeed{st: st, t: t}
+	coverage(t, st, 30)
 	const alice = "arn:aws:iam::123456789012:user/alice"
 	a.principal(alice, record.PrincipalUser, time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), store.PrincipalBaseline, "198.51.100.7")
 	a.history(alice, "203.0.113.0/24", "ap-northeast-1", 30)

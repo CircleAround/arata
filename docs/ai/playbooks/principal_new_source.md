@@ -9,7 +9,7 @@
   新しい送信元 + 同じ窓で access_denied (拒否の急増) も出ている → high
 - allowlist の主体の項目に `dynamic_source: true` があれば (CI のランナーなど) low は出ない (medium 以上は出る)。
   AWS のサービスが引き受けるロール (Lambda・ECS のタスク・EC2 のインスタンスプロファイル。`service_assumed: true`) も同じ扱い。
-  allowlist の `source_ips` の内の送信元は新しい送信元にしない。導入直後 (CloudTrail のデータのある過去日が `min_baseline_days` 未満) は報告しない
+  allowlist の `source_ips` の内の送信元は新しい送信元にしない。導入直後 (CloudTrail を収集し終えた過去日が `min_baseline_days` 未満) は報告しない
 - 材料は日ごとの「主体 × 送信元」「主体 × 書き込みのリージョン」の有無。件数は下限 (日をまたぐ窓で一部しか数えないことがある)。国の判定はしない
 - Key は主体の ARN。data: `principal`、`principal_kind`、`allowlist_status`、`reasons` (`new_source` / `new_source_writes` / `new_region` / `access_denied`)、
   `new_sources` (`prefix`・`events`・`writes`・`ips` (窓で観測した IP))、`new_regions` (`region`・`writes`)、`writes_from_new_sources`、

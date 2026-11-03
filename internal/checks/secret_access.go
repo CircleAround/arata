@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/CircleAround/arata/internal/allowlist"
 	"github.com/CircleAround/arata/internal/collect"
@@ -23,7 +24,7 @@ import (
 //   - 初出: 窓の前 baseline_days の間にその主体が読んでいない秘匿値を読んだ → low。その主体が秘匿値を読むこと自体が初めてなら medium。
 //     履歴は日の区切りに依らず窓の直前まで見る。「その名前を読んだことがある」には復号しない読み取りも数える。
 //     「秘匿値を読んだことがある」は復号した読み取りか、with_decryption の無い (以前の版で集めた) ssm の読み取り。
-//     CloudTrail のデータのある過去日 (主体の活動の日次集計がある日) が min_baseline_days 未満の間 (導入直後) は初出を報告しない
+//     CloudTrail を収集し終えた過去日 (collectedDays。活動の有無ではない) が min_baseline_days 未満の間 (導入直後) は初出を報告しない
 //   - 一括読み出し: 窓の異なる秘匿値の数が max(min_distinct, 中央値 × factor) を超える → high (持ち出しの兆候)。
 //     平常帯は窓の始まりの日の前日から baseline_days 日の、その主体自身の日ごとの異なり数 (無い日は 0) の中央値。導入直後でも判定する
 //   - allowlist の secrets_access に書いた秘匿値は初出に数えない (一括読み出しの数には数える)
@@ -171,7 +172,7 @@ func (c SecretAccess) Evaluate(ctx context.Context, q store.Query, w collect.Win
 	b := c.Config
 	day0 := dayOf(w.From)
 	bds := baseDates(day0.Format(record.DateLayout), b.BaselineDays)
-	withData, err := trailDataDays(ctx, q, bds)
+	withData, err := collectedDays(ctx, q, bds)
 	if err != nil {
 		return nil, err
 	}
@@ -308,23 +309,67 @@ func lateInWindow(e record.TrailEvent, w collect.Window) bool {
 	return !w.ScanFrom.IsZero() && !w.CollectedAt.IsZero() && !e.Time.Before(w.ScanFrom) && e.Time.Before(w.From) && !e.CollectedAt.Before(w.CollectedAt)
 }
 
-// trailDataDays は dates のうち CloudTrail のデータがある日 (主体の活動の日次集計がある日) の数。導入直後の判定に使う (ADR 0027)。
-func trailDataDays(ctx context.Context, q store.Query, dates []string) (int, error) {
+// TrailCollectedStat は run の stats のキー。その run (init はその時点の done_until まで) で、主体の活動の日次集計を出す cloudtrail-lookup の
+// ソースの収集が成功したことを示す (engine が付ける。ADR 0027)。
+const TrailCollectedStat = "trail_collected"
+
+// collectedDays は dates (UTC の日) のうち、arata が CloudTrail を収集し終えた日の数。導入直後の判定に使う (ADR 0027)。
+//
+// 決定: 「データ (日次集計) のある日」ではなく「収集し終えた日」で数える。操作の少ないアカウントでは活動の無い日が多く、
+// データのある日で数えると、漏れたキーが使われると目立つはずのアカウントほどいつまでも判定しないため。収集済みで日次集計の無い日は「活動なし」。
+// 収集し終えた範囲は、stats に TrailCollectedStat のある run の窓の和 (init は stats の done_until まで)。日の全体が覆われた日だけを数える。
+// 印の無い run (CloudTrail を引かないプロファイル・CloudTrail の収集に失敗した run・日次集計を出す前の版の run) は数えない
+// (版を上げた既存のストアで、日次集計の無い過去を「活動なし」とみなして全部の送信元を新しいとしないため)。
+func collectedDays(ctx context.Context, q store.Query, dates []string) (int, error) {
 	if len(dates) == 0 {
 		return 0, nil
 	}
-	lo, hi := dates[0], dates[0]
+	lo := dates[0]
 	for _, d := range dates {
-		lo, hi = min(lo, d), max(hi, d)
+		lo = min(lo, d)
 	}
-	s, err := loadSeries(ctx, q, record.MetricPrincipalSource, lo, hi)
+	from, _ := time.Parse(record.DateLayout, lo)
+	// 窓が from 以降を覆う run は from より後に始まっている (init も窓の終わりの時点で始まる)
+	runs, err := q.Runs(ctx, from, from.AddDate(100, 0, 0))
 	if err != nil {
 		return 0, err
 	}
+	type span struct{ from, to time.Time }
+	var spans []span
+	for _, r := range runs {
+		if v, _ := r.Stats[TrailCollectedStat].(bool); !v || r.Status == "failed" {
+			continue
+		}
+		end := r.WindowTo
+		if s, ok := r.Stats["done_until"].(string); ok {
+			if t, err := time.Parse(time.RFC3339Nano, s); err == nil && t.Before(end) {
+				end = t
+			}
+		}
+		if end.After(r.WindowFrom) {
+			spans = append(spans, span{r.WindowFrom, end})
+		}
+	}
+	sort.Slice(spans, func(i, j int) bool { return spans[i].from.Before(spans[j].from) })
+	var merged []span
+	for _, sp := range spans {
+		if n := len(merged); n > 0 && !sp.from.After(merged[n-1].to) {
+			if sp.to.After(merged[n-1].to) {
+				merged[n-1].to = sp.to
+			}
+			continue
+		}
+		merged = append(merged, sp)
+	}
 	n := 0
 	for _, d := range dates {
-		if len(s[d]) > 0 {
-			n++
+		start, _ := time.Parse(record.DateLayout, d)
+		end := start.AddDate(0, 0, 1)
+		for _, sp := range merged {
+			if !sp.from.After(start) && !sp.to.Before(end) {
+				n++
+				break
+			}
 		}
 	}
 	return n, nil

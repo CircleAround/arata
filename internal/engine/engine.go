@@ -597,6 +597,17 @@ func (e *Engine) registry(profileName string) *checks.Registry {
 	return r
 }
 
+// trailCollected は ok のソースに cloudtrail-lookup があるか。run の stats に checks.TrailCollectedStat を付ける条件
+// (principal_new_source / secret_access が「収集し終えた日」に数える。ADR 0027)。
+func (e *Engine) trailCollected(ok []string) bool {
+	for _, src := range e.cfg.Sources {
+		if src.Kind == config.KindCloudTrailLookup && contains(ok, src.ID) {
+			return true
+		}
+	}
+	return false
+}
+
 // UnusedChecks は登録済みのチェックのうち、どのプロファイルにも入っていないもの (登録順)。
 func UnusedChecks(cfg *config.Config, reg *checks.Registry) []string {
 	used := map[string]bool{}
@@ -816,6 +827,9 @@ func (e *Engine) Run(ctx context.Context, profileName string) (*RunResult, error
 		"new": rep.Summary.New, "changed": rep.Summary.Changed, "recurred": rep.Summary.Recurred, "resolved": rep.Summary.Resolved, "still_open": rep.Summary.StillOpen,
 	}
 	addFormatStats(stats, cr.Formats)
+	if e.trailCollected(cr.SourcesOK) {
+		stats[checks.TrailCollectedStat] = true
+	}
 	if err := e.st.FinishRun(ctx, runID, status, stats); err != nil {
 		return nil, err
 	}
