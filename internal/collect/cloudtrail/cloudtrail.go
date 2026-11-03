@@ -238,6 +238,7 @@ type rawEvent struct {
 	EventName           string         `json:"eventName"`
 	AWSRegion           string         `json:"awsRegion"`
 	SourceIPAddress     string         `json:"sourceIPAddress"`
+	UserAgent           string         `json:"userAgent"`
 	ErrorCode           string         `json:"errorCode"`
 	ReadOnly            bool           `json:"readOnly"`
 	EventID             string         `json:"eventID"`
@@ -328,6 +329,16 @@ func principalOf(r rawEvent) (string, record.PrincipalKind) {
 		return u.ARN, record.PrincipalRole
 	case "AWSService":
 		return u.InvokedBy, record.PrincipalService
+	}
+	// 決定: type が無い記録のうち、invokedBy があるもの・sourceIPAddress か userAgent が "AWS Internal" のものは
+	// AWS サービス自身の記録 (ECR の PolicyExecutionEvent など) なのでサービスの主体にする (設計書 6 章)。
+	if u.Type == "" && u.ARN == "" {
+		if u.InvokedBy != "" {
+			return u.InvokedBy, record.PrincipalService
+		}
+		if (r.SourceIPAddress == "AWS Internal" || r.UserAgent == "AWS Internal") && r.EventSource != "" {
+			return r.EventSource, record.PrincipalService
+		}
 	}
 	if u.ARN != "" {
 		return u.ARN, record.PrincipalUnknown
