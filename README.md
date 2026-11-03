@@ -115,6 +115,11 @@ make build-local   # このホスト向けの bin/arata と bin/aratam
 
 CI は [.github/workflows/test.yml](.github/workflows/test.yml): `go mod verify` → age-gate → go vet → go test → govulncheck → make build。
 
+### 環境変数 (.env)
+
+Slack の Webhook など、値をリポジトリに書けないものは `.env` (git の管理外) に置く。書く項目は [.env.sample](.env.sample)。
+使うときは `set -a; . ./.env; set +a`。Webhook の URL は知っている人が誰でも投稿できるので、リポジトリ・PR・Issue に貼らない。
+
 サプライチェーン対策 (ADR 0017):
 
 - Actions は 40 桁の SHA で固定し、版をコメントに書く。ワークフローは最小権限の `permissions:`
