@@ -18,7 +18,9 @@ const (
 // 決定: metrics は (date, source, metric, key) で全プロファイル共有・置き換え保存なので、プロファイルごとに集計条件を変えると
 // プロファイルが交互に別条件の値で上書きし平常帯が壊れる。overrides では変えられず、全体の checks: でだけ変える。
 // access_denied.error_codes も同じ (events に残す拒否の条件。保存はプロファイルに依らない)。
-var CollectionParams = map[string]bool{"paths": true, "methods": true, "failure_statuses": true, "statuses": true, "exclude_paths": true, "error_codes": true}
+// waf_review の top_paths / rate_path_groups / trusted_cidrs も wafv2 の日次集計の条件 (ADR 0023)。
+var CollectionParams = map[string]bool{"paths": true, "methods": true, "failure_statuses": true, "statuses": true, "exclude_paths": true, "error_codes": true,
+	"top_paths": true, "rate_path_groups": true, "trusted_cidrs": true}
 
 // Param はチェックのパラメータ 1 つ (checks.<Check>.<Key>)。
 type Param struct {

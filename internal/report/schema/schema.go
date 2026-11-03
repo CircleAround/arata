@@ -112,6 +112,8 @@ type FormatCoverage struct {
 	RecentAverage *float64 `json:"recent_average,omitempty"`
 	BytesScanned  float64  `json:"bytes_scanned"`
 	Code          string   `json:"code,omitempty"`
+	// Truncated は結果が行の上限 (10000) に当たった集計の名前 (件数は少なめ)。
+	Truncated []string `json:"truncated,omitempty"`
 }
 
 // SkippedCheck は走らなかったチェックと理由。

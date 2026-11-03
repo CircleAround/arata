@@ -1,6 +1,9 @@
 package config
 
-import "fmt"
+import (
+	"fmt"
+	"net/netip"
+)
 
 // Checks はアプリ層チェックの設定 (設計書 7 章)。パス・閾値・除外パスを顧客ごとに変える。
 // collector (cwlogs) はこの設定から集計クエリを組み、チェックは同じ設定で判定する。
@@ -8,7 +11,9 @@ type Checks struct {
 	LoginBruteforce LoginBruteforce `yaml:"login_bruteforce"`
 	ProbePaths      ProbePaths      `yaml:"probe_paths"`
 	WAFBlockTrend   WAFBlockTrend   `yaml:"waf_block_trend"`
-	AccessDenied    AccessDenied    `yaml:"access_denied"`
+	// WAFReview は wafv2 の日次集計の条件と、週次の waf_review (WAF の修正提案の候補) の閾値 (ADR 0023)。
+	WAFReview    WAFReview    `yaml:"waf_review"`
+	AccessDenied AccessDenied `yaml:"access_denied"`
 	// 以下は週次チェック (Step 3)。
 	CredentialHygiene CredentialHygiene `yaml:"credential_hygiene"`
 	Posture           Posture           `yaml:"posture"`
@@ -70,6 +75,46 @@ type WAFBlockTrend struct {
 	BaselineDays    int     `yaml:"baseline_days"`
 	MinBaselineDays int     `yaml:"min_baseline_days"`
 }
+
+// WAFReview は waf_review の設定 (ADR 0023)。前半は wafv2 の日次集計の条件 (集計条件なので overrides では変えられない)、後半は判定の閾値。
+//
+// 決定: 候補は「人が本番の WAF を変える」判断材料になるので、閾値は「迷ったら提案しない」側に置く。
+type WAFReview struct {
+	// TopPaths は waf_block_path / waf_allow_probe を日ごとに残す正規化パスの数 (件数の多い順)。集計条件。
+	TopPaths int `yaml:"top_paths"`
+	// RatePathGroups は 1 IP あたりの件数 (waf_ip_rate) を分けて測るパスの接頭辞。どれにも当たらなければ「その他」(*)。集計条件。
+	RatePathGroups []string `yaml:"rate_path_groups"`
+	// TrustedCIDRs は監視・開発会社などの正規の送信元。wafv2 の新しい集計 (パス・カウント・レート) と候補から外す。集計条件。
+	TrustedCIDRs []string `yaml:"trusted_cidrs"`
+	// ExpectedHighRatePaths はリクエストが多いのが仕様のパスの接頭辞 (決済など)。レート制限の候補から外す。
+	ExpectedHighRatePaths []string `yaml:"expected_high_rate_paths"`
+	// Days は候補を作るのに見る直近の日数 (保存済みの metrics を読む)。
+	Days int `yaml:"days"`
+	// MinDistinctIPs は「誤検知の疑い」に要る異なり IP 数 (日ごとの値の最大。下限の見積もり)。
+	MinDistinctIPs float64 `yaml:"min_distinct_ips"`
+	// FindingDistinctIPs は「誤検知の疑い」を low の finding にもする異なり IP 数。
+	FindingDistinctIPs float64 `yaml:"finding_distinct_ips"`
+	// CountDays は「ブロックに上げてよいカウントルール」に要る、一致が続いた日数。
+	CountDays int `yaml:"count_days"`
+	// CountRatio は一致のうち探索パスか BLOCK された IP からのものの割合の下限。
+	CountRatio float64 `yaml:"count_ratio"`
+	// CountMinMatches は CountDays の間の一致の合計の下限 (少なすぎる一致で判断しない)。
+	CountMinMatches float64 `yaml:"count_min_matches"`
+	// MinCount は「すり抜けている探索」に要る、許可された探索の件数 (Days の合計)。
+	MinCount float64 `yaml:"min_count"`
+	// RateFactor は「レート制限が無い」とみなす条件: 5 分あたりの最大が p99 のこの倍を超える。
+	RateFactor float64 `yaml:"rate_factor"`
+	// RateMargin と RateFloor は提案する上限 limit = max(p99 × rate_margin, rate_floor) (5 分あたり)。
+	RateMargin float64 `yaml:"rate_margin"`
+	RateFloor  float64 `yaml:"rate_floor"`
+	// RateLooseFactor は既存のレート制限が観測の最大のこの倍より高ければ「緩すぎる」とする。観測の p99 より低ければ「厳しすぎる」。
+	RateLooseFactor float64 `yaml:"rate_loose_factor"`
+	// UnusedDays は「使われていないルール」とみなす一致 0 の日数 (データのある日で数える)。
+	UnusedDays int `yaml:"unused_days"`
+}
+
+// DefaultRatePathGroups は rate_path_groups の既定。
+var DefaultRatePathGroups = []string{"/login", "/api/"}
 
 // AccessDenied は access_denied の設定 (ADR 0021)。
 // 平常帯は Baseline と同じ形 (主体自身の直近 baseline_days 日の日次値の中央値 × factor)。min_count は量の条件の下限。
@@ -168,6 +213,25 @@ func (c *Checks) applyDefaults() {
 	if c.Posture.MinPasswordLength == 0 {
 		c.Posture.MinPasswordLength = 14
 	}
+	wr := &c.WAFReview
+	if wr.TopPaths == 0 {
+		wr.TopPaths = 50
+	}
+	if len(wr.RatePathGroups) == 0 {
+		wr.RatePathGroups = DefaultRatePathGroups
+	}
+	setInt(&wr.Days, 7)
+	setFloat(&wr.MinDistinctIPs, 10)
+	setFloat(&wr.FindingDistinctIPs, 50)
+	setInt(&wr.CountDays, 14)
+	setFloat(&wr.CountRatio, 0.95)
+	setFloat(&wr.CountMinMatches, 100)
+	setFloat(&wr.MinCount, 10)
+	setFloat(&wr.RateFactor, 10)
+	setFloat(&wr.RateMargin, 3)
+	setFloat(&wr.RateFloor, 100)
+	setFloat(&wr.RateLooseFactor, 10)
+	setInt(&wr.UnusedDays, 30)
 	wb := &c.WAFBlockTrend
 	if wb.TopN == 0 {
 		wb.TopN = 5
@@ -197,6 +261,9 @@ func (c *Checks) validate() error {
 	if wb.TopN < 1 || wb.BaselineDays < 1 || wb.MinBaselineDays > wb.BaselineDays {
 		return fmt.Errorf("waf_block_trend: top_n >= 1, baseline_days >= 1, min_baseline_days <= baseline_days")
 	}
+	if err := c.WAFReview.validate(); err != nil {
+		return fmt.Errorf("waf_review: %w", err)
+	}
 	ad := c.AccessDenied
 	if err := ad.Baseline.validate(); err != nil {
 		return fmt.Errorf("access_denied: %w", err)
@@ -218,6 +285,44 @@ func (c *Checks) validate() error {
 	for _, p := range append(append([]string{}, c.LoginBruteforce.Paths...), append(c.ProbePaths.Paths, c.ProbePaths.ExcludePaths...)...) {
 		if len(p) == 0 || p[0] != '/' {
 			return fmt.Errorf("path %q must start with /", p)
+		}
+	}
+	return nil
+}
+
+func setInt(p *int, v int) {
+	if *p == 0 {
+		*p = v
+	}
+}
+
+func setFloat(p *float64, v float64) {
+	if *p == 0 {
+		*p = v
+	}
+}
+
+func (w WAFReview) validate() error {
+	if w.TopPaths < 1 || w.Days < 1 || w.CountDays < 1 || w.UnusedDays < 1 {
+		return fmt.Errorf("top_paths, days, count_days, unused_days >= 1")
+	}
+	if w.CountRatio <= 0 || w.CountRatio > 1 {
+		return fmt.Errorf("0 < count_ratio <= 1")
+	}
+	if w.MinDistinctIPs < 1 || w.FindingDistinctIPs < w.MinDistinctIPs || w.MinCount < 1 || w.CountMinMatches < 0 {
+		return fmt.Errorf("min_distinct_ips >= 1, finding_distinct_ips >= min_distinct_ips, min_count >= 1, count_min_matches >= 0")
+	}
+	if w.RateFactor <= 1 || w.RateMargin <= 0 || w.RateFloor < 1 || w.RateLooseFactor <= 1 {
+		return fmt.Errorf("rate_factor > 1, rate_margin > 0, rate_floor >= 1, rate_loose_factor > 1")
+	}
+	for _, p := range append(append([]string{}, w.RatePathGroups...), w.ExpectedHighRatePaths...) {
+		if len(p) == 0 || p[0] != '/' {
+			return fmt.Errorf("path %q must start with /", p)
+		}
+	}
+	for _, c := range w.TrustedCIDRs {
+		if _, err := netip.ParsePrefix(c); err != nil {
+			return fmt.Errorf("trusted_cidrs: %q is not a CIDR (e.g. 203.0.113.0/24)", c)
 		}
 	}
 	return nil

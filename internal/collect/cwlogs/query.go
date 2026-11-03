@@ -15,7 +15,7 @@ const (
 	MetricSignInFailures = "sign_in_failures" // http_access: sign-in 失敗 (key = ip)
 	MetricProbeHits      = "probe_hits"       // http_access: 機密パスへの 403/404 (key = ip)
 	MetricProbePaths     = "probe_paths"      // http_access: 機密パスへの 403/404 (key = path)
-	MetricWAFBlock       = "waf_block"        // waf_action: BLOCK (key = rule)
+	MetricWAFBlock       = "waf_block"        // waf_action: BLOCK (key = rule)。waf_rule_action から作る (waf.go)
 	MetricWAFBlockIP     = "waf_block_ip"     // waf_action: BLOCK (key = ip)
 )
 
@@ -52,11 +52,8 @@ func Aggregates(kind record.Kind, c config.Checks) []Aggregate {
 			{Metric: MetricProbePaths, KeyField: "path", Filter: probe},
 		}
 	case record.KindWAFAction:
-		block := `action = "BLOCK"`
-		return []Aggregate{
-			{Metric: MetricWAFBlock, KeyField: "rule", Filter: block},
-			{Metric: MetricWAFBlockIP, KeyField: "ip", Filter: block},
-		}
+		// waf_block (rule 別) は waf_rule_action (WAFQueries) から作る。ここは IP 別だけ
+		return []Aggregate{{Metric: MetricWAFBlockIP, KeyField: "ip", Filter: `action = "BLOCK"`}}
 	}
 	return nil
 }

@@ -230,8 +230,8 @@ func (d *doctor) logs(ctx context.Context, src config.Source) {
 		"sample": cwlogs.SampleQuery(prof, cwlogs.SampleLines),
 		"doctor": cwlogs.DoctorQuery(prof, DoctorSampleLines),
 	}
-	for _, a := range c.Aggregates() {
-		queries[a.Metric] = cwlogs.AggregateQuery(prof, a)
+	for n, q := range c.Queries() {
+		queries[n] = q
 	}
 	names := make([]string, 0, len(queries))
 	for n := range queries {

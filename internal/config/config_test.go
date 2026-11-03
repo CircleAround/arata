@@ -370,7 +370,7 @@ func TestProfileOverrides(t *testing.T) {
 }
 
 func TestParamChecks(t *testing.T) {
-	if got := strings.Join(ParamChecks(), ","); got != "login_bruteforce,probe_paths,waf_block_trend,access_denied,credential_hygiene,posture" {
+	if got := strings.Join(ParamChecks(), ","); got != "login_bruteforce,probe_paths,waf_block_trend,waf_review,access_denied,credential_hygiene,posture" {
 		t.Fatalf("got %s", got)
 	}
 }
@@ -408,5 +408,36 @@ func TestSnapshotSources(t *testing.T) {
 	}
 	if _, err := Load(write(t, minimal+"checks:\n  posture:\n    min_password_length: 200\n")); err == nil {
 		t.Fatal("min_password_length must be validated")
+	}
+}
+
+func TestWAFReviewConfig(t *testing.T) {
+	body := strings.Replace(minimal, "profiles:", "  - id: waf_config\n    kind: waf-config\nprofiles:", 1)
+	cfg, err := Load(write(t, body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wr := cfg.Checks.WAFReview
+	if wr.TopPaths != 50 || strings.Join(wr.RatePathGroups, ",") != "/login,/api/" || wr.Days != 7 || wr.MinDistinctIPs != 10 || wr.CountDays != 14 ||
+		wr.CountRatio != 0.95 || wr.UnusedDays != 30 || len(wr.TrustedCIDRs) != 0 || cfg.Sources[1].Regions[0] != "ap-northeast-1" {
+		t.Fatalf("defaults: %+v %v", wr, cfg.Sources[1].Regions)
+	}
+	for _, bad := range []string{
+		"  waf_review:\n    trusted_cidrs: [203.0.113.1]\n",
+		"  waf_review:\n    rate_path_groups: [login]\n",
+		"  waf_review:\n    count_ratio: 1.5\n",
+		"  waf_review:\n    min_distinct_ips: 60\n",
+	} {
+		if _, err := Load(write(t, minimal+"checks:\n"+bad)); err == nil || !strings.Contains(err.Error(), "waf_review") {
+			t.Fatalf("%q: %v", bad, err)
+		}
+	}
+	if _, err := Load(write(t, minimal+"checks:\n  waf_review:\n    trusted_cidrs: [203.0.113.0/24, 2001:db8::/32]\n")); err != nil {
+		t.Fatal(err)
+	}
+	// 集計条件は overrides で変えられない
+	ov := strings.Replace(minimal, "    checks: [default-daily, root_usage]\n", "    checks: [default-daily, root_usage]\n    overrides:\n      waf_review: { trusted_cidrs: [203.0.113.0/24] }\n", 1)
+	if _, err := Load(write(t, ov)); err == nil || !strings.Contains(err.Error(), "waf_review.trusted_cidrs") {
+		t.Fatalf("overrides: %v", err)
 	}
 }

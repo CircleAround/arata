@@ -24,7 +24,7 @@ const (
 // FORMAT_MISMATCH のログは収集エラーとして Collect が出す。
 func (e *Engine) formatCoverage(ctx context.Context, st collect.FormatStats, collectErr error, runID string) report.FormatCoverage {
 	fc := report.FormatCoverage{Source: st.Source, Format: st.Format, LogGroup: st.LogGroup, Total: st.Total, Matched: st.Matched,
-		Expected: st.Expected, BytesScanned: st.BytesScanned}
+		Expected: st.Expected, BytesScanned: st.BytesScanned, Truncated: st.Truncated}
 	rate, ok := st.Rate()
 	if !ok {
 		return fc
@@ -88,15 +88,22 @@ func addFormatStats(stats map[string]any, formats []report.FormatCoverage) {
 	if len(formats) == 0 {
 		return
 	}
-	rates, scanned := map[string]any{}, map[string]any{}
+	rates, scanned, truncated := map[string]any{}, map[string]any{}, map[string]any{}
 	for _, f := range formats {
 		if f.MatchRate != nil {
 			rates[f.Source] = *f.MatchRate
 		}
 		scanned[f.Source] = f.BytesScanned
+		if len(f.Truncated) > 0 {
+			truncated[f.Source] = f.Truncated
+		}
 	}
 	stats["match_rates"] = rates
 	stats["bytes_scanned"] = scanned
+	// 行の上限 (10000) に当たった集計 (件数は少なめ。ADR 0023)
+	if len(truncated) > 0 {
+		stats["truncated_aggregates"] = truncated
+	}
 }
 
 func round3(f float64) float64 { return math.Round(f*1000) / 1000 }
