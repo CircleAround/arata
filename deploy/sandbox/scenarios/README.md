@@ -18,6 +18,8 @@ sandbox (arata の試験用に条件を整えた、開発用アカウント上�
 | `04-guardduty-sample-findings.sh [種類 ...]` | GuardDuty のサンプル finding を作る (`[SAMPLE]`。config の `guardDuty.enabled: true` のとき) | `guardduty_findings`。既定の 2 種類は high と medium | weekly |
 | `05-access-denied-enumeration.sh` | 外部アカウントの profile (`EXTERNAL_PROFILE`) から外部用ロールを引き受け、権限の無い読み取り API を 8 種類 (iam / s3 / ec2 / secretsmanager / kms / dynamodb / lambda / rds) 呼ぶ。`--apis N` で最大 24 種類 (どれも List / Describe)。すべて拒否される (一時認証情報は表示しない) | `access_denied` medium (外部用ロールの ARN、`threshold: breadth`、8 種類)。`--apis 20` 以上なら high。外部用ロールを allowlist で承認しても出る。想定内なら `expected_denied` で除き、ack 後に high へ上がれば changed で再報告 | daily |
 | `06-waf-traffic.sh [正規=60] [探索=20] [攻撃=20] [/login=150]` | 試験用の WAF の API (config の `waf.enabled: true`) に curl で送る: 正規らしい通信、探索パス、XSS などの攻撃らしいクエリ、/login の連打 (送信元はこのホストの IP 1 つ。下の「06 の期待」) | `waf_block_trend` low (`new_rule`: `AWSManagedRulesCommonRuleSet` と `login-rate-limit`。BLOCK が `min_count` 10 を超えればこのホストの IP の `new_top_ip` も)。WAF の修正提案 (実装中) の素材 | daily |
+| `07-defense-evasion.sh` | 試験用のロググループ `<stack>-scenario-07` を作り、保持期間を 1 日にして消す。sandbox のアナライザー (config の `accessAnalyzer.enabled: true`) にアーカイブルール `arata-scenario-07` (存在しないバケットにだけ一致) を作って消す。**CloudTrail の証跡は止めない** | `defense_evasion` high が 3 件: `logs:PutRetentionPolicy` (1 日 < 既定の `min_log_retention_days` 90)・`logs:DeleteLogGroup`・`access-analyzer:CreateArchiveRule` (`<prefix>/arata-scenario-07`。アナライザーがあるとき)。呼び出した主体を `tags: [deploy]` にすると medium (info にはならない)。試験用のロググループは arata の監査対象ではないので critical にはならない | daily |
+| `08-public-exposure.sh` [`VPC_ID=...`] | 試験用のセキュリティグループ `<stack>-scenario-08` をデフォルト VPC (または `VPC_ID`) に作り、tcp/22 を 0.0.0.0/0 に開けて、すぐ閉じて消す。どこにも付けない | `public_exposure` high (`ec2:AuthorizeSecurityGroupIngress\|<sg>\|tcp/22 0.0.0.0/0`)。すぐ閉じても出る。`tags: [deploy]` の主体でも下がらない (`known_deploy_principal: true`) | daily |
 
 ## 06 の期待 (WAF の action)
 
@@ -51,6 +53,7 @@ WebACL のルール ([lib/waf.ts](../lib/waf.ts)): `login-rate-limit` (優先度
 | `accessKey: true` の試験ユーザー (キーは一度も使わない) | `credential_hygiene` medium (`unused_key\|...`)。arata の `checks.credential_hygiene.unused_days` を 1 にして、deploy の翌日以降に出る (既定 90 日のままでは出ない) | weekly |
 | 外部アカウントを信頼する外部用ロール | `access_analyzer` medium (config の `accessAnalyzer.enabled: true` のとき) | weekly |
 | deploy そのもの (CloudFormation がユーザー・キー・パスワードを作る) | `iam_changes` medium (CreateUser / CreateAccessKey / CreateLoginProfile、呼び出し元は CDK の実行ロール)。実行ロールを allowlist で `tags: [deploy]` にすると info | daily |
+| deploy そのもの (CloudFormation が nginx・WAF のロググループの保持期間を `retentionDays` (例の 7 日) にする) | `defense_evasion`: nginx のロググループを arata の cloudwatch-logs のソースにしていれば `logs:PutRetentionPolicy` が critical (監査対象。7 日は既定の `min_log_retention_days` 90 未満で、平常帯の日数 14 より短いので Data に `shorter_than_baseline_days`)。ソースにしていないグループは high。CDK の実行ロールを `tags: [deploy]` にすると 1 段下がる (high / medium)。sandbox では想定内なので ack する | daily |
 | GuardDuty を有効にしていない | `posture` high (`guardduty_enabled\|<region>`)。他の posture の項目 (CloudTrail・パスワードポリシーなど) は開発用アカウントの設定どおりに出る | weekly |
 
 ## 手で起こすもの (スクリプトにしない)
@@ -58,8 +61,16 @@ WebACL のルール ([lib/waf.ts](../lib/waf.ts)): `login-rate-limit` (優先度
 - `root_usage` (critical): ルートユーザーでコンソールにサインインする。ルートの認証情報を扱うのでスクリプトにしない。必要なときだけ、管理者が行う
 - `new_principal` (medium): `arata init` の後に初めて現れた主体。02 の外部アカウントのセッションや、新しく使い始めた開発者の主体で出る
 
+## 07・08 の期待 (出ないはずのもの)
+
+- 07: `CreateLogGroup`・`DeleteArchiveRule` は出ない (弱める操作ではない)。アーカイブルールは既存の findings に一致しないので、weekly の `access_analyzer` の結果は変わらない
+- 08: `CreateSecurityGroup`・`RevokeSecurityGroupIngress`・`DeleteSecurityGroup` は出ない。weekly の `posture` / `access_analyzer` にも出ない (グループは消えている)
+- どちらも、既存のチェック (`iam_changes`・`access_denied` など) の結果は変わらない。失敗した呼び出しは `defense_evasion` / `public_exposure` に出ない (拒否なら `access_denied` の材料)
+- 読み取りロールに権限は足していない (`cloudtrail:LookupEvents` だけで判定する)
+
 ## 片付け
 
 - 03 で作ったユーザーは `03-iam-changes.sh cleanup` で消す (`cdk destroy` はスタックの外のものを消さない)
 - 01 のログと 04 のサンプル finding は `cdk destroy` でロググループ・detector ごと消える
+- 07・08 はスクリプトの中で作ったものを消す (途中で失敗しても終了時に消す)。08 で「消せませんでした」と出たら、そのセキュリティグループを手で消す
 - 06 の WAF のログは `cdk destroy` (または `waf.enabled: false` で deploy) でロググループごと消える
