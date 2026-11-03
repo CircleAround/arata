@@ -30,7 +30,12 @@ type Profile struct {
 	MatchField string
 	// StripPrefix はパスの前に付く接頭辞 (wafv2 の strip_path_prefix)。探索パス・パスの群の判定と正規化の前に外す。
 	StripPrefix string
+	// fields は前処理が作る正規化フィールド (ip / path 以外の任意のもの。method, status, ua など)。
+	fields map[string]bool
 }
+
+// Has は前処理が正規化フィールド name を作るか。
+func (p Profile) Has(name string) bool { return p.fields[name] }
 
 // nginx の combined 形式: `$remote_addr - $remote_user [$time_local] "$request" $status $body_bytes_sent "$http_referer" "$http_user_agent"`。
 // path はクエリ文字列を除く。
@@ -49,19 +54,28 @@ var plainField = regexp.MustCompile(`^[A-Za-z_@][A-Za-z0-9_.@]*$`)
 func ProfileFor(src config.Source) (Profile, error) {
 	p := Profile{Format: src.Format, Yields: record.Kind(src.Yields), StripPrefix: src.StripPathPrefix}
 	var body string
+	p.fields = map[string]bool{}
 	switch src.Format {
 	case config.FormatNginxAccess:
 		body, p.MatchField = nginxParse, "path"
+		p.setFields("ip", "path", "method", "status", "ua")
 	case config.FormatALBAccess:
 		body, p.MatchField = albParse, "path"
+		p.setFields("ip", "path", "method", "status", "ua", "duration")
 	case config.FormatWAFv2:
 		body, p.MatchField = wafPrelude, "action"
+		p.setFields("action", "rule", "ip", "path", "method")
 	case config.FormatJSON:
 		body, p.MatchField = jsonPrelude(src.Fields), "path"
+		for k := range src.Fields {
+			p.setFields(k)
+		}
 	case config.FormatRegex:
-		if _, err := config.RegexGroups(src.Regex, src.Yields); err != nil {
+		groups, err := config.RegexGroups(src.Regex, src.Yields)
+		if err != nil {
 			return Profile{}, err
 		}
+		p.setFields(groups...)
 		body, p.MatchField = "parse @message /"+insightsRegex(src.Regex)+"/", "path"
 	default:
 		return Profile{}, fmt.Errorf("cwlogs: unsupported format %q", src.Format)
@@ -71,6 +85,12 @@ func ProfileFor(src config.Source) (Profile, error) {
 	}
 	p.Prelude = body
 	return p, nil
+}
+
+func (p *Profile) setFields(names ...string) {
+	for _, n := range names {
+		p.fields[n] = true
+	}
 }
 
 // jsonPrelude は対応表から `fields <元> as <正規化名>, ...` を作る。time は Insights の @timestamp を使うので落とす。

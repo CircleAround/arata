@@ -20,7 +20,9 @@ const (
 // access_denied.error_codes も同じ (events に残す拒否の条件。保存はプロファイルに依らない)。
 // waf_review の top_paths / rate_path_groups / trusted_cidrs も wafv2 の日次集計の条件 (ADR 0023)。
 var CollectionParams = map[string]bool{"paths": true, "methods": true, "failure_statuses": true, "statuses": true, "exclude_paths": true, "error_codes": true,
-	"top_paths": true, "rate_path_groups": true, "trusted_cidrs": true}
+	"top_paths": true, "rate_path_groups": true, "trusted_cidrs": true,
+	// endpoint_abuse の画面・時間幅・連鎖も日次集計の条件 (ADR 0030)
+	"endpoints": true, "window": true, "follow_ups": true}
 
 // Param はチェックのパラメータ 1 つ (checks.<Check>.<Key>)。
 type Param struct {

@@ -115,6 +115,10 @@
     ],
     "checks_skipped": [
       {
+        "check": "endpoint_abuse",
+        "reason": "no http_access source"
+      },
+      {
         "check": "login_bruteforce",
         "reason": "no http_access source"
       },

@@ -68,6 +68,7 @@ sources:
 #   secret_access         daily   event  trail_event     秘匿値 (Secrets Manager・SSM SecureString) の初めての読み手・一括読み出し (low / medium / high)
 #   login_bruteforce      daily   event  http_access     sign-in 失敗の IP 別件数が平常帯超え (medium)
 #   probe_paths           daily   event  http_access     機密パス探索の 403/404 が平常帯超え (low)
+#   endpoint_abuse        daily   event  http_access     設定した画面への多数の IP からの短時間の集中・「A のあと B」の連鎖がふだん超え。endpoints が空なら何もしない (medium / low)
 #   waf_block_trend       daily   event  waf_action      WAF の新しく鳴り始めたルール・Top IP の入れ替わり (low)
 #   ai_path_usage         daily   event  principal_seen  allowlist で tags: [ai] の主体の利用を主体 × 送信元 IP で毎回 1 行 (info。自己監査)
 #   credential_hygiene    weekly  state  iam_credential_report  未使用のアクセスキー・MFA 無しのコンソールユーザー・ルートのアクセスキー (medium / high)
@@ -98,6 +99,7 @@ profiles:
       - secret_access         # 秘匿値 (Secrets Manager・SSM SecureString) の初めての読み手・一括読み出し (low / medium / high)
       - login_bruteforce      # sign-in 失敗の IP 別件数が平常帯超え (medium)
       - probe_paths           # 機密パス探索の 403/404 が平常帯超え (low)
+      - endpoint_abuse        # 設定した画面への多数の IP からの短時間の集中・「A のあと B」の連鎖がふだん超え。endpoints が空なら何もしない (medium / low)
       - waf_block_trend       # WAF の新しく鳴り始めたルール・Top IP の入れ替わり (low)
       - ai_path_usage         # allowlist で tags: [ai] の主体の利用を主体 × 送信元 IP で毎回 1 行 (info。自己監査)
     # overrides:                                 # このプロファイルでだけ判定のパラメータを変える (書かなければ checks: の値)
@@ -175,6 +177,17 @@ checks:
     min_baseline_days: 7                         # 初出の判定に要る、CloudTrail を収集し終えた過去日数 (活動の無い日も数える (導入直後は初出を報告しない。一括読み出しは報告する)
     factor: 3                                    # 一括読み出しの平常帯 = その主体の日ごとの異なる秘匿値の数の中央値 × factor
     min_distinct: 10                             # 1 日に読んだ異なる秘匿値の数がこれを超えたら一括読み出し (high)。GetParametersByPath はパス単位で 1 と数える
+  endpoint_abuse:
+    endpoints: []                                # 見る画面 (例 [{ name: signup, paths: [/signup], methods: [POST] }])。空なら何もしない。paths は glob (* は 1 区間、** は 0 区間以上、:id は数字か UUID)。sources: [<ソース ID>] で数えるソースを選ぶ (http_access のみ)。集計条件
+    window: 10m                                  # 集計の時間幅 (1 日を割り切る 1m〜1h)。集計条件
+    baseline_days: 14                            # 平常帯 = 過去 baseline_days 日の全部の時間幅の p99
+    min_baseline_days: 7                         # 平常帯を使うのに要る、ログを収集した過去日数 (足りない間は min_* の絶対の閾値だけで判定)
+    factor: 3                                    # 閾値 = 平常帯 × factor (と min_* の大きいほう)
+    min_distinct_ips: 10                         # 時間幅ごとの異なり IP 数の下限 (分散した集中。medium)
+    min_count: 20                                # 時間幅ごとの件数の下限 (量。low)
+    ua_concentration: {min_ips: 5}               # 同じ UA が min_ips 以上の IP にまたがり平常帯も超えたら根拠に添える (単独では報告しない。UA はハッシュだけ保存)
+    follow_ups: []                               # 「A のあと B」の連鎖 (例 [{ from: signup, to: message, within: 30m, min_ips: 5 }])。集計条件
+    exclude_paths: []                            # endpoints に当たっても数えないパス (glob)。集計条件
   credential_hygiene:
     unused_days: 90                              # アクセスキーを未使用とみなす日数 (最終使用、使われていなければ作成・ローテーションから)
   posture:

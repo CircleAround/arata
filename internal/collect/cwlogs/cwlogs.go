@@ -117,6 +117,9 @@ func (c *Collector) Queries() map[string]string {
 			out[q.Name] = q.Query
 		}
 	}
+	for _, q := range EndpointQueries(c.prof, c.src.ID, c.checks.EndpointAbuse) {
+		out[endpointTruncatedPrefix+q.Endpoint] = q.Query
+	}
 	return out
 }
 
@@ -257,7 +260,7 @@ func (c *Collector) Collect(ctx context.Context, w collect.Window, sink collect.
 	if c.prof.Yields == record.KindWAFAction {
 		return c.collectWAF(ctx, from, to, sink)
 	}
-	return nil
+	return c.collectEndpoints(ctx, from, to, sink)
 }
 
 func (c *Collector) metric(day, name, key string, v float64) record.Metric {

@@ -3,8 +3,11 @@ package engine
 import (
 	"fmt"
 	"io"
+	"reflect"
 	"strings"
 	"text/tabwriter"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/CircleAround/arata/internal/checks"
 	"github.com/CircleAround/arata/internal/config"
@@ -137,6 +140,16 @@ func formatValue(v any) string {
 			s[i] = fmt.Sprint(n)
 		}
 		return "[" + strings.Join(s, ", ") + "]"
+	}
+	// 入れ子の値 (endpoint_abuse の endpoints・ua_concentration など) は設定と同じ 1 行の YAML にする
+	if k := reflect.ValueOf(v).Kind(); k == reflect.Struct || k == reflect.Slice || k == reflect.Map {
+		var n yaml.Node
+		if err := n.Encode(v); err == nil {
+			n.Style = yaml.FlowStyle
+			if out, err := yaml.Marshal(&n); err == nil {
+				return strings.TrimSpace(string(out))
+			}
+		}
 	}
 	return fmt.Sprint(v)
 }

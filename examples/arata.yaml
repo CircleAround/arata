@@ -72,7 +72,7 @@ sources:
 # `default-<cadence>` はその周期のチェック全部に展開される (版が上がって増えたチェックも黙って入る。雛形では使わない)。
 # チェック: root_usage (hourly), unknown_assume_role (hourly), new_principal (daily), iam_changes (daily), access_denied (daily),
 #           defense_evasion / public_exposure (daily), principal_new_source / secret_access (daily),
-#           ai_path_usage (daily), login_bruteforce / probe_paths (daily, http_access), waf_block_trend (daily, waf_action),
+#           ai_path_usage (daily), login_bruteforce / probe_paths / endpoint_abuse (daily, http_access), waf_block_trend (daily, waf_action),
 #           credential_hygiene / guardduty_findings / posture / access_analyzer / waf_review (weekly)
 # hourly に http_access / waf_action を使うチェックを入れなければ hourly では Logs Insights を回さない
 profiles:
@@ -103,6 +103,15 @@ checks:
     exclude_paths: []                          # 正規の管理画面などを外す接頭辞
     statuses: [403, 404]
     min_count: 10
+  endpoint_abuse:                              # 画面への多数の IP からの短時間の集中と「A のあと B」の連鎖 (ADR 0030)。endpoints が空なら何もしない
+    endpoints:                                 # 見る画面 (集計条件。overrides では変えられない)
+      - { name: signup, paths: [/signup], methods: [POST] }
+      - { name: message, paths: [/messages, "/messages/*", "/**/messages"], methods: [POST] }   # * は 1 区間、** は 0 区間以上、:id は数字か UUID
+    window: 10m                                # 集計の時間幅
+    min_distinct_ips: 10                       # 時間幅の異なり IP 数がこれ以上かつふだん (過去の幅の p99) × factor 超えで medium
+    min_count: 20                              # 時間幅の件数がこれ以上かつふだん × factor 超えで low
+    follow_ups:                                # 登録の直後にメッセージ送信 (連鎖した IP 数が min_ips 以上かつふだん超えで medium)
+      - { from: signup, to: message, within: 30m, min_ips: 5 }
   waf_block_trend:
     top_n: 5                                   # BLOCK 件数の Top IP の入れ替わりを見る数
     min_count: 10

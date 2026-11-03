@@ -91,6 +91,7 @@ scenarios/07-defense-evasion.sh              # 試験用のロググループと
 scenarios/08-public-exposure.sh              # 試験用の SG の 22 を 0.0.0.0/0 に開けてすぐ閉じて消す
 scenarios/09-new-source-region.sh <リージョン> # ふだん書き込まないリージョンで無害な書き込み (principal_new_source)
 scenarios/10-secret-bulk-read.sh             # secretAccess.enabled: true で deploy したときだけ。試験用の秘匿値をまとめて読む
+scenarios/11-endpoint-abuse.sh               # 多数の IP からの登録の集中と直後のメッセージ送信の行を書く (checks.endpoint_abuse を設定しておく)
 ```
 
 ### 5. arata を回す
@@ -108,6 +109,7 @@ arata の設定は `arata config init` の雛形から作り、次を変える:
 
 - `aws.profile: arata-sandbox`、`store` は手元の書き込める場所
 - `sources` に nginx のロググループを足す (`kind: cloudwatch-logs`、`log_group: <NginxLogGroupName>`、`format: nginx_access`)
+- (シナリオ 11 を試すとき) `checks.endpoint_abuse` に画面と連鎖を書く (書き方は [scenarios/README.md](scenarios/README.md) の「11 の期待」)
 - `checks.credential_hygiene.unused_days: 1` (試験用のアクセスキーを翌日から「未使用」として出す)
 - (WAF を有効にしたとき) `sources` に WAF のロググループと WebACL の設定 (`waf-config`) を足し、daily の `checks` に `waf_block_trend`、
   weekly の `checks` に `waf_review` (WAF の修正提案の候補。ADR 0023) を入れる:

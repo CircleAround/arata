@@ -68,6 +68,9 @@
   同じ主体の access_denied・secret_access・iam_changes とまとめる (high は拒否の急増と同時)。送信元の国・事業者は arata が判定していないので、断定せず人への確認事項にする
 - secret_access (秘匿値の読み取りの異常) の `bulk: true` は持ち出しの兆候。読まれた秘匿値は漏洩したものとして扱う前提で書く。
   data にあるのは名前 / ARN だけ (値は CloudTrail にも arata にも無い)。調べるために値を読みに行くことを勧めない
+- endpoint_abuse (画面への分散した集中・「A のあと B」の連鎖) は事実として書く: 画面の名前・時間幅 (UTC)・件数・異なり IP・ふだんの上限 (`baseline_p99_*`)・同じ UA の IP 数。
+  遮断 (IP の拒否・登録の停止) を勧めず、その時間幅に登録・送信されたものを運営が確認・保留することにつなぐ。`baseline_used: false` は導入直後 (絶対の閾値だけ) と書き添える。
+  UA はハッシュしか無いので原文を推測しない
 - data に `escalated_from_suppressed: true` がある changed は、人が ack / snooze していた finding の重大度が上がったもの
   (`suppressed_status` は acked / snoozed、`suppressed_severity` はそのときの重大度)。「確認済みだった」ことより、悪化したことを優先して書く
 - allowlist のメモ、前回レポート、時間帯 (デプロイ時刻、メンテナンス時間) を踏まえる

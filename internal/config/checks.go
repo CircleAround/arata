@@ -3,6 +3,8 @@ package config
 import (
 	"fmt"
 	"net/netip"
+	"regexp"
+	"time"
 )
 
 // Checks はアプリ層チェックの設定 (設計書 7 章)。パス・閾値・除外パスを顧客ごとに変える。
@@ -20,6 +22,8 @@ type Checks struct {
 	// PrincipalNewSource と SecretAccess は CloudTrail の主体の活動・秘匿値の読み取りを見る daily のチェック (ADR 0027)。
 	PrincipalNewSource PrincipalNewSource `yaml:"principal_new_source"`
 	SecretAccess       SecretAccess       `yaml:"secret_access"`
+	// EndpointAbuse は画面 (会員登録・メッセージ送信など) への多数の IP からの集中と「A のあと B」の連鎖を見る daily のチェック (ADR 0030)。
+	EndpointAbuse EndpointAbuse `yaml:"endpoint_abuse"`
 	// 以下は週次チェック (Step 3)。
 	CredentialHygiene CredentialHygiene `yaml:"credential_hygiene"`
 	Posture           Posture           `yaml:"posture"`
@@ -170,6 +174,151 @@ type SecretAccess struct {
 	MinDistinct int `yaml:"min_distinct"`
 }
 
+// EndpointAbuse は endpoint_abuse の設定 (ADR 0030)。endpoints / window / follow_ups / exclude_paths は日次集計の条件
+// (overrides では変えられない)。既定は endpoints が空 = 何もしない (Logs Insights も流さない)。
+type EndpointAbuse struct {
+	// Endpoints は見る画面。名前ごとに集計する。
+	Endpoints []AbuseEndpoint `yaml:"endpoints"`
+	// Window は集計の時間幅 (1m 以上 1h 以下、1 日を割り切る分単位。例 10m)。
+	Window string `yaml:"window"`
+	// BaselineDays は平常帯 (過去の時間幅ごとの値の p99) に使う過去の日数。
+	BaselineDays int `yaml:"baseline_days"`
+	// MinBaselineDays は平常帯を使うのに要る、ログを収集した過去日数。足りない間は絶対の閾値 (min_*) だけで判定する。
+	MinBaselineDays int `yaml:"min_baseline_days"`
+	// Factor は平常帯の倍率 (閾値 = max(min_*, p99 × factor))。
+	Factor float64 `yaml:"factor"`
+	// MinDistinctIPs は時間幅ごとの異なり IP 数の下限 (分散した集中。medium)。
+	MinDistinctIPs float64 `yaml:"min_distinct_ips"`
+	// MinCount は時間幅ごとの件数の下限 (量。low)。
+	MinCount float64 `yaml:"min_count"`
+	// UAConcentration は同じ User-Agent の広がり (根拠に添えるだけ。単独では報告しない)。
+	UAConcentration UAConcentration `yaml:"ua_concentration"`
+	// FollowUps は「A の画面に来た IP が within 以内に B の画面に来た」連鎖。
+	FollowUps []FollowUp `yaml:"follow_ups"`
+	// ExcludePaths は endpoints のパスに当たっても数えないパス (glob)。
+	ExcludePaths []string `yaml:"exclude_paths"`
+}
+
+// AbuseEndpoint は endpoint_abuse の画面 1 つ。
+type AbuseEndpoint struct {
+	// Name は表示名 (英数字・_・-)。
+	Name string `yaml:"name"`
+	// Paths は対象のパス。クエリを落とし、数字・UUID の区間を :id とみなして照合する。
+	// glob: `*` は 1 区間、`**` は 0 区間以上、`:id` は数字だけか UUID の区間。
+	Paths []string `yaml:"paths"`
+	// Methods は HTTP メソッド (空なら全部)。
+	Methods []string `yaml:"methods"`
+	// Statuses はステータス (空なら全部)。
+	Statuses []int `yaml:"statuses"`
+	// Sources は数える cloudwatch-logs のソース ID (空なら http_access を出す全部)。複数のソースが同じ画面を数えると件数が重なる。
+	Sources []string `yaml:"sources"`
+}
+
+// UAConcentration は同じ User-Agent の広がりの条件。
+type UAConcentration struct {
+	// MinIPs は同じ UA が時間幅の中でこれ以上の異なる IP から来たら根拠に添える (平常帯も超えるとき)。
+	MinIPs float64 `yaml:"min_ips"`
+}
+
+// FollowUp は「From のあと To」の連鎖 1 つ。
+type FollowUp struct {
+	From string `yaml:"from"`
+	To   string `yaml:"to"`
+	// Within は From の後 To に来るまでの上限 (既定 30m、24h 以下)。
+	Within string `yaml:"within"`
+	// MinIPs は連鎖した異なり IP 数の下限 (既定 5)。
+	MinIPs float64 `yaml:"min_ips"`
+}
+
+// WindowDuration は Window の期間 (検証済みの前提。解釈できなければ 0)。
+func (e EndpointAbuse) WindowDuration() time.Duration {
+	d, _ := ParseDuration(e.Window)
+	return d
+}
+
+// WithinDuration は Within の期間 (検証済みの前提。解釈できなければ 0)。
+func (f FollowUp) WithinDuration() time.Duration {
+	d, _ := ParseDuration(f.Within)
+	return d
+}
+
+var endpointName = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+func (e *EndpointAbuse) applyDefaults() {
+	if e.Window == "" {
+		e.Window = "10m"
+	}
+	setInt(&e.BaselineDays, 14)
+	setInt(&e.MinBaselineDays, (e.BaselineDays+1)/2)
+	setFloat(&e.Factor, 3)
+	setFloat(&e.MinDistinctIPs, 10)
+	setFloat(&e.MinCount, 20)
+	setFloat(&e.UAConcentration.MinIPs, 5)
+	if len(e.FollowUps) > 0 {
+		fs := make([]FollowUp, len(e.FollowUps))
+		for i, f := range e.FollowUps {
+			if f.Within == "" {
+				f.Within = "30m"
+			}
+			setFloat(&f.MinIPs, 5)
+			fs[i] = f
+		}
+		e.FollowUps = fs
+	}
+}
+
+func (e EndpointAbuse) validate() error {
+	w, err := ParseDuration(e.Window)
+	if err != nil || w < time.Minute || w > time.Hour || w%time.Minute != 0 || (24*time.Hour)%w != 0 {
+		return fmt.Errorf("window %q must be whole minutes between 1m and 1h that divide a day (e.g. 10m)", e.Window)
+	}
+	if e.BaselineDays < 1 || e.MinBaselineDays < 0 || e.MinBaselineDays > e.BaselineDays || e.Factor <= 0 ||
+		e.MinDistinctIPs < 1 || e.MinCount < 1 || e.UAConcentration.MinIPs < 2 {
+		return fmt.Errorf("baseline_days >= 1, 0 <= min_baseline_days <= baseline_days, factor > 0, min_distinct_ips >= 1, min_count >= 1, ua_concentration.min_ips >= 2")
+	}
+	names := map[string]bool{}
+	for _, ep := range e.Endpoints {
+		if !endpointName.MatchString(ep.Name) {
+			return fmt.Errorf("endpoints: name %q must be letters, digits, _ or -", ep.Name)
+		}
+		if names[ep.Name] {
+			return fmt.Errorf("endpoints: duplicate name %q", ep.Name)
+		}
+		names[ep.Name] = true
+		if len(ep.Paths) == 0 {
+			return fmt.Errorf("endpoints: %s: paths is required", ep.Name)
+		}
+		for _, p := range ep.Paths {
+			if len(p) == 0 || p[0] != '/' {
+				return fmt.Errorf("endpoints: %s: path %q must start with /", ep.Name, p)
+			}
+		}
+		for _, m := range ep.Methods {
+			if m == "" {
+				return fmt.Errorf("endpoints: %s: methods must not contain an empty string", ep.Name)
+			}
+		}
+	}
+	for _, p := range e.ExcludePaths {
+		if len(p) == 0 || p[0] != '/' {
+			return fmt.Errorf("exclude_paths: path %q must start with /", p)
+		}
+	}
+	for _, f := range e.FollowUps {
+		if !names[f.From] || !names[f.To] || f.From == f.To {
+			return fmt.Errorf("follow_ups: from %q and to %q must be different endpoint names", f.From, f.To)
+		}
+		d, err := ParseDuration(f.Within)
+		if err != nil || d < time.Minute || d > 24*time.Hour {
+			return fmt.Errorf("follow_ups: within %q must be between 1m and 24h", f.Within)
+		}
+		if f.MinIPs < 1 {
+			return fmt.Errorf("follow_ups: min_ips >= 1")
+		}
+	}
+	return nil
+}
+
 // DefaultSensitivePorts は sensitive_ports の既定 (SSH・RDP・DB・キャッシュ・検索・Docker の API)。
 var DefaultSensitivePorts = []int{22, 3389, 3306, 5432, 1433, 1521, 6379, 11211, 27017, 9200, 5601, 2375}
 
@@ -259,6 +408,7 @@ func (c *Checks) applyDefaults() {
 	setInt(&ns.BaselineDays, 30)
 	setInt(&ns.MinBaselineDays, (ns.BaselineDays+1)/2)
 	setInt(&ns.MinWrites, 5)
+	c.EndpointAbuse.applyDefaults()
 	sa := &c.SecretAccess
 	setInt(&sa.BaselineDays, 14)
 	setInt(&sa.MinBaselineDays, (sa.BaselineDays+1)/2)
@@ -349,6 +499,9 @@ func (c *Checks) validate() error {
 	}
 	if sa := c.SecretAccess; sa.BaselineDays < 1 || sa.MinBaselineDays < 1 || sa.MinBaselineDays > sa.BaselineDays || sa.Factor <= 0 || sa.MinDistinct < 1 {
 		return fmt.Errorf("secret_access: baseline_days >= 1, 1 <= min_baseline_days <= baseline_days, factor > 0, min_distinct >= 1")
+	}
+	if err := c.EndpointAbuse.validate(); err != nil {
+		return fmt.Errorf("endpoint_abuse: %w", err)
 	}
 	if c.CredentialHygiene.UnusedDays < 1 {
 		return fmt.Errorf("credential_hygiene: unused_days >= 1")
