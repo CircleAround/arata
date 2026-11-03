@@ -1,0 +1,6 @@
+# zizmor の設定 (ADR 0035)。既定は actions/* のタグ固定を許すので、すべて SHA 固定にする。
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        "*": hash-pin

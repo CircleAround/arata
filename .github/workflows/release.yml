@@ -1,7 +1,8 @@
 name: release
 
-# v* タグの push で arata と aratam の linux/arm64 と linux/amd64 の静的バイナリを作り、SHA256SUMS と共に GitHub Releases に添付する。
+# v* タグの push で arata と aratam の linux/arm64 と linux/amd64 の静的バイナリを作り、SHA256SUMS と SBOM と共に GitHub Releases に添付する。
 # 公開リポジトリでは build provenance attestation (来歴証明) も付ける。非公開の間は SHA256SUMS のみ (ADR 0017)。
+# ジョブを権限で分ける (ADR 0035): テストとビルドは読み取りだけで動かし、書き込みの権限を持つ publish ではリポジトリのコードも外部の道具も動かさない。
 on:
   push:
     tags: ["v*"]
@@ -9,24 +10,28 @@ on:
 permissions: {}
 
 jobs:
-  release:
+  build:
     runs-on: ubuntu-24.04-arm
     permissions:
-      contents: write      # Release の作成
-      id-token: write      # attestation の署名 (Sigstore の OIDC)
-      attestations: write  # attestation の保存
+      contents: read
     steps:
+      # タグの名前は make の引数と -ldflags に入るので、版の形だけを通す
+      - name: check tag name
+        run: '[[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]'
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
           persist-credentials: false
+      # 配布物はキャッシュの中身に影響されないようにする (キャッシュ汚染の対策)
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: false
       - run: go mod verify
       - run: go list -m -json all | go run ./tools/agegate -days 7
       - run: go vet ./...
       - run: go test ./...
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
       - name: build
         run: make build VERSION="${GITHUB_REF_NAME}"
       - name: checksums
@@ -38,6 +43,69 @@ jobs:
         run: |
           bin/arata-linux-arm64 --version | grep -F "${GITHUB_REF_NAME}"
           bin/aratam-linux-arm64 --version | grep -F "${GITHUB_REF_NAME}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: binaries
+          path: bin/
+          if-no-files-found: error
+          retention-days: 1
+
+  # SBOM の道具は配布物と別のジョブで動かす。ここの成果物は SBOM だけで、バイナリは build のものをそのまま配る
+  sbom:
+    needs: build
+    runs-on: ubuntu-24.04-arm
+    permissions: {}
+    env:
+      SYFT_VERSION: 1.55.0
+      SYFT_SHA256: 929bd163db2d7cd2255d3bcb8967208079813d7b46b0c952f7b794d8e2c7d304
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: binaries
+          path: bin
+      - name: syft を取得する
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSL -o syft.tar.gz "https://github.com/anchore/syft/releases/download/v$SYFT_VERSION/syft_${SYFT_VERSION}_linux_arm64.tar.gz"
+          echo "$SYFT_SHA256  syft.tar.gz" | sha256sum --check --strict -
+          tar -xzf syft.tar.gz syft
+      - name: SBOM (SPDX JSON)
+        env:
+          SYFT_CHECK_FOR_APP_UPDATE: "false"
+        run: |
+          mkdir sbom
+          for f in arata-linux-arm64 arata-linux-amd64 aratam-linux-arm64 aratam-linux-amd64; do
+            "$RUNNER_TEMP/syft" scan "file:bin/$f" -o "spdx-json=sbom/$f.spdx.json"
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sbom
+          path: sbom/
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: [build, sbom]
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: write      # Release の作成
+      id-token: write      # attestation の署名 (Sigstore の OIDC)
+      attestations: write  # attestation の保存
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: binaries
+          path: bin
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: sbom
+          path: bin
+      - name: checksums に SBOM を足す
+        working-directory: bin
+        run: |
+          sha256sum --check --strict SHA256SUMS
+          sha256sum ./*.spdx.json | sed 's|  \./|  |' >> SHA256SUMS
+          cat SHA256SUMS
       - name: attest build provenance
         # 非公開リポジトリの attestation は Enterprise Cloud が要る。非公開の間はスキップしてリリースを止めない。
         if: github.event.repository.visibility == 'public'
@@ -48,10 +116,13 @@ jobs:
             bin/arata-linux-amd64
             bin/aratam-linux-arm64
             bin/aratam-linux-amd64
+            bin/*.spdx.json
       - name: publish
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           gh release create "${GITHUB_REF_NAME}" \
-            bin/arata-linux-arm64 bin/arata-linux-amd64 bin/aratam-linux-arm64 bin/aratam-linux-amd64 bin/SHA256SUMS \
+            bin/arata-linux-arm64 bin/arata-linux-amd64 bin/aratam-linux-arm64 bin/aratam-linux-amd64 \
+            bin/*.spdx.json bin/SHA256SUMS \
             --title "${GITHUB_REF_NAME}" --generate-notes --verify-tag

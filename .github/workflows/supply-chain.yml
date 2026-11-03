@@ -1,0 +1,98 @@
+name: supply-chain
+
+# サプライチェーンの検査 (ADR 0017・0035)。PR と main に加えて週次でも回す。
+# コードが変わらなくても、依存に新しい脆弱性が見つかることと、action のタグが動くことがあるため。
+# 検査の道具も固定する: Go 製は `go run pkg@version` (sum.golang.org で検証)、それ以外はリリースのバイナリを sha256 で照合する。
+# 版を上げるときは公開から 7 日以上の版を選ぶ (docs/supply-chain.md「道具の版を上げる」)。
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '27 3 * * 1'   # 毎週月曜 03:27 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  ACTIONLINT: github.com/rhysd/actionlint@v1.7.12
+  GOVULNCHECK: golang.org/x/vuln@v1.9.0
+  ACTIONS_LOCK: github.com/github/gh-actions-lock@v0.4.0
+
+jobs:
+  # uses の固定、コメントの版と SHA の一致、7 日待機、ロックファイル、ワークフローの構文
+  actions:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: age-gate (CI の Go 製の道具も公開から 7 日以上)
+        run: go list -m -json "$ACTIONLINT" "$GOVULNCHECK" "$ACTIONS_LOCK" | go run ./tools/agegate -days 7
+      - name: actions-gate (SHA 固定・版の一致・公開から 7 日以上)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: go run ./tools/actionsgate -days 7 -lock .github/workflows/actions.lock .github/workflows examples/github-actions
+      - name: actionlint
+        run: go run "${ACTIONLINT/@//cmd/actionlint@}" .github/workflows/*.yml examples/github-actions/arata-audit.yml
+      # ロックファイルが古い・壊れている・上流と合わないときに落ちる。無いときは読み飛ばす
+      - name: workflow lockfile
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ ! -f .github/workflows/actions.lock ]; then
+            echo "actions.lock はまだありません (docs/supply-chain.md)"
+            exit 0
+          fi
+          go run "${ACTIONS_LOCK/@//cmd/gh-actions-lock@}" --verify
+
+  # ワークフローのセキュリティの linter。設定は .github/zizmor.yml
+  zizmor:
+    runs-on: ubuntu-24.04-arm
+    env:
+      VERSION: v1.31.1
+      SHA256: 37eebbd5762a44f262d94875431b14a6d2402991e90a685113ea97b8b41be833
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: zizmor を取得する
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSL -o zizmor.tar.gz "https://github.com/zizmorcore/zizmor/releases/download/$VERSION/zizmor-aarch64-unknown-linux-gnu.tar.gz"
+          echo "$SHA256  zizmor.tar.gz" | sha256sum --check --strict -
+          tar -xzf zizmor.tar.gz
+      - name: zizmor
+        env:
+          GH_TOKEN: ${{ github.token }}   # 固定した commit の偽装や既知の脆弱な action を調べるオンラインの検査に使う
+        run: '"$RUNNER_TEMP/zizmor" --config .github/zizmor.yml . examples/github-actions/arata-audit.yml'
+
+  # 依存の既知の脆弱性。Go は呼び出し経路まで見る govulncheck、deploy/sandbox の pnpm の依存は osv-scanner
+  vulnerabilities:
+    runs-on: ubuntu-24.04-arm
+    env:
+      OSV_VERSION: v2.7.0
+      OSV_SHA256: 4061ef4c021ed3c47f203b818f337e351336cc5cd67c0274fc36bd1dfc728dd7
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: govulncheck
+        run: go run "${GOVULNCHECK/@//cmd/govulncheck@}" ./...
+      - name: osv-scanner を取得する
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSL -o osv-scanner "https://github.com/google/osv-scanner/releases/download/$OSV_VERSION/osv-scanner_linux_arm64"
+          echo "$OSV_SHA256  osv-scanner" | sha256sum --check --strict -
+          chmod +x osv-scanner
+      - name: osv-scanner (deploy/sandbox)
+        run: '"$RUNNER_TEMP/osv-scanner" scan source --lockfile deploy/sandbox/pnpm-lock.yaml'

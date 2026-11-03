@@ -31,9 +31,7 @@ concurrency:
   group: arata-audit-example
   cancel-in-progress: false
 
-permissions:
-  id-token: write   # OIDC で実行用ロールを引き受ける
-  contents: read    # 設定ファイルの checkout
+permissions: {}
 
 defaults:
   run:
@@ -49,6 +47,9 @@ jobs:
   audit:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    permissions:
+      id-token: write   # OIDC で実行用ロールを引き受ける
+      contents: read    # 設定ファイルの checkout
     env:
       PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.profile || (github.event.schedule == '10 1 * * 1' && 'weekly' || 'daily') }}
     steps:
