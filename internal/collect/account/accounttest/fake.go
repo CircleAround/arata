@@ -11,8 +11,12 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	aa "github.com/aws/aws-sdk-go-v2/service/accessanalyzer"
 	aatypes "github.com/aws/aws-sdk-go-v2/service/accessanalyzer/types"
+	acc "github.com/aws/aws-sdk-go-v2/service/account"
+	acctypes "github.com/aws/aws-sdk-go-v2/service/account/types"
 	ct "github.com/aws/aws-sdk-go-v2/service/cloudtrail"
 	cttypes "github.com/aws/aws-sdk-go-v2/service/cloudtrail/types"
+	ce "github.com/aws/aws-sdk-go-v2/service/costexplorer"
+	cetypes "github.com/aws/aws-sdk-go-v2/service/costexplorer/types"
 	gd "github.com/aws/aws-sdk-go-v2/service/guardduty"
 	gdtypes "github.com/aws/aws-sdk-go-v2/service/guardduty/types"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
@@ -81,11 +85,79 @@ type Fake struct {
 
 	// WAF は WAFv2 の WebACL (nil なら WebACL が無い)。
 	WAF *WAF
+
+	// Regions はアカウントのリージョンと opt-in の状態 (account:ListRegions)。
+	Regions map[string]acctypes.RegionOptStatus
+
+	// Cost Anomaly Detection のモニターと異常。AnomalyCalls は GetAnomalies の要求 (範囲と下限の確認用)。
+	Monitors     []cetypes.AnomalyMonitor
+	Anomalies    []cetypes.Anomaly
+	AnomalyCalls []*ce.GetAnomaliesInput
 }
 
 // Clients は region のクライアントの束を返す (全部このフェイク)。
 func (f *Fake) Clients(region string) account.Clients {
-	return account.Clients{Region: region, IAM: f, GuardDuty: gdFake{f}, AccessAnalyzer: aaFake{f}, CloudTrail: f, S3Control: f, STS: f, WAFV2: wafFake{f, region}}
+	return account.Clients{Region: region, IAM: f, GuardDuty: gdFake{f}, AccessAnalyzer: aaFake{f}, CloudTrail: f, S3Control: f, STS: f, WAFV2: wafFake{f, region},
+		Account: f, CostExplorer: f}
+}
+
+// --- Account Management ---
+
+func (f *Fake) ListRegions(_ context.Context, in *acc.ListRegionsInput, _ ...func(*acc.Options)) (*acc.ListRegionsOutput, error) {
+	if err := f.call(account.ActionListRegions); err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := &acc.ListRegionsOutput{}
+	for name, st := range f.Regions {
+		ok := len(in.RegionOptStatusContains) == 0
+		for _, want := range in.RegionOptStatusContains {
+			ok = ok || want == st
+		}
+		if ok {
+			out.Regions = append(out.Regions, acctypes.Region{RegionName: aws.String(name), RegionOptStatus: st})
+		}
+	}
+	return out, nil
+}
+
+// --- Cost Explorer (Cost Anomaly Detection) ---
+
+func (f *Fake) GetAnomalyMonitors(context.Context, *ce.GetAnomalyMonitorsInput, ...func(*ce.Options)) (*ce.GetAnomalyMonitorsOutput, error) {
+	if err := f.call(account.ActionGetAnomalyMonitors); err != nil {
+		return nil, err
+	}
+	return &ce.GetAnomalyMonitorsOutput{AnomalyMonitors: f.Monitors}, nil
+}
+
+// GetAnomalies は TotalImpact の下限 (GREATER_THAN_OR_EQUAL) だけを効かせ、1 件ずつページに分けて返す。
+func (f *Fake) GetAnomalies(_ context.Context, in *ce.GetAnomaliesInput, _ ...func(*ce.Options)) (*ce.GetAnomaliesOutput, error) {
+	if err := f.call(account.ActionGetAnomalies); err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.AnomalyCalls = append(f.AnomalyCalls, in)
+	var match []cetypes.Anomaly
+	for _, a := range f.Anomalies {
+		if in.TotalImpact != nil && a.Impact != nil && a.Impact.TotalImpact < in.TotalImpact.StartValue {
+			continue
+		}
+		match = append(match, a)
+	}
+	i := 0
+	if in.NextPageToken != nil {
+		fmt.Sscanf(*in.NextPageToken, "%d", &i)
+	}
+	out := &ce.GetAnomaliesOutput{}
+	if i < len(match) {
+		out.Anomalies = match[i : i+1]
+	}
+	if i+1 < len(match) {
+		out.NextPageToken = aws.String(fmt.Sprint(i + 1))
+	}
+	return out, nil
 }
 
 func (f *Fake) call(action string) error {

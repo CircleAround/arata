@@ -53,3 +53,4 @@
 | [0027](0027-principal-new-source-secret-access.md) | 既知の主体の初めての送信元・リージョン (`principal_new_source`) と秘匿値の読み取りの異常 (`secret_access`) を、CloudTrail の主体の活動の日次集計と注目イベントで判定する | 採用 |
 | [0028](0028-waf-resources-challenge-cost.md) | WAF の分析を資源で絞り、Challenge / CAPTCHA の影響を「解かれた割合」で評価し、Insights の費用を doctor で見積もる | 採用 |
 | [0030](0030-endpoint-abuse.md) | 画面への分散した集中と「A のあと B」の連鎖 (`endpoint_abuse`) を、画面ごとの時間幅の集計とふだんの p99 で判定する | 採用 |
+| [0032](0032-unused-region-activity-cost-anomaly.md) | ふだん使わないリージョンでの書き込み (`unused_region_activity`) を専用のソースで引き、費用の急増 (`cost_anomaly`) は AWS Cost Anomaly Detection の結果を予想に対する割合で読む | 採用 |

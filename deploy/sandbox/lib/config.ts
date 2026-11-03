@@ -34,6 +34,11 @@ export interface SandboxConfig {
   waf: { enabled: boolean; challenge: boolean; captcha: boolean };
   /** 秘匿値の読み取りの試験用 (シークレット 3 つと読み手のロール。シナリオ 10)。シークレットは月額の費用がかかる。 */
   secretAccess: { enabled: boolean };
+  /**
+   * Cost Anomaly Detection のモニター (AWS のサービスごと。無料。cost_anomaly の試験用。ADR 0032)。
+   * AWS のサービスのモニターはアカウントに 1 つしか作れないので、既にあるアカウントでは false にする。
+   */
+  costAnomaly: { enabled: boolean };
 }
 
 export class ConfigError extends Error {
@@ -165,6 +170,7 @@ export function parseConfig(raw: unknown): SandboxConfig {
     'bedrock',
     'waf',
     'secretAccess',
+    'costAnomaly',
   ]);
   if (!top) throw new ConfigError(c.problems);
   // トップレベルの未知のキーは「(トップレベル).x」ではなく「x」と出す
@@ -252,7 +258,7 @@ export function parseConfig(raw: unknown): SandboxConfig {
   }
 
   // 任意の機能。暗黙の既定を持たないよう enabled は必須
-  const toggle = (key: 'guardDuty' | 'accessAnalyzer' | 'secretAccess'): boolean | undefined => {
+  const toggle = (key: 'guardDuty' | 'accessAnalyzer' | 'secretAccess' | 'costAnomaly'): boolean | undefined => {
     const v = c.required(top, key, '');
     if (v === undefined) return undefined;
     const o = c.object(v, key, ['enabled']);
@@ -261,6 +267,7 @@ export function parseConfig(raw: unknown): SandboxConfig {
   const guardDuty = toggle('guardDuty');
   const accessAnalyzer = toggle('accessAnalyzer');
   const secretAccess = toggle('secretAccess');
+  const costAnomaly = toggle('costAnomaly');
 
   // WAF。challenge / captcha は WAF の試験の追加のルール (省略時は false)。waf.enabled が false のまま true にしても効かないので誤りにする
   let waf: boolean | undefined;
@@ -311,5 +318,6 @@ export function parseConfig(raw: unknown): SandboxConfig {
     bedrock: modelSourceArn === undefined ? { enabled: bedrockEnabled! } : { enabled: bedrockEnabled!, modelSourceArn },
     waf: { enabled: waf!, challenge, captcha },
     secretAccess: { enabled: secretAccess! },
+    costAnomaly: { enabled: costAnomaly! },
   };
 }

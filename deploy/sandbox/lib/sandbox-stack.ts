@@ -6,6 +6,7 @@ import { App, CfnOutput, Fn, RemovalPolicy, SecretValue, Stack, Tags, type Stack
 import { CfnInclude } from 'aws-cdk-lib/cloudformation-include';
 import * as accessanalyzer from 'aws-cdk-lib/aws-accessanalyzer';
 import * as bedrock from 'aws-cdk-lib/aws-bedrock';
+import * as ce from 'aws-cdk-lib/aws-ce';
 import * as guardduty from 'aws-cdk-lib/aws-guardduty';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as logs from 'aws-cdk-lib/aws-logs';
@@ -90,6 +91,11 @@ export class SandboxStack extends Stack {
     if (config.accessAnalyzer.enabled) {
       // 外部アクセスのアナライザー (アカウント単位)。上の外部ロールの信頼が finding になる
       new accessanalyzer.CfnAnalyzer(this, 'AccessAnalyzer', { analyzerName: p, type: 'ACCOUNT' });
+    }
+    if (config.costAnomaly.enabled) {
+      // cost_anomaly の試験用 (ADR 0032)。AWS のサービスごとのモニター (無料)。異常の発生は試験できないので、doctor の権限とモニターの検出だけを確かめる。
+      // AWS のサービスのモニターはアカウントに 1 つしか作れない。通知の購読 (AnomalySubscription) は作らない (arata が読むだけ)
+      new ce.CfnAnomalyMonitor(this, 'CostAnomalyMonitor', { monitorName: p, monitorType: 'DIMENSIONAL', monitorDimension: 'SERVICE' });
     }
     if (config.bedrock.enabled) {
       // aratam の bedrock プロバイダの試験用 (モデルの利用申請は手動。README)

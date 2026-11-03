@@ -14,14 +14,17 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/accessanalyzer"
+	acc "github.com/aws/aws-sdk-go-v2/service/account"
 	ct "github.com/aws/aws-sdk-go-v2/service/cloudtrail"
 	cwl "github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
+	"github.com/aws/aws-sdk-go-v2/service/costexplorer"
 	"github.com/aws/aws-sdk-go-v2/service/guardduty"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/s3control"
@@ -155,7 +158,8 @@ func NewAccountClients(ctx context.Context, cfg *config.Config, _ config.Source,
 		return account.Clients{}, err
 	}
 	return account.Clients{Region: region, IAM: iam.NewFromConfig(ac), GuardDuty: guardduty.NewFromConfig(ac), AccessAnalyzer: accessanalyzer.NewFromConfig(ac),
-		CloudTrail: ct.NewFromConfig(ac), S3Control: s3control.NewFromConfig(ac), STS: sts.NewFromConfig(ac), WAFV2: wafv2.NewFromConfig(ac)}, nil
+		CloudTrail: ct.NewFromConfig(ac), S3Control: s3control.NewFromConfig(ac), STS: sts.NewFromConfig(ac), WAFV2: wafv2.NewFromConfig(ac),
+		Account: acc.NewFromConfig(ac), CostExplorer: costexplorer.NewFromConfig(ac)}, nil
 }
 
 func loadAWSConfig(ctx context.Context, cfg *config.Config, region string, extra ...func(*awsconfig.LoadOptions) error) (aws.Config, error) {
@@ -199,6 +203,7 @@ func (d *Deps) fill(cfg *config.Config) {
 	if d.Registry == nil {
 		d.Registry = checks.NewRegistryFor(cfg.Checks)
 		d.Registry.SetAuditLogGroups(cfg.AuditLogGroups())
+		d.Registry.SetUnusedRegionSources(cfg.UnusedRegionSources())
 	}
 	if d.Limiter == nil {
 		d.Limiter = cloudtrail.NewLimiter()
@@ -249,6 +254,10 @@ type CollectResult struct {
 	// SecretReadEvents は秘匿値の読み取り (secret_access が見る操作。成否・復号の有無を問わない) として出した trail_event の数
 	// (保存量の目安。GetParameter はアプリの起動ごとに呼ばれて多い。重複排除の前。ADR 0027)。
 	SecretReadEvents int
+	// UnusedRegionEvents はふだん使わないリージョン (cloudtrail-unused-regions) の書き込みとして出した trail_event の数、
+	// UnusedRegionsScanned はそのソースが引いたリージョン (ADR 0032。run の stats に残す)。
+	UnusedRegionEvents   int
+	UnusedRegionsScanned []string
 	// Formats は cloudwatch-logs ソースの解釈率 (失敗したソースも計測できた分は入る)。
 	Formats []report.FormatCoverage
 	// yielded はソースごとに出せるレコード種類 (チェックの skip 判定に使う)
@@ -317,6 +326,12 @@ func (e *Engine) Collect(ctx context.Context, w collect.Window, o CollectOptions
 				switch v := rec.(type) {
 				case record.TrailEvent:
 					v.CollectedAt = w.CollectedAt
+					if src.Kind == config.KindCloudTrailUnusedRegions {
+						// 既存の stats (denied_events / secret_read_events) を変えない
+						res.UnusedRegionEvents++
+						rec = v
+						break
+					}
 					if denied[v.ErrorCode] {
 						res.DeniedEvents++
 					}
@@ -336,6 +351,9 @@ func (e *Engine) Collect(ctx context.Context, w collect.Window, o CollectOptions
 			}
 			err = c.Collect(ctx, sw, sink)
 			res.Records += n
+			if ur, ok := c.(*cloudtrail.UnusedRegions); ok {
+				res.UnusedRegionsScanned = append(res.UnusedRegionsScanned, ur.ScannedRegions()...)
+			}
 			if fr, ok := c.(collect.FormatReporter); ok && fr.FormatStats() != nil {
 				if r := fr.FormatStats().OutOfRange; r != "" {
 					res.outOfRange[src.ID] = r
@@ -428,7 +446,22 @@ func (e *Engine) partialProblems(c collect.Collector, src config.Source, runID s
 
 func (e *Engine) collector(ctx context.Context, src config.Source) (collect.Collector, error) {
 	switch src.Kind {
-	case config.KindCredentialReport, config.KindGuardDuty, config.KindAccessAnalyzer, config.KindPosture, config.KindWAFConfig:
+	case config.KindCloudTrailUnusedRegions:
+		// 有効なリージョンの一覧 (Account Management) はグローバルなので us-east-1 のクライアントで引く
+		cl, err := e.deps.Account(ctx, e.cfg, src, config.GlobalRegion)
+		if err != nil {
+			return nil, err
+		}
+		c := cloudtrail.NewUnusedRegions(src.ID, cl.Account, e.cfg.ActiveRegions(), func(ctx context.Context, region string) (cloudtrail.API, error) {
+			return e.deps.CloudTrail(ctx, e.cfg, src, region)
+		})
+		c.Limiter = e.deps.Limiter
+		c.Logger = e.log
+		if e.deps.Sleep != nil {
+			c.Sleep = e.deps.Sleep
+		}
+		return c, nil
+	case config.KindCredentialReport, config.KindGuardDuty, config.KindAccessAnalyzer, config.KindPosture, config.KindWAFConfig, config.KindCostAnomaly:
 		clients := make([]account.Clients, 0, len(src.Regions))
 		for _, region := range src.Regions {
 			cl, err := e.deps.Account(ctx, e.cfg, src, region)
@@ -449,6 +482,9 @@ func (e *Engine) collector(ctx context.Context, src config.Source) (collect.Coll
 			c = account.NewGuardDuty(src.ID, clients...)
 		case config.KindAccessAnalyzer:
 			c = account.NewAccessAnalyzer(src.ID, clients...)
+		case config.KindCostAnomaly:
+			// regions は us-east-1 に固定 (Cost Explorer の API。config で検証済み)
+			c = account.NewCostAnomaly(src.ID, e.cfg.Checks.CostAnomaly.LookbackDays, e.cfg.Checks.CostAnomaly.MinImpactUSD, clients...)
 		case config.KindWAFConfig:
 			// CLOUDFRONT の WebACL は us-east-1 にしか無いので、regions に関係なく us-east-1 のクライアントを足す
 			cf, err := e.deps.Account(ctx, e.cfg, src, config.GlobalRegion)
@@ -560,12 +596,13 @@ func (e *Engine) Evaluate(ctx context.Context, profileName string, w collect.Win
 			continue
 		}
 		var obs []checks.Observation
+		q := e.queryFor(name)
 		if p, ok := c.(checks.Proposer); ok {
 			var props []schema.Proposal
-			props, obs, err = p.Propose(ctx, e.st, w)
+			props, obs, err = p.Propose(ctx, q, w)
 			res.Proposals = append(res.Proposals, props...)
 		} else {
-			obs, err = c.Evaluate(ctx, e.st, w, e.al)
+			obs, err = c.Evaluate(ctx, q, w, e.al)
 		}
 		if err != nil {
 			return EvalResult{}, fmt.Errorf("check %s: %w", name, err)
@@ -590,10 +627,32 @@ func (e *Engine) Evaluate(ctx context.Context, profileName string, w collect.Win
 	return res, nil
 }
 
+// queryFor はチェックに渡す Query。決定 (ADR 0032): ふだん使わないリージョンのイベント (cloudtrail-unused-regions のソース) は
+// unused_region_activity だけが見る。他のチェックには除いた Query を渡す (二重の報告と、既存のチェックの結果・平常帯の変化を防ぐ)。
+func (e *Engine) queryFor(check string) store.Query {
+	ids := e.cfg.UnusedRegionSources()
+	if len(ids) == 0 || check == "unused_region_activity" {
+		return e.st
+	}
+	return excludeSources{Query: e.st, ids: ids}
+}
+
+// excludeSources は Events から ids のソースのイベントを除く Query。
+type excludeSources struct {
+	store.Query
+	ids []string
+}
+
+func (q excludeSources) Events(ctx context.Context, from, to time.Time, f store.EventFilter) ([]record.TrailEvent, error) {
+	f.ExcludeSources = append(append([]string(nil), f.ExcludeSources...), q.ids...)
+	return q.Query.Events(ctx, from, to, f)
+}
+
 // registry はプロファイルで効くパラメータ (checks: に overrides を重ねたもの) でチェックを組んだ Registry。
 func (e *Engine) registry(profileName string) *checks.Registry {
 	r := checks.NewRegistryFor(e.cfg.ChecksFor(profileName))
 	r.SetAuditLogGroups(e.cfg.AuditLogGroups())
+	r.SetUnusedRegionSources(e.cfg.UnusedRegionSources())
 	return r
 }
 
@@ -681,6 +740,10 @@ func kindsOf(src config.Source) []record.Kind {
 		return []record.Kind{record.KindPostureItem}
 	case config.KindWAFConfig:
 		return []record.Kind{record.KindWAFConfig}
+	case config.KindCloudTrailUnusedRegions:
+		return []record.Kind{record.KindUnusedRegionEvent}
+	case config.KindCostAnomaly:
+		return []record.Kind{record.KindCostAnomaly}
 	}
 	return nil
 }
@@ -827,6 +890,10 @@ func (e *Engine) Run(ctx context.Context, profileName string) (*RunResult, error
 		"new": rep.Summary.New, "changed": rep.Summary.Changed, "recurred": rep.Summary.Recurred, "resolved": rep.Summary.Resolved, "still_open": rep.Summary.StillOpen,
 	}
 	addFormatStats(stats, cr.Formats)
+	if e.cfg.HasSourceKind(config.KindCloudTrailUnusedRegions) {
+		stats["unused_region_events"] = cr.UnusedRegionEvents
+		stats["unused_regions_scanned"] = strings.Join(cr.UnusedRegionsScanned, ",")
+	}
 	if e.trailCollected(cr.SourcesOK) {
 		stats[checks.TrailCollectedStat] = true
 	}

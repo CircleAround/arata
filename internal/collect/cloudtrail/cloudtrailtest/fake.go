@@ -46,7 +46,7 @@ func (f *Fake) LookupEvents(_ context.Context, in *ct.LookupEventsInput, _ ...fu
 	}
 	var inWindow []types.Event
 	for _, e := range f.Events {
-		if e.EventTime == nil {
+		if e.EventTime == nil || !matchesAttributes(e, in.LookupAttributes) {
 			continue
 		}
 		if (in.StartTime == nil || !e.EventTime.Before(*in.StartTime)) && (in.EndTime == nil || e.EventTime.Before(*in.EndTime)) {
@@ -69,6 +69,23 @@ func (f *Fake) LookupEvents(_ context.Context, in *ct.LookupEventsInput, _ ...fu
 		out.NextToken = &tok
 	}
 	return out, nil
+}
+
+// matchesAttributes は LookupAttributes のうち ReadOnly だけを見る (他の属性は使っていない)。
+func matchesAttributes(e types.Event, attrs []types.LookupAttribute) bool {
+	for _, a := range attrs {
+		if a.AttributeKey != types.LookupAttributeKeyReadOnly || a.AttributeValue == nil || e.CloudTrailEvent == nil {
+			continue
+		}
+		var body struct {
+			ReadOnly bool `json:"readOnly"`
+		}
+		_ = json.Unmarshal([]byte(*e.CloudTrailEvent), &body)
+		if fmt.Sprint(body.ReadOnly) != *a.AttributeValue {
+			return false
+		}
+	}
+	return true
 }
 
 func (f *Fake) pageSize() int {
@@ -102,6 +119,11 @@ func Root(account string) Identity {
 func AssumedRole(account, role, session string) Identity {
 	return Identity{"type": "AssumedRole", "principalId": "AROA:" + session, "arn": fmt.Sprintf("arn:aws:sts::%s:assumed-role/%s/%s", account, role, session), "accountId": account,
 		"sessionContext": map[string]any{"sessionIssuer": map[string]any{"type": "Role", "arn": fmt.Sprintf("arn:aws:iam::%s:role/%s", account, role), "userName": role}}}
+}
+
+// Service は AWS のサービスの主体 (userIdentity.type = AWSService)。
+func Service(invokedBy string) Identity {
+	return Identity{"type": "AWSService", "invokedBy": invokedBy}
 }
 
 // Event は CloudTrailEvent JSON を持つ types.Event を組み立てる。

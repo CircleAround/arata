@@ -18,6 +18,13 @@ sources:
     kind: cloudtrail-lookup                      # CloudTrail を API 経由で取得 (CloudWatch Logs 配信が無くても動く)
     # regions: [ap-northeast-1, us-east-1]       # 省略時は [aws.region, us-east-1]。IAM・ConsoleLogin・STS の一部は us-east-1 にしか記録されない
     # ingest_delay: 15m                          # 記録の遅れの見込み。run は窓の前をこの分だけ引き直す (0 で引き直さない)
+  - id: trail_unused_regions
+    kind: cloudtrail-unused-regions              # ふだん使わないリージョンの書き込み → unused_region_activity。LookupEvents は無料
+    # 対象 = アカウントで有効なリージョン (account:ListRegions) − 上の cloudtrail-lookup の regions。regions は書かない
+  # 費用の急増 → cost_anomaly。AWS Cost Anomaly Detection のモニター (無料) を作ってから有効にする (無ければ skip)。
+  # Cost Explorer の API は 1 リクエスト 0.01 USD (1 回の run で約 2 回。daily で月 0.6 USD ほど。arata doctor の cost に出る)
+  # - id: cost_anomaly
+  #   kind: cost-anomaly                         # Cost Explorer の API は us-east-1 だけ (regions は書かない)
 
   # アカウント単位の状態 (週次チェック用)。取るたびに丸ごと置き換える。プロファイルが必要とする run (weekly) でだけ取る。
   # 一部の権限が無ければ、そのソースのチェックだけ skip される (coverage と doctor に不足 action が出る)。
@@ -59,62 +66,66 @@ sources:
   #   # resources: ["app/app-alb/*"]             # 集計する資源 (ログの httpSourceId。glob 可)。WebACL を staging と共有するとき本番だけを見る。費用は減らない
 
 # チェック一覧 (周期 / 型 / 必要なレコード)。event 型は窓内の出来事、state 型は今の状態を報告する。
-#   root_usage            hourly  event  trail_event     ルートユーザーの利用 (critical)
-#   unknown_assume_role   hourly  event  trail_event     allowlist に無い呼び出し元の AssumeRole (high)
-#   new_principal         daily   state  principal_seen  allowlist にもベースラインにも無い主体 (medium)
-#   iam_changes           daily   event  trail_event     IAM の変更。deploy タグの主体なら info (medium)
-#   access_denied         daily   event  trail_event     拒否された API 呼び出しの急増。種類が多ければ権限の列挙の兆候 (medium / high)
-#   defense_evasion       daily   event  trail_event     監査・検知の仕組み (CloudTrail・GuardDuty・ログなど) を止める・弱める操作。deploy タグの主体なら 1 段下げる (critical / high)
-#   public_exposure       daily   event  trail_event     セキュリティグループ・S3・RDS・スナップショットなどを外部に開く設定変更。deploy タグでも下げない (high / medium / low)
-#   principal_new_source  daily   event  trail_event,principal_seen  既知の主体が初めての送信元 (/24・/48)・リージョンから使われた (アクセスキーの漏洩の典型)。導入直後は報告しない (low / medium / high)
-#   secret_access         daily   event  trail_event     秘匿値 (Secrets Manager・SSM SecureString) の初めての読み手・一括読み出し (low / medium / high)
-#   login_bruteforce      daily   event  http_access     sign-in 失敗の IP 別件数が平常帯超え (medium)
-#   probe_paths           daily   event  http_access     機密パス探索の 403/404 が平常帯超え (low)
-#   endpoint_abuse        daily   event  http_access     設定した画面への多数の IP からの短時間の集中・「A のあと B」の連鎖がふだん超え。endpoints が空なら何もしない (medium / low)
-#   waf_block_trend       daily   event  waf_action      WAF の新しく鳴り始めたルール・Top IP の入れ替わり (low)
-#   ai_path_usage         daily   event  principal_seen  allowlist で tags: [ai] の主体の利用を主体 × 送信元 IP で毎回 1 行 (info。自己監査)
-#   credential_hygiene    weekly  state  iam_credential_report  未使用のアクセスキー・MFA 無しのコンソールユーザー・ルートのアクセスキー (medium / high)
-#   guardduty_findings    weekly  state  guardduty       GuardDuty の findings。新規と件数の増加 (重大度は GuardDuty 準拠)
-#   posture               weekly  state  posture_item    CloudTrail 証跡と検証・GuardDuty 有効・ルート MFA・S3 Public Access Block・パスワードポリシー (high / medium)
-#   access_analyzer       weekly  state  access_analyzer  IAM Access Analyzer の外部アクセス findings (公開は high、他は medium)
-#   waf_review            weekly  state  waf_config      WAF の修正提案の候補を report.json の proposals に (正規の画面での大量 BLOCK は low の finding にも)
+#   root_usage              hourly  event  trail_event     ルートユーザーの利用 (critical)
+#   unknown_assume_role     hourly  event  trail_event     allowlist に無い呼び出し元の AssumeRole (high)
+#   new_principal           daily   state  principal_seen  allowlist にもベースラインにも無い主体 (medium)
+#   iam_changes             daily   event  trail_event     IAM の変更。deploy タグの主体なら info (medium)
+#   access_denied           daily   event  trail_event     拒否された API 呼び出しの急増。種類が多ければ権限の列挙の兆候 (medium / high)
+#   defense_evasion         daily   event  trail_event     監査・検知の仕組み (CloudTrail・GuardDuty・ログなど) を止める・弱める操作。deploy タグの主体なら 1 段下げる (critical / high)
+#   public_exposure         daily   event  trail_event     セキュリティグループ・S3・RDS・スナップショットなどを外部に開く設定変更。deploy タグでも下げない (high / medium / low)
+#   principal_new_source    daily   event  trail_event,principal_seen  既知の主体が初めての送信元 (/24・/48)・リージョンから使われた (アクセスキーの漏洩の典型)。導入直後は報告しない (low / medium / high)
+#   secret_access           daily   event  trail_event     秘匿値 (Secrets Manager・SSM SecureString) の初めての読み手・一括読み出し (low / medium / high)
+#   login_bruteforce        daily   event  http_access     sign-in 失敗の IP 別件数が平常帯超え (medium)
+#   probe_paths             daily   event  http_access     機密パス探索の 403/404 が平常帯超え (low)
+#   endpoint_abuse          daily   event  http_access     設定した画面への多数の IP からの短時間の集中・「A のあと B」の連鎖がふだん超え。endpoints が空なら何もしない (medium / low)
+#   unused_region_activity  daily   event  unused_region_event  ふだん使わないリージョン (有効なリージョン − cloudtrail-lookup の regions) での書き込み。計算資源の作成は critical、試行は medium。deploy タグの主体なら 1 段下げる (critical / high / medium)
+#   cost_anomaly            daily   event  cost_anomaly    AWS Cost Anomaly Detection の費用の異常を予想に対する増加の割合で (medium / high)。費用の削減の提案はしない
+#   waf_block_trend         daily   event  waf_action      WAF の新しく鳴り始めたルール・Top IP の入れ替わり (low)
+#   ai_path_usage           daily   event  principal_seen  allowlist で tags: [ai] の主体の利用を主体 × 送信元 IP で毎回 1 行 (info。自己監査)
+#   credential_hygiene      weekly  state  iam_credential_report  未使用のアクセスキー・MFA 無しのコンソールユーザー・ルートのアクセスキー (medium / high)
+#   guardduty_findings      weekly  state  guardduty       GuardDuty の findings。新規と件数の増加 (重大度は GuardDuty 準拠)
+#   posture                 weekly  state  posture_item    CloudTrail 証跡と検証・GuardDuty 有効・ルート MFA・S3 Public Access Block・パスワードポリシー (high / medium)
+#   access_analyzer         weekly  state  access_analyzer  IAM Access Analyzer の外部アクセス findings (公開は high、他は medium)
+#   waf_review              weekly  state  waf_config      WAF の修正提案の候補を report.json の proposals に (正規の画面での大量 BLOCK は low の finding にも)
 # 必要なレコードを出すソースが無いチェックは skip される (coverage に理由が出る)。http_access / waf_action は cloudwatch-logs が出す。
 profiles:
   hourly:                                        # 発生そのものが異常な事象の早期検知。Logs Insights を使うチェックは入れない (費用)
     window: 1h
     # max_catchup: 7d                            # cron が遅れた時に前回の窓の終わりから追いつく上限
     checks:
-      - root_usage            # ルートユーザーの利用 (critical)
-      - unknown_assume_role   # allowlist に無い呼び出し元の AssumeRole (high)
+      - root_usage              # ルートユーザーの利用 (critical)
+      - unknown_assume_role     # allowlist に無い呼び出し元の AssumeRole (high)
   daily:                                         # 前兆・試行の発見と平常帯との比較。hourly を回さない運用でも拾えるよう hourly のチェックも入れる
     window: 24h
     # max_catchup: 7d                            # cron が遅れた時に前回の窓の終わりから追いつく上限
     checks:
-      - root_usage            # ルートユーザーの利用 (critical)
-      - unknown_assume_role   # allowlist に無い呼び出し元の AssumeRole (high)
-      - new_principal         # allowlist にもベースラインにも無い主体 (medium)
-      - iam_changes           # IAM の変更。deploy タグの主体なら info (medium)
-      - access_denied         # 拒否された API 呼び出しの急増。種類が多ければ権限の列挙の兆候 (medium / high)
-      - defense_evasion       # 監査・検知の仕組み (CloudTrail・GuardDuty・ログなど) を止める・弱める操作。deploy タグの主体なら 1 段下げる (critical / high)
-      - public_exposure       # セキュリティグループ・S3・RDS・スナップショットなどを外部に開く設定変更。deploy タグでも下げない (high / medium / low)
-      - principal_new_source  # 既知の主体が初めての送信元 (/24・/48)・リージョンから使われた (アクセスキーの漏洩の典型)。導入直後は報告しない (low / medium / high)
-      - secret_access         # 秘匿値 (Secrets Manager・SSM SecureString) の初めての読み手・一括読み出し (low / medium / high)
-      - login_bruteforce      # sign-in 失敗の IP 別件数が平常帯超え (medium)
-      - probe_paths           # 機密パス探索の 403/404 が平常帯超え (low)
-      - endpoint_abuse        # 設定した画面への多数の IP からの短時間の集中・「A のあと B」の連鎖がふだん超え。endpoints が空なら何もしない (medium / low)
-      - waf_block_trend       # WAF の新しく鳴り始めたルール・Top IP の入れ替わり (low)
-      - ai_path_usage         # allowlist で tags: [ai] の主体の利用を主体 × 送信元 IP で毎回 1 行 (info。自己監査)
+      - root_usage              # ルートユーザーの利用 (critical)
+      - unknown_assume_role     # allowlist に無い呼び出し元の AssumeRole (high)
+      - new_principal           # allowlist にもベースラインにも無い主体 (medium)
+      - iam_changes             # IAM の変更。deploy タグの主体なら info (medium)
+      - access_denied           # 拒否された API 呼び出しの急増。種類が多ければ権限の列挙の兆候 (medium / high)
+      - defense_evasion         # 監査・検知の仕組み (CloudTrail・GuardDuty・ログなど) を止める・弱める操作。deploy タグの主体なら 1 段下げる (critical / high)
+      - public_exposure         # セキュリティグループ・S3・RDS・スナップショットなどを外部に開く設定変更。deploy タグでも下げない (high / medium / low)
+      - principal_new_source    # 既知の主体が初めての送信元 (/24・/48)・リージョンから使われた (アクセスキーの漏洩の典型)。導入直後は報告しない (low / medium / high)
+      - secret_access           # 秘匿値 (Secrets Manager・SSM SecureString) の初めての読み手・一括読み出し (low / medium / high)
+      - login_bruteforce        # sign-in 失敗の IP 別件数が平常帯超え (medium)
+      - probe_paths             # 機密パス探索の 403/404 が平常帯超え (low)
+      - endpoint_abuse          # 設定した画面への多数の IP からの短時間の集中・「A のあと B」の連鎖がふだん超え。endpoints が空なら何もしない (medium / low)
+      - unused_region_activity  # ふだん使わないリージョン (有効なリージョン − cloudtrail-lookup の regions) での書き込み。計算資源の作成は critical、試行は medium。deploy タグの主体なら 1 段下げる (critical / high / medium)
+      - cost_anomaly            # AWS Cost Anomaly Detection の費用の異常を予想に対する増加の割合で (medium / high)。費用の削減の提案はしない
+      - waf_block_trend         # WAF の新しく鳴り始めたルール・Top IP の入れ替わり (low)
+      - ai_path_usage           # allowlist で tags: [ai] の主体の利用を主体 × 送信元 IP で毎回 1 行 (info。自己監査)
     # overrides:                                 # このプロファイルでだけ判定のパラメータを変える (書かなければ checks: の値)
     #   login_bruteforce: { min_count: 50 }      # 集計条件 (paths / methods / statuses など) は変えられない
   weekly:                                        # 設定不備・衛生状態の差分
     window: 7d
     # max_catchup: 7d                            # cron が遅れた時に前回の窓の終わりから追いつく上限
     checks:
-      - credential_hygiene    # 未使用のアクセスキー・MFA 無しのコンソールユーザー・ルートのアクセスキー (medium / high)
-      - guardduty_findings    # GuardDuty の findings。新規と件数の増加 (重大度は GuardDuty 準拠)
-      - posture               # CloudTrail 証跡と検証・GuardDuty 有効・ルート MFA・S3 Public Access Block・パスワードポリシー (high / medium)
-      - access_analyzer       # IAM Access Analyzer の外部アクセス findings (公開は high、他は medium)
-      - waf_review            # WAF の修正提案の候補を report.json の proposals に (正規の画面での大量 BLOCK は low の finding にも)
+      - credential_hygiene      # 未使用のアクセスキー・MFA 無しのコンソールユーザー・ルートのアクセスキー (medium / high)
+      - guardduty_findings      # GuardDuty の findings。新規と件数の増加 (重大度は GuardDuty 準拠)
+      - posture                 # CloudTrail 証跡と検証・GuardDuty 有効・ルート MFA・S3 Public Access Block・パスワードポリシー (high / medium)
+      - access_analyzer         # IAM Access Analyzer の外部アクセス findings (公開は high、他は medium)
+      - waf_review              # WAF の修正提案の候補を report.json の proposals に (正規の画面での大量 BLOCK は low の finding にも)
 
 # チェックのパラメータ (すべてのプロファイルに効く)。下の値はこの版の既定値。
 checks:
@@ -193,6 +204,14 @@ checks:
     ua_concentration: {min_ips: 5}               # 同じ UA が min_ips 以上の IP にまたがり平常帯も超えたら根拠に添える (単独では報告しない。UA はハッシュだけ保存)
     follow_ups: []                               # 「A のあと B」の連鎖 (例 [{ from: signup, to: message, within: 30m, min_ips: 5 }])。集計条件
     exclude_paths: []                            # endpoints に当たっても数えないパス (glob)。集計条件
+  unused_region_activity:
+    compute_apis: ['ec2:RunInstances', 'ec2:RequestSpotInstances', 'ec2:RequestSpotFleet', 'ec2:CreateFleet', 'lambda:CreateFunction', 'ecs:CreateCluster', 'ecs:RunTask', 'ecs:CreateService', 'eks:CreateCluster', 'eks:CreateNodegroup', 'batch:CreateComputeEnvironment', 'sagemaker:CreateNotebookInstance', 'sagemaker:CreateTrainingJob', 'lightsail:CreateInstances', 'autoscaling:CreateAutoScalingGroup'] # 計算資源の作成とみなす操作 (<サービス>:<操作>。Lambda の版の接尾辞は吸収)。成功は critical、失敗 (試行) は medium
+    ignore_event_sources: [iam.amazonaws.com, sts.amazonaws.com, signin.amazonaws.com, organizations.amazonaws.com, support.amazonaws.com, health.amazonaws.com, ce.amazonaws.com] # 数えない eventSource (グローバルサービス。記録が us-east-1 に入るので、us-east-1 を cloudtrail-lookup の regions に入れていないときの誤報を防ぐ)
+  cost_anomaly:
+    lookback_days: 7                             # 直近何日に終わった (続いている) 異常を引くか。問い合わせの条件
+    min_impact_usd: 10                           # 影響額 (USD) がこれ未満は割合が大きくても報告しない (1 USD → 5 USD の +400% のような誤報を防ぐ)。問い合わせの絞り込みにも使う
+    medium_impact_ratio: 0.5                     # 予想に対する増加の割合 (影響額 / 予想額) がこれ以上で medium (0.5 = 予想の 1.5 倍)。固定の金額ではなく比で見る
+    high_impact_ratio: 1                         # これ以上で high (1.0 = 予想の 2 倍)
   credential_hygiene:
     unused_days: 90                              # アクセスキーを未使用とみなす日数 (最終使用、使われていなければ作成・ローテーションから)
   posture:

@@ -145,6 +145,19 @@ Resources:
                   - wafv2:GetLoggingConfiguration
                   - wafv2:ListResourcesForWebACL
                 Resource: '*'
+              # cloudtrail-unused-regions (有効なリージョンの一覧。各リージョンの LookupEvents は上の CloudTrailLookup)
+              - Sid: UnusedRegions
+                Effect: Allow
+                Action:
+                  - account:ListRegions
+                Resource: '*'
+              # cost-anomaly (Cost Anomaly Detection の読み取りだけ。Cost Explorer の API は 1 リクエスト 0.01 USD)
+              - Sid: CostAnomaly
+                Effect: Allow
+                Action:
+                  - ce:GetAnomalyMonitors
+                  - ce:GetAnomalies
+                Resource: '*'
 
 Outputs:
   RoleArn:

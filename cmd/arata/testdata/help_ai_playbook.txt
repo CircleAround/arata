@@ -20,6 +20,7 @@ LLM はこの手順に沿って、根拠 (finding の `data`) と利用者の事
 | access_analyzer | 外部からアクセスできる資源 | `arata help ai playbook access_analyzer` |
 | access_denied | 拒否された API 呼び出しの急増 | `arata help ai playbook access_denied` |
 | ai_path_usage | AI・監査用の主体の利用 | `arata help ai playbook ai_path_usage` |
+| cost_anomaly | 費用の異常 (急増) | `arata help ai playbook cost_anomaly` |
 | credential_hygiene | 認証情報の衛生 | `arata help ai playbook credential_hygiene` |
 | defense_evasion | 監査・検知の仕組みを止める・弱める操作 | `arata help ai playbook defense_evasion` |
 | endpoint_abuse | 画面への分散した集中と連鎖 | `arata help ai playbook endpoint_abuse` |
@@ -34,5 +35,6 @@ LLM はこの手順に沿って、根拠 (finding の `data`) と利用者の事
 | root_usage | ルートユーザーの利用 | `arata help ai playbook root_usage` |
 | secret_access | 秘匿値の読み取りの異常 | `arata help ai playbook secret_access` |
 | unknown_assume_role | 既知リストに無い主体の AssumeRole | `arata help ai playbook unknown_assume_role` |
+| unused_region_activity | ふだん使わないリージョンでの書き込み | `arata help ai playbook unused_region_activity` |
 | waf_block_trend | WAF の BLOCK の変化 | `arata help ai playbook waf_block_trend` |
 | waf_review | WAF の修正提案の候補 | `arata help ai playbook waf_review` |

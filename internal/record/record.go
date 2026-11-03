@@ -29,10 +29,15 @@ const (
 	KindAccessAnalyzer Kind = "access_analyzer"
 	// KindWAFConfig は WAFv2 の WebACL の設定 (WebACL 1 件か、その中のルール 1 件)。
 	KindWAFConfig Kind = "waf_config"
+	// KindUnusedRegionEvent はふだん使わないリージョン (cloudtrail-unused-regions) の書き込み。中身は TrailEvent として events に保存する。
+	// 別の種類にするのは、そのソースが失敗したときに unused_region_activity を skip するため (trail_event があるだけで「0 件」と誤らない。ADR 0032)。
+	KindUnusedRegionEvent Kind = "unused_region_event"
+	// KindCostAnomaly は AWS Cost Anomaly Detection の異常 1 件 (ADR 0032)。
+	KindCostAnomaly Kind = "cost_anomaly"
 )
 
 // SnapshotKinds は「窓に依らない今の状態」を表すレコード種類。collector が取るたびに丸ごと置き換えて保存する (ADR 0015)。
-var SnapshotKinds = map[Kind]bool{KindCredentialReport: true, KindGuardDuty: true, KindAccessAnalyzer: true, KindPostureItem: true, KindWAFConfig: true}
+var SnapshotKinds = map[Kind]bool{KindCredentialReport: true, KindGuardDuty: true, KindAccessAnalyzer: true, KindPostureItem: true, KindWAFConfig: true, KindCostAnomaly: true}
 
 // PrincipalKind は主体の種類。principals.kind に対応する。
 type PrincipalKind string

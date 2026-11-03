@@ -391,6 +391,18 @@ func (s *Dir) Events(ctx context.Context, from, to time.Time, f EventFilter) ([]
 			args = append(args, e)
 		}
 	}
+	if len(f.Sources) > 0 {
+		q += ` AND source IN (` + placeholders(len(f.Sources)) + `)`
+		for _, x := range f.Sources {
+			args = append(args, x)
+		}
+	}
+	if len(f.ExcludeSources) > 0 {
+		q += ` AND source NOT IN (` + placeholders(len(f.ExcludeSources)) + `)`
+		for _, x := range f.ExcludeSources {
+			args = append(args, x)
+		}
+	}
 	if len(f.PrincipalKinds) > 0 {
 		q += ` AND principal_kind IN (` + placeholders(len(f.PrincipalKinds)) + `)`
 		for _, k := range f.PrincipalKinds {

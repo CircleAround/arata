@@ -115,6 +115,10 @@
     ],
     "checks_skipped": [
       {
+        "check": "cost_anomaly",
+        "reason": "no cost_anomaly source"
+      },
+      {
         "check": "endpoint_abuse",
         "reason": "no http_access source"
       },
@@ -125,6 +129,10 @@
       {
         "check": "probe_paths",
         "reason": "no http_access source"
+      },
+      {
+        "check": "unused_region_activity",
+        "reason": "no unused_region_event source"
       },
       {
         "check": "waf_block_trend",
