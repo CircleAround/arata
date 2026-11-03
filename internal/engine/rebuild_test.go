@@ -29,7 +29,8 @@ func TestRebuildMatchesRuns(t *testing.T) {
 	h.acct.GDFindings = append(h.acct.GDFindings, accounttest.GDFinding("g1", "Recon:EC2/Portscan", 5, 1))
 	h.acct.AAFindings = append(h.acct.AAFindings, accounttest.AAFinding("a1", "arn:aws:s3:::public", true, "s3:GetObject"))
 	h.logs.On("as lines_total", linesRows("2026-10-21", 1000, 950))
-	h.logs.On("as sign_in_failures", cwlogstest.Response{Rows: []map[string]string{cwlogstest.Rows("day", "2026-10-21 00:00:00.000", "ip", "198.51.100.7", "sign_in_failures", "30")}})
+	h.logs.On("as http_hits", cwlogstest.Response{Rows: []map[string]string{
+		cwlogstest.Rows("day", "2026-10-21 00:00:00.000", "ip", "198.51.100.7", "method", "POST", "status", "401", "sign_in", "/users/sign_in", "http_hits", "30")}})
 	alice := cloudtrailtest.User(acct, "alice")
 	h.fake.Add(
 		cloudtrailtest.Event("b1", h.now.Add(-5*time.Hour), alice, "ec2.amazonaws.com", "DescribeInstances", "ap-northeast-1", "203.0.113.1", true, nil),
@@ -60,7 +61,8 @@ func TestRebuildMatchesRuns(t *testing.T) {
 		cloudtrailtest.Event("late", prev.Add(-3*time.Minute), cloudtrailtest.User(acct, "mallory"), "sts.amazonaws.com", "AssumeRole", "ap-northeast-1", "198.51.100.7", true, map[string]any{"roleArn": "arn:aws:iam::" + acct + ":role/Admin"}),
 		cloudtrailtest.Event("a2", h.now.Add(-2*time.Hour), alice, "ec2.amazonaws.com", "DescribeInstances", "ap-northeast-1", "203.0.113.1", true, nil),
 	)
-	h.logs.On("as sign_in_failures", cwlogstest.Response{Rows: []map[string]string{cwlogstest.Rows("day", "2026-10-21 00:00:00.000", "ip", "198.51.100.7", "sign_in_failures", "45")}})
+	h.logs.On("as http_hits", cwlogstest.Response{Rows: []map[string]string{
+		cwlogstest.Rows("day", "2026-10-21 00:00:00.000", "ip", "198.51.100.7", "method", "POST", "status", "401", "sign_in", "/users/sign_in", "http_hits", "45")}})
 	h.acct.AAFindings = nil
 	e = h.open(t)
 	r, err := e.Run(ctx, "daily")
