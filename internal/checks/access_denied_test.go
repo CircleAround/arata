@@ -238,3 +238,78 @@ func sortStrings(ss []string) []string {
 	}
 	return sortedKeys(m)
 }
+
+// 想定済みの拒否 (allowlist の expected_denied) は数える前に除く。窓にも平常帯にも同じく適用し、除いた件数は Data に残す (ADR 0022)。
+func TestAccessDeniedExpectedDenied(t *testing.T) {
+	const (
+		ai     = "arn:aws:iam::123456789012:role/ai-investigation-readonly"
+		legacy = "arn:aws:iam::123456789012:role/legacy-batch"
+		batch  = "arn:aws:iam::123456789012:role/example-batch"
+	)
+	al, err := allowlist.Parse([]byte(`
+principals:
+  - arn: ` + ai + `
+    note: 個人情報を含むロググループは IAM で Deny している
+    expected_denied: ["logs:StartQuery", "logs:Get*", "logs:FilterLogEvents"]
+  - arn: ` + legacy + `
+    note: 移行中の旧ロール
+    expires: 2026-10-20
+    expected_denied: ["s3:*"]
+  - arn: ` + batch + `
+    note: 定期処理。kms の列挙は拒否される
+    expected_denied: ["kms:*"]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := now.Add(-3 * time.Hour)
+
+	t.Run("excluded below threshold", func(t *testing.T) {
+		st := newStore(t)
+		d := &deniedSeed{st: st, t: t}
+		// 想定内 3 種類 (32 件) + 想定外 3 種類 → 除けば 3 種類・3 件で閾値未満
+		d.put(ai, record.PrincipalAssumedRole, in, "AccessDenied", "", append(repeat("logs:StartQuery", 30), "logs:GetLogEvents", "logs:FilterLogEvents")...)
+		d.put(ai, record.PrincipalAssumedRole, in, "AccessDenied", "", "iam:ListUsers", "s3:ListBuckets", "kms:ListKeys")
+		if obs := evaluate(t, deniedCheck(), st, al); len(obs) != 0 {
+			t.Fatalf("expected denials should be excluded: %+v", obs)
+		}
+		// 想定外が 6 種類になれば報告し、除いた件数を残す
+		d.put(ai, record.PrincipalAssumedRole, in, "AccessDenied", "", "ec2:DescribeVpcs", "sts:GetCallerIdentity", "secretsmanager:ListSecrets")
+		obs := evaluate(t, deniedCheck(), st, al)
+		o := obs[ai]
+		if len(obs) != 1 || o.Severity != Medium || o.Data["distinct_apis"] != 6 || o.Data["count"] != 6 || o.Data["expected_denied_excluded"] != 32 {
+			t.Fatalf("obs: %+v", obs)
+		}
+		if strings.Contains(strings.Join(o.Data["apis"].([]string), ","), "logs:") {
+			t.Fatalf("apis should not list expected denials: %v", o.Data["apis"])
+		}
+	})
+
+	t.Run("expired entry is counted again", func(t *testing.T) {
+		st := newStore(t)
+		d := &deniedSeed{st: st, t: t}
+		d.put(legacy, record.PrincipalAssumedRole, in, "AccessDenied", "", apis("s3", 6)...)
+		obs := evaluate(t, deniedCheck(), st, al)
+		if o, ok := obs[legacy]; !ok || o.Data["distinct_apis"] != 6 || o.Data["expected_denied_excluded"] != 0 {
+			t.Fatalf("expired expected_denied must not exclude: %+v", obs)
+		}
+	})
+
+	t.Run("baseline excludes too", func(t *testing.T) {
+		st := newStore(t)
+		d := &deniedSeed{st: st, t: t}
+		// 平常帯に毎日 kms の想定内の拒否 6 種類。除かなければ平常帯 6 × 3 = 18 種類に吸収されるが、除くので平常帯は 0
+		for day := 6; day <= 19; day++ {
+			d.put(batch, record.PrincipalAssumedRole, time.Date(2026, 10, day, 12, 0, 0, 0, time.UTC), "AccessDenied", "", apis("kms", 6)...)
+		}
+		d.put(batch, record.PrincipalAssumedRole, in, "AccessDenied", "", apis("iam", 6)...)
+		obs := evaluate(t, deniedCheck(), st, al)
+		if o, ok := obs[batch]; !ok || o.Data["baseline_median_distinct"] != 0.0 || o.Data["distinct_apis"] != 6 {
+			t.Fatalf("baseline should exclude expected denials: %+v", obs)
+		}
+		// 同じ平常帯でも、allowlist に expected_denied が無ければ吸収される (比較)
+		if obs := evaluate(t, deniedCheck(), st, &allowlist.List{}); len(obs) != 0 {
+			t.Fatalf("without expected_denied the baseline absorbs: %+v", obs)
+		}
+	})
+}

@@ -72,6 +72,9 @@ func newApproveCmd(d *Deps, g *globalFlags) *subcmd.Command {
 
   - new_principal は主体、unknown_assume_role は呼び出し元、iam_changes は変更した主体を承認する
   - 主体が外部アカウントの root なら account: で承認する (SaaS 連携)。--account で主体のアカウント全体を、--arn-pattern で glob を承認できる
+  - access_denied は --expected-denied <サービス:操作の glob> (複数可) でだけ approve できる。想定済みの拒否として主体の項目を追記し、
+    次の run から数えない。finding は resolved にしない。主体の項目が既にあれば書き換えず、足す行を示して止まる (手で足す)。
+    項目を追記すると主体そのものも承認される (new_principal なども止まる)
   - approved_by は --by、省略時は OS のユーザー名。approved_at は今日 (UTC)
   - git への commit は人が行う。--commit を付けると allowlist.yaml だけを commit する
 
@@ -86,7 +89,11 @@ LLM は approve を実行せず、人に提案するだけにすること (arata
 			res, err := e.Approve(ctx, args[0], o)
 			if res != nil {
 				fmt.Fprintf(d.Stdout, "%s に追記しました (%s):\n%s", cfg.Allowlist, res.Entry.Subject(), res.Added)
-				fmt.Fprintf(d.Stdout, "finding %s は resolved になりました。\n", res.Finding.ID)
+				if res.KeptOpen {
+					fmt.Fprintf(d.Stdout, "finding %s (access_denied) は open のままです。次の run で想定済みの拒否を除いて数え直します。\n", res.Finding.ID)
+				} else {
+					fmt.Fprintf(d.Stdout, "finding %s は resolved になりました。\n", res.Finding.ID)
+				}
 				if n := len(res.AlsoResolved); n > 0 {
 					fmt.Fprintf(d.Stdout, "同じ承認に一致する他の %d 件も resolved にしました:\n", n)
 					for _, f := range res.AlsoResolved {
@@ -109,6 +116,7 @@ LLM は approve を実行せず、人に提案するだけにすること (arata
 	cmd.BoolVar(&o.Commit, "commit", false, "allowlist.yaml を git commit する")
 	cmd.BoolVar(&o.Account, "account", false, "主体のアカウント全体を承認する (account:)")
 	cmd.StringVar(&o.ARNPattern, "arn-pattern", "", "主体ではなく glob で承認する (arn_pattern:)")
+	cmd.StringArrayVar(&o.ExpectedDenied, "expected-denied", "access_denied の想定済みの拒否 (サービス:操作の glob。例 logs:StartQuery、logs:Get*。複数可)")
 	return cmd
 }
 

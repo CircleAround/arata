@@ -440,3 +440,25 @@ func TestUnknownSectionsAreIgnored(t *testing.T) {
 		t.Fatalf("%v %+v", err, r)
 	}
 }
+
+// ack 中の finding の重大度が上がったとき、arata は新しい class を足さず changed に印を付けて出す (ADR 0022)。
+// aratam は max_severity で緊急用に振り分け、変化として本文に出す (aratam 側の変更なしで届くことを固定する)。
+func TestEscalatedChangedGoesUrgent(t *testing.T) {
+	r := goldenRun(t)
+	f := schema.Finding{ID: "f-ad", Check: "access_denied", Key: "arn:aws:iam::123456789012:role/ai-investigation-readonly", Severity: "high", Status: "open",
+		Summary:   "(確認済み (ack) だったが重大度が medium → high に上昇) 拒否された API 呼び出し: arn:aws:iam::123456789012:role/ai-investigation-readonly が 22 種類 (22 件) で拒否 (列挙の兆候)",
+		FirstSeen: "2026-10-18T09:00:00Z", LastSeen: "2026-10-21T09:00:00Z", LastChanged: "2026-10-21T09:00:00Z",
+		Data: map[string]any{"escalated_from_suppressed": true, "suppressed_status": "acked", "suppressed_severity": "medium", "distinct_apis": 22}}
+	r.Summary = schema.Summary{Changed: 1, MaxSeverity: "high", CollectErrors: []schema.CollectError{}}
+	r.Findings = schema.Findings{New: []schema.Finding{}, Changed: []schema.Finding{f}, Recurred: []schema.Finding{}, Resolved: []schema.Finding{}, StillOpen: []schema.Finding{}}
+	r.AlreadyReported, r.Info = []schema.Finding{}, []schema.Finding{}
+	r.Coverage.SourcesFailed = []schema.SourceFailure{}
+	s := &fakeSender{}
+	res, _ := run(t, inputDir(t, marshal(t, r), ""), s)
+	if res.Route != RouteUrgent || !res.Sent || len(s.got) != 1 || s.got[0].route != RouteUrgent {
+		t.Fatalf("escalated high must go urgent: %+v %+v", res, s.got)
+	}
+	if !strings.Contains(s.got[0].text, "medium → high に上昇") {
+		t.Fatalf("text must show the escalation:\n%s", s.got[0].text)
+	}
+}

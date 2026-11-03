@@ -202,6 +202,8 @@ type ApproveOptions struct {
 	// Account は主体のアカウント全体を承認する (`account:`)。ARNPattern は glob で承認する。どちらも空なら主体そのもの。
 	Account    bool
 	ARNPattern string
+	// ExpectedDenied は access_denied の finding の主体に、想定済みの拒否 (「サービス:操作」の glob) を付けて追記する (ADR 0022)。
+	ExpectedDenied []string
 }
 
 // ApproveResult は approve の結果。
@@ -212,6 +214,20 @@ type ApproveResult struct {
 	Committed bool
 	// AlsoResolved は、追記後の allowlist で対象主体が承認済みになったため一緒に resolved にした他の finding。
 	AlsoResolved []store.Finding
+	// KeptOpen は finding を resolved にしなかったこと (--expected-denied。次の run で除いて数え直す)。
+	KeptOpen bool
+}
+
+// deniedTargetOf は access_denied の finding の主体 (expected_denied を付ける対象)。
+func deniedTargetOf(f store.Finding) (*ApproveTarget, error) {
+	arn, kind := str(f.Data["principal"]), record.PrincipalKind(str(f.Data["principal_kind"]))
+	if arn == "" {
+		return nil, fmt.Errorf("%w: finding has no principal ARN", errNotApprovable)
+	}
+	if acct, ok := record.ExternalAccount(arn, kind); ok {
+		return &ApproveTarget{Account: acct, Label: record.PrincipalLabel(arn, kind)}, nil
+	}
+	return &ApproveTarget{ARN: arn, Label: arn}, nil
 }
 
 // Approve は finding の主体を allowlist.yaml に追記し、finding を resolved にする (設計書 6-2)。
@@ -224,12 +240,28 @@ func (e *Engine) Approve(ctx context.Context, id string, o ApproveOptions) (*App
 	if strings.TrimSpace(o.Note) == "" {
 		return nil, e.configErr(errors.New("--note is required (why this principal is legitimate)"))
 	}
-	target, err := ApproveTargetOf(*f)
+	var target *ApproveTarget
+	switch {
+	case len(o.ExpectedDenied) > 0 && f.Check != "access_denied":
+		return nil, e.configErr(fmt.Errorf("finding %s: --expected-denied is only for access_denied findings (this is %s)", id, f.Check))
+	case len(o.ExpectedDenied) > 0:
+		target, err = deniedTargetOf(*f)
+	case f.Check == "access_denied":
+		// 決定 (ADR 0021・0022): 主体の承認は「居ること」を認めるもので、権限を探ってよいではない。access_denied は主体ごと承認しない
+		err = fmt.Errorf("%w: approve access_denied with --expected-denied <service:Action> for expected denials, or use ack / snooze", errNotApprovable)
+	default:
+		target, err = ApproveTargetOf(*f)
+	}
 	if err != nil {
 		return nil, e.configErr(fmt.Errorf("finding %s: %w", id, err))
 	}
+	for _, g := range o.ExpectedDenied {
+		if err := allowlist.CheckDeniedGlob(g); err != nil {
+			return nil, e.configErr(fmt.Errorf("--expected-denied %w", err))
+		}
+	}
 	now := e.deps.Now()
-	entry := allowlist.NewEntry{Note: o.Note, ApprovedAt: now.UTC().Format(record.DateLayout), Tags: o.Tags}
+	entry := allowlist.NewEntry{Note: o.Note, ApprovedAt: now.UTC().Format(record.DateLayout), Tags: o.Tags, ExpectedDenied: o.ExpectedDenied}
 	switch {
 	case o.ARNPattern != "":
 		entry.ARNPattern = o.ARNPattern
@@ -266,13 +298,21 @@ func (e *Engine) Approve(ctx context.Context, id string, o ApproveOptions) (*App
 		}
 	}
 	added, err := allowlist.Append(e.cfg.Allowlist, entry)
+	if errors.Is(err, allowlist.ErrAlreadyListed) && len(o.ExpectedDenied) > 0 {
+		// 既存の項目は書き換えない (ADR 0010)。足す行を示して人に任せる
+		return nil, e.configErr(fmt.Errorf("%s is already in %s; add (or merge into) this line of that entry by hand:\n    expected_denied: %s",
+			entry.Subject(), e.cfg.Allowlist, allowlist.FormatExpectedDenied(o.ExpectedDenied)))
+	}
 	if err != nil {
 		return nil, e.configErr(err)
 	}
-	if err := e.st.SetFindingStatus(ctx, f.ID, store.FindingResolved, time.Time{}, now); err != nil {
+	res := &ApproveResult{Finding: *f, Entry: entry, Added: added}
+	if len(o.ExpectedDenied) > 0 {
+		// 決定: access_denied は resolved にしない。次の run で想定済みの拒否を除いて数え直し、閾値を下回れば報告されなくなる
+		res.KeptOpen = true
+	} else if err := e.st.SetFindingStatus(ctx, f.ID, store.FindingResolved, time.Time{}, now); err != nil {
 		return nil, err
 	}
-	res := &ApproveResult{Finding: *f, Entry: entry, Added: added}
 	// 同じ主体 (account / arn_pattern なら一致する全主体) の他の finding も解消する。evaluate を待つと event 型の finding は open のまま残るため
 	al, err := allowlist.Load(e.cfg.Allowlist)
 	if err != nil {
@@ -286,6 +326,10 @@ func (e *Engine) Approve(ctx context.Context, id string, o ApproveOptions) (*App
 	if o.Commit {
 		dir, name := filepath.Dir(e.cfg.Allowlist), filepath.Base(e.cfg.Allowlist)
 		msg := fmt.Sprintf("allowlist: approve %s\n\nfinding: %s (%s)\nnote: %s\napproved_by: %s\n", entry.Subject(), f.ID, f.Check, o.Note, entry.ApprovedBy)
+		if len(o.ExpectedDenied) > 0 {
+			msg = fmt.Sprintf("allowlist: expected_denied for %s\n\nfinding: %s (%s)\nexpected_denied: %s\nnote: %s\napproved_by: %s\n",
+				entry.Subject(), f.ID, f.Check, allowlist.FormatExpectedDenied(o.ExpectedDenied), o.Note, entry.ApprovedBy)
+		}
 		if _, err := e.deps.Git(ctx, dir, "add", "--", name); err != nil {
 			return res, fmt.Errorf("git add: %w", err)
 		}
