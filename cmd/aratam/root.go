@@ -278,7 +278,8 @@ func newNotifyCmd(d *Deps, g *globalFlags) *subcmd.Command {
   - max_severity が urgent_severity 以上、または取れなかったソースがある → 緊急用。それ以外は通常用
   - 新規・変化・再発が無く、取れなかったソースも無い → on_quiet (short = 1 行 / silent = 送らない)
   - 送ったら入力ディレクトリの .aratam-notified に run_id を書き、同じ run は二度送らない (--force で再送)
-  - report.json に WAF の修正提案の候補 (proposals) があれば、「WAF の改善提案」を 2 通目として通常用に送る (on_quiet: silent でも送る)
+  - report.json に WAF の修正提案の候補 (proposals) があれば、「WAF の改善提案」を 2 通目として通常用に送る (on_quiet: silent でも送る)。
+    slack.format: blocks では、提案の全文 (設定例を含む) を入力ディレクトリの waf-proposals.md に書く (--dry-run では書かない)
 
 終了コード: 0 = 送った (または送る必要が無かった)、2 = 設定エラー、3 = LLM が使えず report.md で送った、
 4 = 入力が無い・古い (その旨は送った)、5 = 送信に失敗した。

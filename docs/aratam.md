@@ -17,7 +17,7 @@ arata 設計書 9-1 章 (「report.json から通知までの LLM の仕事」) 
 | 通知先 | Slack Incoming Webhook。通常用と緊急用の 2 本まで。SNS などは後続 |
 | 書式 | Block Kit (`slack.format: blocks`。3-4 章、ADR 0029)。`text` で v0.3.0 までの mrkdwn の本文も選べる |
 | 依存 | 標準の `net/http` で書く。例外は Bedrock で、AWS SDK (`service/bedrockruntime`) を使ってよい (arata が AWS SDK の core を既に持つため増分が小さい) |
-| 状態 | 持たない。二重送信の防止だけ、入力ディレクトリに `.aratam-notified` (通知済みの run_id) を書く |
+| 状態 | 持たない。二重送信の防止だけ、入力ディレクトリに `.aratam-notified` (通知済みの run_id) を書く。ほかに書くのは WAF の提案の全文 `waf-proposals.md` だけ (3-4 章) |
 | 判定 | LLM に判定させない。重大度の下限・必ず載せる finding・失敗時のフォールバックは aratam の規則で固定する (2 章) |
 
 ## 2. 処理の流れ
@@ -206,13 +206,14 @@ LLM に求める出力:
   ```
   [メンション・注記・警告]                 (section。緊急用を通常用に送るとき・NAME_MISMATCH・LLM の失敗)
   🚨 arata daily — acme                    (header。絵文字は最大重大度: critical 🚨 / high 🔴 / medium 🟠 / low 🟡 / info ⚪)
-  期間 | 新規 (重大度別) | 変化・再発 | 解消・未対応 | 本日報告済み | 情報 (件数のみ)   (fields。0 件の変化・再発、報告済み、情報は出さない)
+  *期間* … | *新規* 🚨 critical 1 ・ 🟠 medium 2 | 変化 1 件 ・ 再発 1 件 | 解消 1 件 ・ 未対応 0 件 | 本日報告済み N 件 | 情報 N 件 (件数のみ)
+                                           (fields。1 つの欄に 1 行で書き、ラベルと値を 2 段に分けない。0 件の変化・再発、報告済み、情報は出さない)
   要約 1〜2 文                             (LLM。none は規則)
   ⚠️ 取れていないもの                       (取れなかったソース・解釈率の警告・スキップ。期間レポートは取れなかった run)
   ── まず対応                               (new / changed / recurred のうち urgent_severity 以上。1 件ずつ)
   🚨 *<summary>* (再発)
   → <何をするか>
-  ── まとめて確認                           (それ未満。同じチェックは 1 項目)
+  ── 確認推奨                           (それ未満。同じチェックは 1 項目)
   🟠 *MFA の無いコンソールユーザー* 5 人
   `alice` `bob` …
   全文と対処手順: `arata review` ・ `arata help ai playbook <check>` | WAF の改善提案は別のメッセージ | <dir>/report.md   (context)
@@ -227,7 +228,7 @@ LLM に求める出力:
   - 変化・再発は名前や見出しの後に `(変化)` `(再発)` を付ける
 - 「→」(規則): playbook の「対処の選択肢」の先頭の項目を、太字・コマンドを含む括弧・末尾の補足の括弧を除き、最初の文まで (80 字まで)。
   決定: 条件の括弧 (「封じ込め (侵害の疑い)」) は残す (条件を落とすと過剰な対処を勧めることになる)。playbook が無ければ「`arata review` で詳細を確認する」
-- 要約 (規則。provider: none と LLM の失敗時): 「まず対応 N 件 (最も重いのは「…」)、まとめて確認 M 件。」/「まとめて確認 M 件。high 以上の指摘はありません。」/「新規・変化・再発の指摘はありません。」
+- 要約 (規則。provider: none と LLM の失敗時): 「まず対応 N 件 (最も重いのは「…」)、確認推奨 M 件。」/「確認推奨 M 件。high 以上の指摘はありません。」/「新規・変化・再発の指摘はありません。」
 - LLM の契約 (blocks):
 
   ```json
@@ -241,9 +242,27 @@ LLM に求める出力:
   - 縮退: 失敗したら規則だけの Block Kit を送り、先頭に「要約に失敗したため規則で組み立てました」。終了コード 3。提案の書き起こしは呼ばない (2 章と同じ)
 - 上限 (Slack): blocks 50 個、section の text 3,000 字、header 150 字、fields 10 個・各 2,000 字、context の要素 2,000 字。
   決定: 入らない項目は後ろから「ほか N 件は `arata review` で確認してください」に縮める (「まず対応」を優先して残す。件数は落とさない)。長い文字列は行の境目で切って … を付ける
-- WAF の改善提案 (2 通目): header `🛡️ WAF の改善提案 — <name>` → fields (期間・提案 N 件 ・ 観察 M 件) → context (候補であり人が判断する) →
-  提案ごとの section (種類の短い見出し (誤検知の疑い など)・段階・kind を 1 行目に、概要・根拠の数字 (規則)・何を/なぜ/進め方 (LLM) を続ける。設定例は別の section のコードブロック) →
-  観察と COUNT のルールの状況 (3-2 章と同じ 10 行まで) → context (`arata help ai playbook waf_review`)。提案が入らなければ「ほか N 件の提案は `arata review`」
+- WAF の改善提案 (2 通目。`internal/notify/proposals_blocks.go`): 俯瞰できる短い形にし、全文は別のファイルに書き出す。
+
+  ```
+  🛡️ WAF の改善提案 — acme                                  (header)
+  10/20 09:00 〜 10/21 09:00 (UTC) ・ 提案 5 件 ・ 観察 3 件 | arata の規則による候補…   (context)
+  ──
+  🛡️ *探索パスが WAF を通過* — 14 件 / 7 日・2 パス           (section 1 行目: 種類の日本語 + 主な数字)
+  → 探索パスのルールを COUNT で追加して様子を見る               (section 2 行目: 次の一手。80 字まで)
+  /.env 13・/.git/config 1                                    (context: 根拠 1 行)
+  ──
+  *観察* / *COUNT のルール*                                    (1 ルール 1 行。「`名前` 140 件・怪しい 100%・7/7 日」、一致なしは「一致なし: `a` `b`」の 1 行)
+  設定例と詳しい説明: `<dir>/waf-proposals.md` | 対処手順: `arata help ai playbook waf_review`   (context)
+  ```
+
+  - 決定 (試験チャンネルで「文章が長く俯瞰しにくい」という意見を受けて): 規則の長い summary、LLM の何を・なぜ・進め方・設定例は Slack に出さない (report.json / report.md と waf-proposals.md にある)
+  - 主な数字と根拠は種類ごとの規則 (`proposalNumbers`)。「→」は LLM の `next` (書き起こしの契約に足した 1 行。BLOCK に強める記述の検査は他の項目と同じで、捨てたら項目ごと規則に戻る)、
+    無ければ規則 (`ruleNext`。false_positive = このパスだけ `<ルール>` を COUNT にして様子を見る、rate_limit_* = limit N への見直し など)
+  - **`waf-proposals.md` の書き出し (notify の副作用)**: slack.format: blocks で提案があるとき、入力ディレクトリ (`--in`) に書く (一時ファイルから置き換え、0640)。
+    提案ごとの種類・対象・概要・根拠・次の一手・何を・なぜ・進め方・設定例の全文と、観察・COUNT のルールの状況。`--dry-run` では書かない (パスは出す)。
+    書けなければ WARN `PROPOSALS_FILE_FAILED` を出し、context は report.md を案内する (通知は続ける。終了コードは変えない)
+  - 提案が入らなければ「ほか N 件の提案は waf-proposals.md」。観察と COUNT のルールは合わせて 10 行まで
 - 静か (`on_quiet: short`): header `✅ arata <profile> — <name>` と 1 行。入力の問題: header `⚠️ arata の出力が無いか古い — <name>`、理由・code・入力のパス
 - `--dry-run`: `--format text` (既定) は人が読む簡易表示 (`[通知] <text>`、header は `# `、divider は `---`、context は `(小) `、fields は ` | ` でつなぐ)。
   `--format json` は Webhook に送る payload そのもの。`--format` は `--dry-run` のときだけ指定できる

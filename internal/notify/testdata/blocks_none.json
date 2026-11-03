@@ -21,27 +21,27 @@
       "fields": [
         {
           "type": "mrkdwn",
-          "text": "*期間*\n10/20 09:00 〜 10/21 09:00 (UTC)"
+          "text": "*期間* 10/20 09:00 〜 10/21 09:00 (UTC)"
         },
         {
           "type": "mrkdwn",
-          "text": "*新規*\n🚨 critical 1 ・ 🟠 medium 2"
+          "text": "*新規* 🚨 critical 1 ・ 🟠 medium 2"
         },
         {
           "type": "mrkdwn",
-          "text": "*変化 ・ 再発*\n1 ・ 1"
+          "text": "変化 1 件 ・ 再発 1 件"
         },
         {
           "type": "mrkdwn",
-          "text": "*解消 ・ 未対応*\n1 ・ 1"
+          "text": "解消 1 件 ・ 未対応 1 件"
         },
         {
           "type": "mrkdwn",
-          "text": "*本日報告済み*\n1 件"
+          "text": "本日報告済み 1 件"
         },
         {
           "type": "mrkdwn",
-          "text": "*情報*\n1 件 (件数のみ)"
+          "text": "情報 1 件 (件数のみ)"
         }
       ]
     },
@@ -49,7 +49,7 @@
       "type": "section",
       "text": {
         "type": "mrkdwn",
-        "text": "まず対応 3 件 (最も重いのは「summary of arn:aws:iam::1:root|203.0.113.1」)、まとめて確認 2 件。"
+        "text": "まず対応 3 件 (最も重いのは「summary of arn:aws:iam::1:root|203.0.113.1」)、確認推奨 2 件。"
       }
     },
     {
@@ -97,7 +97,7 @@
       "type": "section",
       "text": {
         "type": "mrkdwn",
-        "text": "*まとめて確認*"
+        "text": "*確認推奨*"
       }
     },
     {

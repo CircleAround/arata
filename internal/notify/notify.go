@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"time"
 )
 
@@ -215,7 +216,16 @@ func Run(ctx context.Context, o Options) Result {
 	}
 	pm := Message{Text: ProposalsText(in, warnings, writeups, notice)}
 	if blocks {
-		pm = ProposalsBlocks(in, warnings, writeups, notice)
+		// 決定 (ADR 0029): Slack には短い形だけを載せ、何を・なぜ・進め方・設定例の全文は入力ディレクトリの waf-proposals.md に書く。
+		// --dry-run では書かない (パスだけ出す)。書けなくても通知は続け、report.md を案内する
+		file := filepath.Join(o.Dir, ProposalsMD)
+		if o.DryRun {
+			log.Info("--dry-run のため "+ProposalsMD+" は書きません", "path", file)
+		} else if _, err := writeProposalsFile(o.Dir, ProposalsMarkdown(in, writeups, notice)); err != nil {
+			log.Warn(ProposalsMD+" を書けませんでした (通知は続けます)", "code", CodeProposalsFileFailed, "error", err.Error())
+			file = ""
+		}
+		pm = ProposalsBlocks(in, warnings, writeups, notice, file)
 	}
 	if !send(ctx, o, log, RouteNormal, pm) {
 		res.Exit = ExitSend

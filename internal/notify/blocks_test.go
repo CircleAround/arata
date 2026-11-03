@@ -3,6 +3,8 @@ package notify
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -79,7 +81,7 @@ func allText(m Message) string {
 	return b.String()
 }
 
-// provider: none の Block Kit。high 以上 (urgent_severity) は「まず対応」に 1 件ずつ「→」付きで、それ未満は「まとめて確認」。
+// provider: none の Block Kit。high 以上 (urgent_severity) は「まず対応」に 1 件ずつ「→」付きで、それ未満は「確認推奨」。
 func TestBlocksNone(t *testing.T) {
 	dir := inputDir(t, golden(t, "report.json"), string(golden(t, "report.md")))
 	s := &fakeSender{}
@@ -96,7 +98,7 @@ func TestBlocksNone(t *testing.T) {
 		t.Fatalf("mention first: %+v", m.Blocks[:2])
 	}
 	txt := allText(m)
-	for _, want := range []string{"*まず対応*", "*まとめて確認*", "→ ", "`arata review`"} {
+	for _, want := range []string{"*まず対応*", "*確認推奨*", "→ ", "`arata review`"} {
 		if !strings.Contains(txt, want) {
 			t.Errorf("missing %q", want)
 		}
@@ -264,7 +266,7 @@ func TestBlocksLLM(t *testing.T) {
 	l := &fakeLLM{responses: []string{`前置き {"summary": "ルートの利用が 2 件 <!here>。引き受けの変化も 1 件。", "next": [
 		{"finding_id": "f-002", "action": "ルートの利用者を確かめ、心当たりが無ければパスワードを変える"},
 		{"finding_id": "f-002", "action": "重複は捨てる"},
-		{"finding_id": "f-010", "action": "まとめて確認の項目には書かない"},
+		{"finding_id": "f-010", "action": "確認推奨の項目には書かない"},
 		{"finding_id": "f-999", "action": "知らない ID"}]} 後書き`}}
 	s := &fakeSender{}
 	res, _ := run(t, dir, s, withBlocks, withLLM(l))
@@ -283,7 +285,7 @@ func TestBlocksLLM(t *testing.T) {
 			t.Errorf("missing %q\n%s", want, txt)
 		}
 	}
-	for _, bad := range []string{"重複は捨てる", "まとめて確認の項目には書かない", "知らない ID"} {
+	for _, bad := range []string{"重複は捨てる", "確認推奨の項目には書かない", "知らない ID"} {
 		if strings.Contains(txt, bad) {
 			t.Errorf("must drop %q", bad)
 		}
@@ -317,10 +319,13 @@ func TestBlocksLLMFailureFallsBack(t *testing.T) {
 	}
 }
 
-// WAF の改善提案の 2 通目も Block Kit。数字は規則の行に出し、LLM の文は何を・なぜ・進め方・設定例だけ。
+// WAF の改善提案の 2 通目も Block Kit。提案 1 件 = 見出し (種類 + 主な数字) と「→」の section と、根拠の context だけ。
+// 規則の長い summary・設定例は Slack に出さず、全文は入力ディレクトリの waf-proposals.md に書いてパスを添える。
 func TestBlocksProposals(t *testing.T) {
-	r := goldenRun(t)
-	dir := inputDir(t, withProposals(t, r, testProposals(t)), "")
+	ps := append(testProposals(t), schema.Proposal{Kind: "observation", About: "count_rule_status", Reason: "informational", Stage: "none", WebACL: "prod-waf",
+		Rule: "AWS-AWSManagedRulesCommonRuleSet", RuleInGroup: "SizeRestrictions_BODY", Summary: "一致なし",
+		Evidence: map[string]any{"matches": float64(0), "matching_days": float64(0), "days": float64(7)}})
+	dir := inputDir(t, withProposals(t, goldenRun(t), ps), "")
 	s := &fakeSender{}
 	run(t, dir, s, withBlocks)
 	if len(s.got) != 2 || s.got[1].route != RouteNormal {
@@ -329,19 +334,97 @@ func TestBlocksProposals(t *testing.T) {
 	m := s.got[1].msg
 	checkLimits(t, m)
 	checkGolden(t, "blocks_proposals.txt", strings.ReplaceAll(PlainText(m), dir, "<dir>"))
+	txt := allText(m)
+	for _, want := range []string{
+		"🛡️ *探索パスが WAF を通過* — 14 件 / 7 日・2 パス\n→ 探索パスのルールを COUNT で追加して様子を見る",
+		"/.env 13・/.git/config 1",
+		"🛡️ *誤検知の疑い* — `CrossSiteScripting_BODY` が POST /posts/:id で 250 件 / 7 日",
+		"• `AWS-AWSManagedRulesKnownBadInputsRuleSet` 140 件・怪しい 100%・7/7 日",
+		"• 一致なし: `SizeRestrictions_BODY`",
+		"設定例と詳しい説明: `" + filepath.Join(dir, ProposalsMD) + "`",
+	} {
+		if !strings.Contains(txt, want) {
+			t.Errorf("missing %q\n%s", want, txt)
+		}
+	}
+	// 規則の長い summary は出さない
+	for _, no := range []string{"RuleActionOverrides", "見直しの候補 (守りとして残す価値"} {
+		if strings.Contains(txt, no) {
+			t.Errorf("must not contain the long summary %q", no)
+		}
+	}
+	// 提案の section は 2 行 (見出しと →) まで
+	for _, b := range m.Blocks {
+		if b.Type == "section" && b.Text != nil && strings.HasPrefix(b.Text.Text, "🛡️") && strings.Count(b.Text.Text, "\n") != 1 {
+			t.Errorf("a proposal section must be 2 lines: %q", b.Text.Text)
+		}
+	}
 	if !strings.Contains(allText(s.got[0].msg), "WAF の改善提案は別のメッセージ") {
 		t.Error("the first message should point to the proposals message")
 	}
+	md, err := os.ReadFile(filepath.Join(dir, ProposalsMD))
+	if err != nil || !strings.Contains(string(md), "## p1. 誤検知の疑い") || !strings.Contains(string(md), "RuleActionOverrides") {
+		t.Fatalf("waf-proposals.md: %v\n%s", err, md)
+	}
+}
 
-	l := &fakeLLM{responses: []string{`{"summary": "要約", "next": []}`, fixture(t, "proposals_ok.json")}}
-	s = &fakeSender{}
-	run(t, inputDir(t, withProposals(t, goldenRun(t), testProposals(t)), ""), s, withBlocks, withLLM(l))
+// LLM は「→」の 1 行 (next) を書く。何を・なぜ・進め方・設定例は waf-proposals.md にだけ書き、Slack には出さない。
+// BLOCK に強める next はその項目ごと捨てて規則の「→」にする。--dry-run では waf-proposals.md を書かない。
+func TestBlocksProposalsLLM(t *testing.T) {
+	resp := `{"proposals": [
+		{"id": "p1", "what": "誤検知を除外する", "why": "250 件", "how": "COUNT で様子を見る", "example": "\"RuleActionOverrides\": []", "next": "投稿画面だけ XSS のルールを COUNT にする <!here>"},
+		{"id": "p2", "what": "探索を止める", "why": "14 件", "how": "COUNT で足す", "example": "", "next": "BLOCK に切り替える"}]}`
+	dir := inputDir(t, withProposals(t, goldenRun(t), testProposals(t)), "")
+	l := &fakeLLM{responses: []string{`{"summary": "要約", "next": []}`, resp}}
+	s := &fakeSender{}
+	_, logs := run(t, dir, s, withBlocks, withLLM(l))
 	if len(s.got) != 2 {
 		t.Fatalf("%+v", s.got)
 	}
-	checkLimits(t, s.got[1].msg)
-	if !strings.Contains(allText(s.got[1].msg), "何を: ") {
-		t.Fatalf("%s", allText(s.got[1].msg))
+	m := s.got[1].msg
+	checkLimits(t, m)
+	txt := allText(m)
+	if !strings.Contains(txt, "→ 投稿画面だけ XSS のルールを COUNT にする &lt;!here&gt;") || !strings.Contains(txt, "→ 探索パスのルールを COUNT で追加して様子を見る") {
+		t.Fatalf("%s", txt)
+	}
+	for _, no := range []string{"何を", "RuleActionOverrides", "BLOCK に切り替える", "```"} {
+		if strings.Contains(txt, no) {
+			t.Errorf("slack must not contain %q", no)
+		}
+	}
+	if !strings.Contains(logs.String(), CodeLLMProposalRejected) {
+		t.Error("the BLOCK writeup must be rejected")
+	}
+	md, _ := os.ReadFile(filepath.Join(dir, ProposalsMD))
+	for _, want := range []string{"- 何を: 誤検知を除外する", "設定例:\n\n```\n\"RuleActionOverrides\": []\n```", "- 次の一手: 投稿画面だけ XSS のルールを COUNT にする <!here>"} {
+		if !strings.Contains(string(md), want) {
+			t.Errorf("waf-proposals.md lacks %q\n%s", want, md)
+		}
+	}
+	if strings.Contains(string(md), "BLOCK に切り替える") {
+		t.Error("rejected writeups must not reach the file")
+	}
+
+	dir = inputDir(t, withProposals(t, goldenRun(t), testProposals(t)), "")
+	run(t, dir, &fakeSender{}, withBlocks, func(o *Options) { o.DryRun = true })
+	if _, err := os.Stat(filepath.Join(dir, ProposalsMD)); !os.IsNotExist(err) {
+		t.Fatalf("--dry-run must not write %s: %v", ProposalsMD, err)
+	}
+}
+
+// waf-proposals.md を書けなくても通知は続け、report.md を案内する。
+func TestBlocksProposalsFileFailure(t *testing.T) {
+	dir := inputDir(t, withProposals(t, goldenRun(t), testProposals(t)), "")
+	if err := os.Mkdir(filepath.Join(dir, ProposalsMD), 0o700); err != nil { // 同名のディレクトリで置き換えを失敗させる
+		t.Fatal(err)
+	}
+	s := &fakeSender{}
+	res, logs := run(t, dir, s, withBlocks)
+	if res.Exit != ExitOK || len(s.got) != 2 || !strings.Contains(logs.String(), CodeProposalsFileFailed) {
+		t.Fatalf("%+v %s", res, logs)
+	}
+	if txt := allText(s.got[1].msg); !strings.Contains(txt, "詳しい説明: `"+filepath.Join(dir, ReportMD)+"`") {
+		t.Fatalf("%s", txt)
 	}
 }
 

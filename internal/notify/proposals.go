@@ -66,6 +66,8 @@ type Writeup struct {
 	Why     string `json:"why"`
 	How     string `json:"how"`
 	Example string `json:"example"`
+	// Next は Slack (slack.format: blocks) の「→」に出す次の一手 1 行 (ADR 0029)。what・why・how・example は waf-proposals.md に書く。
+	Next string `json:"next"`
 }
 
 // splitProposals は提案・observation (count_rule_status 以外)・count_rule_status に分ける (report.json の順)。
@@ -121,7 +123,7 @@ var (
 
 // rejectWriteup は書き起こしを捨てる理由 (捨てないなら空)。
 func rejectWriteup(w Writeup) string {
-	for _, s := range []string{w.What, w.Why, w.How, w.Example} {
+	for _, s := range []string{w.What, w.Why, w.How, w.Example, w.Next} {
 		if blockText.MatchString(s) {
 			return "recommends switching to BLOCK"
 		}
@@ -372,7 +374,7 @@ func ProposalsSystemPrompt(context, playbooks string) string {
 各候補を、次の JSON だけで書き起こしてください (前後に文章やコードフェンスを付けない)。
 
 {
-  "proposals": [{"id": "候補の id", "what": "何を変えるか (1 文)", "why": "なぜか (evidence の数字を根拠に 1〜2 文)", "how": "進め方 (stage に従う。1〜2 文)", "example": "設定例 (WebACL の JSON の断片か CDK の書き方。10 行程度。無ければ空文字)"}]
+  "proposals": [{"id": "候補の id", "what": "何を変えるか (1 文)", "why": "なぜか (evidence の数字を根拠に 1〜2 文)", "how": "進め方 (stage に従う。1〜2 文)", "example": "設定例 (WebACL の JSON の断片か CDK の書き方。10 行程度。無ければ空文字)", "next": "通知に「→」として出す次の一手 (1 文、60 字程度。例: 探索パスのルールを COUNT で追加して様子を見る)"}]
 }
 
 規則:
@@ -382,6 +384,7 @@ func ProposalsSystemPrompt(context, playbooks string) string {
 - stage が count_first なら「まず COUNT で様子を見る」、review なら「人が見直す (変更を勧めるものではない)」として進め方を書く。unused_rule は削除を勧めない。
 - 数字は evidence と summary にあるものだけを使い、作らない。重大度や判定は書かない。
 - ヘッダー・クエリ・Cookie などの生の値は入力に無い。推測で補わない。個人を特定できる値を書かない。
+- next は通知の一覧に 1 行で出る。何をするかだけを短く書き、数字や理由は書かない (根拠の数字は通知に別に表示される)。
 - what・why・how は各 120 字程度。summary と evidence の数字は通知に別に表示されるので、全部を繰り返さない。
 - 設定例にはコードフェンス (`+"```"+`) を付けない (通知の側で付ける)。
 

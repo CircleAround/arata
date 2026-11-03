@@ -12,16 +12,15 @@ import (
 	"time"
 
 	"github.com/CircleAround/arata/docs/ai"
-	"github.com/CircleAround/arata/internal/report/schema"
 )
 
 // Block Kit の通知 (slack.format: blocks。ADR 0029)。
 //
 // 決定:
 //   - 構成: header (重大度の絵文字 + arata <profile> — <name>) → fields (期間・新規の件数を重大度別・変化/再発・解消/未対応・情報)
-//     → 要約 1〜2 文 → (取れていないもの) → 「まず対応」→「まとめて確認」→ context (arata review・playbook・WAF の提案は別のメッセージ)。
+//     → 要約 1〜2 文 → (取れていないもの) → 「まず対応」→「確認推奨」→ context (arata review・playbook・WAF の提案は別のメッセージ)。
 //   - 「まず対応」= new / changed / recurred のうち urgent_severity (緊急の振り分けと同じ下限) 以上。1 件ずつ、1 行の「→ 何をするか」を付ける。
-//     「まとめて確認」= それ未満。同じチェック (と key の種類) の指摘は groupRules の対応表で 1 項目にまとめ、主体を `code` で並べる。
+//     「確認推奨」= それ未満。同じチェック (と key の種類) の指摘は groupRules の対応表で 1 項目にまとめ、主体を `code` で並べる。
 //     対応表に無いチェックと、1 件だけのグループは 1 件ずつ。解消・未対応・報告済み・情報は fields の件数だけ。
 //   - まとめ方・振り分け・件数・重大度・取れていないものは規則で書く (LLM に任せない)。LLM が書くのは要約と「→」だけ (BlockNotes)。
 //   - Slack の上限 (blocks 50、section 3000 字、header 150 字) を超えるときは、後ろの項目を「ほか N 件は `arata review`」に縮める。
@@ -199,7 +198,7 @@ func urgentItems(top []findingRef, notes *BlockNotes) []item {
 	return out
 }
 
-// groupItems は「まとめて確認」の項目。対応表にあるチェックは 1 項目にまとめる。並びは重大度の高い順、同じなら最初の出現順。
+// groupItems は「確認推奨」の項目。対応表にあるチェックは 1 項目にまとめる。並びは重大度の高い順、同じなら最初の出現順。
 func groupItems(rest []findingRef) []item {
 	type group struct {
 		key string
@@ -327,23 +326,24 @@ func headerTitle(in *Input) (string, string) {
 }
 
 // countFields は fields (件数は report.json の値)。
+// 決定: ラベルと値を 2 段に分けず、1 つの値に「解消 1 件 ・ 未対応 0 件」のように書く (2 段の表示は分かりにくいという意見があったため)。
 func countFields(in *Input) []string {
-	fs := []string{"*期間*\n" + Escape(windowText(in))}
+	fs := []string{"*期間* " + Escape(windowText(in))}
 	if r := in.Run; r != nil {
 		var sevs []string
 		for _, f := range r.Findings.New {
 			sevs = append(sevs, f.Severity)
 		}
-		fs = append(fs, "*新規*\n"+bySeverity(sevs))
+		fs = append(fs, "*新規* "+bySeverity(sevs))
 		if r.Summary.Changed+r.Summary.Recurred > 0 {
-			fs = append(fs, fmt.Sprintf("*変化 ・ 再発*\n%d ・ %d", r.Summary.Changed, r.Summary.Recurred))
+			fs = append(fs, fmt.Sprintf("変化 %d 件 ・ 再発 %d 件", r.Summary.Changed, r.Summary.Recurred))
 		}
-		fs = append(fs, fmt.Sprintf("*解消 ・ 未対応*\n%d ・ %d", r.Summary.Resolved, r.Summary.StillOpen))
+		fs = append(fs, fmt.Sprintf("解消 %d 件 ・ 未対応 %d 件", r.Summary.Resolved, r.Summary.StillOpen))
 		if n := len(r.AlreadyReported); n > 0 {
-			fs = append(fs, fmt.Sprintf("*本日報告済み*\n%d 件", n))
+			fs = append(fs, fmt.Sprintf("本日報告済み %d 件", n))
 		}
 		if n := len(r.Info); n > 0 {
-			fs = append(fs, fmt.Sprintf("*情報*\n%d 件 (件数のみ)", n))
+			fs = append(fs, fmt.Sprintf("情報 %d 件 (件数のみ)", n))
 		}
 		return fs
 	}
@@ -352,11 +352,11 @@ func countFields(in *Input) []string {
 	for _, e := range p.Events.New {
 		sevs = append(sevs, e.Severity)
 	}
-	fs = append(fs, "*新規*\n"+bySeverity(sevs))
+	fs = append(fs, "*新規* "+bySeverity(sevs))
 	if p.Summary.Changed+p.Summary.Recurred > 0 {
-		fs = append(fs, fmt.Sprintf("*変化 ・ 再発*\n%d ・ %d", p.Summary.Changed, p.Summary.Recurred))
+		fs = append(fs, fmt.Sprintf("変化 %d 件 ・ 再発 %d 件", p.Summary.Changed, p.Summary.Recurred))
 	}
-	fs = append(fs, fmt.Sprintf("*解消 ・ 未対応の残存*\n%d ・ %d", p.Summary.Resolved, p.Summary.Open))
+	fs = append(fs, fmt.Sprintf("解消 %d 件 ・ 未対応の残存 %d 件", p.Summary.Resolved, p.Summary.Open))
 	return fs
 }
 
@@ -393,9 +393,9 @@ func notifyText(in *Input) string {
 func ruleSummary(top, rest []findingRef, urgent string) string {
 	switch {
 	case len(top) > 0:
-		return fmt.Sprintf("まず対応 %d 件 (最も重いのは「%s」)、まとめて確認 %d 件。", len(top), Escape(oneLine(top[0].summary)), len(rest))
+		return fmt.Sprintf("まず対応 %d 件 (最も重いのは「%s」)、確認推奨 %d 件。", len(top), Escape(oneLine(top[0].summary)), len(rest))
 	case len(rest) > 0:
-		return fmt.Sprintf("まとめて確認 %d 件。%s 以上の指摘はありません。", len(rest), urgent)
+		return fmt.Sprintf("確認推奨 %d 件。%s 以上の指摘はありません。", len(rest), urgent)
 	default:
 		return "新規・変化・再発の指摘はありません。"
 	}
@@ -443,7 +443,7 @@ func RunBlocks(in *Input, d Decision, r Rules, warnings []string, notes *BlockNo
 	for _, s := range []struct {
 		title string
 		items []item
-	}{{"*まず対応*", urgentItems(top, notes)}, {"*まとめて確認*", groupItems(rest)}} {
+	}{{"*まず対応*", urgentItems(top, notes)}, {"*確認推奨*", groupItems(rest)}} {
 		for i, it := range s.items {
 			p := piece{blocks: []Block{sectionBlock(it.text)}, n: it.n}
 			if i == 0 {
@@ -501,81 +501,6 @@ func InputProblemBlocks(dir string, e *InputError, r Rules) Message {
 		sectionBlock("*監査結果を通知できません*\n• 理由: "+Escape(e.Reason)+" (`"+e.Code+"`)\n• 入力: "+Escape(dir)),
 		contextBlock("arata が実行されていないか、失敗しています。cron と arata のログを確認してください。"))
 	return Message{Text: Escape(fmt.Sprintf("arata の出力が無いか古いため、監査結果を通知できません (%s)", r.Name)), Blocks: blocks}
-}
-
-// ProposalsBlocks は WAF の改善提案 (2 通目) の Block Kit。数字・種類・段階・概要は report.json の値で、LLM の文は何を・なぜ・進め方・設定例だけ。
-func ProposalsBlocks(in *Input, warnings []string, writeups map[string]Writeup, notice string) Message {
-	if in.Run == nil || len(in.Run.Proposals) == 0 {
-		return Message{}
-	}
-	props, obs, status := splitProposals(in.Run.Proposals)
-	var head []Block
-	head = append(head, topSection(RouteNormal, Rules{}, notice, warnings)...)
-	head = append(head,
-		headerBlock("🛡️ WAF の改善提案 — "+in.Run.Name),
-		fieldsBlock("*期間*\n"+Escape(windowText(in)), fmt.Sprintf("*候補*\n提案 %d 件 ・ 観察 %d 件", len(props), len(obs)+len(status))),
-		contextBlock("arata が規則で作った候補です。適用するかは人が判断します (aratam は WAF の設定を変えません)"))
-	tail := []Block{contextBlock("対処手順: `arata help ai playbook waf_review`  |  全文: `arata review`", Escape(filepath.Join(in.Dir, ReportMD)))}
-	var obsBlocks []Block
-	if ls := nonEmpty(observationLines(obs, status)); len(ls) > 0 {
-		obsBlocks = []Block{dividerBlock(), sectionBlock(strings.Join(ls, "\n"))}
-	}
-	budget := MaxBlocks - len(head) - len(tail) - len(obsBlocks) - 1
-	body := []Block{dividerBlock()}
-	if len(props) == 0 {
-		body = append(body, sectionBlock("提案はありません。"))
-	}
-	for i, p := range props {
-		bs := proposalBlocks(i, p, writeups)
-		if len(body)+len(bs) > budget-1 {
-			body = append(body, sectionBlock(fmt.Sprintf("ほか %d 件の提案は `arata review` で確認してください", len(props)-i)))
-			break
-		}
-		body = append(body, bs...)
-	}
-	blocks := append(append(append(head, body...), obsBlocks...), tail...)
-	return Message{Text: Escape(fmt.Sprintf("%s: WAF の改善提案 %d 件 (観察 %d 件)", title(in), len(props), len(obs)+len(status))), Blocks: blocks}
-}
-
-// proposalKindLabels は提案の種類の短い見出し (対応表に無い種類は kind をそのまま)。
-var proposalKindLabels = map[string]string{
-	"false_positive":     "誤検知の疑い",
-	"probe_allowed":      "探索が WAF を通過",
-	"rate_limit_missing": "レート制限が無い",
-	"rate_limit_loose":   "レート制限が緩い",
-	"rate_limit_tight":   "レート制限が厳しい",
-	"unused_rule":        "一致していないルール",
-}
-
-// proposalBlocks は提案 1 件 (規則の行 + LLM の文の section と、設定例の section)。
-func proposalBlocks(i int, p schema.Proposal, writeups map[string]Writeup) []Block {
-	stage := stageLabels[p.Stage]
-	if stage == "" {
-		stage = p.Stage
-	}
-	label := proposalKindLabels[p.Kind]
-	if label == "" {
-		label = p.Kind
-	}
-	lines := []string{fmt.Sprintf("*%s* ・ %s `%s`", Escape(label), Escape(stage), Escape(p.Kind)), Escape(p.Summary)}
-	if ev := evidenceText(p); ev != "" {
-		lines = append(lines, "根拠: "+ev)
-	}
-	w, ok := writeups[proposalID(i)]
-	if ok {
-		for _, f := range []struct{ label, v string }{{"何を", w.What}, {"なぜ", w.Why}, {"進め方", w.How}} {
-			if v := oneLine(f.v); v != "" {
-				lines = append(lines, f.label+": "+Escape(clipRunes(v, maxWriteupRunes)))
-			}
-		}
-	}
-	out := []Block{sectionBlock(strings.Join(lines, "\n"))}
-	if ok {
-		if ex := exampleText(w.Example); ex != "" {
-			out = append(out, sectionBlock("設定例:\n```\n"+ex+"\n```"))
-		}
-	}
-	return out
 }
 
 // BlocksSystemPrompt は blocks の書式で LLM に渡す system。LLM が書くのは要約と「まず対応」の「→」だけ。

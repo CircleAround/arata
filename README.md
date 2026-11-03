@@ -33,13 +33,14 @@ arata を呼ばず、AWS の監査ロールもストアも使わない (出力�
 
 - 送り先と「静か」の判定は規則で固定する。`max_severity` が `urgent_severity` 以上か取れなかったソースがあれば緊急用、report.json が無い・古ければ「arata が実行されていない」と緊急用に送る
 - 通知は Slack の Block Kit (`slack.format: blocks`。ADR 0029)。見出し・件数のあとに、`urgent_severity` 以上を「まず対応」(1 件ずつ「→ 何をするか」付き)、
-  それ未満を「まとめて確認」(同じチェックの指摘は規則で 1 項目にまとめ、主体を並べる) に分ける。`slack.format: text` で v0.3.0 までの mrkdwn の本文も選べる (v0.4.0 から `slack.format` は必須)
+  それ未満を「確認推奨」(同じチェックの指摘は規則で 1 項目にまとめ、主体を並べる) に分ける。`slack.format: text` で v0.3.0 までの mrkdwn の本文も選べる (v0.4.0 から `slack.format` は必須)
 - LLM が書くのは要約 1〜2 文と「まず対応」の「→」だけ (text のときは分類と説明)。重大度・件数・まとめ方は規則で、report.json の値を表示する。
   LLM が使えなければ規則だけで組み立てた通知を送る (text のときは原文)
 - LLM のプロバイダ: `bedrock` (Converse。`bedrock:InvokeModel` だけ要る) / `claude-cli` (`claude -p` をツール無し・ユーザー設定を読まず・空の一時ディレクトリで起動) / `none` (LLM を呼ばない)
 - Webhook の URL は設定ファイルに書かず、`slack.webhook_env` に書いた名前の環境変数で渡す。LLM に渡すデータは report.json (と下の提案の候補・前提) だけ
 - weekly の report.json に WAF の修正提案の候補 (`proposals`) があれば、「WAF の改善提案」を 2 通目として通常用に送る (ADR 0024)。
-  種類・段階・根拠の数字は規則で書き、LLM は候補だけを受け取って「何を・なぜ・進め方・設定例」を書き起こす (候補に無い提案・BLOCK に強める提案は捨てる。observation は LLM に渡さない)
+  種類・段階・根拠の数字は規則で書き、LLM は候補だけを受け取って「何を・なぜ・進め方・設定例」を書き起こす (候補に無い提案・BLOCK に強める提案は捨てる。observation は LLM に渡さない)。
+  Block Kit では提案 1 件を 3 行 (種類と数字・「→ 次の一手」・根拠) にし、全文と設定例は `--in` のディレクトリの `waf-proposals.md` に書き出す
 - `llm.context_file` にアプリの事情 (決済画面はリクエストが多い、監視の送信元など) を Markdown で書くと、LLM に「この監査対象の前提」として渡す。
   判定 (重大度・送り先) は変わらない。例は [examples/aratam-context.md](examples/aratam-context.md) (架空の値)。利用者の環境に置き、16 KiB まで
 
