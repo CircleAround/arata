@@ -45,7 +45,7 @@
 ## 4. 未決の判断 (利用者側に確認する)
 
 - リポジトリを公開するか。公開すると Release の来歴証明が自動で有効になる。公開前に `git log` と PR / Release の本文に顧客情報が無いことを再確認する
-- Slack の書式 (mrkdwn の本文だけで続けるか Block Kit にするか)
+- ~~Slack の書式 (mrkdwn の本文だけで続けるか Block Kit にするか)~~ (決定: Block Kit。`slack.format: text` で従来の本文も選べる。ADR 0029)
 - hourly と daily の通知をまとめるか (今は別々)
 - `aratam` の `--in` に既定を持たせない方針を維持するか (`docs/aratam.md` 5 章の決定)
 

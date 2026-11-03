@@ -163,7 +163,7 @@ func newTestNotifyCmd(d *Deps, g *globalFlags) *subcmd.Command {
 			}
 			lines = append(lines, fmt.Sprintf("aratam の試験通知です (%s、%s)。この通知が届いていれば Webhook の設定は正しく動いています。", notify.Escape(cfg.Name), label))
 			sender := &slackSender{client: slack.New(d.HTTPClient), hooks: hooks}
-			if err := sender.Send(ctx, route, strings.Join(lines, "\n")); err != nil {
+			if err := sender.Send(ctx, route, notify.Message{Text: strings.Join(lines, "\n")}); err != nil {
 				d.Logger.Error("試験通知の送信に失敗しました", "code", notify.CodeSendFailed, "route", string(route), "error", err.Error())
 				return &exitError{code: notify.ExitSend}
 			}

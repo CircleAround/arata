@@ -51,3 +51,4 @@
 | [0025](0025-check-playbooks.md) | チェックごとの対処手順 (playbook) を `docs/ai/playbooks/<check>.md` としてバイナリに埋め込み、全チェックに必須にする | 採用 |
 | [0026](0026-defense-evasion-public-exposure.md) | 監査・検知の無効化 (`defense_evasion`) と公開設定の変更 (`public_exposure`) を、CloudTrail の注目イベントと要求の内容だけで判定する | 採用 |
 | [0027](0027-principal-new-source-secret-access.md) | 既知の主体の初めての送信元・リージョン (`principal_new_source`) と秘匿値の読み取りの異常 (`secret_access`) を、CloudTrail の主体の活動の日次集計と注目イベントで判定する | 採用 |
+| [0029](0029-aratam-block-kit.md) | aratam の Slack 通知を Block Kit にし、同じチェックの指摘は規則でまとめ、LLM は要約と「→ 何をするか」だけを書く | 採用 |

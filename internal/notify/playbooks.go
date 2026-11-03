@@ -86,7 +86,7 @@ func playbooksPrompt(checks []string, log *slog.Logger) string {
 # 対処手順 (playbook。arata の汎用の手順)
 
 次は、今回の入力に出たチェックの対処手順です (チェック名ごとに <playbook> で区切ってあります)。
-助言 (reason・incidents の summary・approve の理由など) を、該当するチェックの手順に沿って書いてください。
+助言 (reason・action・incidents の summary・approve の理由など) を、該当するチェックの手順に沿って書いてください。
 手順 → 利用者の前提 (後ろの節があれば) の順に参考にします。利用者の前提と手順が食い違うときは前提を優先し、その旨を書き添えてください。
 
 - 手順の「まず確かめること」は、あなたは確かめられません (追加の照会はできない)。確かめたことにせず、「人が確かめること」として書く。入力に書かれた値だけを根拠にする。

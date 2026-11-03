@@ -42,17 +42,20 @@ type hook struct {
 	srv    *httptest.Server
 	mu     sync.Mutex
 	got    map[string][]string
+	raw    map[string][][]byte // 受け取った本文 (JSON) そのもの
 	status int
 }
 
 func newHook(t *testing.T) *hook {
-	h := &hook{got: map[string][]string{}, status: http.StatusOK}
+	h := &hook{got: map[string][]string{}, raw: map[string][][]byte{}, status: http.StatusOK}
 	h.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
-		var m map[string]string
+		var m map[string]any
 		_ = json.Unmarshal(b, &m)
+		text, _ := m["text"].(string)
 		h.mu.Lock()
-		h.got[r.URL.Path] = append(h.got[r.URL.Path], m["text"])
+		h.got[r.URL.Path] = append(h.got[r.URL.Path], text)
+		h.raw[r.URL.Path] = append(h.raw[r.URL.Path], b)
 		status := h.status
 		h.mu.Unlock()
 		w.WriteHeader(status)
@@ -85,7 +88,9 @@ func newCLI(t *testing.T) *cli {
 		"ARATAM_SLACK_WEBHOOK":        c.hook.srv.URL + normalPath,
 		"ARATAM_SLACK_URGENT_WEBHOOK": c.hook.srv.URL + urgentPath,
 	}
+	// 既存のテストは mrkdwn の本文 (text) で確かめる。Block Kit は blocks_test.go で確かめる
 	body := strings.Replace(string(notify.Scaffold()), "name: example", "name: acme", 1)
+	body = strings.Replace(body, "format: blocks", "format: text", 1)
 	if err := os.WriteFile(c.cfg, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
