@@ -104,7 +104,8 @@ arata の設定は `arata config init` の雛形から作り、次を変える:
 - `aws.profile: arata-sandbox`、`store` は手元の書き込める場所
 - `sources` に nginx のロググループを足す (`kind: cloudwatch-logs`、`log_group: <NginxLogGroupName>`、`format: nginx_access`)
 - `checks.credential_hygiene.unused_days: 1` (試験用のアクセスキーを翌日から「未使用」として出す)
-- (WAF を有効にしたとき) `sources` に WAF のロググループを足し、daily の `checks` に `waf_block_trend` を入れる:
+- (WAF を有効にしたとき) `sources` に WAF のロググループと WebACL の設定 (`waf-config`) を足し、daily の `checks` に `waf_block_trend`、
+  weekly の `checks` に `waf_review` (WAF の修正提案の候補。ADR 0023) を入れる:
 
 ```yaml
 sources:
@@ -112,8 +113,14 @@ sources:
     kind: cloudwatch-logs
     log_group: aws-waf-logs-arata-sandbox     # 出力の WafLogGroupName
     format: wafv2                             # → waf_action
+    strip_path_prefix: /sandbox               # API Gateway の REST API はパスの前にステージ名が付く
     max_scan_gb: 1                            # 試験のログは小さい。念のため上限を付ける
+  - id: waf_config
+    kind: waf-config                          # WebACL の設定 → waf_review
 ```
+
+  waf_review は daily が貯めた日次集計を読む (weekly は WAF のログを引かない)。候補を見るには先に daily を回す。
+  `count_days` (14) や `unused_days` (30) は試験では満たないので、その候補は `observation` (提案なし) として出る
 
 ```sh
 arata doctor -c arata.yaml                   # 権限・ロググループ・解釈率

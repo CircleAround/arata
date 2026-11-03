@@ -27,6 +27,10 @@ const EXPECTED_ACTIONS = [
   'logs:StartQuery',
   'logs:StopQuery',
   's3:GetAccountPublicAccessBlock',
+  'wafv2:GetLoggingConfiguration',
+  'wafv2:GetWebACL',
+  'wafv2:ListResourcesForWebACL',
+  'wafv2:ListWebACLs',
 ];
 
 function rawTemplate(): Record<string, any> {

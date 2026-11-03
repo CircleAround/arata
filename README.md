@@ -13,9 +13,9 @@ AWS のログと設定を定期的に改め、**前回から新しく発生し�
 ## 現在の実装範囲 (設計書 10 章の Step 1〜3)
 
 - ソース: `cloudtrail-lookup` (CloudTrail LookupEvents)、`cloudwatch-logs` (Logs Insights の集計クエリ。形式プロファイル `nginx_access` / `alb_access` / `wafv2` / `json` / `regex`)、
-  アカウント単位の状態 `iam-credential-report` / `guardduty` / `access-analyzer` / `posture`
+  アカウント単位の状態 `iam-credential-report` / `guardduty` / `access-analyzer` / `posture` / `waf-config` (WAFv2 の WebACL の設定)
 - チェック: `root_usage`, `unknown_assume_role`, `new_principal`, `iam_changes`, `access_denied`, `login_bruteforce`, `probe_paths`, `waf_block_trend`, `ai_path_usage` (daily)、
-  `credential_hygiene`, `guardduty_findings`, `posture`, `access_analyzer` (weekly)
+  `credential_hygiene`, `guardduty_findings`, `posture`, `access_analyzer`, `waf_review` (weekly。WAF の修正提案の候補を report.json の `proposals` に)
 - ストア: `dir://` (JSONL 原本 + SQLite)
 - CLI: `config init` (推奨設定の雛形と `--diff`) / `profiles` (効いているチェックとパラメータ) / `init` (日単位の分割と `--resume`) / `doctor` / `run` / `collect` / `evaluate` / `report` (`--from --to` / `--month` で期間レポート) / `review` / `approve` / `ack` / `snooze` / `resolve` / `help ai`
 - allowlist: `principals[]` の `arn` / `account` (アカウント単位) / `arn_pattern` (glob)、`tags` は `deploy` / `ai`
@@ -222,11 +222,15 @@ arata resolve <finding-id>
 | `guardduty` | `guardduty:ListDetectors`, `guardduty:ListFindings`, `guardduty:GetFindings` |
 | `access-analyzer` | `access-analyzer:ListAnalyzers`, `access-analyzer:ListFindings` |
 | `posture` | `cloudtrail:DescribeTrails`, `cloudtrail:GetTrailStatus`, `guardduty:ListDetectors`, `guardduty:GetDetector`, `iam:GetAccountSummary`, `iam:GetAccountPasswordPolicy`, `s3:GetAccountPublicAccessBlock` |
+| `waf-config` | `wafv2:ListWebACLs`, `wafv2:GetWebACL`, `wafv2:GetLoggingConfiguration`, `wafv2:ListResourcesForWebACL` (REGIONAL は `regions`、CLOUDFRONT は us-east-1) |
 
 - `iam:GenerateCredentialReport` だけは書き込み系。読み取り専用ロールで拒否されても、4 時間以内に生成済みのレポートがあればそれを使う (生成時刻は finding の Data に残る)
 - 権限が足りないソースのチェックだけが skip され、他は続行する (coverage と doctor に不足 action が出る)。前回の指摘は「解消」にならない。
   posture は一部の項目だけ取れなければ取れた項目で評価する (終了コード 3)
 - GuardDuty が無効なら guardduty_findings は skip され、posture が「GuardDuty が有効でない」と報告する。アナライザーが無ければ access_analyzer は skip
+- `waf_review` (WAF の修正提案の候補) は `waf-config` と wafv2 の `cloudwatch-logs` ソースの両方が要る。daily が貯めた wafv2 の日次集計を読むだけで、
+  weekly の run は WAF のログを引かない。候補は report.json の `proposals` に出る (適用は人が判断する。`arata help ai report`)。
+  既に配ったロールには wafv2 の 4 つの action を足す必要がある (無ければ waf-config だけが ACCESS_DENIED になり、waf_review が skip される)
 - 監査ロールや AI 用の主体を allowlist で `tags: [ai]` にすると、`ai_path_usage` (daily) が利用を主体 × 送信元 IP で毎回 info に 1 行出す (自己監査)
 
 ```sh
