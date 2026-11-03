@@ -370,7 +370,7 @@ func TestProfileOverrides(t *testing.T) {
 }
 
 func TestParamChecks(t *testing.T) {
-	if got := strings.Join(ParamChecks(), ","); got != "login_bruteforce,probe_paths,waf_block_trend,waf_review,access_denied,defense_evasion,public_exposure,principal_new_source,secret_access,credential_hygiene,posture" {
+	if got := strings.Join(ParamChecks(), ","); got != "login_bruteforce,probe_paths,waf_block_trend,waf_review,access_denied,defense_evasion,public_exposure,principal_new_source,secret_access,endpoint_abuse,credential_hygiene,posture" {
 		t.Fatalf("got %s", got)
 	}
 }
@@ -519,6 +519,78 @@ func TestAuditLogGroups(t *testing.T) {
 	}
 	if got := strings.Join(cfg.AuditLogGroups(), ","); got != "prod-nginx-access" {
 		t.Fatalf("audit log groups: %q", got)
+	}
+}
+
+// endpoint_abuse は既定で endpoints が空 (何もしない)。閾値の既定は雛形と config init --diff に出る。
+func TestEndpointAbuseConfig(t *testing.T) {
+	cfg, err := Load(write(t, logsSource("    format: nginx_access\n")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ea := cfg.Checks.EndpointAbuse
+	if len(ea.Endpoints) != 0 || ea.Window != "10m" || ea.BaselineDays != 14 || ea.MinBaselineDays != 7 || ea.Factor != 3 ||
+		ea.MinDistinctIPs != 10 || ea.MinCount != 20 || ea.UAConcentration.MinIPs != 5 || len(ea.FollowUps) != 0 || len(ea.ExcludePaths) != 0 {
+		t.Fatalf("endpoint_abuse defaults: %+v", ea)
+	}
+	if ea.WindowDuration() != 10*time.Minute {
+		t.Fatalf("window: %v", ea.WindowDuration())
+	}
+	good := "checks:\n  endpoint_abuse:\n    endpoints:\n" +
+		"      - { name: signup, paths: [/signup], methods: [POST], sources: [web] }\n" +
+		"      - { name: message, paths: [/messages, \"/messages/*\", \"/**/messages\", \"/users/:id/messages\"], methods: [POST] }\n" +
+		"    follow_ups:\n      - { from: signup, to: message }\n"
+	cfg, err = Load(write(t, logsSource("    format: nginx_access\n")+good))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ea = cfg.Checks.EndpointAbuse
+	if len(ea.Endpoints) != 2 || ea.Endpoints[0].Name != "signup" || len(ea.FollowUps) != 1 {
+		t.Fatalf("%+v", ea)
+	}
+	// follow_ups の within / min_ips の既定
+	if f := ea.FollowUps[0]; f.Within != "30m" || f.MinIPs != 5 || f.WithinDuration() != 30*time.Minute {
+		t.Fatalf("follow_up defaults: %+v", f)
+	}
+
+	ep := func(s string) string { return "checks:\n  endpoint_abuse:\n    endpoints:\n" + s }
+	bad := []struct{ name, body, want string }{
+		{"no name", ep("      - { paths: [/signup] }\n"), "name"},
+		{"dup name", ep("      - { name: a, paths: [/a] }\n      - { name: a, paths: [/b] }\n"), "duplicate"},
+		{"bad name", ep("      - { name: \"a|b\", paths: [/a] }\n"), "name"},
+		{"no paths", ep("      - { name: a }\n"), "paths"},
+		{"relative path", ep("      - { name: a, paths: [signup] }\n"), "must start with /"},
+		{"unknown source", ep("      - { name: a, paths: [/a], sources: [nope] }\n"), "nope"},
+		{"not http source", ep("      - { name: a, paths: [/a], sources: [trail] }\n"), "trail"},
+		{"wafv2 source", ep("      - { name: a, paths: [/a], sources: [waf] }\n"), "not support yet"},
+		{"window not dividing a day", "checks:\n  endpoint_abuse:\n    window: 7m\n", "window"},
+		{"window too long", "checks:\n  endpoint_abuse:\n    window: 2h\n", "window"},
+		{"window seconds", "checks:\n  endpoint_abuse:\n    window: 90s\n", "window"},
+		{"follow unknown", ep("      - { name: a, paths: [/a] }\n") + "    follow_ups:\n      - { from: a, to: b }\n", "follow_ups"},
+		{"follow within", ep("      - { name: a, paths: [/a] }\n      - { name: b, paths: [/b] }\n") + "    follow_ups:\n      - { from: a, to: b, within: 2d }\n", "within"},
+		{"min_baseline_days", "checks:\n  endpoint_abuse:\n    min_baseline_days: 20\n", "endpoint_abuse"},
+		{"min_distinct_ips", "checks:\n  endpoint_abuse:\n    min_distinct_ips: -1\n", "endpoint_abuse"},
+	}
+	for _, tc := range bad {
+		t.Run(tc.name, func(t *testing.T) {
+			src := logsSource("    format: nginx_access\n")
+			src = strings.Replace(src, "profiles:", "  - id: waf\n    kind: cloudwatch-logs\n    log_group: aws-waf-logs-app\n    format: wafv2\nprofiles:", 1)
+			_, err := Load(write(t, src+tc.body))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("want error containing %q, got %v", tc.want, err)
+			}
+		})
+	}
+	// endpoints / window / follow_ups は日次集計の条件なので overrides では変えられない。閾値は変えられる
+	body := strings.Replace(logsSource("    format: nginx_access\n"), "    checks: [default-daily, root_usage]\n",
+		"    checks: [default-daily, root_usage]\n    overrides:\n      endpoint_abuse: { window: 5m }\n", 1)
+	if _, err := Load(write(t, body)); err == nil || !strings.Contains(err.Error(), "endpoint_abuse.window") {
+		t.Fatalf("want collection condition error, got %v", err)
+	}
+	body = strings.Replace(logsSource("    format: nginx_access\n"), "    checks: [default-daily, root_usage]\n",
+		"    checks: [default-daily, root_usage]\n    overrides:\n      endpoint_abuse: { min_distinct_ips: 30 }\n", 1)
+	if cfg, err := Load(write(t, body)); err != nil || cfg.ChecksFor("daily").EndpointAbuse.MinDistinctIPs != 30 {
+		t.Fatalf("override threshold: %v", err)
 	}
 }
 

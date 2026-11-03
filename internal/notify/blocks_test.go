@@ -468,3 +468,36 @@ func TestBlocksProposalsChallenge(t *testing.T) {
 		t.Error("the long summary must not be in slack")
 	}
 }
+
+// endpoint_abuse (ADR 0030) は 1 件でも「*画面への分散した集中* — `signup` 25 IP / 10 分」の形にし、
+// playbook どおり確認・保留の運用へ回す「→」を添える (遮断は勧めない)。「A のあと B」は key (from>to) で別の項目にまとめる。
+func TestBlocksEndpointAbuse(t *testing.T) {
+	r := goldenRun(t)
+	mk := func(id, key string, data map[string]any) schema.Finding {
+		return schema.Finding{ID: id, Check: "endpoint_abuse", Key: key, Severity: "medium", Summary: "長い summary " + key, Data: data}
+	}
+	r.Findings.New = []schema.Finding{
+		mk("e-1", "signup", map[string]any{"endpoint": "signup", "window": "10m", "distinct_ips": 25.0, "count": 300.0}),
+		mk("e-2", "signup>post", map[string]any{"from": "signup", "to": "post", "window": "10m", "ips": 12.0}),
+		mk("e-3", "login>reset", map[string]any{"from": "login", "to": "reset", "window": "1h", "ips": 8.0}),
+	}
+	r.Findings.Changed, r.Findings.Recurred = nil, nil
+	r.Summary.New, r.Summary.Changed, r.Summary.Recurred, r.Summary.MaxSeverity = 3, 0, 0, "medium"
+	r.Coverage.SourcesFailed = nil
+	s := &fakeSender{}
+	run(t, inputDir(t, marshal(t, r), ""), s, withBlocks)
+	m := s.got[0].msg
+	checkLimits(t, m)
+	txt := allText(m)
+	for _, want := range []string{
+		"🟠 *画面への分散した集中* — `signup` 25 IP / 10 分\n→ " + abuseNext,
+		"🟠 *「A のあと B」の連鎖* 2 件\n`signup → post` 12 IP / 10 分 ・ `login → reset` 8 IP / 1 時間\n→ " + abuseNext,
+	} {
+		if !strings.Contains(txt, want) {
+			t.Errorf("missing %q\n%s", want, txt)
+		}
+	}
+	if strings.Contains(txt, "長い summary") {
+		t.Error("endpoint_abuse must not show the long summary")
+	}
+}

@@ -56,26 +56,71 @@ type BlockNotes struct {
 type groupRule struct {
 	label, unit, sep string
 	name             func(f findingRef) string
+	// single は 1 件だけでも summary ではなく「*見出し* — 名前」の形で出す (summary が長いチェック)。
+	single bool
+	// next は項目の下に添える「→」(確認推奨の項目にも付けたいチェックだけ。規則の固定の文言)。
+	next string
 }
 
 // groupRules は (check または check/key の種類) ごとのまとめ方。key の種類は key の最初の `|` より前 (credential_hygiene の no_mfa など)。
 // 決定: 並べる値は IAM ユーザー名・ARN の末尾・IP・ルール名まで (個人を特定できる値を出さない。主体は ID で表す)。
 var groupRules = map[string]groupRule{
-	"credential_hygiene/no_mfa":          {"MFA の無いコンソールユーザー", "人", " ", func(f findingRef) string { return code(dataOrKey(f, "user", 1)) }},
-	"credential_hygiene/unused_key":      {"使われていないアクセスキー", "本", " ・ ", func(f findingRef) string { return code(dataOrKey(f, "user", 1)) + numSuffix(f, "days_unused", "日") }},
-	"credential_hygiene/root_access_key": {"ルートユーザーのアクセスキー", "本", " ", func(f findingRef) string { return code("キー " + dataOrKey(f, "key", 1)) }},
-	"new_principal":                      {"新しく観測した主体", "件", " ・ ", principalName},
-	"principal_new_source":               {"新しい送信元から使われた主体", "件", " ・ ", principalName},
-	"secret_access":                      {"秘匿値を読んだ主体", "件", " ・ ", principalName},
-	"access_denied":                      {"アクセス拒否が続く主体", "件", " ・ ", principalName},
-	"access_analyzer":                    {"外部からアクセスできるリソース", "件", " ・ ", func(f findingRef) string { return code(arnTail(dataOrKey(f, "resource", -1))) }},
-	"login_bruteforce":                   {"ログイン試行の急増", "件", " ・ ", func(f findingRef) string { return code(dataOrKey(f, "ip", 0)) + numSuffix(f, "count", "回") }},
-	"probe_paths":                        {"探索的なパスへのアクセス", "件", " ・ ", func(f findingRef) string { return code(dataOrKey(f, "ip", 0)) + numSuffix(f, "count", "回") }},
-	"waf_block_trend/top_ip":             {"WAF のブロックが多い IP", "件", " ・ ", func(f findingRef) string { return code(dataOrKey(f, "ip", 1)) + numSuffix(f, "count", "回") }},
-	"waf_block_trend/rule":               {"WAF の新しいルールのブロック", "件", " ・ ", func(f findingRef) string { return code(dataOrKey(f, "rule", 1)) + numSuffix(f, "count", "回") }},
+	"credential_hygiene/no_mfa":          {"MFA の無いコンソールユーザー", "人", " ", func(f findingRef) string { return code(dataOrKey(f, "user", 1)) }, false, ""},
+	"credential_hygiene/unused_key":      {"使われていないアクセスキー", "本", " ・ ", func(f findingRef) string { return code(dataOrKey(f, "user", 1)) + numSuffix(f, "days_unused", "日") }, false, ""},
+	"credential_hygiene/root_access_key": {"ルートユーザーのアクセスキー", "本", " ", func(f findingRef) string { return code("キー " + dataOrKey(f, "key", 1)) }, false, ""},
+	"new_principal":                      {"新しく観測した主体", "件", " ・ ", principalName, false, ""},
+	"principal_new_source":               {"新しい送信元から使われた主体", "件", " ・ ", principalName, false, ""},
+	"secret_access":                      {"秘匿値を読んだ主体", "件", " ・ ", principalName, false, ""},
+	"access_denied":                      {"アクセス拒否が続く主体", "件", " ・ ", principalName, false, ""},
+	"access_analyzer":                    {"外部からアクセスできるリソース", "件", " ・ ", func(f findingRef) string { return code(arnTail(dataOrKey(f, "resource", -1))) }, false, ""},
+	"login_bruteforce":                   {"ログイン試行の急増", "件", " ・ ", func(f findingRef) string { return code(dataOrKey(f, "ip", 0)) + numSuffix(f, "count", "回") }, false, ""},
+	"probe_paths":                        {"探索的なパスへのアクセス", "件", " ・ ", func(f findingRef) string { return code(dataOrKey(f, "ip", 0)) + numSuffix(f, "count", "回") }, false, ""},
+	"waf_block_trend/top_ip":             {"WAF のブロックが多い IP", "件", " ・ ", func(f findingRef) string { return code(dataOrKey(f, "ip", 1)) + numSuffix(f, "count", "回") }, false, ""},
+	"waf_block_trend/rule":               {"WAF の新しいルールのブロック", "件", " ・ ", func(f findingRef) string { return code(dataOrKey(f, "rule", 1)) + numSuffix(f, "count", "回") }, false, ""},
+	// ADR 0030。playbook どおり確認・保留の運用へ回す (遮断は勧めない)
+	"endpoint_abuse":        {"画面への分散した集中", "件", " ・ ", endpointName, true, abuseNext},
+	"endpoint_abuse/follow": {"「A のあと B」の連鎖", "件", " ・ ", followName, true, abuseNext},
+}
+
+const abuseNext = "その時間幅の登録・送信をアプリの運営者が確認し、保留・承認待ちの運用へ回す (遮断はしない)"
+
+// endpointName は「`signup` 25 IP / 10 分」(期間レポートは key だけ)。
+func endpointName(f findingRef) string {
+	return code(dataOrKey(f, "endpoint", -1)) + abuseIPs(f, "distinct_ips")
+}
+
+// followName は「`signup → post` 12 IP / 10 分」。
+func followName(f findingRef) string {
+	from, to, _ := strings.Cut(f.key, ">")
+	return code(from+" → "+to) + abuseIPs(f, "ips")
+}
+
+func abuseIPs(f findingRef, field string) string {
+	if f.finding == nil {
+		return ""
+	}
+	v, ok := f.finding.Data[field].(float64)
+	if !ok {
+		return ""
+	}
+	s := fmt.Sprintf(" %g IP", v)
+	if w, ok := f.finding.Data["window"].(string); ok && w != "" {
+		if d, err := time.ParseDuration(w); err == nil {
+			if d%time.Hour == 0 {
+				w = fmt.Sprintf("%d 時間", int(d/time.Hour))
+			} else {
+				w = fmt.Sprintf("%d 分", int(d/time.Minute))
+			}
+		}
+		s += " / " + Escape(w)
+	}
+	return s
 }
 
 func groupKeyOf(f findingRef) string {
+	if f.check == "endpoint_abuse" && strings.Contains(f.key, ">") {
+		return "endpoint_abuse/follow" // 「A のあと B」の key は from>to
+	}
 	kind, _, _ := strings.Cut(f.key, "|")
 	if _, ok := groupRules[f.check+"/"+kind]; ok && kind != "" {
 		return f.check + "/" + kind
@@ -228,6 +273,15 @@ func groupItems(rest []findingRef) []item {
 				sev = f.severity
 			}
 		}
+		if r, ok := groupRules[g.key]; ok && r.single && len(g.fs) == 1 {
+			f := g.fs[0]
+			text := fmt.Sprintf("%s *%s* — %s%s", sevEmoji(sev), r.label, r.name(f), diffMark(f))
+			if r.next != "" {
+				text += "\n→ " + r.next
+			}
+			out = append(out, item{sev: sev, n: 1, first: i, text: text})
+			continue
+		}
 		if len(g.fs) == 1 {
 			f := g.fs[0]
 			out = append(out, item{sev: sev, n: 1, first: i, text: fmt.Sprintf("%s *%s*%s", sevEmoji(sev), Escape(oneLine(f.summary)), diffMark(f))})
@@ -242,8 +296,11 @@ func groupItems(rest []findingRef) []item {
 			}
 			names = append(names, r.name(f)+diffMark(f))
 		}
-		out = append(out, item{sev: sev, n: len(g.fs), first: i,
-			text: fmt.Sprintf("%s *%s* %d %s\n%s", sevEmoji(sev), r.label, len(g.fs), r.unit, strings.Join(names, r.sep))})
+		text := fmt.Sprintf("%s *%s* %d %s\n%s", sevEmoji(sev), r.label, len(g.fs), r.unit, strings.Join(names, r.sep))
+		if r.next != "" {
+			text += "\n→ " + r.next
+		}
+		out = append(out, item{sev: sev, n: len(g.fs), first: i, text: text})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return severityRank[out[i].sev] > severityRank[out[j].sev] })
 	return out

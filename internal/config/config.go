@@ -307,6 +307,9 @@ func (c *Config) Validate() error {
 	if err := c.Checks.validate(); err != nil {
 		return fmt.Errorf("config: checks: %w", err)
 	}
+	if err := c.validateEndpointSources(); err != nil {
+		return fmt.Errorf("config: checks: endpoint_abuse: %w", err)
+	}
 	if len(c.Profiles) == 0 {
 		return fmt.Errorf("config: at least one profile is required (profiles:)")
 	}
@@ -320,6 +323,26 @@ func (c *Config) Validate() error {
 		eff := c.ChecksFor(name)
 		if err := eff.validate(); err != nil {
 			return fmt.Errorf("config: profile %s: overrides: %w", name, err)
+		}
+	}
+	return nil
+}
+
+// validateEndpointSources は endpoint_abuse の endpoints[].sources が http_access を出す cloudwatch-logs のソースかを確かめる。
+func (c *Config) validateEndpointSources() error {
+	byID := map[string]Source{}
+	for _, s := range c.Sources {
+		byID[s.ID] = s
+	}
+	for _, ep := range c.Checks.EndpointAbuse.Endpoints {
+		for _, id := range ep.Sources {
+			s, ok := byID[id]
+			if ok && s.Kind == KindCloudWatchLogs && s.Yields == YieldsWAFAction {
+				return fmt.Errorf("endpoints: %s: source %q is a wafv2 source, which endpoint_abuse does not support yet (planned; use an http_access source)", ep.Name, id)
+			}
+			if !ok || s.Kind != KindCloudWatchLogs || s.Yields != YieldsHTTPAccess {
+				return fmt.Errorf("endpoints: %s: source %q must be a cloudwatch-logs source that yields http_access", ep.Name, id)
+			}
 		}
 	}
 	return nil

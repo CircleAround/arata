@@ -22,6 +22,7 @@ sandbox (arata の試験用に条件を整えた、開発用アカウント上�
 | `08-public-exposure.sh` [`VPC_ID=...`] | 試験用のセキュリティグループ `<stack>-scenario-08` をデフォルト VPC (または `VPC_ID`) に作り、tcp/22 を 0.0.0.0/0 に開けて、すぐ閉じて消す。どこにも付けない | `public_exposure` high (`ec2:AuthorizeSecurityGroupIngress\|<sg>\|tcp/22 0.0.0.0/0`)。すぐ閉じても出る。`tags: [deploy]` の主体でも下がらない (`known_deploy_principal: true`) | daily |
 | `09-new-source-region.sh <リージョン>` | 実行する主体 (既知で、過去 30 日に活動のある開発者の主体) が、ふだん書き込まないリージョン (arata の cloudtrail-lookup の regions に入っているもの) に String のパラメータ `/<stack>/scenario-09` を作って消す。送信元の初出も試すなら AWS CloudShell など別の送信元から実行する | `principal_new_source` medium (実行した主体の ARN、`reasons` に `new_region`、`new_regions` に指定のリージョンと書き込み 2 件)。arata が CloudTrail を収集し終えた日 (この版の init・daily の窓) が 15 日 (`min_baseline_days`) 未満なら出ない (導入直後)。下の「09・10 の期待」 | daily |
 | `10-secret-bulk-read.sh` | (`secretAccess.enabled: true` のとき) SecureString のパラメータを 9 つ作り、読み手のロール `<stack>-secret-reader` でシークレット 3 つ (個別と BatchGetSecretValue)・パラメータ 9 つ (個別に復号)・パス 1 つ (再帰・復号) を読み、パラメータを消す。値は表示しない | `secret_access` high (読み手のロールの ARN、`distinct_secrets` 13 > `min_distinct` 10、`bulk: true`、`paths` に `(recursive)`)。収集し終えた日が 7 日以上なら `first_reader: true` と `new_secrets` 13 個。読み手のロールの `new_principal` medium も出る (承認すれば止まる) | daily |
+| `11-endpoint-abuse.sh [登録の IP 数=25] [送信する IP 数=8]` | nginx のロググループに、`POST /signup` 302 を 203.0.113.11〜 の 25 IP から 1 件ずつ約 1 分の間に (22 IP は同じ UA)、そのうち 8 IP の `POST /messages` 200 を登録の約 5 分後に書き込む (行を書くだけで通信は起きない。時刻は約 20 分前から)。arata の設定に `checks.endpoint_abuse` の画面と連鎖を書いておく (下の「11 の期待」) | `endpoint_abuse` medium (`signup`。`reasons` に `distributed_burst`・`volume`・`same_user_agent`、異なり IP 25、同じ UA が 22 IP) と medium (`signup>message`。`follow_up`、8 IP)。収集した過去日が 7 日未満なら `baseline_used: false` (絶対の閾値で判定) | daily |
 
 ## 06 の期待 (WAF の action)
 
@@ -87,10 +88,33 @@ WebACL のルール ([lib/waf.ts](../lib/waf.ts)): `login-rate-limit` (優先度
 - 10: 同じ日にもう一度実行しても still_open で沈黙する (イベント型)。読み手のロールの `secrets_access` を allowlist に書くと初出に数えなくなる (一括読み出しは数える)
 - どちらも読み取りロールに権限は足していない (`cloudtrail:LookupEvents` だけで判定する)
 
+## 11 の期待 (設定・出ないはずのもの)
+
+arata の設定 (`checks:`) に次を書いてから daily を回す (画面のパスは架空。sandbox の nginx のロググループに合わせたもの):
+
+```yaml
+checks:
+  endpoint_abuse:
+    endpoints:
+      - { name: signup, paths: [/signup], methods: [POST] }
+      - { name: message, paths: [/messages, "/messages/*"], methods: [POST] }
+    follow_ups:
+      - { from: signup, to: message, within: 30m, min_ips: 5 }
+```
+
+- `signup` は 10 分幅の異なり IP が 25 (幅の境目をまたげば 2 つの幅に分かれるが、どちらかに 10 IP 以上が残る)。件数 25 も `min_count` 20 を超えるので `volume` も付く。
+  境目で分かれて件数が 20 未満になった幅は `volume` が付かない (`bins` で確かめる)。UA は `ua_hash` (8 文字) と `ua_ips` だけで、原文は report・metrics・ログのどこにも出ない
+- `signup>message` は登録した 25 IP のうち 8 IP が 5 分後にメッセージ送信。窓の終わりが登録の幅の終わり + 30 分より前なら、この run では評価せず次の run で出る
+  (daily の窓の終わりの近くで入れたときは、次の daily で出る)
+- `message` (8 IP・8 件) は `min_distinct_ips` 10・`min_count` 20 未満なので画面としては出ない
+- 既存のチェック (`login_bruteforce`・`probe_paths`) の結果は変わらない。01 と同じ日に入れても、01 の 2 件はそのまま出る
+- 結果は事実だけ (件数・異なり IP・ふだんの上限)。遮断の提案は出ない。同じ日にもう一度実行しても still_open で沈黙する (イベント型)
+- Insights のクエリは画面ごとに 1 本増える (この設定なら 2 本)。`max_scan_gb` を付けておく
+
 ## 片付け
 
 - 03 で作ったユーザーは `03-iam-changes.sh cleanup` で消す (`cdk destroy` はスタックの外のものを消さない)
-- 01 のログと 04 のサンプル finding は `cdk destroy` でロググループ・detector ごと消える
+- 01・11 のログと 04 のサンプル finding は `cdk destroy` でロググループ・detector ごと消える
 - 10 のシークレットと読み手のロールは `secretAccess.enabled: false` で deploy し直すか `cdk destroy` で消える (シークレットは削除の猶予期間 (30 日) の後に消える。名前は CloudFormation が付けるので、すぐ作り直してもぶつからない)
 - 07・08・09・10 はスクリプトの中で作ったもの (ロググループ・ルール・セキュリティグループ・パラメータ) を消す (途中で失敗しても終了時に消す)。08 で「消せませんでした」と出たら、そのセキュリティグループを手で消す
 - 06 の WAF のログは `cdk destroy` (または `waf.enabled: false` で deploy) でロググループごと消える
