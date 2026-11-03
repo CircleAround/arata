@@ -31,8 +31,10 @@ type cli struct {
 	// rec は偽の claude が引数・標準入力・環境変数を記録するディレクトリ。claudeOut は偽の claude が返す出力 (--output-format json の形)。
 	rec       string
 	claudeOut string
-	fakeMode  string // "" = claudeOut を返す / "fail" = 終了コード 1 / "sleep" = 時間切れ
-	bedrock   *httptest.Server
+	// claudeProposalsOut は提案の書き起こしの呼び出し (標準入力が JSON の配列) に返す出力。空なら claudeOut を返す。
+	claudeProposalsOut string
+	fakeMode           string // "" = claudeOut を返す / "fail" = 終了コード 1 / "sleep" = 時間切れ
+	bedrock            *httptest.Server
 }
 
 // hook は Incoming Webhook の偽物。パスごとに受け取った text を記録する。
@@ -105,6 +107,9 @@ func (c *cli) run(args ...string) int {
 			out, _ := os.Create(filepath.Join(c.rec, "response"))
 			_, _ = io.WriteString(out, c.claudeOut)
 			out.Close()
+			if c.claudeProposalsOut != "" {
+				_ = os.WriteFile(filepath.Join(c.rec, "response_proposals"), []byte(c.claudeProposalsOut), 0o600)
+			}
 			return []string{"PATH=/usr/bin:/bin", "REC=" + c.rec, "FAKE_MODE=" + c.fakeMode,
 				"ARATAM_SLACK_WEBHOOK=" + c.env["ARATAM_SLACK_WEBHOOK"], "ARATAM_SLACK_URGENT_WEBHOOK=" + c.env["ARATAM_SLACK_URGENT_WEBHOOK"]}
 		},

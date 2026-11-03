@@ -76,6 +76,8 @@ type Options struct {
 	Summarizer Summarizer
 	// LLMTimeout は LLM 呼び出し 1 回の時間切れ (再試行は 1 回まで)。
 	LLMTimeout time.Duration
+	// Context は利用者が書いた「この監査対象の前提」(llm.context_file の中身)。LLM の system に足すだけで、規則の判定には使わない。
+	Context string
 }
 
 // Result は Run の結果。
@@ -142,11 +144,16 @@ func Run(ctx context.Context, o Options) Result {
 
 	d := Decide(in, o.Rules)
 	exit := ExitOK
+	// 決定 (ADR 0024): WAF の改善提案 (proposals) は 2 通目として常に通常用に送る。on_quiet: silent でも提案は送る (週 1 回の改善提案のまとめ)
+	hasProposals := in.Run != nil && len(in.Run.Proposals) > 0
+	llmOK := o.Summarizer != nil
 	var text string
 	switch {
 	case d.Quiet && o.Rules.OnQuiet == "silent":
-		mark(o, log, key)
-		return Result{Exit: ExitOK, Route: d.Route}
+		if !hasProposals {
+			mark(o, log, key)
+			return Result{Exit: ExitOK, Route: d.Route}
+		}
 	case d.Quiet:
 		text = QuietText(in, d, o.Rules, warnings)
 	case o.Summarizer == nil:
@@ -156,33 +163,91 @@ func Run(ctx context.Context, o Options) Result {
 			log.Error("LLM の要約に失敗したため原文を送ります", "code", CodeLLMFailed, "error", err.Error())
 			text = ReportText(in, d, o.Rules, warnings, FallbackNotice)
 			exit = ExitFallback
+			llmOK = false // 決定: 要約が失敗したら提案の書き起こしは呼ばない (LLM が使えない見込みが高い)
 		} else {
 			text = SummaryText(in, d, o.Rules, warnings, s)
 		}
 	}
-	if !send(ctx, o, log, d.Route, text) {
-		return Result{Exit: ExitSend, Route: d.Route}
+	res := Result{Exit: exit, Route: d.Route}
+	if text != "" {
+		if !send(ctx, o, log, d.Route, text) {
+			return Result{Exit: ExitSend, Route: d.Route}
+		}
+		res.Sent = true
+		mark(o, log, key) // 本文を送れたら記録する (提案の送信に失敗しても本文を二重に送らない)
 	}
-	mark(o, log, key)
-	return Result{Exit: exit, Route: d.Route, Sent: true}
+	if !hasProposals {
+		return res
+	}
+	if text == "" {
+		res.Route = RouteNormal
+	}
+	var writeups map[string]Writeup
+	notice := ""
+	if llmOK {
+		var err error
+		if writeups, err = writeUp(ctx, o, log, in); err != nil {
+			log.Warn("提案の書き起こしに失敗したため、候補をそのまま載せます", "code", CodeLLMProposalsFailed, "error", err.Error())
+			notice = ProposalsFallbackNotice
+		}
+	}
+	if !send(ctx, o, log, RouteNormal, ProposalsText(in, warnings, writeups, notice)) {
+		res.Exit = ExitSend
+		return res
+	}
+	if text == "" {
+		mark(o, log, key)
+	}
+	res.Sent = true
+	return res
+}
+
+// writeUp は提案の候補だけを LLM に渡して書き起こさせる (要約とは別の呼び出し。再試行は要約と同じく 1 回まで)。
+func writeUp(ctx context.Context, o Options, log *slog.Logger, in *Input) (map[string]Writeup, error) {
+	props, _, _ := splitProposals(in.Run.Proposals)
+	if len(props) == 0 {
+		return nil, nil // observation だけなら LLM に渡すものが無い (observation は規則の書式で載せる)
+	}
+	var got map[string]Writeup
+	err := callLLM(ctx, o, log, ProposalsSystemPrompt(o.Context), proposalsInput(props), func(raw []byte) error {
+		w, rejected, err := ParseWriteups(raw, props)
+		if err != nil {
+			return err
+		}
+		for _, r := range rejected {
+			log.Warn("提案の書き起こしを捨てました (規則の行だけを載せます)", "code", CodeLLMProposalRejected, "reason", r)
+		}
+		got = w
+		return nil
+	})
+	return got, err
 }
 
 // summarize は LLM に要約させ、出力を検証する。失敗 (エラー・時間切れ・形が合わない) なら 1 回だけ再試行する。
 // 決定: 形が合わない出力も再試行の対象にする (同じ入力でも 2 回目は契約どおりに返すことが多いため)。
 func summarize(ctx context.Context, o Options, log *slog.Logger, in *Input) (*Summary, error) {
-	system := SystemPrompt(in.Kind)
+	var s *Summary
+	err := callLLM(ctx, o, log, SystemPrompt(in.Kind, o.Context), in.JSON, func(raw []byte) error {
+		var err error
+		s, err = ParseSummary(raw, in)
+		return err
+	})
+	return s, err
+}
+
+// callLLM は LLM を呼び、parse で検証する。失敗 (エラー・時間切れ・形が合わない) なら 1 回だけ再試行する。timeout は 1 回ごと。
+func callLLM(ctx context.Context, o Options, log *slog.Logger, system string, input []byte, parse func([]byte) error) error {
 	var last error
 	for attempt := 1; attempt <= 2; attempt++ {
 		cctx, cancel := context.WithTimeout(ctx, o.LLMTimeout)
-		raw, err := o.Summarizer.Summarize(cctx, system, in.JSON)
+		raw, err := o.Summarizer.Summarize(cctx, system, input)
 		if errors.Is(cctx.Err(), context.DeadlineExceeded) {
 			err = fmt.Errorf("timed out after %s: %w", o.LLMTimeout, context.DeadlineExceeded)
 		}
 		cancel()
 		if err == nil {
-			var s *Summary
-			if s, err = ParseSummary(raw, in); err == nil {
-				return s, nil
+			if err = parse(raw); err == nil {
+				return nil
 			}
 		}
 		last = err
@@ -190,10 +255,10 @@ func summarize(ctx context.Context, o Options, log *slog.Logger, in *Input) (*Su
 			break
 		}
 		if attempt == 1 {
-			log.Warn("LLM の要約に失敗したので再試行します", "code", CodeLLMRetry, "error", err.Error())
+			log.Warn("LLM の呼び出しに失敗したので再試行します", "code", CodeLLMRetry, "error", err.Error())
 		}
 	}
-	return nil, last
+	return last
 }
 
 func send(ctx context.Context, o Options, log *slog.Logger, route Route, text string) bool {

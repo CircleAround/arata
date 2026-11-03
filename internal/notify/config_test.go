@@ -27,7 +27,7 @@ func TestScaffoldLoads(t *testing.T) {
 		c.Slack.WebhookEnv != "ARATAM_SLACK_WEBHOOK" || c.Slack.UrgentWebhookEnv != "ARATAM_SLACK_URGENT_WEBHOOK" || c.Slack.UrgentMention != "<!channel>" {
 		t.Fatalf("%+v", c)
 	}
-	for _, key := range []string{"name:", "max_age:", "urgent_severity:", "on_quiet:", "provider:", "model:", "region:", "profile:", "timeout:", "command:", "webhook_env:", "urgent_webhook_env:", "urgent_mention:"} {
+	for _, key := range []string{"name:", "max_age:", "urgent_severity:", "on_quiet:", "provider:", "model:", "region:", "profile:", "timeout:", "command:", "context_file:", "webhook_env:", "urgent_webhook_env:", "urgent_mention:"} {
 		if !strings.Contains(string(Scaffold()), "\n"+key) && !strings.Contains(string(Scaffold()), " "+key) {
 			t.Errorf("scaffold must state %s", key)
 		}
@@ -99,5 +99,49 @@ func TestParseDuration(t *testing.T) {
 		if _, err := ParseDuration(in); err == nil {
 			t.Errorf("%q must be rejected", in)
 		}
+	}
+}
+
+// llm.context_file (利用者が書いた「この監査対象の前提」)。相対パスは設定ファイルのディレクトリ基準。
+// 決定 (ADR 0024): 無い・読めない・16 KiB を超えるときは設定エラーにせず、WARN を出して前提なしで続ける (超えたら切り詰めずに使わない)。
+func TestLoadContext(t *testing.T) {
+	load := func(t *testing.T, contextFile string, files map[string]string) (string, string, error) {
+		t.Helper()
+		p := writeConfig(t, strings.Replace(string(Scaffold()), `context_file: ""`, "context_file: "+contextFile, 1))
+		for name, body := range files {
+			if err := os.WriteFile(filepath.Join(filepath.Dir(p), name), []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		c, err := LoadConfig(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c.LoadContext()
+	}
+	if text, code, err := load(t, `""`, nil); text != "" || code != "" || err != nil {
+		t.Fatalf("empty: %q %q %v", text, code, err)
+	}
+	if text, code, err := load(t, "context.md", map[string]string{"context.md": "- 決済画面はリクエストが多い\n"}); text != "- 決済画面はリクエストが多い\n" || code != "" || err != nil {
+		t.Fatalf("relative to the config file: %q %q %v", text, code, err)
+	}
+	abs := filepath.Join(t.TempDir(), "ctx.md")
+	if err := os.WriteFile(abs, []byte("abs"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if text, _, err := load(t, abs, nil); text != "abs" || err != nil {
+		t.Fatalf("absolute: %q %v", text, err)
+	}
+	if text, code, err := load(t, "missing.md", nil); text != "" || code != CodeContextUnreadable || err == nil {
+		t.Fatalf("missing: %q %q %v", text, code, err)
+	}
+	if text, code, err := load(t, "big.md", map[string]string{"big.md": strings.Repeat("a", MaxContextBytes+1)}); text != "" || code != CodeContextTooLarge || err == nil {
+		t.Fatalf("too large: %d %q %v", len(text), code, err)
+	}
+	if text, _, err := load(t, "edge.md", map[string]string{"edge.md": strings.Repeat("a", MaxContextBytes)}); len(text) != MaxContextBytes || err != nil {
+		t.Fatalf("exactly the limit is accepted: %d %v", len(text), err)
+	}
+	if text, code, err := load(t, "bin.md", map[string]string{"bin.md": "\xff\xfe"}); text != "" || code != CodeContextUnreadable || err == nil {
+		t.Fatalf("not UTF-8: %q %q %v", text, code, err)
 	}
 }

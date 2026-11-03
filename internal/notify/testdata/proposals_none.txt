@@ -1,0 +1,26 @@
+*WAF の改善提案* arata daily (acme) 2026-10-20T09:00:00Z 〜 2026-10-21T09:00:00Z
+提案 5 件 / 観察 3 件 (arata が規則で作った候補。適用するかは人が判断する。aratam は WAF の設定を変えない)
+
+• *[false_positive / まず COUNT で様子を見る]* prod-waf: AWS-AWSManagedRulesCommonRuleSet/CrossSiteScripting_BODY が正規の画面らしい POST /posts/:id を直近 7 日で 250 件 BLOCK (日ごとの異なり IP 最大 60)。誤検知の疑い。グループ AWS-AWSManagedRulesCommonRuleSet の CrossSiteScripting_BODY をこのパスだけ COUNT にする (RuleActionOverrides か scope-down) → 様子を見て除外を確定する
+    根拠: count 250 · distinct_ips_max_per_day 60 · days 7 · matching_days 7
+
+• *[probe_allowed / まず COUNT で様子を見る]* prod-waf: 探索パスへのリクエストが WAF で許可された (直近 7 日で 14 件: /.env (13 件), /.git/config (1 件))。マネージドルール (AWSManagedRulesKnownBadInputsRuleSet など) か、探索パスをブロックするルールを COUNT で追加して様子を見る
+    根拠: count 14 · paths /.env (13 件), /.git/config (1 件) · days 7
+
+• *[rate_limit_missing / まず COUNT で様子を見る]* prod-waf: パスの群 /api/* を受け持つレートベースのルールが無く、1 IP が 5 分に最大 400 件 (p99 20 の 5 倍超え)。limit 100 (5 分、IP 単位) のレートベースのルールを COUNT で足して様子を見る
+    根拠: path_group /api/* · p99_per_5min 20 · max_per_5min 400 · proposed_limit 100
+
+• *[rate_limit_loose / 見直す]* prod-waf: rate-login の limit (5 分あたり 1000) が、パスの群 /login の観測の最大 9 の 10 倍より高い。limit 100 への見直しを検討する
+    根拠: path_group /login · current_limit_per_5min 1000 · max_per_5min 9 · p99_per_5min 4 · proposed_limit 100
+
+• *[unused_rule / 見直す]* prod-waf: ルール block-legacy-admin (BLOCK, ByteMatch) は直近 30 日、一度も一致していない。見直しの候補 (守りとして残す価値があることも多い。削除は勧めない)
+    根拠: days_without_match 30
+
+*観察* (提案はしないが気づいたこと)
+• [false_positive / excluded_by_config] prod-waf: AWS-AWSManagedRulesSQLiRuleSet が POST /checkout/pay を 30 件 BLOCK (日ごとの異なり IP 最大 12)。expected_high_rate_paths に一致するため誤検知の提案はしない
+
+*COUNT のルールの状況* (提案ではない。COUNT → BLOCK の切り替えは人が計画して決める)
+• prod-waf: COUNT の AWS-AWSManagedRulesKnownBadInputsRuleSet: 直近 7 日で 140 件一致、うち怪しい通信 100%、一致した日 7 / 7 日
+• prod-waf: COUNT の count-geo: 直近 7 日で 12 件一致、うち怪しい通信 25%、一致した日 3 / 7 日
+
+全文: <dir>/report.md
