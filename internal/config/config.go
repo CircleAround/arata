@@ -65,6 +65,9 @@ type Source struct {
 	// SampleLines は FORMAT_MISMATCH のエラーに解釈できなかった行の例 (マスク済み) を添えるか (既定 true)。
 	SampleLines    bool  `yaml:"-"`
 	SampleLinesRaw *bool `yaml:"sample_lines"`
+	// StripPathPrefix は wafv2 のログの httpRequest.uri の前に付く接頭辞 (API Gateway の REST API のステージ名 `/prod` など)。
+	// 探索パス・パスの群の判定とパスの正規化の前に外す (ADR 0023)。集計条件。wafv2 のときだけ。
+	StripPathPrefix string `yaml:"strip_path_prefix"`
 	// MaxScanGB は 1 回の収集でこのソースが Insights でスキャンしてよい量 (GB)。0 なら無制限。超えたら QUERY_LIMIT。
 	MaxScanGB float64 `yaml:"max_scan_gb"`
 	// IngestDelay はイベントが起きてから取得できるようになるまでの遅延の見込み。収集は [From - IngestDelay, To) を引き、

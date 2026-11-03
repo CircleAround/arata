@@ -98,6 +98,14 @@ func (s *Source) validateLogs() error {
 	if s.Format != FormatJSON && len(s.Fields) > 0 {
 		return fmt.Errorf("fields is only for format json")
 	}
+	if s.StripPathPrefix != "" {
+		if s.Format != FormatWAFv2 {
+			return fmt.Errorf("strip_path_prefix is only for format wafv2")
+		}
+		if s.StripPathPrefix[0] != '/' || strings.HasSuffix(s.StripPathPrefix, "/") {
+			return fmt.Errorf("strip_path_prefix %q: must start with / and must not end with / (e.g. /prod)", s.StripPathPrefix)
+		}
+	}
 	switch s.Format {
 	case FormatJSON:
 		known := append(append([]string{}, RequiredFields[s.Yields]...), OptionalFields[s.Yields]...)

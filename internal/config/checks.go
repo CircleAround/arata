@@ -111,6 +111,8 @@ type WAFReview struct {
 	RateLooseFactor float64 `yaml:"rate_loose_factor"`
 	// UnusedDays は「使われていないルール」とみなす一致 0 の日数 (データのある日で数える)。
 	UnusedDays int `yaml:"unused_days"`
+	// MaxProposals は候補の種類ごとに出す上限 (根拠の強い順)。
+	MaxProposals int `yaml:"max_proposals"`
 }
 
 // DefaultRatePathGroups は rate_path_groups の既定。
@@ -232,6 +234,7 @@ func (c *Checks) applyDefaults() {
 	setFloat(&wr.RateFloor, 100)
 	setFloat(&wr.RateLooseFactor, 10)
 	setInt(&wr.UnusedDays, 30)
+	setInt(&wr.MaxProposals, 20)
 	wb := &c.WAFBlockTrend
 	if wb.TopN == 0 {
 		wb.TopN = 5
@@ -303,8 +306,8 @@ func setFloat(p *float64, v float64) {
 }
 
 func (w WAFReview) validate() error {
-	if w.TopPaths < 1 || w.Days < 1 || w.CountDays < 1 || w.UnusedDays < 1 {
-		return fmt.Errorf("top_paths, days, count_days, unused_days >= 1")
+	if w.TopPaths < 1 || w.Days < 1 || w.CountDays < 1 || w.UnusedDays < 1 || w.MaxProposals < 1 {
+		return fmt.Errorf("top_paths, days, count_days, unused_days, max_proposals >= 1")
 	}
 	if w.CountRatio <= 0 || w.CountRatio > 1 {
 		return fmt.Errorf("0 < count_ratio <= 1")

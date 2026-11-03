@@ -15,6 +15,7 @@ import (
 	cwl "github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 
 	"github.com/CircleAround/arata/internal/allowlist"
+	"github.com/CircleAround/arata/internal/checks"
 	"github.com/CircleAround/arata/internal/collect"
 	"github.com/CircleAround/arata/internal/collect/account"
 	"github.com/CircleAround/arata/internal/collect/cwlogs"
@@ -304,7 +305,11 @@ func (d *doctor) checks() {
 				d.res.Rows = append(d.res.Rows, DoctorRow{Source: "-", Kind: "-", Item: "check", Status: DoctorNG, Code: CodeConfigInvalid, Detail: fmt.Sprintf("profile %s: unknown check %q", pname, name)})
 				continue
 			}
-			for _, k := range c.Needs() {
+			needs := c.Needs()
+			if sn, ok := c.(checks.StoredNeeder); ok {
+				needs = append(append([]record.Kind{}, needs...), sn.StoredNeeds()...)
+			}
+			for _, k := range needs {
 				if !available[k] {
 					if missing[name] == nil {
 						missing[name] = map[string]bool{}

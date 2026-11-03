@@ -39,6 +39,7 @@ type Input struct {
 	ChecksRun     []string
 	ChecksSkipped []SkippedCheck
 	Formats       []FormatCoverage
+	Proposals     []schema.Proposal
 }
 
 // Build は差分判定の結果からレポートを組み立てる。
@@ -66,6 +67,7 @@ func Build(in Input) *Report {
 			ChecksSkipped: nonNil(in.ChecksSkipped),
 			Formats:       nonNil(in.Formats),
 		},
+		Proposals: in.Proposals,
 	}
 	var sevs []checks.Severity
 	for _, res := range in.Results {

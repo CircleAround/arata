@@ -32,40 +32,58 @@ var Descriptions = map[string]string{
 	"guardduty_findings":  "GuardDuty の findings。新規と件数の増加 (重大度は GuardDuty 準拠)",
 	"posture":             "CloudTrail 証跡と検証・GuardDuty 有効・ルート MFA・S3 Public Access Block・パスワードポリシー (high / medium)",
 	"access_analyzer":     "IAM Access Analyzer の外部アクセス findings (公開は high、他は medium)",
+	"waf_review":          "WAF の修正提案の候補を report.json の proposals に (正規の画面での大量 BLOCK は low の finding にも)",
 }
 
 // paramComments は checks.<check>.<key> の説明。
 var paramComments = map[string]string{
-	"login_bruteforce.paths":             "sign-in の送信先。前方一致ではなく完全一致 (クエリ文字列は除いて比べる)。Devise のスコープ付きパス (/admin/users/sign_in など) は実際のパスに合わせる。集計条件なので overrides では変えられない",
-	"login_bruteforce.methods":           "sign-in 試行とみなす HTTP メソッド",
-	"login_bruteforce.failure_statuses":  "失敗とみなすステータス (Devise の再表示は 401 / 422、成功は 302 / 303)",
-	"login_bruteforce.baseline_days":     "平常帯 = その IP 自身の直近 baseline_days 日の中央値 × factor",
-	"login_bruteforce.factor":            "平常帯の倍率",
-	"login_bruteforce.min_count":         "平常帯の下限 (中央値 0 の IP もこの件数までは鳴らさない)",
-	"login_bruteforce.min_baseline_days": "「初出」判定に要る、データのある過去日数 (導入直後に全部が初出になるのを防ぐ)",
-	"login_bruteforce.top_ip_min_count":  "その日の最多 IP が初出なら、この件数以上で報告",
-	"probe_paths.paths":                  "機密パスの接頭辞。集計条件なので overrides では変えられない",
-	"probe_paths.exclude_paths":          "対象から外す接頭辞 (正規の管理画面など)",
-	"probe_paths.statuses":               "探索とみなすステータス",
-	"probe_paths.baseline_days":          "平常帯の日数",
-	"probe_paths.factor":                 "平常帯の倍率",
-	"probe_paths.min_count":              "平常帯の下限",
-	"probe_paths.min_baseline_days":      "「初出」判定に要る過去日数",
-	"probe_paths.top_ip_min_count":       "その日の最多 IP が初出なら、この件数以上で報告",
-	"waf_block_trend.top_n":              "BLOCK 件数の Top IP の入れ替わりを見る数",
-	"waf_block_trend.min_count":          "Top IP の新顔として報告する BLOCK 件数の下限",
-	"waf_block_trend.new_rule_min_count": "新しく鳴り始めたルールとして報告する BLOCK 件数の下限",
-	"waf_block_trend.baseline_days":      "過去と比べる日数",
-	"waf_block_trend.min_baseline_days":  "「初出」判定に要る過去日数",
-	"access_denied.error_codes":          "拒否とみなす CloudTrail の errorCode (完全一致)。events に残す条件なので overrides では変えられない。後から足したコードは過去分が無いので平常帯 0 から始まる",
-	"access_denied.min_distinct_apis":    "拒否された API の種類がこれ以上 (かつ平常帯超え) で報告 (medium)",
-	"access_denied.high_distinct_apis":   "種類がこれ以上なら high (列挙ツールは数十種類を叩く)",
-	"access_denied.baseline_days":        "平常帯 = その主体自身の直近 baseline_days 日の中央値 × factor (件数・種類それぞれ)",
-	"access_denied.factor":               "平常帯の倍率",
-	"access_denied.min_count":            "件数の条件の下限 (同じ API を叩き続ける設定ミスなど。medium 止まり)",
-	"access_denied.min_baseline_days":    "平常帯を使うのに要る、拒否のある過去日数 (それ未満は平常帯 0 として絶対の閾値だけで判定)",
-	"credential_hygiene.unused_days":     "アクセスキーを未使用とみなす日数 (最終使用、使われていなければ作成・ローテーションから)",
-	"posture.min_password_length":        "IAM パスワードポリシーの最小文字数の下限",
+	"login_bruteforce.paths":              "sign-in の送信先。前方一致ではなく完全一致 (クエリ文字列は除いて比べる)。Devise のスコープ付きパス (/admin/users/sign_in など) は実際のパスに合わせる。集計条件なので overrides では変えられない",
+	"login_bruteforce.methods":            "sign-in 試行とみなす HTTP メソッド",
+	"login_bruteforce.failure_statuses":   "失敗とみなすステータス (Devise の再表示は 401 / 422、成功は 302 / 303)",
+	"login_bruteforce.baseline_days":      "平常帯 = その IP 自身の直近 baseline_days 日の中央値 × factor",
+	"login_bruteforce.factor":             "平常帯の倍率",
+	"login_bruteforce.min_count":          "平常帯の下限 (中央値 0 の IP もこの件数までは鳴らさない)",
+	"login_bruteforce.min_baseline_days":  "「初出」判定に要る、データのある過去日数 (導入直後に全部が初出になるのを防ぐ)",
+	"login_bruteforce.top_ip_min_count":   "その日の最多 IP が初出なら、この件数以上で報告",
+	"probe_paths.paths":                   "機密パスの接頭辞。集計条件なので overrides では変えられない",
+	"probe_paths.exclude_paths":           "対象から外す接頭辞 (正規の管理画面など)",
+	"probe_paths.statuses":                "探索とみなすステータス",
+	"probe_paths.baseline_days":           "平常帯の日数",
+	"probe_paths.factor":                  "平常帯の倍率",
+	"probe_paths.min_count":               "平常帯の下限",
+	"probe_paths.min_baseline_days":       "「初出」判定に要る過去日数",
+	"probe_paths.top_ip_min_count":        "その日の最多 IP が初出なら、この件数以上で報告",
+	"waf_block_trend.top_n":               "BLOCK 件数の Top IP の入れ替わりを見る数",
+	"waf_block_trend.min_count":           "Top IP の新顔として報告する BLOCK 件数の下限",
+	"waf_block_trend.new_rule_min_count":  "新しく鳴り始めたルールとして報告する BLOCK 件数の下限",
+	"waf_block_trend.baseline_days":       "過去と比べる日数",
+	"waf_block_trend.min_baseline_days":   "「初出」判定に要る過去日数",
+	"access_denied.error_codes":           "拒否とみなす CloudTrail の errorCode (完全一致)。events に残す条件なので overrides では変えられない。後から足したコードは過去分が無いので平常帯 0 から始まる",
+	"access_denied.min_distinct_apis":     "拒否された API の種類がこれ以上 (かつ平常帯超え) で報告 (medium)",
+	"access_denied.high_distinct_apis":    "種類がこれ以上なら high (列挙ツールは数十種類を叩く)",
+	"access_denied.baseline_days":         "平常帯 = その主体自身の直近 baseline_days 日の中央値 × factor (件数・種類それぞれ)",
+	"access_denied.factor":                "平常帯の倍率",
+	"access_denied.min_count":             "件数の条件の下限 (同じ API を叩き続ける設定ミスなど。medium 止まり)",
+	"access_denied.min_baseline_days":     "平常帯を使うのに要る、拒否のある過去日数 (それ未満は平常帯 0 として絶対の閾値だけで判定)",
+	"credential_hygiene.unused_days":      "アクセスキーを未使用とみなす日数 (最終使用、使われていなければ作成・ローテーションから)",
+	"posture.min_password_length":         "IAM パスワードポリシーの最小文字数の下限",
+	"waf_review.top_paths":                "wafv2 の BLOCK / 許可された探索のパスを日ごとに残す数 (件数の多い順)。集計条件なので overrides では変えられない",
+	"waf_review.rate_path_groups":         "1 IP あたりの件数を分けて測るパスの接頭辞 (どれにも当たらなければ「その他」)。集計条件",
+	"waf_review.trusted_cidrs":            "監視・開発会社などの正規の送信元 (例 [203.0.113.0/24])。wafv2 の新しい集計と候補から外す。集計条件",
+	"waf_review.expected_high_rate_paths": "リクエストが多いのが仕様のパスの接頭辞 (決済など)。レート制限の候補から外す (observation には残る)",
+	"waf_review.days":                     "候補を作るのに見る直近の日数 (daily が貯めた日次集計を読む。weekly は wafv2 を引かない)",
+	"waf_review.min_distinct_ips":         "誤検知の疑いに要る異なり IP 数 (日ごとの最大。下限の見積もり)",
+	"waf_review.finding_distinct_ips":     "誤検知の疑いを low の finding にもする異なり IP 数",
+	"waf_review.count_days":               "BLOCK に上げてよいカウントルールに要る、一致が続いた日数",
+	"waf_review.count_ratio":              "その一致のうち探索パスか BLOCK された IP からの割合の下限",
+	"waf_review.count_min_matches":        "count_days の間の一致の合計の下限",
+	"waf_review.min_count":                "すり抜けている探索の件数の下限。誤検知の observation (異なり IP が足りない) の件数の下限にも使う",
+	"waf_review.rate_factor":              "レート制限が無いとみなす条件: 1 IP の 5 分あたりの最大が p99 のこの倍を超える",
+	"waf_review.rate_margin":              "提案する limit = max(p99 × rate_margin, rate_floor) (5 分あたり)",
+	"waf_review.rate_floor":               "提案する limit の下限",
+	"waf_review.rate_loose_factor":        "既存のレート制限が観測の最大のこの倍より高ければ緩すぎる (p99 より低ければ厳しすぎる)",
+	"waf_review.unused_days":              "使われていないルールとみなす一致 0 の日数 (この日数分のデータが要る)",
+	"waf_review.max_proposals":            "候補の種類ごとに出す上限 (根拠の強い順)",
 }
 
 // Profile は雛形のプロファイル 1 つ。
@@ -138,6 +156,8 @@ func Generate(reg *checks.Registry) []byte {
 	cm("    kind: "+config.KindAccessAnalyzer, "→ access_analyzer。アナライザーが無ければ skip")
 	w("  - id: posture\n")
 	cm("    kind: "+config.KindPosture, "→ posture (CloudTrail・GuardDuty・ルート MFA・S3・パスワードポリシー)")
+	w("  # - id: waf_config\n")
+	cm("  #   kind: "+config.KindWAFConfig, "WebACL の設定 → waf_review (下の wafv2 のソースも要る)。REGIONAL は regions、CLOUDFRONT は us-east-1")
 	w(`
   # アプリ層 (CloudWatch Logs): ロググループ → 形式プロファイル → 正規化レコード。取得は Logs Insights の集計クエリだけ。
   # 足したら arata doctor で解釈率とクエリを確かめる。
@@ -159,7 +179,8 @@ func Generate(reg *checks.Registry) []byte {
 	w("  # - id: waf\n")
 	w("  #   kind: %s\n", config.KindCloudWatchLogs)
 	w("  #   log_group: aws-waf-logs-my-app\n")
-	w("  #   format: wafv2\n\n")
+	w("  #   format: wafv2\n")
+	cm("  #   # strip_path_prefix: /prod", "API Gateway の REST API はパスの前にステージ名が付く。探索パス・パスの群の判定の前に外す\n")
 
 	w("# チェック一覧 (周期 / 型 / 必要なレコード)。event 型は窓内の出来事、state 型は今の状態を報告する。\n")
 	width := 0

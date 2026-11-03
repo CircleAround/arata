@@ -441,3 +441,20 @@ func TestWAFReviewConfig(t *testing.T) {
 		t.Fatalf("overrides: %v", err)
 	}
 }
+
+func TestStripPathPrefix(t *testing.T) {
+	src := "  - id: waf\n    kind: cloudwatch-logs\n    log_group: aws-waf-logs-prod\n    format: wafv2\n    strip_path_prefix: %s\nprofiles:"
+	cfg, err := Load(write(t, strings.Replace(minimal, "profiles:", fmt.Sprintf(src, "/prod"), 1)))
+	if err != nil || cfg.Sources[1].StripPathPrefix != "/prod" {
+		t.Fatalf("%v", err)
+	}
+	for _, bad := range []string{"prod", "/prod/"} {
+		if _, err := Load(write(t, strings.Replace(minimal, "profiles:", fmt.Sprintf(src, bad), 1))); err == nil || !strings.Contains(err.Error(), "strip_path_prefix") {
+			t.Fatalf("%q: %v", bad, err)
+		}
+	}
+	nginx := "  - id: web\n    kind: cloudwatch-logs\n    log_group: prod-nginx-access\n    format: nginx_access\n    strip_path_prefix: /prod\nprofiles:"
+	if _, err := Load(write(t, strings.Replace(minimal, "profiles:", nginx, 1))); err == nil || !strings.Contains(err.Error(), "only for format wafv2") {
+		t.Fatalf("nginx: %v", err)
+	}
+}

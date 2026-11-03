@@ -28,6 +28,8 @@ type Profile struct {
 	Prelude string
 	// MatchField は解釈できたかの判定に使う正規化フィールド。count(MatchField) が matched になる。
 	MatchField string
+	// StripPrefix はパスの前に付く接頭辞 (wafv2 の strip_path_prefix)。探索パス・パスの群の判定と正規化の前に外す。
+	StripPrefix string
 }
 
 // nginx の combined 形式: `$remote_addr - $remote_user [$time_local] "$request" $status $body_bytes_sent "$http_referer" "$http_user_agent"`。
@@ -45,7 +47,7 @@ var plainField = regexp.MustCompile(`^[A-Za-z_@][A-Za-z0-9_.@]*$`)
 
 // ProfileFor は設定のソースから形式プロファイルを作る。config.Validate を通ったソースを前提とする。
 func ProfileFor(src config.Source) (Profile, error) {
-	p := Profile{Format: src.Format, Yields: record.Kind(src.Yields)}
+	p := Profile{Format: src.Format, Yields: record.Kind(src.Yields), StripPrefix: src.StripPathPrefix}
 	var body string
 	switch src.Format {
 	case config.FormatNginxAccess:

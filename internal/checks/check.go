@@ -95,7 +95,8 @@ func NewRegistryFor(c config.Checks) *Registry {
 	r := &Registry{byName: map[string]Check{}}
 	for _, ch := range []Check{RootUsage{}, UnknownAssumeRole{}, NewPrincipal{}, IAMChanges{}, AccessDenied{Config: c.AccessDenied},
 		LoginBruteforce{Config: c.LoginBruteforce}, ProbePaths{Config: c.ProbePaths}, WAFBlockTrend{Config: c.WAFBlockTrend}, AIPathUsage{},
-		CredentialHygiene{Config: c.CredentialHygiene}, GuardDutyFindings{}, Posture{Config: c.Posture}, AccessAnalyzer{}} {
+		CredentialHygiene{Config: c.CredentialHygiene}, GuardDutyFindings{}, Posture{Config: c.Posture}, AccessAnalyzer{},
+		WAFReview{Config: c.WAFReview, SignInPaths: c.LoginBruteforce.Paths, ProbePaths: c.ProbePaths.Paths}} {
 		r.Register(ch)
 	}
 	return r

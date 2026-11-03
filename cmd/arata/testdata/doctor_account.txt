@@ -16,7 +16,8 @@ posture          posture                permission  ng      ACCESS_DENIED  s3:Ge
 -                -                      check       warn    -              login_bruteforce は skip される: no http_access source (profile daily)
 -                -                      check       warn    -              probe_paths は skip される: no http_access source (profile daily)
 -                -                      check       warn    -              waf_block_trend は skip される: no waf_action source (profile daily)
+-                -                      check       warn    -              waf_review は skip される: no waf_action source (profile weekly)
 
 必要な IAM action: access-analyzer:ListAnalyzers, access-analyzer:ListFindings, cloudtrail:DescribeTrails, cloudtrail:GetTrailStatus, cloudtrail:LookupEvents, guardduty:GetDetector, guardduty:GetFindings, guardduty:ListDetectors, guardduty:ListFindings, iam:GenerateCredentialReport, iam:GetAccountPasswordPolicy, iam:GetAccountSummary, iam:GetCredentialReport, s3:GetAccountPublicAccessBlock
   (iam:GenerateCredentialReport だけは書き込み系: 認証情報レポートの生成のみ。拒否されても 4 時間以内に生成済みのレポートがあれば使う)
-結果: ng 2 / warn 3
+結果: ng 2 / warn 4

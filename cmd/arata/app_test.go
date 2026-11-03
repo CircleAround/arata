@@ -276,7 +276,7 @@ func TestProfileOverridesAndUnusedChecks(t *testing.T) {
 			warned = m
 		}
 	}
-	if warned == nil || warned["level"] != "WARN" || fmt.Sprint(warned["checks"]) != "[root_usage unknown_assume_role credential_hygiene guardduty_findings posture access_analyzer]" {
+	if warned == nil || warned["level"] != "WARN" || fmt.Sprint(warned["checks"]) != "[root_usage unknown_assume_role credential_hygiene guardduty_findings posture access_analyzer waf_review]" {
 		t.Fatalf("CHECK_UNUSED: %v", warned)
 	}
 	if code := c.run("evaluate", "--config", c.cfg, "--profile", "daily"); code != 0 || !strings.Contains(strings.Join(c.codes(), ","), "CHECK_UNUSED") {

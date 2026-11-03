@@ -37,6 +37,7 @@ import (
 	"github.com/CircleAround/arata/internal/config"
 	"github.com/CircleAround/arata/internal/record"
 	"github.com/CircleAround/arata/internal/report"
+	"github.com/CircleAround/arata/internal/report/schema"
 	"github.com/CircleAround/arata/internal/store"
 )
 
@@ -510,7 +511,9 @@ func (e *Engine) ingest(ctx context.Context, source string, rec record.Record, p
 
 // EvalResult は評価の結果。
 type EvalResult struct {
-	Results       []checks.Result
+	Results []checks.Result
+	// Proposals は WAF の修正提案の候補 (waf_review。ADR 0023)。
+	Proposals     []schema.Proposal
 	ChecksRun     []string
 	ChecksSkipped []report.SkippedCheck
 }
@@ -545,7 +548,18 @@ func (e *Engine) Evaluate(ctx context.Context, profileName string, w collect.Win
 			res.ChecksSkipped = append(res.ChecksSkipped, report.SkippedCheck{Check: name, Reason: reason})
 			continue
 		}
-		obs, err := c.Evaluate(ctx, e.st, w, e.al)
+		if reason := e.storedSkipReason(c); reason != "" {
+			res.ChecksSkipped = append(res.ChecksSkipped, report.SkippedCheck{Check: name, Reason: reason})
+			continue
+		}
+		var obs []checks.Observation
+		if p, ok := c.(checks.Proposer); ok {
+			var props []schema.Proposal
+			props, obs, err = p.Propose(ctx, e.st, w)
+			res.Proposals = append(res.Proposals, props...)
+		} else {
+			obs, err = c.Evaluate(ctx, e.st, w, e.al)
+		}
 		if err != nil {
 			return EvalResult{}, fmt.Errorf("check %s: %w", name, err)
 		}
@@ -692,6 +706,27 @@ func skipReason(c checks.Check, available map[record.Kind]bool, failed map[recor
 			return fmt.Sprintf("source %s failed", src)
 		}
 		return fmt.Sprintf("no %s source", k)
+	}
+	return ""
+}
+
+// storedSkipReason は保存済みのデータだけを読むチェック (checks.StoredNeeder) について、その種類を出すソースが設定に無ければ理由を返す。
+// 決定 (ADR 0023): waf_review は daily が貯めた wafv2 の日次集計を読むだけで、weekly の run は wafv2 のソースを引かない (Insights の費用)。
+func (e *Engine) storedSkipReason(c checks.Check) string {
+	sn, ok := c.(checks.StoredNeeder)
+	if !ok {
+		return ""
+	}
+	configured := map[record.Kind]bool{}
+	for _, src := range e.cfg.Sources {
+		for _, k := range kindsOf(src) {
+			configured[k] = true
+		}
+	}
+	for _, k := range sn.StoredNeeds() {
+		if !configured[k] {
+			return fmt.Sprintf("no %s source (reads the daily metrics)", k)
+		}
 	}
 	return ""
 }
@@ -869,7 +904,7 @@ func (e *Engine) buildReport(profileName, runID string, w collect.Window, now ti
 	return report.Build(report.Input{
 		Profile: profileName, Name: e.cfg.Name, RunID: runID, Window: w, Now: now,
 		Results: ev.Results, CollectErrors: cr.Errors, SourcesOK: cr.SourcesOK, Formats: cr.Formats,
-		ChecksRun: ev.ChecksRun, ChecksSkipped: ev.ChecksSkipped,
+		ChecksRun: ev.ChecksRun, ChecksSkipped: ev.ChecksSkipped, Proposals: ev.Proposals,
 	})
 }
 

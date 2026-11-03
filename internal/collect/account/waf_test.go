@@ -39,8 +39,8 @@ func TestWAFConfig(t *testing.T) {
 	second := accounttest.WebACL(waftypes.ScopeRegional, "ap-northeast-1", "stg-waf")
 	cf := accounttest.WebACL(waftypes.ScopeCloudfront, "us-east-1", "cdn-waf")
 	f := &accounttest.Fake{WAF: &accounttest.WAF{
-		WebACLs: map[string][]waftypes.WebACL{"REGIONAL|ap-northeast-1": {regional, second}, "CLOUDFRONT|us-east-1": {cf}},
-		Logging: map[string][]string{*regional.ARN: {"arn:aws:logs:ap-northeast-1:123456789012:log-group:aws-waf-logs-prod"}},
+		WebACLs:   map[string][]waftypes.WebACL{"REGIONAL|ap-northeast-1": {regional, second}, "CLOUDFRONT|us-east-1": {cf}},
+		Logging:   map[string][]string{*regional.ARN: {"arn:aws:logs:ap-northeast-1:123456789012:log-group:aws-waf-logs-prod"}},
 		Resources: map[string]map[waftypes.ResourceType][]string{*regional.ARN: {waftypes.ResourceTypeApiGateway: {"arn:aws:apigateway:ap-northeast-1::/restapis/abc/stages/prod"}}},
 	}}
 	c := account.NewWAFConfig("waf_config", f.Clients("us-east-1"), f.Clients("ap-northeast-1"))
