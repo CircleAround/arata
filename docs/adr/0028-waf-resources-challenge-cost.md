@@ -5,11 +5,11 @@
 
 ## 背景
 
-ADR 0023 の WAF の修正提案を実際の規模の環境で使うと、次のことが分かった (数字は形だけを書く)。
+ADR 0023 の WAF の修正提案を大きな環境に当てはめると、次のことが問題になる。
 
-- 1 つの WebACL (REGIONAL) を本番と staging の複数の ALB が共有していて、ログに staging の通信が混ざる。監査したいのは本番だけ
-- 1 日に数百万リクエストのうち、Challenge と CAPTCHA が ALLOW に次いで多い。利用者にとって一番価値があるのは「正規の利用者が Challenge / CAPTCHA に巻き込まれていないか」の評価
-- ログは 1 日に数 GB で、daily の集計クエリはそれを何本もスキャンする。費用の見当が付かない
+- 1 つの WebACL (REGIONAL) を本番と staging の資源 (ALB など) が共有することがあり、ログに staging の通信が混ざる。監査したいのは本番だけ
+- Bot 対策で Challenge と CAPTCHA を広く使うと、それが要求の大きな割合を占める。「正規の利用者が Challenge / CAPTCHA に巻き込まれていないか」の評価は価値が高い
+- WAF のログは 1 日に GB 単位になり得て、daily の集計クエリはそれを何本もスキャンする。費用の見当が付かない
 
 方針は変えない: arata は LLM を使わず規則で候補を作る (ADR 0001・0023)。迷ったら提案しない。事実は observation で伝える。COUNT → BLOCK は提案しない。
 ヘッダー・クエリ・Cookie・authorization・User-Agent は保存も通知もしない。
