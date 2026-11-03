@@ -290,6 +290,7 @@ func (c *Collector) normalize(raw types.Event) (record.TrailEvent, bool) {
 			e.Data[dst] = v
 		}
 	}
+	extractDetail(r.EventSource, r.EventName, r.RequestParameters, e.Data)
 	if v, ok := r.AdditionalEventData["MFAUsed"].(string); ok {
 		e.Data["mfa"] = v
 	}
@@ -371,9 +372,22 @@ var notableNames = map[string]bool{
 	"ModifyDBInstance": true, "CreateDBInstance": true, "PutBucketPolicy": true, "PutBucketAcl": true, "PutPublicAccessBlock": true, "DeletePublicAccessBlock": true,
 }
 
+// notableAPIs は defense_evasion / public_exposure のために残す、上の eventSource 単位の規則に入らない操作 (ADR 0026)。
+// 決定: 全書き込みは足さず、監査・検知を弱める操作と公開設定の変更だけを足す (一覧は checks.DefenseEvasionAPIs / PublicExposureAPIs とテストで突き合わせる)。
+// S3 の DeleteBucketPolicy / PutBucketLifecycle は証跡の宛先かどうかを collector では分からないので、バケットに依らず残す (件数は少ない)。
+var notableAPIs = map[string]map[string]bool{
+	"logs.amazonaws.com":        {"DeleteLogGroup": true, "DeleteLogStream": true, "PutRetentionPolicy": true, "DeleteSubscriptionFilter": true},
+	"ec2.amazonaws.com":         {"DeleteFlowLogs": true, "ModifySecurityGroupRules": true, "ModifySnapshotAttribute": true, "ModifyImageAttribute": true},
+	"config.amazonaws.com":      {"StopConfigurationRecorder": true, "DeleteConfigurationRecorder": true, "DeleteDeliveryChannel": true},
+	"securityhub.amazonaws.com": {"DisableSecurityHub": true, "BatchDisableStandards": true},
+	"wafv2.amazonaws.com":       {"DeleteLoggingConfiguration": true, "PutLoggingConfiguration": true},
+	"s3.amazonaws.com":          {"DeleteBucketPolicy": true, "PutBucketLifecycle": true, "PutAccountPublicAccessBlock": true, "DeleteAccountPublicAccessBlock": true},
+	"rds.amazonaws.com":         {"ModifyDBCluster": true, "ModifyDBSnapshotAttribute": true, "ModifyDBClusterSnapshotAttribute": true},
+}
+
 // DefaultNotable は events テーブルに残す「注目イベント」の判定 (設計書 5-2)。拒否のコードは既定 (config.DefaultDeniedErrorCodes)。
-// 決定: ルート利用、AssumeRole*、IAM / CloudTrail / GuardDuty の書き込み、秘匿値取得、SSM セッション、公開設定の変更、
-// 拒否された呼び出し (access_denied。ADR 0021) を残す。それ以外は principal_seen にだけ集計する。
+// 決定: ルート利用、AssumeRole*、IAM / CloudTrail / GuardDuty / Access Analyzer / Organizations の書き込み、秘匿値取得、SSM セッション、
+// 公開設定の変更、監査・検知を弱める操作 (notableAPIs)、拒否された呼び出し (access_denied。ADR 0021) を残す。それ以外は principal_seen にだけ集計する。
 var DefaultNotable = NotableWith(config.DefaultDeniedErrorCodes)
 
 // NotableWith は deniedCodes (errorCode の完全一致) の呼び出しも残す注目イベントの判定を返す (設定 checks.access_denied.error_codes)。
@@ -398,6 +412,13 @@ func notable(e record.TrailEvent) bool {
 	switch e.EventSource {
 	case "iam.amazonaws.com", "cloudtrail.amazonaws.com", "guardduty.amazonaws.com", "access-analyzer.amazonaws.com", "organizations.amazonaws.com":
 		return !e.ReadOnly
+	}
+	if notableAPIs[e.EventSource][e.Name] {
+		return true
+	}
+	// Lambda の eventName は API の版が付く (AddPermission20150331v2)
+	if e.EventSource == "lambda.amazonaws.com" && strings.HasPrefix(e.Name, "AddPermission") {
+		return true
 	}
 	return notableNames[e.Name]
 }

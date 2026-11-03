@@ -395,3 +395,15 @@ func ParseDuration(s string) (time.Duration, error) {
 	}
 	return d, nil
 }
+
+// AuditLogGroups は arata が監査に使うロググループ (cloudwatch-logs のソースの log_group。重複除去、設定順)。
+// defense_evasion がこれらのロググループへの削除・保持期間の短縮を critical にする (ADR 0026)。
+func (c *Config) AuditLogGroups() []string {
+	var out []string
+	for _, s := range c.Sources {
+		if s.Kind == KindCloudWatchLogs && s.LogGroup != "" {
+			out = append(out, s.LogGroup)
+		}
+	}
+	return dedup(out)
+}

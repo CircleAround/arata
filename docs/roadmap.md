@@ -13,6 +13,7 @@
 - 試験環境 sandbox (`deploy/sandbox`、CDK。ADR 0020) を開発用アカウントに deploy し、`scenarios/01〜05` を一巡した。
   login_bruteforce / probe_paths / iam_changes / unknown_assume_role / new_principal / guardduty_findings / access_analyzer /
   credential_hygiene / posture / access_denied がシナリオどおりに出ること、posture の不備を直すと次の weekly で「解消」になることを、本物の AWS で確認済み
+- 監査・検知の無効化 `defense_evasion` と公開設定の変更 `public_exposure` (ADR 0026) を実装した。sandbox の `scenarios/07`・`08` での確認はこれから
 - 未確認: aratam の Slack への実送信と `bedrock`、`report --month`
 
 ## 2. すぐにやること

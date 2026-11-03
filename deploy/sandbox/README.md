@@ -86,6 +86,8 @@ export SANDBOX_ACCOUNT=<account>
 scenarios/01-nginx-bruteforce.sh
 EXTERNAL_PROFILE=<外部アカウントの profile> EXTERNAL_ID=<config の externalId> scenarios/02-external-assume-role.sh
 scenarios/06-waf-traffic.sh                  # waf.enabled: true で deploy したときだけ
+scenarios/07-defense-evasion.sh              # 試験用のロググループとアーカイブルールを作って弱めて消す (証跡は止めない)
+scenarios/08-public-exposure.sh              # 試験用の SG の 22 を 0.0.0.0/0 に開けてすぐ閉じて消す
 ```
 
 ### 5. arata を回す

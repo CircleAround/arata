@@ -94,12 +94,23 @@ func NewRegistry() *Registry {
 func NewRegistryFor(c config.Checks) *Registry {
 	r := &Registry{byName: map[string]Check{}}
 	for _, ch := range []Check{RootUsage{}, UnknownAssumeRole{}, NewPrincipal{}, IAMChanges{}, AccessDenied{Config: c.AccessDenied},
+		DefenseEvasion{Config: c.DefenseEvasion, LogBaselineDays: max(c.LoginBruteforce.Baseline.BaselineDays, c.ProbePaths.Baseline.BaselineDays)},
+		PublicExposure{Config: c.PublicExposure},
 		LoginBruteforce{Config: c.LoginBruteforce}, ProbePaths{Config: c.ProbePaths}, WAFBlockTrend{Config: c.WAFBlockTrend}, AIPathUsage{},
 		CredentialHygiene{Config: c.CredentialHygiene}, GuardDutyFindings{}, Posture{Config: c.Posture}, AccessAnalyzer{},
 		WAFReview{Config: c.WAFReview, SignInPaths: c.LoginBruteforce.Paths, ProbePaths: c.ProbePaths.Paths}} {
 		r.Register(ch)
 	}
 	return r
+}
+
+// SetAuditLogGroups は defense_evasion に監査対象のロググループ (config.Config.AuditLogGroups) を渡す。
+// 決定: ソースの設定から作る値なので checks: (利用者が書くパラメータ) には置かず、Registry を作った側が渡す。
+func (r *Registry) SetAuditLogGroups(groups []string) {
+	if c, ok := r.byName["defense_evasion"].(DefenseEvasion); ok {
+		c.AuditLogGroups = append([]string(nil), groups...)
+		r.byName[c.Name()] = c
+	}
 }
 
 // Register はチェックを追加する。

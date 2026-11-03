@@ -104,8 +104,10 @@
     "checks_run": [
       "access_denied",
       "ai_path_usage",
+      "defense_evasion",
       "iam_changes",
       "new_principal",
+      "public_exposure",
       "root_usage",
       "unknown_assume_role"
     ],

@@ -21,12 +21,14 @@ LLM はこの手順に沿って、根拠 (finding の `data`) と利用者の事
 | access_denied | 拒否された API 呼び出しの急増 | `arata help ai playbook access_denied` |
 | ai_path_usage | AI・監査用の主体の利用 | `arata help ai playbook ai_path_usage` |
 | credential_hygiene | 認証情報の衛生 | `arata help ai playbook credential_hygiene` |
+| defense_evasion | 監査・検知の仕組みを止める・弱める操作 | `arata help ai playbook defense_evasion` |
 | guardduty_findings | GuardDuty の検出 | `arata help ai playbook guardduty_findings` |
 | iam_changes | IAM の権限変更 | `arata help ai playbook iam_changes` |
 | login_bruteforce | sign-in 失敗の急増 | `arata help ai playbook login_bruteforce` |
 | new_principal | 新規の主体 | `arata help ai playbook new_principal` |
 | posture | アカウントの姿勢 | `arata help ai playbook posture` |
 | probe_paths | 機密パスの探索 | `arata help ai playbook probe_paths` |
+| public_exposure | 資源を外部に開く設定変更 | `arata help ai playbook public_exposure` |
 | root_usage | ルートユーザーの利用 | `arata help ai playbook root_usage` |
 | unknown_assume_role | 既知リストに無い主体の AssumeRole | `arata help ai playbook unknown_assume_role` |
 | waf_block_trend | WAF の BLOCK の変化 | `arata help ai playbook waf_block_trend` |

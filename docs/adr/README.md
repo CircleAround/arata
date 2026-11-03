@@ -49,3 +49,4 @@
 | [0023](0023-waf-review-proposals.md) | WAF の修正提案の候補は arata が規則で作り、report.json の `proposals` に出す (WebACL の設定は `waf-config` のスナップショット) | 採用 |
 | [0024](0024-aratam-waf-proposals.md) | aratam は WAF の修正提案の候補を 2 通目として通常用に送り、LLM には候補だけを渡して書き起こさせる (アプリの事情は `llm.context_file`) | 採用 |
 | [0025](0025-check-playbooks.md) | チェックごとの対処手順 (playbook) を `docs/ai/playbooks/<check>.md` としてバイナリに埋め込み、全チェックに必須にする | 採用 |
+| [0026](0026-defense-evasion-public-exposure.md) | 監査・検知の無効化 (`defense_evasion`) と公開設定の変更 (`public_exposure`) を、CloudTrail の注目イベントと要求の内容だけで判定する | 採用 |

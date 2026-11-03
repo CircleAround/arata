@@ -198,6 +198,7 @@ func (d *Deps) fill(cfg *config.Config) {
 	}
 	if d.Registry == nil {
 		d.Registry = checks.NewRegistryFor(cfg.Checks)
+		d.Registry.SetAuditLogGroups(cfg.AuditLogGroups())
 	}
 	if d.Limiter == nil {
 		d.Limiter = cloudtrail.NewLimiter()
@@ -585,7 +586,9 @@ func (e *Engine) Evaluate(ctx context.Context, profileName string, w collect.Win
 
 // registry はプロファイルで効くパラメータ (checks: に overrides を重ねたもの) でチェックを組んだ Registry。
 func (e *Engine) registry(profileName string) *checks.Registry {
-	return checks.NewRegistryFor(e.cfg.ChecksFor(profileName))
+	r := checks.NewRegistryFor(e.cfg.ChecksFor(profileName))
+	r.SetAuditLogGroups(e.cfg.AuditLogGroups())
+	return r
 }
 
 // UnusedChecks は登録済みのチェックのうち、どのプロファイルにも入っていないもの (登録順)。
