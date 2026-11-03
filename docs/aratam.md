@@ -37,6 +37,7 @@ aratam notify --in /var/lib/arata/out/daily
    - 新規・変化・再発が 0 件で、取れなかったものも無い → `on_quiet` に従う (`short` = 「新規なし」と 1 行、`silent` = 送らない)。
 3. **LLM による要約** (`llm.provider` が `none` 以外のとき)
    - 入力は `report.json` だけ。system には `docs/ai/report.md` (arata が `arata help ai report` で出すのと同じ文書) を埋め込んで渡す。
+   - system には、その run に出たチェックの対処手順 (playbook。3-3 章) も入れる。
    - 出力は決まった JSON (3 章) に限る。形が合わない、時間切れ、エラー → 4 へ。
 4. **組み立てと検証** (LLM を使わない)
    - LLM が返した分類と説明を、aratam が決まった書式で Slack のメッセージに組み立てる。
@@ -127,7 +128,7 @@ LLM に求める出力:
   (インシデント候補と承認の提案は必ず残す)。
 - 期間レポート: system の文書は足さない。`docs/ai/report.md` の「期間レポート」の節で足りるため (8 章の未決を閉じる)。
   必ず載せる finding は events の new / changed / recurred。
-- system: 出力の契約 (3 章)、「追加の照会はできない。report.json だけで判断する」、続けて `docs/ai/report.md` を埋め込む。
+- system: 出力の契約 (3 章)、「追加の照会はできない。report.json だけで判断する」、続けて `docs/ai/report.md`、その run のチェックの対処手順 (3-3 章)、利用者の前提を埋め込む。
 - `claude-cli`: `claude -p --output-format json --tools "" --strict-mcp-config --no-session-persistence --setting-sources project --system-prompt <system> [--model <model>]`。
   ツールも MCP サーバーも使わせず、セッションをディスクに残さない。作業ディレクトリは空の一時ディレクトリ (終わったら消す)。
   子プロセスの環境変数は aratam のものから Webhook の環境変数 (`slack.webhook_env` / `urgent_webhook_env`) を除いて渡す。
@@ -176,6 +177,24 @@ LLM に求める出力:
     `LLM_PROPOSALS_FAILED` の WARN を出す。終了コードは変えない。本文の要約が失敗したら書き起こしは呼ばない (終了コード 3 のまま)
 - 生の値: LLM にも Slack にも report.json の proposals の値だけを使う (ヘッダー・クエリ・Cookie は report.json にも無い)
 
+### 3-3. 対処手順 (playbook)
+
+経緯は ADR 0025 (「aratam の system への埋め込み」はその延長。新しい ADR は立てない)。目的は、LLM が決まった手順に沿って、利用者の事情 (`context_file`) を踏まえた具体的な助言を書けるようにすること。
+
+- 何を入れるか: `docs/ai/playbooks/<check>.md` (`ai.Playbook(check)`) を、LLM の system に `<playbook check="...">` で区切って入れる。
+  - 要約: その run の report.json の **new / changed / recurred** の finding のチェックだけ (LLM が分類・説明を書く finding と同じ範囲)。同じチェックは 1 回。
+    決定: 解消・未対応 (still_open)・報告済み・情報だけのチェックは入れない (items に必ず入れるものではなく、助言を求めないため)。期間レポートも期間の new / changed / recurred。
+  - 提案の書き起こし (2 回目の呼び出し。3-2 章): `waf_review` の playbook を同じ形で入れる。
+  - `provider: none` は LLM を呼ばないので使わない。playbook の無いチェックは黙って飛ばす。
+- 並びと上限: チェックごとの最大の重大度が高い順 (同じなら出現順)。**合計 24 KiB まで**。超えたら高い順に入れ、入らないものは落とす
+  (後ろにもっと小さい playbook があれば入れる)。**1 つの playbook を途中で切らない** (途中で切った手順は誤解を招く)。
+  落としたチェック名は WARN `PLAYBOOKS_OMITTED` (`omitted` にカンマ区切り)。要約は続ける。区切りや見出しの分は上限に数えない。
+- 位置づけ (system に書く): 対処手順 (arata の汎用の手順) → 利用者の前提 (`context_file`) の順に参考にする。食い違うときは前提を優先して書き添える。
+  重大度・分類・振り分け・規則より優先しない。「まず確かめること」は LLM には確かめられないので「人が確かめること」として書く。
+  封じ込め・設定の変更・approve / ack / snooze / resolve は**人への提案にとどめ、LLM は実行しない**。
+- system の並び: 出力の契約 → `docs/ai/report.md` → 対処手順 → 利用者の前提。
+- 振り分け・重大度・finding 欠落の補完・LLM 失敗時の原文送信は、playbook の有無に関わらず規則のまま (2 章)。
+
 ## 4. 設定
 
 arata と同じく暗黙の既定を持たない。`aratam config init` で全項目を明示した雛形を出す。
@@ -212,7 +231,7 @@ slack:
   緊急用の Webhook があるときはメンションを付けない (チャンネル自体が緊急用のため)。
 - `llm.context_file` (ADR 0024): 利用者が書いた「この監査対象の前提」(決済画面はリクエストが多いのが仕様、監視の送信元、ログインのパスなど) の Markdown。
   利用者の環境に置き、リポジトリには置かない (例は `examples/aratam-context.md`)。相対パスは設定ファイルのディレクトリ基準。空なら使わない。
-  LLM を使うときだけ読み、要約と提案の書き起こしの両方の system に「この監査対象の前提」として区切って入れる。重大度・分類の基準・規則より優先しないと明記する
+  LLM を使うときだけ読み、要約と提案の書き起こしの両方の system に「この監査対象の前提」として (対処手順の後に。3-3 章) 区切って入れる。重大度・分類の基準・規則より優先しないと明記する
   (振り分けは規則なので変わらない)。provider: none では読まない。
   決定: 無い・読めない・UTF-8 でない・16 KiB を超えるときは設定エラーにせず、WARN (`CONTEXT_UNREADABLE` / `CONTEXT_TOO_LARGE`) を出して前提なしで続ける。
   超えたときは切り詰めずに使わない (途中で切った前提は誤解を招くため)。
