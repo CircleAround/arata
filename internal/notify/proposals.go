@@ -366,7 +366,7 @@ func proposalsSection() string {
 }
 
 // ProposalsSystemPrompt は提案の書き起こしの system。出力の契約、縛り、docs/ai/report.md の proposals の節、利用者の前提 (あれば)。
-func ProposalsSystemPrompt(context string) string {
+func ProposalsSystemPrompt(context, playbooks string) string {
 	return fmt.Sprintf(`あなたは AWS 監査ツール arata の通知で、WAF の修正提案の候補を利用者向けに書き起こす担当です。
 ユーザーのメッセージは、arata が決まった規則で作った提案の候補の JSON 配列です (各候補に id があります)。
 各候補を、次の JSON だけで書き起こしてください (前後に文章やコードフェンスを付けない)。
@@ -387,7 +387,7 @@ func ProposalsSystemPrompt(context string) string {
 
 ---
 
-%s%s`, proposalsSection(), contextSection(context))
+%s%s%s`, proposalsSection(), playbooks, contextSection(context))
 }
 
 // contextSection は利用者が書いた「この監査対象の前提」(context_file) の節。空なら何も足さない。

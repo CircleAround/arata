@@ -209,7 +209,7 @@ func writeUp(ctx context.Context, o Options, log *slog.Logger, in *Input) (map[s
 		return nil, nil // observation だけなら LLM に渡すものが無い (observation は規則の書式で載せる)
 	}
 	var got map[string]Writeup
-	err := callLLM(ctx, o, log, ProposalsSystemPrompt(o.Context), proposalsInput(props), func(raw []byte) error {
+	err := callLLM(ctx, o, log, ProposalsSystemPrompt(o.Context, playbooksPrompt([]string{"waf_review"}, log)), proposalsInput(props), func(raw []byte) error {
 		w, rejected, err := ParseWriteups(raw, props)
 		if err != nil {
 			return err
@@ -227,7 +227,8 @@ func writeUp(ctx context.Context, o Options, log *slog.Logger, in *Input) (map[s
 // 決定: 形が合わない出力も再試行の対象にする (同じ入力でも 2 回目は契約どおりに返すことが多いため)。
 func summarize(ctx context.Context, o Options, log *slog.Logger, in *Input) (*Summary, error) {
 	var s *Summary
-	err := callLLM(ctx, o, log, SystemPrompt(in.Kind, o.Context), in.JSON, func(raw []byte) error {
+	system := SystemPrompt(in.Kind, o.Context, playbooksPrompt(orderedChecks(in), log))
+	err := callLLM(ctx, o, log, system, in.JSON, func(raw []byte) error {
 		var err error
 		s, err = ParseSummary(raw, in)
 		return err
