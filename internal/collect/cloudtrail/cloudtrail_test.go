@@ -83,6 +83,7 @@ const (
 type captured struct {
 	events     []record.TrailEvent
 	principals []record.PrincipalSeen
+	metrics    []record.Metric
 }
 
 func (c *captured) Emit(_ context.Context, r record.Record) error {
@@ -91,6 +92,8 @@ func (c *captured) Emit(_ context.Context, r record.Record) error {
 		c.events = append(c.events, v)
 	case record.PrincipalSeen:
 		c.principals = append(c.principals, v)
+	case record.Metric:
+		c.metrics = append(c.metrics, v)
 	}
 	return nil
 }
@@ -433,5 +436,60 @@ func TestCollectRescanOverlap(t *testing.T) {
 	root := got["arn:aws:iam::123456789012:root"]
 	if root.ARN == "" || root.Count != 0 || root.RescanCount != 1 || alice.RescanCount != 1 {
 		t.Fatalf("principal seen only in the overlap: %+v", root)
+	}
+}
+
+// activityBody は IAM ユーザー alice (またはロールのセッション) の 1 件。
+func activityBody(id, identity, name, region, ip, code string, readOnly bool) string {
+	return fmt.Sprintf(`{"userIdentity":%s,"eventTime":"2026-10-21T01:00:00Z","eventSource":"ec2.amazonaws.com","eventName":%q,
+	  "awsRegion":%q,"sourceIPAddress":%q,"errorCode":%q,"readOnly":%v,"eventID":%q}`, identity, name, region, ip, code, readOnly, id)
+}
+
+// 主体の活動の日次集計 (principal_new_source。ADR 0027): 主体 × 送信元 (/24・/48)、その書き込み、主体 × 書き込みのリージョン。
+// サービス主体・root・IP でない送信元は出さない。再走査の区間も数える (値は下限として使うだけ)。
+func TestCollectActivityMetrics(t *testing.T) {
+	const (
+		alice   = `{"type":"IAMUser","arn":"arn:aws:iam::123456789012:user/alice","accountId":"123456789012"}`
+		admin   = `{"type":"AssumedRole","arn":"arn:aws:sts::123456789012:assumed-role/Admin/s","accountId":"123456789012","sessionContext":{"sessionIssuer":{"arn":"arn:aws:iam::123456789012:role/Admin"}}}`
+		root    = `{"type":"Root","arn":"arn:aws:iam::123456789012:root","accountId":"123456789012"}`
+		service = `{"type":"AWSService","invokedBy":"ec2.amazonaws.com"}`
+	)
+	day := time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)
+	fake := &Fake{Pages: [][]types.Event{{
+		ev("a1", day.Add(-time.Hour), activityBody("a1", alice, "DescribeInstances", "ap-northeast-1", "203.0.113.2", "", true)), // 再走査の区間 (前日)
+		ev("a2", day.Add(time.Hour), activityBody("a2", alice, "RunInstances", "ap-northeast-1", "203.0.113.9", "", false)),
+		ev("a3", day.Add(2*time.Hour), activityBody("a3", alice, "RunInstances", "us-west-2", "203.0.113.9", "UnauthorizedOperation", false)), // 失敗した書き込みは書き込みに数えない
+		ev("a4", day.Add(3*time.Hour), activityBody("a4", alice, "DescribeInstances", "ap-northeast-1", "2001:db8:1:2::5", "", true)),
+		ev("a5", day.Add(4*time.Hour), activityBody("a5", admin, "CreateTags", "us-east-1", "198.51.100.7", "", false)),
+		ev("a6", day.Add(5*time.Hour), activityBody("a6", root, "CreateTags", "us-east-1", "198.51.100.8", "", false)),
+		ev("a7", day.Add(6*time.Hour), activityBody("a7", service, "CreateTags", "us-east-1", "ec2.amazonaws.com", "", false)),
+		ev("a8", day.Add(7*time.Hour), activityBody("a8", alice, "CreateTags", "ap-northeast-1", "AWS Internal", "", false)),
+	}}}
+	c, _, _ := testCollector("trail", RegionClient{Region: "ap-northeast-1", API: fake})
+	sink := &captured{}
+	w := collect.Window{From: day, To: day.Add(24 * time.Hour), ScanFrom: day.Add(-2 * time.Hour)}
+	if err := c.Collect(context.Background(), w, sink); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]float64{}
+	for _, m := range sink.metrics {
+		if m.Source != "trail" || m.From != record.KindTrailEvent {
+			t.Fatalf("metric source: %+v", m)
+		}
+		got[m.Date+" "+m.Metric+" "+m.Key] = m.Value
+	}
+	const a, r = "arn:aws:iam::123456789012:user/alice", "arn:aws:iam::123456789012:role/Admin"
+	want := map[string]float64{
+		"2026-10-20 principal_source " + a + "|203.0.113.0/24":         1,
+		"2026-10-21 principal_source " + a + "|203.0.113.0/24":         2,
+		"2026-10-21 principal_source_writes " + a + "|203.0.113.0/24":  1,
+		"2026-10-21 principal_write_region " + a + "|ap-northeast-1":   2, // 送信元が IP でない書き込みもリージョンには数える
+		"2026-10-21 principal_source " + a + "|2001:db8:1::/48":        1,
+		"2026-10-21 principal_source " + r + "|198.51.100.0/24":        1,
+		"2026-10-21 principal_source_writes " + r + "|198.51.100.0/24": 1,
+		"2026-10-21 principal_write_region " + r + "|us-east-1":        1,
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("metrics:\n got  %v\n want %v", got, want)
 	}
 }

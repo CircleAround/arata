@@ -71,7 +71,7 @@ sources:
 # 周期ごとの窓と有効チェック。実行されるのはここに書いたチェックだけ (arata profiles で確かめる)。
 # `default-<cadence>` はその周期のチェック全部に展開される (版が上がって増えたチェックも黙って入る。雛形では使わない)。
 # チェック: root_usage (hourly), unknown_assume_role (hourly), new_principal (daily), iam_changes (daily), access_denied (daily),
-#           defense_evasion / public_exposure (daily),
+#           defense_evasion / public_exposure (daily), principal_new_source / secret_access (daily),
 #           ai_path_usage (daily), login_bruteforce / probe_paths (daily, http_access), waf_block_trend (daily, waf_action),
 #           credential_hygiene / guardduty_findings / posture / access_analyzer / waf_review (weekly)
 # hourly に http_access / waf_action を使うチェックを入れなければ hourly では Logs Insights を回さない
@@ -122,6 +122,15 @@ checks:
     trail_buckets: [example-trail-bucket]      # CloudTrail の証跡の宛先バケット (ポリシーの削除・ライフサイクルを報告)
   public_exposure:                             # 外部に開く設定変更 (ADR 0026)
     sensitive_ports: [22, 3389, 3306, 5432, 1433, 1521, 6379, 11211, 27017, 9200, 5601, 2375]   # 0.0.0.0/0 に開けたら high
+  principal_new_source:                        # 既知の主体の初めての送信元 (/24・/48)・リージョン (ADR 0027)
+    baseline_days: 30                          # 「初めて」とみなすために比べる過去の日数
+    min_baseline_days: 15                      # データのある過去日がこれ未満 (導入直後) は報告しない
+    min_writes: 5                              # 新しい送信元からの書き込みがこれ以上で medium
+  secret_access:                               # 秘匿値の読み取りの異常 (ADR 0027)
+    baseline_days: 14                          # 「主体 × 秘匿値」の初出と一括読み出しの平常帯の日数
+    min_baseline_days: 7                       # 初出の判定に要るデータのある過去日数
+    factor: 3                                  # 一括読み出しの平常帯の倍率
+    min_distinct: 10                           # 1 日に読んだ異なる秘匿値の数がこれを超えたら high
 
 # 保持期間 (省略時の既定値)。prune は後続 Step。
 retention:

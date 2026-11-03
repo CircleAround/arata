@@ -41,6 +41,9 @@ type PrincipalEntry struct {
 	// ExpectedDenied は access_denied で数えない「想定済みの拒否」(「サービス:操作」の glob。ADR 0022)。
 	// 主体の承認とは独立に評価するが、項目そのものは主体を承認する (expected_denied だけの項目でも new_principal などは止まる)。
 	ExpectedDenied []string `yaml:"expected_denied"`
+	// DynamicSource は送信元が毎回変わる主体 (CI のランナーなど)。principal_new_source の low (新しい送信元だけ) を出さない。
+	// medium 以上 (書き込みが多い・新しいリージョン・拒否も出ている) は出す (ADR 0027)。
+	DynamicSource bool `yaml:"dynamic_source"`
 
 	expires time.Time
 	pattern *regexp.Regexp
@@ -166,10 +169,13 @@ type SourceIPEntry struct {
 	net *net.IPNet
 }
 
-// SecretsAccessEntry は secrets_access の 1 件 (Step 1 では読むだけ)。
+// SecretsAccessEntry は secrets_access の 1 件。主体 (ARN の完全一致) が読んでよい秘匿値 (名前・パスの glob)。
+// 決定 (ADR 0027): secret_access は、一致する秘匿値を「初めて読む秘匿値」に数えない (一括読み出しの数には数える)。
 type SecretsAccessEntry struct {
 	Principal string   `yaml:"principal"`
 	Secrets   []string `yaml:"secrets"`
+
+	secrets []*regexp.Regexp
 }
 
 // List は allowlist 全体。
@@ -267,6 +273,22 @@ func Parse(b []byte) (*List, error) {
 			l.broad = append(l.broad, e)
 		}
 	}
+	for i := range l.SecretsAccess {
+		e := &l.SecretsAccess[i]
+		if e.Principal == "" || len(e.Secrets) == 0 {
+			return nil, fmt.Errorf("secrets_access[%d]: principal and secrets are required", i)
+		}
+		for j, g := range e.Secrets {
+			if strings.TrimSpace(g) == "" {
+				return nil, fmt.Errorf("secrets_access[%d]: secrets[%d] is empty", i, j)
+			}
+			re, err := globToRegexp(g)
+			if err != nil {
+				return nil, fmt.Errorf("secrets_access[%d]: secrets[%d]: %w", i, j, err)
+			}
+			e.secrets = append(e.secrets, re)
+		}
+	}
 	for i := range l.SourceIPs {
 		e := &l.SourceIPs[i]
 		_, n, err := net.ParseCIDR(e.CIDR)
@@ -335,6 +357,29 @@ func (l *List) HasExpectedDenied() bool {
 	for i := range l.Principals {
 		if len(l.Principals[i].denied) > 0 {
 			return true
+		}
+	}
+	return false
+}
+
+// SecretExpected は arn が secret (Secrets Manager のシークレットの名前か ARN、SSM のパラメータ名かパス) を読むことが
+// secrets_access に書いてあるか。シークレットの ARN はシークレット名の部分 (":secret:" の後) でも比べる。
+func (l *List) SecretExpected(arn, secret string) bool {
+	cands := []string{secret}
+	if _, name, ok := strings.Cut(secret, ":secret:"); ok && strings.HasPrefix(secret, "arn:") {
+		cands = append(cands, name)
+	}
+	for i := range l.SecretsAccess {
+		e := &l.SecretsAccess[i]
+		if e.Principal != arn {
+			continue
+		}
+		for _, re := range e.secrets {
+			for _, c := range cands {
+				if re.MatchString(c) {
+					return true
+				}
+			}
 		}
 	}
 	return false

@@ -64,6 +64,10 @@
   侵害が進んでいる疑いとして最初に書く。`known_deploy_principal: true` で 1 段下がっていても、監査の無効化そのものは見逃さない
 - public_exposure (外部に開く設定変更) は deploy タグの主体でも重大度を下げていない (`known_deploy_principal` は事実として添える)。
   `exposure` (開いた中身) と `target` を根拠にし、weekly の access_analyzer・posture の同じ資源の指摘とまとめる
+- principal_new_source (既知の主体の初めての送信元・リージョン) はアクセスキー・セッションの漏洩の典型。`new_sources` の `ips` と `new_regions` を根拠にし、
+  同じ主体の access_denied・secret_access・iam_changes とまとめる (high は拒否の急増と同時)。送信元の国・事業者は arata が判定していないので、断定せず人への確認事項にする
+- secret_access (秘匿値の読み取りの異常) の `bulk: true` は持ち出しの兆候。読まれた秘匿値は漏洩したものとして扱う前提で書く。
+  data にあるのは名前 / ARN だけ (値は CloudTrail にも arata にも無い)。調べるために値を読みに行くことを勧めない
 - data に `escalated_from_suppressed: true` がある changed は、人が ack / snooze していた finding の重大度が上がったもの
   (`suppressed_status` は acked / snoozed、`suppressed_severity` はそのときの重大度)。「確認済みだった」ことより、悪化したことを優先して書く
 - allowlist のメモ、前回レポート、時間帯 (デプロイ時刻、メンテナンス時間) を踏まえる

@@ -1,16 +1,18 @@
 profile daily (window 24h, max_catchup 7d)
-  CHECK                CADENCE  MODE   VIA
-  access_denied        daily    event  default-daily
-  ai_path_usage        daily    event  default-daily
-  defense_evasion      daily    event  default-daily
-  iam_changes          daily    event  default-daily
-  login_bruteforce     daily    event  default-daily
-  new_principal        daily    state  default-daily
-  probe_paths          daily    event  default-daily
-  public_exposure      daily    event  default-daily
-  root_usage           hourly   event  explicit
-  unknown_assume_role  hourly   event  explicit
-  waf_block_trend      daily    event  default-daily
+  CHECK                 CADENCE  MODE   VIA
+  access_denied         daily    event  default-daily
+  ai_path_usage         daily    event  default-daily
+  defense_evasion       daily    event  default-daily
+  iam_changes           daily    event  default-daily
+  login_bruteforce      daily    event  default-daily
+  new_principal         daily    state  default-daily
+  principal_new_source  daily    event  default-daily
+  probe_paths           daily    event  default-daily
+  public_exposure       daily    event  default-daily
+  root_usage            hourly   event  explicit
+  secret_access         daily    event  default-daily
+  unknown_assume_role   hourly   event  explicit
+  waf_block_trend       daily    event  default-daily
   PARAM                                   ORIGIN     VALUE
   login_bruteforce.paths                  既定値     [/users/sign_in, /login, /signin]
   login_bruteforce.methods                既定値     [POST]
@@ -43,6 +45,13 @@ profile daily (window 24h, max_catchup 7d)
   defense_evasion.min_log_retention_days  既定値     90
   defense_evasion.trail_buckets           既定値     []
   public_exposure.sensitive_ports         既定値     [22, 3389, 3306, 5432, 1433, 1521, 6379, 11211, 27017, 9200, 5601, 2375]
+  principal_new_source.baseline_days      既定値     30
+  principal_new_source.min_baseline_days  既定値     15
+  principal_new_source.min_writes         既定値     5
+  secret_access.baseline_days             既定値     14
+  secret_access.min_baseline_days         既定値     7
+  secret_access.factor                    既定値     3
+  secret_access.min_distinct              既定値     10
 
 profile hourly (window 1h, max_catchup 7d)
   CHECK                CADENCE  MODE   VIA

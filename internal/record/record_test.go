@@ -63,3 +63,28 @@ func TestSnapshotItemAccessors(t *testing.T) {
 		t.Fatalf("%+v", it)
 	}
 }
+
+func TestSourcePrefix(t *testing.T) {
+	cases := []struct {
+		ip, want string
+		ok       bool
+	}{
+		{"198.51.100.7", "198.51.100.0/24", true},
+		{"::ffff:198.51.100.7", "198.51.100.0/24", true},
+		{"2001:db8:1234:5678::1", "2001:db8:1234::/48", true},
+		{"ec2.amazonaws.com", "", false},
+		{"AWS Internal", "", false},
+		{"", "", false},
+	}
+	for _, tc := range cases {
+		got, ok := SourcePrefix(tc.ip)
+		if got != tc.want || ok != tc.ok {
+			t.Fatalf("%q: got %q %v", tc.ip, got, ok)
+		}
+	}
+	k := ActivityKey("arn:aws:iam::123456789012:user/alice", "198.51.100.0/24")
+	arn, v, ok := SplitActivityKey(k)
+	if !ok || arn != "arn:aws:iam::123456789012:user/alice" || v != "198.51.100.0/24" {
+		t.Fatalf("split: %q %q %v", arn, v, ok)
+	}
+}

@@ -230,7 +230,7 @@ func TestAppLayerRun(t *testing.T) {
 	if len(rep.Coverage.Formats) != 2 || rep.Coverage.Formats[0].MatchRate != 0.99 || strings.Join(rep.Coverage.SourcesOK, ",") != "trail,web,rails" {
 		t.Fatalf("coverage: %+v", rep.Coverage)
 	}
-	if !strings.Contains(strings.Join(rep.Coverage.ChecksRun, ","), "login_bruteforce,new_principal,probe_paths") {
+	if !strings.Contains(strings.Join(rep.Coverage.ChecksRun, ","), "login_bruteforce,new_principal,principal_new_source,probe_paths") {
 		t.Fatalf("checks_run: %v", rep.Coverage.ChecksRun)
 	}
 	// 翌日: 同じ IP が続けて失敗しても event 型なので still_open で沈黙する

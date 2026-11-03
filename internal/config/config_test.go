@@ -370,7 +370,7 @@ func TestProfileOverrides(t *testing.T) {
 }
 
 func TestParamChecks(t *testing.T) {
-	if got := strings.Join(ParamChecks(), ","); got != "login_bruteforce,probe_paths,waf_block_trend,waf_review,access_denied,defense_evasion,public_exposure,credential_hygiene,posture" {
+	if got := strings.Join(ParamChecks(), ","); got != "login_bruteforce,probe_paths,waf_block_trend,waf_review,access_denied,defense_evasion,public_exposure,principal_new_source,secret_access,credential_hygiene,posture" {
 		t.Fatalf("got %s", got)
 	}
 }
@@ -479,6 +479,14 @@ func TestSecurityChecksConfig(t *testing.T) {
 	if fmt.Sprint(pe.SensitivePorts) != "[22 3389 3306 5432 1433 1521 6379 11211 27017 9200 5601 2375]" {
 		t.Fatalf("public_exposure defaults: %+v", pe)
 	}
+	if ns, sa := cfg.Checks.PrincipalNewSource, cfg.Checks.SecretAccess; ns != (PrincipalNewSource{BaselineDays: 30, MinBaselineDays: 15, MinWrites: 5}) ||
+		sa != (SecretAccess{BaselineDays: 14, MinBaselineDays: 7, Factor: 3, MinDistinct: 10}) {
+		t.Fatalf("principal_new_source / secret_access defaults: %+v %+v", ns, sa)
+	}
+	// min_baseline_days を書かなければ baseline_days の半分 (導入直後は報告しない)
+	if c, err := Load(write(t, minimal+"checks:\n  principal_new_source:\n    baseline_days: 60\n")); err != nil || c.Checks.PrincipalNewSource.MinBaselineDays != 30 {
+		t.Fatalf("derived min_baseline_days: %+v %v", c, err)
+	}
 	cfg, err = Load(write(t, minimal+"checks:\n  defense_evasion:\n    min_log_retention_days: 30\n    trail_buckets: [example-trail-bucket]\n  public_exposure:\n    sensitive_ports: [8080]\n"))
 	if err != nil {
 		t.Fatal(err)
@@ -491,6 +499,10 @@ func TestSecurityChecksConfig(t *testing.T) {
 		minimal + "checks:\n  defense_evasion:\n    min_log_retention_days: -1\n",
 		minimal + "checks:\n  public_exposure:\n    sensitive_ports: [70000]\n",
 		minimal + "checks:\n  defense_evasion:\n    trail_buckets: [\"\"]\n",
+		minimal + "checks:\n  principal_new_source:\n    baseline_days: 10\n    min_baseline_days: 11\n",
+		minimal + "checks:\n  principal_new_source:\n    min_writes: -1\n",
+		minimal + "checks:\n  secret_access:\n    min_distinct: -1\n",
+		minimal + "checks:\n  secret_access:\n    factor: -1\n",
 	} {
 		if _, err := Load(write(t, body)); err == nil {
 			t.Fatalf("expected error for %q", body)

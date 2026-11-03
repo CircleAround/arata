@@ -90,19 +90,72 @@ func (c *Collector) Yields() []record.Kind {
 // principal_seen の件数 (Count) には数えず RescanCount に分ける (前回の run で数え済みのものが二重に足されるため)。重なり区間でだけ見えた主体は Count 0 で出す。
 func (c *Collector) Collect(ctx context.Context, w collect.Window, sink collect.RecordSink) error {
 	seen := map[string]*record.PrincipalSeen{}
+	act := activity{}
 	doneIDs := map[string]bool{} // 同じイベントが複数リージョンに見えても 1 回だけ数える
 	var firstErr error
 	for _, rc := range c.clients {
-		if err := c.collectRegion(ctx, rc, w, sink, seen, doneIDs); err != nil {
+		if err := c.collectRegion(ctx, rc, w, sink, seen, act, doneIDs); err != nil {
 			firstErr = err
 			break
 		}
 	}
-	// 失敗しても取れた分の principal_seen は捨てない
+	// 失敗しても取れた分の principal_seen と活動の集計は捨てない
 	if err := c.flush(ctx, sink, seen); err != nil {
 		return err
 	}
+	if err := act.flush(ctx, c.id, sink); err != nil {
+		return err
+	}
 	return firstErr
+}
+
+// activity は主体の活動の日次集計 (date → metric → key → 件数。ADR 0027)。
+type activity map[[3]string]float64
+
+// add は 1 件を数える。対象は IAM ユーザーとロール (のセッション)。サービス主体・root (root_usage が扱う)・正体の分からない主体は数えない。
+// 送信元は IP のときだけ数え、書き込み (成功した readOnly=false) のリージョンは送信元に依らず数える。
+func (a activity) add(e record.TrailEvent) {
+	switch e.PrincipalKind {
+	case record.PrincipalUser, record.PrincipalAssumedRole, record.PrincipalRole:
+	default:
+		return
+	}
+	if e.PrincipalARN == "" {
+		return
+	}
+	date := e.Time.UTC().Format(record.DateLayout)
+	write := !e.ReadOnly && e.ErrorCode == ""
+	if p, ok := record.SourcePrefix(e.IP); ok {
+		k := record.ActivityKey(e.PrincipalARN, p)
+		a[[3]string{date, record.MetricPrincipalSource, k}]++
+		if write {
+			a[[3]string{date, record.MetricPrincipalSourceWrites, k}]++
+		}
+	}
+	if write && e.Region != "" {
+		a[[3]string{date, record.MetricPrincipalWriteRegion, record.ActivityKey(e.PrincipalARN, e.Region)}]++
+	}
+}
+
+func (a activity) flush(ctx context.Context, source string, sink collect.RecordSink) error {
+	keys := make([][3]string, 0, len(a))
+	for k := range a {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		for n := 0; n < 3; n++ {
+			if keys[i][n] != keys[j][n] {
+				return keys[i][n] < keys[j][n]
+			}
+		}
+		return false
+	})
+	for _, k := range keys {
+		if err := sink.Emit(ctx, record.Metric{Date: k[0], Source: source, From: record.KindTrailEvent, Metric: k[1], Key: k[2], Value: a[k]}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (c *Collector) flush(ctx context.Context, sink collect.RecordSink, seen map[string]*record.PrincipalSeen) error {
@@ -119,7 +172,7 @@ func (c *Collector) flush(ctx context.Context, sink collect.RecordSink, seen map
 	return nil
 }
 
-func (c *Collector) collectRegion(ctx context.Context, rc RegionClient, w collect.Window, sink collect.RecordSink, seen map[string]*record.PrincipalSeen, doneIDs map[string]bool) error {
+func (c *Collector) collectRegion(ctx context.Context, rc RegionClient, w collect.Window, sink collect.RecordSink, seen map[string]*record.PrincipalSeen, act activity, doneIDs map[string]bool) error {
 	var next *string
 	pages, events := 0, 0
 	var oldest, lastEvent time.Time // LookupEvents は新しい順に返す
@@ -158,6 +211,7 @@ func (c *Collector) collectRegion(ctx context.Context, rc RegionClient, w collec
 				continue
 			}
 			doneIDs[e.EventID] = true
+			act.add(e)
 			if e.PrincipalKind != record.PrincipalService && e.PrincipalARN != "" {
 				k := e.PrincipalARN + "|" + e.IP
 				p, ok := seen[k]
@@ -367,7 +421,7 @@ func roleARNFromSession(arn string) string {
 }
 
 var notableNames = map[string]bool{
-	"ConsoleLogin": true, "GetSecretValue": true, "GetParameter": true, "GetParameters": true, "GetParametersByPath": true,
+	"ConsoleLogin": true, "GetSecretValue": true, "BatchGetSecretValue": true, "GetParameter": true, "GetParameters": true, "GetParametersByPath": true,
 	"StartSession": true, "AuthorizeSecurityGroupIngress": true, "AuthorizeSecurityGroupEgress": true,
 	"ModifyDBInstance": true, "CreateDBInstance": true, "PutBucketPolicy": true, "PutBucketAcl": true, "PutPublicAccessBlock": true, "DeletePublicAccessBlock": true,
 }

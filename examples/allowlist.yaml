@@ -19,6 +19,7 @@ principals:
     note: GitHub Actions のロール群
     approved_at: 2026-10-21
     tags: [deploy]
+    dynamic_source: true         # 送信元が毎回変わる (ランナー)。principal_new_source の low (新しい送信元だけ) を出さない (ADR 0027)
   - arn: arn:aws:iam::123456789012:role/ai-investigation-readonly
     note: AI 調査用の読み取りロール。個人情報を含むロググループは IAM で Deny しているので、その読み取りの拒否は想定内
     approved_by: alice
@@ -30,4 +31,7 @@ source_ips:
   - cidr: 203.0.113.0/24
     note: 本社オフィス
 admin_users: []                  # アプリ層の管理者 ID (後続 Step)
-secrets_access: []               # 主体 × シークレット (後続 Step)
+# 主体 × 秘匿値 (名前・パスの glob)。secret_access が「初めて読む秘匿値」に数えない (一括読み出しには数える。ADR 0027)
+secrets_access:
+  - principal: arn:aws:iam::123456789012:role/example-app-task
+    secrets: ["prod/app/*", "/example/prod/*"]

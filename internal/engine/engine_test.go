@@ -211,7 +211,7 @@ func TestInitThenRunTwice(t *testing.T) {
 	if len(r1.Report.Info) != 1 || r1.Report.Info[0].Check != "iam_changes" {
 		t.Fatalf("deploy principal IAM change should be info: %+v", r1.Report.Info)
 	}
-	if strings.Join(r1.Report.Coverage.ChecksRun, ",") != "access_denied,ai_path_usage,defense_evasion,iam_changes,new_principal,public_exposure,root_usage,unknown_assume_role" {
+	if strings.Join(r1.Report.Coverage.ChecksRun, ",") != "access_denied,ai_path_usage,defense_evasion,iam_changes,new_principal,principal_new_source,public_exposure,root_usage,secret_access,unknown_assume_role" {
 		t.Fatalf("checks_run: %v", r1.Report.Coverage.ChecksRun)
 	}
 	e.Close()
@@ -292,7 +292,7 @@ func TestPartialFailureExit3(t *testing.T) {
 	if sf := r.Report.Coverage.SourcesFailed[0]; sf.Source != "trail" || sf.Code != "ACCESS_DENIED" || sf.CoveredFrom != "" {
 		t.Fatalf("sources_failed: %+v", sf)
 	}
-	if len(r.Report.Coverage.ChecksRun) != 0 || len(r.Report.Coverage.ChecksSkipped) != 11 || r.Report.Coverage.ChecksSkipped[0].Reason != "source trail failed" {
+	if len(r.Report.Coverage.ChecksRun) != 0 || len(r.Report.Coverage.ChecksSkipped) != 13 || r.Report.Coverage.ChecksSkipped[0].Reason != "source trail failed" {
 		t.Fatalf("coverage: %+v", r.Report.Coverage)
 	}
 	if codes := h.logCodes(t); strings.Join(codes, ",") != "ACCESS_DENIED" {
@@ -809,5 +809,63 @@ func TestRunSecurityChecks(t *testing.T) {
 	sort.Strings(found)
 	if strings.Join(found, ";") != want {
 		t.Fatalf("findings:\n%s\nwant\n%s", strings.Join(found, ";"), want)
+	}
+}
+
+// collector の日次集計 (送信元・書き込みのリージョン) と秘匿値の名前の取り出しから、principal_new_source / secret_access の判定までを通す (ADR 0027)。
+// init で 30 日の平常帯を作り、run の窓で alice が初めての送信元から書き込み、app ロールが秘匿値を一括で読む。
+func TestRunNewSourceAndSecretAccess(t *testing.T) {
+	h := newHarnessWith(t, "", "  security:\n    window: 24h\n    checks: [principal_new_source, secret_access]\n")
+	ctx := context.Background()
+	alice := cloudtrailtest.User(acct, "alice")
+	app := cloudtrailtest.AssumedRole(acct, "example-app", "task")
+	for d := 2; d <= 31; d++ {
+		at := h.now.Add(-time.Duration(d) * 24 * time.Hour)
+		h.fake.Add(
+			cloudtrailtest.Event(fmt.Sprintf("h-r%d", d), at, alice, "ec2.amazonaws.com", "DescribeInstances", "ap-northeast-1", "203.0.113.1", true, nil),
+			cloudtrailtest.Event(fmt.Sprintf("h-w%d", d), at, alice, "ec2.amazonaws.com", "CreateTags", "ap-northeast-1", "203.0.113.1", false, nil),
+			cloudtrailtest.Event(fmt.Sprintf("h-s%d", d), at, app, "secretsmanager.amazonaws.com", "GetSecretValue", "ap-northeast-1", "203.0.113.2", true, map[string]any{"secretId": "prod/db"}),
+		)
+	}
+	e := h.open(t)
+	if _, err := e.Init(ctx, InitOptions{Window: 32 * 24 * time.Hour}); err != nil {
+		t.Fatal(err)
+	}
+	e.Close()
+
+	at := h.now.Add(-2 * time.Hour)
+	for i := 0; i < 6; i++ {
+		h.fake.Add(cloudtrailtest.Event(fmt.Sprintf("n-w%d", i), at, alice, "ec2.amazonaws.com", "CreateTags", "ap-northeast-1", "198.51.100.7", false, nil))
+	}
+	for i := 0; i < 10; i++ {
+		h.fake.Add(cloudtrailtest.Event(fmt.Sprintf("n-s%d", i), at, app, "secretsmanager.amazonaws.com", "GetSecretValue", "ap-northeast-1", "203.0.113.2", true, map[string]any{"secretId": fmt.Sprintf("prod/s%02d", i)}))
+	}
+	h.fake.Add(cloudtrailtest.Event("n-p", at, app, "ssm.amazonaws.com", "GetParametersByPath", "ap-northeast-1", "203.0.113.2", true, map[string]any{"path": "/example/prod/", "recursive": true, "withDecryption": true}))
+	h.now = h.now.Add(time.Hour)
+	e = h.open(t)
+	r, err := e.Run(ctx, "security")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found []string
+	for _, f := range r.Report.Findings.New {
+		found = append(found, fmt.Sprintf("%s %s %s", f.Check, f.Key, f.Severity))
+	}
+	sort.Strings(found)
+	want := "principal_new_source arn:aws:iam::" + acct + ":user/alice medium;secret_access arn:aws:iam::" + acct + ":role/example-app high"
+	if strings.Join(found, ";") != want {
+		t.Fatalf("findings:\n%s\nwant\n%s", strings.Join(found, ";"), want)
+	}
+	last, _ := e.Store().RecentRuns(ctx, 1)
+	if last[0].Stats["secret_read_events"] != float64(11) {
+		t.Fatalf("secret_read_events: %+v", last[0].Stats)
+	}
+	// 同じ窓を daily (既存のチェックすべて) で評価しても、新しく鳴るものは無い (既存のチェックの結果は変わらない)
+	r2, err := e.Run(ctx, "daily")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r2.Report.Findings.New) != 0 {
+		t.Fatalf("existing checks must not react: %+v", r2.Report.Findings.New)
 	}
 }

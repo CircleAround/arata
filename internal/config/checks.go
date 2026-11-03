@@ -17,6 +17,9 @@ type Checks struct {
 	// DefenseEvasion と PublicExposure は CloudTrail の注目イベントを見る daily のチェック (ADR 0026)。
 	DefenseEvasion DefenseEvasion `yaml:"defense_evasion"`
 	PublicExposure PublicExposure `yaml:"public_exposure"`
+	// PrincipalNewSource と SecretAccess は CloudTrail の主体の活動・秘匿値の読み取りを見る daily のチェック (ADR 0027)。
+	PrincipalNewSource PrincipalNewSource `yaml:"principal_new_source"`
+	SecretAccess       SecretAccess       `yaml:"secret_access"`
 	// 以下は週次チェック (Step 3)。
 	CredentialHygiene CredentialHygiene `yaml:"credential_hygiene"`
 	Posture           Posture           `yaml:"posture"`
@@ -145,6 +148,28 @@ type PublicExposure struct {
 	SensitivePorts []int `yaml:"sensitive_ports"`
 }
 
+// PrincipalNewSource は principal_new_source (既知の主体の初めての送信元・リージョン) の設定 (ADR 0027)。
+type PrincipalNewSource struct {
+	// BaselineDays は「初めて」とみなすために比べる過去の日数 (窓の始まりの日の前日から)。
+	BaselineDays int `yaml:"baseline_days"`
+	// MinBaselineDays は判定に要る、CloudTrail のデータのある過去日数 (導入直後に全部が初めてになるのを防ぐ)。既定は baseline_days の半分。
+	MinBaselineDays int `yaml:"min_baseline_days"`
+	// MinWrites は新しい送信元からの書き込みがこれ以上なら medium (それ未満は low)。
+	MinWrites int `yaml:"min_writes"`
+}
+
+// SecretAccess は secret_access (秘匿値の読み取りの異常) の設定 (ADR 0027)。
+type SecretAccess struct {
+	// BaselineDays は「主体 × 秘匿値」の初出と、一括読み出しの平常帯に使う過去の日数。
+	BaselineDays int `yaml:"baseline_days"`
+	// MinBaselineDays は初出の判定に要る、CloudTrail のデータのある過去日数 (導入直後は初出を報告しない)。
+	MinBaselineDays int `yaml:"min_baseline_days"`
+	// Factor は一括読み出しの平常帯の倍率 (その主体の日ごとの異なる秘匿値の数の中央値 × factor)。
+	Factor float64 `yaml:"factor"`
+	// MinDistinct は一括読み出しとみなす異なる秘匿値の数の下限 (これを超えたら)。
+	MinDistinct int `yaml:"min_distinct"`
+}
+
 // DefaultSensitivePorts は sensitive_ports の既定 (SSH・RDP・DB・キャッシュ・検索・Docker の API)。
 var DefaultSensitivePorts = []int{22, 3389, 3306, 5432, 1433, 1521, 6379, 11211, 27017, 9200, 5601, 2375}
 
@@ -230,6 +255,15 @@ func (c *Checks) applyDefaults() {
 	if len(c.PublicExposure.SensitivePorts) == 0 {
 		c.PublicExposure.SensitivePorts = DefaultSensitivePorts
 	}
+	ns := &c.PrincipalNewSource
+	setInt(&ns.BaselineDays, 30)
+	setInt(&ns.MinBaselineDays, (ns.BaselineDays+1)/2)
+	setInt(&ns.MinWrites, 5)
+	sa := &c.SecretAccess
+	setInt(&sa.BaselineDays, 14)
+	setInt(&sa.MinBaselineDays, (sa.BaselineDays+1)/2)
+	setFloat(&sa.Factor, 3)
+	setInt(&sa.MinDistinct, 10)
 	if c.CredentialHygiene.UnusedDays == 0 {
 		c.CredentialHygiene.UnusedDays = 90
 	}
@@ -309,6 +343,12 @@ func (c *Checks) validate() error {
 		if p < 0 || p > 65535 {
 			return fmt.Errorf("public_exposure: sensitive_ports must be 0-65535 (got %d)", p)
 		}
+	}
+	if ns := c.PrincipalNewSource; ns.BaselineDays < 1 || ns.MinBaselineDays < 1 || ns.MinBaselineDays > ns.BaselineDays || ns.MinWrites < 1 {
+		return fmt.Errorf("principal_new_source: baseline_days >= 1, 1 <= min_baseline_days <= baseline_days, min_writes >= 1")
+	}
+	if sa := c.SecretAccess; sa.BaselineDays < 1 || sa.MinBaselineDays < 1 || sa.MinBaselineDays > sa.BaselineDays || sa.Factor <= 0 || sa.MinDistinct < 1 {
+		return fmt.Errorf("secret_access: baseline_days >= 1, 1 <= min_baseline_days <= baseline_days, factor > 0, min_distinct >= 1")
 	}
 	if c.CredentialHygiene.UnusedDays < 1 {
 		return fmt.Errorf("credential_hygiene: unused_days >= 1")

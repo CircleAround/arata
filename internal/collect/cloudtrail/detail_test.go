@@ -46,6 +46,21 @@ func TestNormalizeDetail(t *testing.T) {
 		want                 map[string]any // Data に含まれるべきキーと値 (JSON の形で比べる)
 		absent               []string
 	}{
+		// secret_access (ADR 0027): 秘匿値の名前 / ARN だけ。値は CloudTrail に入らない
+		{"secretsmanager.amazonaws.com", "GetSecretValue", `{"secretId":"arn:aws:secretsmanager:ap-northeast-1:123456789012:secret:prod/db-AbCdEf","versionStage":"AWSCURRENT"}`,
+			map[string]any{"secret_id": "arn:aws:secretsmanager:ap-northeast-1:123456789012:secret:prod/db-AbCdEf"}, []string{"version_stage"}},
+		{"secretsmanager.amazonaws.com", "BatchGetSecretValue", `{"secretIdList":["prod/db","prod/api"]}`,
+			map[string]any{"secret_ids": []any{"prod/db", "prod/api"}}, []string{"secret_filters"}},
+		{"secretsmanager.amazonaws.com", "BatchGetSecretValue", `{"filters":[{"key":"name","values":["prod/"]}]}`,
+			map[string]any{"secret_filters": true}, []string{"secret_ids"}},
+		{"ssm.amazonaws.com", "GetParameter", `{"name":"/example/prod/db_password","withDecryption":true}`,
+			map[string]any{"name": "/example/prod/db_password", "with_decryption": true}, nil},
+		{"ssm.amazonaws.com", "GetParameters", `{"names":["/example/prod/a","/example/prod/b"],"withDecryption":true}`,
+			map[string]any{"names": []any{"/example/prod/a", "/example/prod/b"}, "with_decryption": true}, nil},
+		{"ssm.amazonaws.com", "GetParametersByPath", `{"path":"/example/prod/","recursive":true,"withDecryption":true,"maxResults":10}`,
+			map[string]any{"path": "/example/prod/", "recursive": true, "with_decryption": true}, []string{"max_results"}},
+		// 復号の有無は常に残す (無いのは以前の版で集めたもの、と見分けるため)
+		{"ssm.amazonaws.com", "GetParameter", `{"name":"/example/prod/region"}`, map[string]any{"name": "/example/prod/region", "with_decryption": false}, nil},
 		// defense_evasion
 		{"cloudtrail.amazonaws.com", "UpdateTrail", `{"name":"main","isMultiRegionTrail":false,"enableLogFileValidation":false,"s3BucketName":"example-trail-bucket"}`,
 			map[string]any{"name": "main", "multi_region": false, "log_validation": false, "s3_bucket": "example-trail-bucket"}, nil},
@@ -162,7 +177,7 @@ func TestNormalizeDetail(t *testing.T) {
 // 2 つのチェックが見る操作は、すべて注目イベントとして残る (一覧のずれを防ぐ)。
 // 読み取りやほかの書き込みは足さない。
 func TestNotableCoversSecurityChecks(t *testing.T) {
-	for _, api := range append(checks.DefenseEvasionAPIs(), checks.PublicExposureAPIs()...) {
+	for _, api := range append(append(checks.DefenseEvasionAPIs(), checks.PublicExposureAPIs()...), checks.SecretReadAPIs()...) {
 		name := api.Name
 		if api.Prefix {
 			name += "20150331v2"
