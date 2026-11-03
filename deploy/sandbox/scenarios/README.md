@@ -16,6 +16,7 @@ sandbox (arata の試験用に条件を整えた、開発用アカウント上�
 | `02-external-assume-role.sh` | 外部アカウントの profile (`EXTERNAL_PROFILE`) から外部用ロールを AssumeRole する (ロールは権限なし。一時認証情報は捨てる) | `unknown_assume_role` high (「外部アカウント 111122223333」)。`arata approve` すると `account:` 単位で承認され、次の run から出ない | hourly / daily |
 | `03-iam-changes.sh create` / `cleanup` | スタックの外で IAM ユーザーとアクセスキーを作る / 消す (ポリシーなし。秘密値は表示しない) | `iam_changes` medium が CreateUser と CreateAccessKey に 1 件ずつ。呼び出した主体を allowlist で `tags: [deploy]` にすると info | daily |
 | `04-guardduty-sample-findings.sh [種類 ...]` | GuardDuty のサンプル finding を作る (`[SAMPLE]`。config の `guardDuty.enabled: true` のとき) | `guardduty_findings`。既定の 2 種類は high と medium | weekly |
+| `05-access-denied-enumeration.sh` | 外部アカウントの profile (`EXTERNAL_PROFILE`) から外部用ロールを引き受け、権限の無い読み取り API を 8 種類 (iam / s3 / ec2 / secretsmanager / kms / dynamodb / lambda / rds) 呼ぶ。すべて拒否される (一時認証情報は表示しない) | `access_denied` medium (外部用ロールの ARN、`threshold: breadth`、8 種類)。外部用ロールを allowlist で承認しても出る (止めるなら ack / snooze) | daily |
 
 ## スクリプト無しで出るもの (deploy しただけで出る)
 

@@ -348,7 +348,7 @@ S3 の条件付き書き込みでロック)。SQLite ファイルは数十 MB �
 | `runs` | id, profile, window_from, window_to, started_at, status, stats | 実行履歴。欠損 (走らなかった日) の検出にも使う |
 | `principals` | arn, kind (user/role/assumed-role/root), first_seen, last_seen, status (unknown/approved/expired/baseline) | 主体の初出判定。決定: `init` のベースライン収集で初出した主体は `baseline` とし new_principal の対象外。evaluate 時に allowlist から approved / expired を同期する |
 | `principal_ips` | arn, ip, country, first_seen, last_seen, count | 主体 × IP の初出判定。決定: count は各 run の窓 [From, To) の件数の和 (再走査の重なり区間は行を初めて作るときだけ数える。3 章) |
-| `events` | time, source, name, principal_arn, ip, region, resource, data | 「注目イベント」のみ (ルート利用、IAM 変更など)。全 CloudTrail は保存しない。決定: 注目の判定は collector 側 (`cloudtrail.DefaultNotable`) で行い、ルート利用・AssumeRole*・IAM / CloudTrail / GuardDuty / Organizations の書き込み・秘匿値取得・SSM セッション・公開設定変更を残す。`event_id` で重複を排除する (複数リージョンを引いた場合の二重も同じ仕組みで防ぐ。collector 側でも同一 Collect 内の event_id は 1 回だけ数える)。決定: `collected_at` (最初に収集した run の時刻) を持ち、再走査で遅れて届いたイベントを見分ける (3 章、ADR 0013) |
+| `events` | time, source, name, principal_arn, ip, region, resource, data | 「注目イベント」のみ (ルート利用、IAM 変更など)。全 CloudTrail は保存しない。決定: 注目の判定は collector 側 (`cloudtrail.DefaultNotable`) で行い、ルート利用・AssumeRole*・IAM / CloudTrail / GuardDuty / Organizations の書き込み・秘匿値取得・SSM セッション・公開設定変更を残す。決定: 拒否された呼び出し (errorCode が `checks.access_denied.error_codes` に入るもの) も読み取りを含めて残す (access_denied の元。コードは設定から `cloudtrail.NotableWith` に渡す。ADR 0021)。`event_id` で重複を排除する (複数リージョンを引いた場合の二重も同じ仕組みで防ぐ。collector 側でも同一 Collect 内の event_id は 1 回だけ数える)。決定: `collected_at` (最初に収集した run の時刻) を持ち、再走査で遅れて届いたイベントを見分ける (3 章、ADR 0013) |
 | `metrics` | date, source, metric, key, value | 日次集計 (`sign_in_failures` by ip、`admin_404` by ip、`waf_block` by rule)。平常帯の計算元。決定: 集計元のレコード種類 `from` 列を追加。主キーは (date, source, metric, key) で、後から来た値で**置き換える** (3 章の決定により後の値ほど完全)。raw JSONL には追記されるので rebuild は行順に適用すれば同じ結果になる。日は UTC |
 | `findings` | id, check, key, severity, first_seen, last_seen, last_changed, status (open/resolved/acked/snoozed), reported_at, fingerprint, data | 差分判定の中核。決定: `fingerprint` 列を追加 (4-2) |
 | `posture` | check, resource, value, first_seen, last_changed | 姿勢チェックの現在値。決定: 作らず `snapshot_items` にまとめた (ADR 0015) |
@@ -448,6 +448,7 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 | secret_access_unknown | hourly | trail_event | 主体 × シークレットの組が allowlist に無い GetSecretValue / GetParameter(decrypt) | high |
 | guardduty_findings | hourly (High) / daily (他)。決定: Step 3 は weekly のみ (state) | guardduty | finding ID 初出、count 増加 | severity 準拠 |
 | iam_changes | daily | trail_event | CreateAccessKey / CreateUser / Attach*Policy / Put*Policy / UpdateAssumeRolePolicy / CreateLoginProfile | medium (既知デプロイ主体なら info。決定: 既知デプロイ主体 = allowlist の principals で `tags: [deploy]` を持つもの) |
+| access_denied | daily | trail_event | 拒否された API 呼び出しの主体ごとの種類 (幅) と件数 (量) が平常帯超え。権限の列挙の兆候。決定: ADR 0021 | 幅は medium (種類が多ければ high)、量は medium |
 | console_login | daily | trail_event | 失敗が閾値超え、MFA 無し成功 | medium / high |
 | new_principal | daily | principal_seen | allowlist にも principals にも無い主体。決定: principals.status が unknown / expired の主体を毎回観測する (承認されるまで still_open として残る)。root は root_usage が扱うので対象外 | medium |
 | new_source_ip | daily | principal_seen | 主体 × IP (国) の初出 | low (国外なら medium) |
@@ -481,6 +482,17 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 | login_bruteforce | event | `<ip>` | 重大度 + 理由 (`above_baseline` / `new_top_ip`) | `sign_in_failures` の日次値が「その IP 自身の直近 14 日の中央値 × factor (既定 3)、ただし min_count (既定 20) 以上」を超えた。または閾値未満でもその日の最多 IP が過去 14 日に一度も無く、top_ip_min_count (既定 5) 件以上 |
 | probe_paths | event | `<ip>` | 重大度 + 理由 | `probe_hits` について同上 (min_count 既定 10)。Data にその日の多かったパス (全 IP 合計の上位 5) を添える |
 | waf_block_trend | event | `rule\|<ルール ID>` / `top_ip\|<IP>` | 重大度 + 理由 (`new_rule` / `new_top_ip`) | 過去 14 日に BLOCK の無いルールが new_rule_min_count (既定 1) 件以上 BLOCK した / その日の BLOCK 件数 Top N (既定 5、min_count 10 以上) に過去 14 日合計の Top N に居ない IP が入った |
+
+決定 (access_denied。ADR 0021):
+
+| チェック | Mode | Key | Fingerprint | 判定 |
+|---|---|---|---|---|
+| access_denied | event | `<主体 ARN>` | 重大度 + IP 集合 | 窓の拒否 (errorCode が `error_codes` に完全一致) を主体ごとに数える。拒否された API (`eventSource:eventName`) の種類が min_distinct_apis (既定 5) 以上かつ平常帯超えで medium、high_distinct_apis (既定 20) 以上で high。件数が max(min_count (既定 50), 中央値 × factor) 超えで medium。両方なら重い方を 1 件 |
+
+- 評価するのは窓のイベント (再走査で遅れて届いた分を含む。ADR 0013)。UTC の日では分けない (日をまたぐ列挙が割れないように)。平常帯は窓の始まりの日の前日から baseline_days 日の、その主体自身の日ごとの件数・種類 (無い日は 0) の中央値 × factor。拒否のある過去日が min_baseline_days 未満なら平常帯 0
+- 決定: 平常帯は丸 1 日と比べるので、daily (窓 24h) を前提とする。窓が 24h より短いプロファイル (hourly に入れた場合) では窓が短い分だけ鳴りにくい (いまは daily だけ。hourly は将来の課題)
+- 決定: error_codes は保存 (events) の条件なので overrides では変えられない。後から足したコードは、足す前の拒否が保存されていないので平常帯 0 から始まる
+- サービス主体と root は対象外。allowlist で承認済みでも対象 (止めるのは ack / snooze)。Data: principal, principal_kind, allowlist_status, external_account, count, distinct_apis, apis (件数の多い順に最大 10 個、`iam:ListUsers × 3`), error_codes, ips, first_time, last_time, baseline_median_count, baseline_median_distinct, threshold (`breadth` / `volume`)
 
 決定 (週次チェックと ai_path_usage。Step 3、ADR 0015):
 

@@ -46,6 +46,11 @@
 - 新規主体 + 国外 IP + 秘匿値取得が同じ主体なら、1 件のインシデント候補として書く
 - unknown_assume_role の呼び出し元と new_principal が同じなら 1 つの話としてまとめる
 - login_bruteforce / probe_paths / waf_block_trend の IP が重なれば、同じ攻撃元の可能性として書く
+- access_denied (拒否された API 呼び出しの急増) は権限の列挙の兆候。同じ主体の new_principal・unknown_assume_role・iam_changes (拒否) と合わせて 1 つの話として書く。
+  data の `apis` (拒否された API と件数)・`threshold` (`breadth` = 種類が多い、`volume` = 同じ API の件数が多い)・`allowlist_status` を根拠にする。
+  `breadth` は乗っ取りや侵害の疑い、`volume` だけなら設定ミスのアプリの可能性が高い
+- access_denied は allowlist で承認済みの主体 (`allowlist_status: approved`) でも出る。承認は「その主体が居ること」を認めるもので、権限を探ってよいという意味ではない。
+  承認済みの主体の列挙は乗っ取り・SaaS 側の侵害の疑いとして扱う
 - allowlist のメモ、前回レポート、時間帯 (デプロイ時刻、メンテナンス時間) を踏まえる
 
 ## 分類の基準
