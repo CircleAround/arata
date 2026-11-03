@@ -20,9 +20,10 @@
 | IAM Access Analyzer (任意) | `<prefix>` | `accessAnalyzer.enabled`。外部アクセスのアナライザー (アカウント単位)。外部用ロールの信頼が finding になる |
 | Bedrock の application inference profile (任意) | `<prefix>` | `bedrock.enabled`。aratam の `bedrock` プロバイダの試験用。コピー元のモデル (またはシステム定義の推論プロファイル) の ARN を `bedrock.modelSourceArn` に書く |
 | 試験用の WAF (任意) | API `<prefix>-waf`、WebACL `<prefix>`、ロググループ `aws-waf-logs-<prefix>` | `waf.enabled`。WAF の修正提案を本物の WAF のログで確かめる用。下の「試験用の WAF」。**費用がかかる** (月 8 USD 程度) ので試験のときだけ有効にする |
+| 秘匿値の読み取りの試験用 (任意) | シークレット 3 つ (名前は CloudFormation が付ける)、ロール `<prefix>-secret-reader` | `secretAccess.enabled`。シナリオ 10 (secret_access) 用。シークレットの値は生成した無意味な文字列。読み手のロールは `readonlyRole.trustedPrincipalArn` を信頼し、権限はこのシークレットと `/<prefix>/scenario-10` のパラメータの読み取りだけ (テストで固定)。シークレットは月 1.2 USD 程度かかるので試験のときだけ有効にする |
 
 スタック名は `prefix` (既定 `arata-sandbox`)。出力: `ReadonlyRoleArn`、`NginxLogGroupName`、`ExternalRoleArn`、`TestUserNames`、(Bedrock を有効にしたとき) `InferenceProfileArn`、
-(WAF を有効にしたとき) `ApiUrl`・`WebAclArn`・`WafLogGroupName`。
+(WAF を有効にしたとき) `ApiUrl`・`WebAclArn`・`WafLogGroupName`、(secretAccess を有効にしたとき) `SecretReaderRoleArn`・`ScenarioSecretArns`・`ScenarioParameterPath`。
 
 ## 必要なもの
 
@@ -61,7 +62,7 @@ cp config.example.json ~/arata-sandbox/config.json
 | `nginxLogGroup.name` / `retentionDays` | ロググループの名前と保持日数 (CloudWatch Logs の決まった値: 1, 3, 5, 7, 14, 30 ...) |
 | `testUsers[]` | `name` (prefix の後ろ)、`consolePassword`、`accessKey`。要らなければ `[]` |
 | `externalRole.trustedAccountId` / `externalId` | 外部用ロールを引き受けてよい外部アカウントと、要求する ExternalId (省略可) |
-| `guardDuty.enabled` / `accessAnalyzer.enabled` / `bedrock.enabled` / `waf.enabled` | 任意の機能。暗黙の既定は持たないので、4 つとも書く (`waf` は例でも `false`。費用がかかる) |
+| `guardDuty.enabled` / `accessAnalyzer.enabled` / `bedrock.enabled` / `waf.enabled` / `secretAccess.enabled` | 任意の機能。暗黙の既定は持たないので、5 つとも書く (`waf`・`secretAccess` は例でも `false`。費用がかかる)。以前の設定ファイルには `"secretAccess": { "enabled": false }` を足す |
 | `bedrock.modelSourceArn` | `bedrock.enabled: true` のとき必須 |
 
 未知のキー・型の誤り・不足は deploy の前にまとめて報告される (`cdk synth` で確かめられる)。
@@ -88,6 +89,8 @@ EXTERNAL_PROFILE=<外部アカウントの profile> EXTERNAL_ID=<config の exte
 scenarios/06-waf-traffic.sh                  # waf.enabled: true で deploy したときだけ
 scenarios/07-defense-evasion.sh              # 試験用のロググループとアーカイブルールを作って弱めて消す (証跡は止めない)
 scenarios/08-public-exposure.sh              # 試験用の SG の 22 を 0.0.0.0/0 に開けてすぐ閉じて消す
+scenarios/09-new-source-region.sh <リージョン> # ふだん書き込まないリージョンで無害な書き込み (principal_new_source)
+scenarios/10-secret-bulk-read.sh             # secretAccess.enabled: true で deploy したときだけ。試験用の秘匿値をまとめて読む
 ```
 
 ### 5. arata を回す

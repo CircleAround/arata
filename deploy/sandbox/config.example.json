@@ -23,5 +23,6 @@
     "enabled": false,
     "modelSourceArn": "arn:aws:bedrock:ap-northeast-1:123456789012:inference-profile/apac.anthropic.example-model-v1:0"
   },
-  "waf": { "enabled": false }
+  "waf": { "enabled": false },
+  "secretAccess": { "enabled": false }
 }

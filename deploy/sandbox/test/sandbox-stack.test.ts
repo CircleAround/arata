@@ -73,6 +73,7 @@ test('リソースの説明は ASCII (IAM などは日本語を受け付けず d
     raw.guardDuty.enabled = true;
     raw.bedrock.enabled = true;
     raw.waf.enabled = true;
+    raw.secretAccess.enabled = true;
   });
   for (const [id, r] of Object.entries(t.toJSON().Resources as Record<string, any>)) {
     const d = r.Properties?.Description;
@@ -163,6 +164,12 @@ test('IAM のポリシーは読み取りロールのインラインポリシー�
   t.resourceCountIs('AWS::IAM::Group', 0);
   const withPolicies = resourcesOf(t, 'AWS::IAM::Role').filter((r) => r.Properties.Policies || r.Properties.ManagedPolicyArns);
   assert.deepEqual(withPolicies.map((r) => r.Properties.RoleName), [{ Ref: 'RoleName' }], '読み取りロール (名前はパラメータ) だけ');
+  // secretAccess を有効にしたときだけ、試験用の読み手のロール (インラインポリシー) が増える
+  const ts = withSecrets();
+  ts.resourceCountIs('AWS::IAM::Policy', 0);
+  ts.resourceCountIs('AWS::IAM::ManagedPolicy', 0);
+  const names = resourcesOf(ts, 'AWS::IAM::Role').filter((r) => r.Properties.Policies || r.Properties.ManagedPolicyArns).map((r) => r.Properties.RoleName);
+  assert.deepEqual(names, [{ Ref: 'RoleName' }, 'arata-sandbox-secret-reader']);
 });
 
 test('GuardDuty は設定で on/off', () => {
@@ -191,6 +198,7 @@ test('全リソースが cdk destroy で消える (Retain / Snapshot を持た�
     raw.guardDuty.enabled = true;
     raw.bedrock.enabled = true;
     raw.waf.enabled = true;
+    raw.secretAccess.enabled = true;
   });
   for (const [id, r] of Object.entries(t.toJSON().Resources as Record<string, any>)) {
     for (const key of ['DeletionPolicy', 'UpdateReplacePolicy']) {
@@ -397,4 +405,71 @@ test('WAF: ApiUrl・WebAclArn・WafLogGroupName を出力する', () => {
   const outputs = withWaf().toJSON().Outputs as Record<string, any>;
   for (const name of ['ApiUrl', 'WebAclArn', 'WafLogGroupName']) assert.ok(outputs[name], `Outputs.${name} が無い`);
   assert.deepEqual(Object.keys(outputs).filter((k) => k.includes('Endpoint')), [], 'RestApi の自動の出力 (ApiUrl と重複) は出さない');
+});
+
+// --- 秘匿値の読み取りの試験用 (secretAccess.enabled。シナリオ 10、ADR 0027) ---
+
+function withSecrets(): Template {
+  return synth((raw) => (raw.secretAccess.enabled = true));
+}
+
+test('secretAccess: 無効ならシークレットも読み手のロールも作らない', () => {
+  const t = synth();
+  const ds = resourcesOf(t, 'AWS::SecretsManager::Secret').map((r) => String(r.Properties.Description));
+  assert.ok(!ds.some((d) => d.includes('secret_access scenario')), `シナリオのシークレットは無い: ${ds}`);
+  assert.equal(resourcesOf(t, 'AWS::IAM::Role').filter((r) => r.Properties.RoleName === 'arata-sandbox-secret-reader').length, 0);
+  assert.equal((t.toJSON().Outputs as Record<string, any>).SecretReaderRoleArn, undefined);
+});
+
+test('secretAccess: 試験用のシークレットを 3 つ、生成した値で作り、destroy で消える (名前は付けない)', () => {
+  const t = withSecrets();
+  const secrets = resourcesOf(t, 'AWS::SecretsManager::Secret').filter((r) => String(r.Properties.Description).includes('secret_access scenario'));
+  assert.equal(secrets.length, 3);
+  for (const s of secrets) {
+    assert.ok(s.Properties.GenerateSecretString, '値は生成する (実際の秘密を入れない)');
+    assert.equal(s.Properties.SecretString, undefined);
+    // 削除したシークレットの名前は猶予期間の間使えないので、固定の名前にしない (deploy し直せなくなる)
+    assert.equal(s.Properties.Name, undefined);
+    assert.equal(s.DeletionPolicy, 'Delete');
+  }
+  const outputs = t.toJSON().Outputs as Record<string, any>;
+  assert.ok(outputs.ScenarioSecretArns);
+  assert.equal(outputs.ScenarioParameterPath.Value, '/arata-sandbox/scenario-10');
+});
+
+test('secretAccess: 読み手のロールは設定の主体を信頼し、権限は試験用のシークレットとパラメータの読み取りだけ', () => {
+  const t = withSecrets();
+  const role = resourcesOf(t, 'AWS::IAM::Role').find((r) => r.Properties.RoleName === 'arata-sandbox-secret-reader')!;
+  assert.ok(role, '読み手のロール');
+  assert.deepEqual(role.Properties.AssumeRolePolicyDocument.Statement, [
+    { Effect: 'Allow', Principal: { AWS: 'arn:aws:iam::123456789012:root' }, Action: 'sts:AssumeRole' },
+  ]);
+  assert.equal(role.Properties.ManagedPolicyArns, undefined);
+  const statements = role.Properties.Policies.flatMap((p: any) => p.PolicyDocument.Statement);
+  const actions = statements.flatMap((s: any) => [s.Action].flat()).sort();
+  assert.deepEqual(actions, [
+    'secretsmanager:BatchGetSecretValue',
+    'secretsmanager:GetSecretValue',
+    'ssm:GetParameter',
+    'ssm:GetParameters',
+    'ssm:GetParametersByPath',
+  ]);
+  for (const s of statements) {
+    const actions = [s.Action].flat();
+    const resources = JSON.stringify(s.Resource);
+    if (actions.includes('secretsmanager:BatchGetSecretValue')) {
+      // BatchGetSecretValue は資源を指定できない。値は GetSecretValue の権限 (試験用のシークレットだけ) で絞られる
+      assert.equal(s.Resource, '*');
+      assert.equal(actions.length, 1);
+    } else if (actions.includes('secretsmanager:GetSecretValue')) {
+      assert.equal(s.Resource.length, 3);
+      assert.ok(!resources.includes('"*"'), resources);
+    } else {
+      assert.ok(resources.includes(':parameter/arata-sandbox/scenario-10'), resources);
+      assert.ok(!resources.includes('parameter/*'), resources);
+    }
+  }
+  const outputs = t.toJSON().Outputs as Record<string, any>;
+  assert.ok(outputs.SecretReaderRoleArn);
+  assert.ok(!JSON.stringify(outputs).includes('SecretString'));
 });

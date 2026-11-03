@@ -83,7 +83,7 @@ func TestConfigInitThenRun(t *testing.T) {
 	if err := json.Unmarshal(c.stdout.Bytes(), &rep); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(rep.Coverage.ChecksRun, ",") != "access_denied,ai_path_usage,defense_evasion,iam_changes,new_principal,public_exposure,root_usage,unknown_assume_role" || len(rep.Coverage.ChecksSkipped) != 3 {
+	if strings.Join(rep.Coverage.ChecksRun, ",") != "access_denied,ai_path_usage,defense_evasion,iam_changes,new_principal,principal_new_source,public_exposure,root_usage,secret_access,unknown_assume_role" || len(rep.Coverage.ChecksSkipped) != 3 {
 		t.Fatalf("coverage: %+v", rep.Coverage)
 	}
 	if code := c.run("config", "init", "--diff", "-c", c.cfg); code != 0 || c.stdout.String() != "この版の雛形との差分はありません。\n" {

@@ -257,3 +257,48 @@ func TestExpectedDeniedValidation(t *testing.T) {
 		})
 	}
 }
+
+// dynamic_source (送信元が毎回変わる主体。principal_new_source の low を出さない) と secrets_access (主体 × 秘匿値。ADR 0027)。
+func TestDynamicSourceAndSecretsAccess(t *testing.T) {
+	l := load(t, `
+principals:
+  - arn_pattern: arn:aws:iam::123456789012:role/github-actions-*
+    tags: [deploy]
+    dynamic_source: true
+  - arn: arn:aws:iam::123456789012:user/alice
+secrets_access:
+  - principal: arn:aws:iam::123456789012:role/App
+    secrets: ["prod/db/*", "/example/prod/*"]
+`)
+	at := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	if e, st := l.Principal("arn:aws:iam::123456789012:role/github-actions-deploy", at); st != StatusApproved || !e.DynamicSource {
+		t.Fatalf("dynamic_source: %+v %v", e, st)
+	}
+	if e, _ := l.Principal("arn:aws:iam::123456789012:user/alice", at); e.DynamicSource {
+		t.Fatal("dynamic_source must default to false")
+	}
+	const app = "arn:aws:iam::123456789012:role/App"
+	for _, tc := range []struct {
+		arn, secret string
+		want        bool
+	}{
+		{app, "prod/db/main", true},
+		{app, "arn:aws:secretsmanager:ap-northeast-1:123456789012:secret:prod/db/main-AbCdEf", true}, // ARN はシークレット名の部分でも比べる
+		{app, "/example/prod/token", true},
+		{app, "prod/api", false},
+		{"arn:aws:iam::123456789012:role/Other", "prod/db/main", false},
+	} {
+		if got := l.SecretExpected(tc.arn, tc.secret); got != tc.want {
+			t.Errorf("SecretExpected(%s, %s) = %v", tc.arn, tc.secret, got)
+		}
+	}
+	for _, body := range []string{
+		"secrets_access:\n  - principal: arn:aws:iam::123456789012:role/App\n    secrets: []\n",
+		"secrets_access:\n  - secrets: [\"prod/*\"]\n",
+		"secrets_access:\n  - principal: arn:aws:iam::123456789012:role/App\n    secrets: [\"\"]\n",
+	} {
+		if _, err := Parse([]byte(body)); err == nil {
+			t.Errorf("expected error for %q", body)
+		}
+	}
+}

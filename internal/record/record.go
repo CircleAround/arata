@@ -5,7 +5,9 @@ package record
 import (
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -127,6 +129,50 @@ type Metric struct {
 	Metric string  `json:"metric"`
 	Key    string  `json:"key"`
 	Value  float64 `json:"value"`
+}
+
+// cloudtrail collector が出す主体の活動の日次集計 (principal_new_source / secret_access。ADR 0027)。Key は ActivityKey の形。
+//
+// 決定: Metric の「同じ (Date, Source, Metric, Key) は後から来た値で置き換える」規則のため、値は「その日のうち、最後にその日を
+// 引いた run が見た件数」(下限) になる (cloudtrail は日の頭から引き直さない)。判定は「その日に有ったか」と、窓の日の下限値にだけ使う。
+const (
+	// MetricPrincipalSource は主体 × 送信元 (/24・/48) の件数。
+	MetricPrincipalSource = "principal_source"
+	// MetricPrincipalSourceWrites はそのうち成功した書き込み (readOnly=false) の件数。0 なら出さない。
+	MetricPrincipalSourceWrites = "principal_source_writes"
+	// MetricPrincipalWriteRegion は主体 × リージョンの、成功した書き込みの件数。
+	MetricPrincipalWriteRegion = "principal_write_region"
+)
+
+// ActivityKey は活動の日次集計の Key (主体 ARN と値を "|" でつなぐ。ARN には "|" が入らない)。
+func ActivityKey(arn, v string) string { return arn + "|" + v }
+
+// SplitActivityKey は ActivityKey を分ける。
+func SplitActivityKey(k string) (arn, v string, ok bool) {
+	i := strings.LastIndex(k, "|")
+	if i < 0 {
+		return "", "", false
+	}
+	return k[:i], k[i+1:], true
+}
+
+// SourcePrefix は送信元 IP を /24 (IPv4) か /48 (IPv6) のネットワークにする。IP でないもの (サービス名・"AWS Internal") は false。
+// 決定: 「初めての送信元」はこの単位で比べる (同じ回線・同じ事業者の近い IP の入れ替わりを新しい送信元にしない。ADR 0027)。
+func SourcePrefix(ip string) (string, bool) {
+	a, err := netip.ParseAddr(ip)
+	if err != nil {
+		return "", false
+	}
+	a = a.Unmap()
+	bits := 48
+	if a.Is4() {
+		bits = 24
+	}
+	p, err := a.Prefix(bits)
+	if err != nil {
+		return "", false
+	}
+	return p.String(), true
 }
 
 // DateLayout は Metric.Date の書式。

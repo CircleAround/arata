@@ -37,6 +37,10 @@ func periodInput() PeriodInput {
 			{Date: "2026-10-06", Source: "rails", Metric: "sign_in_failures", Key: "198.51.100.8", Value: 3},
 			{Date: "2026-10-06", Source: "web", Metric: "probe_paths", Key: "/.env", Value: 9},
 			{Date: "2026-10-07", Source: "web", Metric: "probe_hits", Key: "198.51.100.9", Value: 9},
+			// 主体の活動の日次集計 (ADR 0027) は判定の材料で、合計に意味が無いので推移表に出さない
+			{Date: "2026-10-07", Source: "trail", Metric: record.MetricPrincipalSource, Key: "arn:aws:iam::123456789012:user/alice|198.51.100.0/24", Value: 5},
+			{Date: "2026-10-07", Source: "trail", Metric: record.MetricPrincipalSourceWrites, Key: "arn:aws:iam::123456789012:user/alice|198.51.100.0/24", Value: 1},
+			{Date: "2026-10-07", Source: "trail", Metric: record.MetricPrincipalWriteRegion, Key: "arn:aws:iam::123456789012:user/alice|us-east-1", Value: 1},
 		},
 		Runs: []store.Run{
 			{ID: "i", Profile: "init", StartedAt: day(5, 9), Status: "ok"},

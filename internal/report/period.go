@@ -41,8 +41,9 @@ type PeriodInput struct {
 	Windows map[string]time.Duration
 }
 
-// 期間レポートの推移表に出さない指標 (他の指標の内訳・解釈率の分子)。
-var periodHiddenMetrics = map[string]bool{"lines_matched": true, "probe_paths": true, "waf_block_ip": true}
+// 期間レポートの推移表に出さない指標 (他の指標の内訳・解釈率の分子・主体の活動の日次集計 (判定の材料で、値は下限。ADR 0027))。
+var periodHiddenMetrics = map[string]bool{"lines_matched": true, "probe_paths": true, "waf_block_ip": true,
+	record.MetricPrincipalSource: true, record.MetricPrincipalSourceWrites: true, record.MetricPrincipalWriteRegion: true}
 
 // BuildPeriod は期間レポートを組み立てる。
 func BuildPeriod(in PeriodInput) *PeriodReport {

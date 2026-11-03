@@ -75,6 +75,26 @@ func extractDetail(source, name string, rp map[string]any, d map[string]any) {
 		if a, _ := rp["attributeName"].(string); a == "restore" && contains(strs(rp["valuesToAdd"]), "all") {
 			d["shared_public"] = true
 		}
+	case "secretsmanager.amazonaws.com":
+		// 決定 (ADR 0027): 秘匿値の名前 / ARN だけ (値は CloudTrail に入らない)。secretId は normalize の共通の取り出しで secret_id になる
+		if name == "BatchGetSecretValue" {
+			putList(d, "secret_ids", strs(rp["secretIdList"]))
+			if f, ok := rp["filters"].([]any); ok && len(f) > 0 {
+				d["secret_filters"] = true
+			}
+		}
+	case "ssm.amazonaws.com":
+		switch name {
+		case "GetParameter", "GetParameters", "GetParametersByPath":
+			// 復号の有無は常に残す (無いのは以前の版で集めたもの、と見分けるため)
+			v, _ := rp["withDecryption"].(bool)
+			d["with_decryption"] = v
+			putList(d, "names", strs(rp["names"]))
+			putStr(d, "path", rp["path"])
+			if r, ok := rp["recursive"].(bool); ok {
+				d["recursive"] = r
+			}
+		}
 	case "lambda.amazonaws.com":
 		if !strings.HasPrefix(name, "AddPermission") {
 			return

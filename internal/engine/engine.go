@@ -246,6 +246,9 @@ type CollectResult struct {
 	Records       int
 	// DeniedEvents は拒否された呼び出し (access_denied の error_codes) として出した trail_event の数 (run の stats の目安。重複排除の前)。
 	DeniedEvents int
+	// SecretReadEvents は秘匿値の読み取り (secret_access が見る操作。成否・復号の有無を問わない) として出した trail_event の数
+	// (保存量の目安。GetParameter はアプリの起動ごとに呼ばれて多い。重複排除の前。ADR 0027)。
+	SecretReadEvents int
 	// Formats は cloudwatch-logs ソースの解釈率 (失敗したソースも計測できた分は入る)。
 	Formats []report.FormatCoverage
 	// yielded はソースごとに出せるレコード種類 (チェックの skip 判定に使う)
@@ -316,6 +319,9 @@ func (e *Engine) Collect(ctx context.Context, w collect.Window, o CollectOptions
 					v.CollectedAt = w.CollectedAt
 					if denied[v.ErrorCode] {
 						res.DeniedEvents++
+					}
+					if checks.IsSecretRead(v) {
+						res.SecretReadEvents++
 					}
 					rec = v
 				case record.SnapshotItem:
@@ -591,6 +597,17 @@ func (e *Engine) registry(profileName string) *checks.Registry {
 	return r
 }
 
+// trailCollected は ok のソースに cloudtrail-lookup があるか。run の stats に checks.TrailCollectedStat を付ける条件
+// (principal_new_source / secret_access が「収集し終えた日」に数える。ADR 0027)。
+func (e *Engine) trailCollected(ok []string) bool {
+	for _, src := range e.cfg.Sources {
+		if src.Kind == config.KindCloudTrailLookup && contains(ok, src.ID) {
+			return true
+		}
+	}
+	return false
+}
+
 // UnusedChecks は登録済みのチェックのうち、どのプロファイルにも入っていないもの (登録順)。
 func UnusedChecks(cfg *config.Config, reg *checks.Registry) []string {
 	used := map[string]bool{}
@@ -806,10 +823,13 @@ func (e *Engine) Run(ctx context.Context, profileName string) (*RunResult, error
 		status, exit = "partial", ExitPartial
 	}
 	stats := map[string]any{
-		"records": cr.Records, "denied_events": cr.DeniedEvents, "sources_ok": len(cr.SourcesOK), "sources_failed": len(cr.SourcesFailed),
+		"records": cr.Records, "denied_events": cr.DeniedEvents, "secret_read_events": cr.SecretReadEvents, "sources_ok": len(cr.SourcesOK), "sources_failed": len(cr.SourcesFailed),
 		"new": rep.Summary.New, "changed": rep.Summary.Changed, "recurred": rep.Summary.Recurred, "resolved": rep.Summary.Resolved, "still_open": rep.Summary.StillOpen,
 	}
 	addFormatStats(stats, cr.Formats)
+	if e.trailCollected(cr.SourcesOK) {
+		stats[checks.TrailCollectedStat] = true
+	}
 	if err := e.st.FinishRun(ctx, runID, status, stats); err != nil {
 		return nil, err
 	}

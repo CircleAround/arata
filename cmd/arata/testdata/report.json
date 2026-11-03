@@ -107,8 +107,10 @@
       "defense_evasion",
       "iam_changes",
       "new_principal",
+      "principal_new_source",
       "public_exposure",
       "root_usage",
+      "secret_access",
       "unknown_assume_role"
     ],
     "checks_skipped": [
