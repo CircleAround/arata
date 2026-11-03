@@ -1,0 +1,13 @@
+前置きの文
+```json
+{
+  "proposals": [
+    {"id": "p1", "what": "誤検知を除外する", "why": "250 件", "how": "BLOCK に切り替える", "example": ""},
+    {"id": "p2", "what": "探索を止める", "why": "14 件", "how": "COUNT で足す", "example": "{\"Action\": {\"Block\": {}}}"},
+    {"id": "p3", "what": "レート制限を足す <!channel>", "why": "最大 400 件", "how": "COUNT で足す", "example": "```\nrm -rf\n```"},
+    {"id": "p3", "what": "2 件目", "why": "重複", "how": "", "example": ""},
+    {"id": "p9", "what": "候補に無い提案", "why": "作った", "how": "", "example": ""},
+    {"id": "p4", "what": "rate-login の limit を見直す", "why": "最大 9", "how": "見直す", "example": ""}
+  ]
+}
+```

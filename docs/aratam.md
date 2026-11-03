@@ -43,6 +43,7 @@ aratam notify --in /var/lib/arata/out/daily
    - new / changed / recurred の finding が LLM の出力から漏れていたら、規則で組み立てた行として末尾に足す (LLM が finding を消す経路を作らない)。
    - LLM が使えなかったときは report.md を送る (Slack の上限に合わせて切り詰め、出力ディレクトリのパスを添える)。冒頭に「要約に失敗したため原文を送ります」と書く。
 5. **送信** → 成功したら `.aratam-notified` に run_id を書く。
+6. **WAF の改善提案** (report.json に `proposals` があるとき。3-2 章) → 2 通目として常に通常用に送る。LLM を使うときは候補だけを渡して書き起こさせる。
 
 期間レポート (`"kind": "period"`) も同じ流れで扱う。違いは 3 の system 文書と、2 の振り分け (期間レポートは常に通常用) だけ。
 
@@ -68,8 +69,8 @@ aratam notify --in /var/lib/arata/out/daily
 - メッセージ: report 由来の文字列は `&` `<` `>` をエスケープする。ログ由来の値 (User-Agent など) が `<!channel>` やリンクとして働かないようにするため。メンションは設定に書いたものだけを付ける。
 - メッセージ: 1 通は 3,800 文字までに切り詰める (Slack は text を 4,000 文字程度までにするよう求めている)。
   文字数は Unicode のコードポイント数 (Go の rune 数) で数え、バイト数では数えない (Slack の上限も文字数)。理由文などの上限を含め、切り詰めはすべて文字単位で行う。行の境目で切り、`…(長いため省略)` と report.md のパスを添える。
-- 入力 (ADR 0023): arata の weekly の report.json に `proposals` (WAF の修正提案の候補と observation) が足された。未知のフィールドと同じく読み飛ばしても止まらない (テストで固定)。
-  Slack に「WAF の改善提案」の節として出す処理は後続 (none の書式と LLM の書き起こし。LLM には候補だけを渡す)。それまでは LLM の要約の入力 (report.json) に含まれるだけ
+- 入力 (ADR 0023): arata の weekly の report.json に `proposals` (WAF の修正提案の候補と observation) が足された。
+  本文の通知は変えず (要約の入力の report.json には含まれる)、「WAF の改善提案」を 2 通目として送る (3-2 章、ADR 0024)
 - 送信: 再送はしない (Slack が受け取ったのに応答が届かなかった場合の二重送信を避ける。失敗は終了コード 5 で cron 側に任せる)。
   `net/http` のエラーは URL を含むので、中身だけを取り出してから返す (Webhook の URL をログに出さない)。
 
@@ -134,6 +135,47 @@ LLM に求める出力:
 - `bedrock`: SDK の自動再試行は切る (RetryMaxAttempts 1。再試行は共通部分で 1 回までと決めているため重ねない)。温度 0、maxTokens 4096。
   stopReason が max_tokens なら失敗 (途中で切れた JSON を検証に回さない)。
 
+### 3-2. WAF の改善提案 (proposals)
+
+経緯は ADR 0024。
+
+- 送り方: 本文とは別の 2 通目として、**常に通常用の Webhook** に送る (proposals だけでは緊急にしない。本文が緊急用でも提案は通常用)。
+  `on_quiet: short` なら静かな 1 行の後に、`silent` なら 2 通目だけを送る。proposals が無い (waf_review が走らない) run では送らない。
+  2 通目の送信に失敗したら終了コード 5。1 通目を送れていれば `.aratam-notified` は書く (本文を二重に送らない)。2 通目だけの run で失敗したら書かない
+- 書式 (`internal/notify/proposals.go`):
+
+  ```
+  *WAF の改善提案* arata weekly (acme) <期間>
+  提案 N 件 / 観察 M 件 (arata が規則で作った候補。適用するかは人が判断する。aratam は WAF の設定を変えない)
+
+  • *[false_positive / まず COUNT で様子を見る]* <summary>
+      根拠: count 250 · distinct_ips_max_per_day 60 · days 7 · matching_days 7
+      何を: … / なぜ: … / 進め方: …   (LLM のときだけ)
+      設定例: (コードブロック。LLM のときだけ)
+
+  *観察* (提案はしないが気づいたこと)
+  • [false_positive / excluded_by_config] <summary>
+
+  *COUNT のルールの状況* (提案ではない。COUNT → BLOCK の切り替えは人が計画して決める)
+  • <summary>
+  ```
+
+  - 提案 (kind が observation 以外) → observation → count_rule_status の順。observation は合わせて 10 行までで、残りは「ほか N 件は report.json」
+  - 段階は `count_first` = 「まず COUNT で様子を見る」、`review` = 「見直す」。根拠の行は kind ごとの evidence の主なキー (対応表に無い kind は全キー)。リストは 3 個まで
+  - 決定: **数字は規則の行に必ず出す**。種類・段階・概要・根拠は report.json の値で、エスケープする。LLM の文字列は何を・なぜ・進め方・設定例だけ
+  - 3,800 文字を超えたら、設定例 → LLM の文 の順に削り、それでも収まらなければ末尾 (observation の側) から行の境目で切る
+- LLM (`claude-cli` / `bedrock`): 要約とは別の 1 回の呼び出し (再試行は 1 回まで。`timeout` も同じ)。
+  - 入力は提案の候補だけの JSON 配列 (id `p1`.. を振り、kind・stage・web_acl・scope・rule・rule_in_group・method・path・summary・evidence)。
+    決定: **observation は LLM に渡さない** (規則の書式だけで出すので、提案への格上げが構造上起きない)。提案が 0 件なら呼ばない
+  - system: 出力の契約 `{"proposals": [{"id", "what", "why", "how", "example"}]}`、縛り (候補に無い提案を作らない・BLOCK に強めない・設定例の action は Count か変更点だけ・
+    数字を作らない・unused_rule は削除を勧めない)、`docs/ai/report.md` の「WAF の修正提案の候補」の節、`context_file` (あれば)
+  - 検査: 前後の文・コードフェンスは要約と同じく取り除く。`proposals` が無ければ形が不正。知らない id・重複は捨てる (漏れた候補は規則の行だけ)。
+    BLOCK に強める記述 (設定例の `"Block":` / CDK の `block:`、文中の「BLOCK に切り替える」など) を含む項目は捨てる。``` を含む設定例は例だけ捨てる。
+    捨てたものは `LLM_PROPOSAL_REJECTED` の WARN。文字数は各文 200 字、設定例 800 字・20 行まで。文中の数字が evidence にあるかは検査しない
+  - 縮退: 書き起こしだけが失敗したら、候補を規則の書式で載せて節の冒頭に「(提案の書き起こしに失敗したため、候補をそのまま載せます)」と書き、
+    `LLM_PROPOSALS_FAILED` の WARN を出す。終了コードは変えない。本文の要約が失敗したら書き起こしは呼ばない (終了コード 3 のまま)
+- 生の値: LLM にも Slack にも report.json の proposals の値だけを使う (ヘッダー・クエリ・Cookie は report.json にも無い)
+
 ## 4. 設定
 
 arata と同じく暗黙の既定を持たない。`aratam config init` で全項目を明示した雛形を出す。
@@ -151,6 +193,7 @@ llm:
   # profile: aratam-llm
   timeout: 120s
   # command: /usr/local/bin/claude   # claude-cli の実行ファイル (決定: 実装順 2 で追加。空なら PATH の claude)
+  # context_file: aratam-context.md  # この監査対象の前提 (Markdown。ADR 0024)
 
 slack:
   webhook_env: ARATAM_SLACK_WEBHOOK            # 通常用。URL は設定ファイルに書かず環境変数で渡す
@@ -167,6 +210,12 @@ slack:
 - `*_env` は環境変数の名前 (`[A-Za-z_][A-Za-z0-9_]*`) でなければ設定エラー。URL を貼った誤りを弾き、エラーには値を出さない。
 - `urgent_webhook_env` を書いたのに環境変数が空なら、通常用に送り `urgent_mention` を付ける (`URGENT_WEBHOOK_UNSET` の警告を出す)。緊急の通知を落とさないため。
   緊急用の Webhook があるときはメンションを付けない (チャンネル自体が緊急用のため)。
+- `llm.context_file` (ADR 0024): 利用者が書いた「この監査対象の前提」(決済画面はリクエストが多いのが仕様、監視の送信元、ログインのパスなど) の Markdown。
+  利用者の環境に置き、リポジトリには置かない (例は `examples/aratam-context.md`)。相対パスは設定ファイルのディレクトリ基準。空なら使わない。
+  LLM を使うときだけ読み、要約と提案の書き起こしの両方の system に「この監査対象の前提」として区切って入れる。重大度・分類の基準・規則より優先しないと明記する
+  (振り分けは規則なので変わらない)。provider: none では読まない。
+  決定: 無い・読めない・UTF-8 でない・16 KiB を超えるときは設定エラーにせず、WARN (`CONTEXT_UNREADABLE` / `CONTEXT_TOO_LARGE`) を出して前提なしで続ける。
+  超えたときは切り詰めずに使わない (途中で切った前提は誤解を招くため)。
 - 雛形 (`config init`) の `llm.provider` は `none` にする。LLM の鍵を用意する前でも notify が動き、まず規則だけの通知で流れを確かめられるように。
   `max_age` などの書式は arata の設定と同じ (`time.ParseDuration` と `d` = 日)。
 
@@ -194,6 +243,7 @@ aratam test-notify [-c aratam.yaml] # Slack に試験メッセージを 1 通送
 - 決定 (`doctor`): config / webhook / llm を表 (STATUS ITEM DETAIL) で出す。Webhook は環境変数の有無だけで URL は表示しない。
   通常用が無ければ ng (`WEBHOOK_UNSET`)、緊急用の名前を書いたのに無ければ warn (`URGENT_WEBHOOK_UNSET`)。
   LLM は「疎通確認です。ok とだけ返してください。」を 1 回送り (report のデータは渡さない。再試行しない)、失敗や claude の実行ファイルが無ければ ng (`LLM_UNAVAILABLE`)。
+  `llm.context_file` を書いたときは context の行を足す (読めなければ warn。provider: none なら skip)。
   ng が 1 つでもあれば終了コード 2、ng / warn の行は標準エラーにも code 付きで出す。
 - 決定 (`test-notify`): 既定は通常用、`--urgent` で緊急用に送る (緊急用が無ければ notify と同じく通常用にメンション付き)。送信に失敗したら終了コード 5。
 

@@ -5,11 +5,14 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 )
@@ -22,6 +25,8 @@ type Config struct {
 	OnQuiet        string      `yaml:"on_quiet"`
 	LLM            LLMConfig   `yaml:"llm"`
 	Slack          SlackConfig `yaml:"slack"`
+
+	path string // 読んだ設定ファイルのパス (context_file の相対パスの基準)
 }
 
 // LLMConfig は要約に使う LLM。
@@ -33,6 +38,9 @@ type LLMConfig struct {
 	Timeout  string `yaml:"timeout"`
 	// Command は claude-cli の実行ファイル (空なら PATH から claude を探す。cron の PATH が狭いときに絶対パスで書く)。
 	Command string `yaml:"command"`
+	// ContextFile は利用者が書いた「この監査対象の前提」(Markdown) のパス。LLM の system に足す (provider: none では使わない)。
+	// 相対パスは設定ファイルのディレクトリ基準。空なら使わない (ADR 0024)。
+	ContextFile string `yaml:"context_file"`
 }
 
 // SlackConfig は通知先。URL は秘密なので設定ファイルには環境変数の名前だけを書く。
@@ -70,7 +78,53 @@ func LoadConfig(path string) (*Config, error) {
 	if err := c.Validate(); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
+	c.path = path
 	return &c, nil
+}
+
+// MaxContextBytes は context_file の上限 (16 KiB)。
+const MaxContextBytes = 16 << 10
+
+// context_file を使えないときの code (WARN)。
+const (
+	CodeContextUnreadable = "CONTEXT_UNREADABLE"
+	CodeContextTooLarge   = "CONTEXT_TOO_LARGE"
+)
+
+// ContextPath は context_file のパス (相対なら設定ファイルのディレクトリ基準)。空なら空。
+func (c *Config) ContextPath() string {
+	p := c.LLM.ContextFile
+	if p == "" || filepath.IsAbs(p) || c.path == "" {
+		return p
+	}
+	return filepath.Join(filepath.Dir(c.path), p)
+}
+
+// LoadContext は context_file を読む。空なら ("", "", nil)。
+//
+// 決定 (ADR 0024): 無い・読めない・UTF-8 でない・16 KiB を超えるときは設定エラーにせず、code を返す (呼び出し側が WARN を出して前提なしで続ける)。
+// 超えたときは切り詰めずに使わない (途中で切った前提は誤解を招くため)。
+func (c *Config) LoadContext() (string, string, error) {
+	p := c.ContextPath()
+	if p == "" {
+		return "", "", nil
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		return "", CodeContextUnreadable, fmt.Errorf("llm.context_file %s を読めません: %w", p, errors.Unwrap(err))
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, MaxContextBytes+1))
+	if err != nil {
+		return "", CodeContextUnreadable, fmt.Errorf("llm.context_file %s を読めません: %w", p, err)
+	}
+	if len(b) > MaxContextBytes {
+		return "", CodeContextTooLarge, fmt.Errorf("llm.context_file %s が上限 %d バイトを超えるため使いません", p, MaxContextBytes)
+	}
+	if !utf8.Valid(b) {
+		return "", CodeContextUnreadable, fmt.Errorf("llm.context_file %s が UTF-8 のテキストではありません", p)
+	}
+	return string(b), "", nil
 }
 
 // Validate は設定を検証する。llm の項目は provider に応じて要るものだけを見る (--llm none で上書きした後にも呼ぶ)。

@@ -23,7 +23,7 @@ AWS のログと設定を定期的に改め、**前回から新しく発生し�
 
 ## AI (LLM) から使う
 
-`arata help ai` を最初に読ませる (report の読み方は `arata help ai report`、承認判断は `arata help ai approve`、`--format json` も可)。
+`arata help ai` を最初に読ませる (report の読み方は `arata help ai report`、承認判断は `arata help ai approve`、チェックごとの対処手順は `arata help ai playbook <check>`、`--format json` も可)。
 内容はバイナリに埋め込まれていて、エンジンの版と常に揃う。
 
 ## 通知 (aratam)
@@ -34,7 +34,11 @@ arata を呼ばず、AWS の監査ロールもストアも使わない (出力�
 - 送り先と「静か」の判定は規則で固定する。`max_severity` が `urgent_severity` 以上か取れなかったソースがあれば緊急用、report.json が無い・古ければ「arata が実行されていない」と緊急用に送る
 - LLM は分類と説明だけ。重大度は report.json の値を表示し、LLM の出力から漏れた新規・変化・再発の finding は規則で末尾に足す。LLM が使えなければ原文を送る
 - LLM のプロバイダ: `bedrock` (Converse。`bedrock:InvokeModel` だけ要る) / `claude-cli` (`claude -p` をツール無し・ユーザー設定を読まず・空の一時ディレクトリで起動) / `none` (LLM を呼ばない)
-- Webhook の URL は設定ファイルに書かず、`slack.webhook_env` に書いた名前の環境変数で渡す。LLM に渡すデータは report.json だけ
+- Webhook の URL は設定ファイルに書かず、`slack.webhook_env` に書いた名前の環境変数で渡す。LLM に渡すデータは report.json (と下の提案の候補・前提) だけ
+- weekly の report.json に WAF の修正提案の候補 (`proposals`) があれば、「WAF の改善提案」を 2 通目として通常用に送る (ADR 0024)。
+  種類・段階・根拠の数字は規則で書き、LLM は候補だけを受け取って「何を・なぜ・進め方・設定例」を書き起こす (候補に無い提案・BLOCK に強める提案は捨てる。observation は LLM に渡さない)
+- `llm.context_file` にアプリの事情 (決済画面はリクエストが多い、監視の送信元など) を Markdown で書くと、LLM に「この監査対象の前提」として渡す。
+  判定 (重大度・送り先) は変わらない。例は [examples/aratam-context.md](examples/aratam-context.md) (架空の値)。利用者の環境に置き、16 KiB まで
 
 ```sh
 aratam config init                          # ./aratam.yaml (全項目を明示した雛形。provider は none)

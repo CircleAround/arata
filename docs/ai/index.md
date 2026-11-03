@@ -44,6 +44,7 @@ LLM の役割は「危険の判定を代行する」ことではなく「人が�
 | `arata review [--format json]` | 未対応 (open / acked) の一覧と approve の対象 | よい |
 | `arata approve <id> --note ... [--expires] [--tag] [--commit]` | allowlist に追記し finding を解消 | **しない** (人に提案する) |
 | `arata ack / snooze --until / resolve <id>` | finding の状態を変える | 人の指示があれば |
+| `arata help ai playbook [<check>]` | チェックごとの対処手順 | よい (読み取りのみ) |
 
 ## 終了コード
 
@@ -110,4 +111,5 @@ source_ips:
 
 - `arata help ai report`: report.json の構造と要約の手順
 - `arata help ai approve`: 承認判断の基準
+- `arata help ai playbook <check>`: チェックごとの対処手順 (確かめる順番・判断の分かれ目・対処の選択肢)。一覧は `arata help ai playbook`
 - `--format json` を付けると `{topic, sections: [{title, body}]}` で受け取れる

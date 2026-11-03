@@ -37,6 +37,10 @@ func TestHelpAI(t *testing.T) {
 		{[]string{"ai"}, ""},
 		{[]string{"help", "ai", "report"}, "report"},
 		{[]string{"ai", "approve"}, "approve"},
+		{[]string{"help", "ai", "playbook"}, "playbook"},
+		{[]string{"ai", "playbook"}, "playbook"},
+		{[]string{"help", "ai", "playbook", "root_usage"}, "playbook root_usage"},
+		{[]string{"ai", "playbook", "access_denied"}, "playbook access_denied"},
 	} {
 		if code := c.run(tc.args...); code != 0 {
 			t.Fatalf("%v: exit %d %s", tc.args, code, c.stderr)
@@ -59,6 +63,18 @@ func TestHelpAI(t *testing.T) {
 	if code := c.run("help", "ai", "nope"); code != 2 || !strings.Contains(c.stderr.String(), "arata help ai report") {
 		t.Fatalf("unknown topic exit %d: %s", code, c.stderr)
 	}
+	if code := c.run("help", "ai", "playbook", "nope"); code != 2 || !strings.Contains(c.stderr.String(), "root_usage") {
+		t.Fatalf("unknown playbook exit %d: %s", code, c.stderr)
+	}
+	if code := c.run("help", "ai", "playbook", "root_usage", "extra"); code != 2 {
+		t.Fatalf("too many args exit %d", code)
+	}
+	if code := c.run("help", "ai", "playbook", "root_usage", "--format", "json"); code != 0 {
+		t.Fatalf("exit %d: %s", code, c.stderr)
+	}
+	if err := json.Unmarshal(c.stdout.Bytes(), &doc); err != nil || doc.Topic != "ai playbook root_usage" || len(doc.Sections) != len(ai.PlaybookSections) {
+		t.Fatalf("playbook json: %v %s", err, c.stdout)
+	}
 	if code := c.run("help", "run"); code != 0 || !strings.Contains(c.stdout.String(), "--profile") {
 		t.Fatalf("help run: %d %s", code, c.stdout)
 	}
@@ -70,4 +86,13 @@ func TestHelpAI(t *testing.T) {
 		}
 	}
 	c.assertCodesInVocabulary()
+}
+
+// TestHelpAIPlaybookIndex は playbook の一覧 (arata help ai playbook) を固定する。チェックを足したら一覧も変わる。
+func TestHelpAIPlaybookIndex(t *testing.T) {
+	c := newCLI(t)
+	if code := c.run("help", "ai", "playbook"); code != 0 {
+		t.Fatalf("exit %d: %s", code, c.stderr)
+	}
+	compareGolden(t, "help_ai_playbook.txt", c.stdout.Bytes())
 }

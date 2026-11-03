@@ -83,6 +83,6 @@ go run ./cmd/arata help ai                               # LLM 向けの使い�
 - `internal/config` 設定 / `internal/collect` 収集 (cloudtrail, cwlogs, account) / `internal/store` JSONL + SQLite /
   `internal/checks` チェック / `internal/engine` run の流れ / `internal/report` レポート (`schema` は標準ライブラリだけ) /
   `internal/allowlist` 既知リスト / `internal/scaffold` 雛形 / `internal/notify`・`internal/llm`・`internal/slack` aratam
-- `docs/ai/*.md` はバイナリに埋め込まれる。変えたらテストのゴールデンも変わる
+- `docs/ai/*.md` はバイナリに埋め込まれる。変えたらテストのゴールデンも変わる。新しいチェックを足したら `docs/ai/playbooks/<check>.md` (対処手順。ADR 0025) も書く (無ければテストが落ちる)
 - `tools/agegate` CI 用。`examples/` は架空の値の設定例
 - `deploy/iam/readonly-role.yaml` 顧客に配る読み取り専用ロール (素の CFN) / `deploy/sandbox` 試験環境 (CDK、pnpm、Node 24。Go とは独立。ADR 0020)
