@@ -457,6 +457,9 @@ secrets_access:
 - 複数のエントリに一致するときは、有効な (expires 前の) 承認が 1 つでもあれば approved。返すエントリ (タグの判定に使う) は有効なもののうち最も具体的なもの (arn > arn_pattern > account)。一致したものが全部期限切れなら expired。
 - CloudTrail の `userIdentity.type` が `AWSAccount` (他アカウントからのクロスアカウント AssumeRole) の主体は `arn:aws:iam::<アカウント>:root` (kind は unknown) に正規化される。
   レポートの文面ではこれを「外部アカウント NNN」と書き、Data に `external_account` を添える。自アカウントの Root (kind=root、root_usage が扱う) とは区別する。
+- 決定: `userIdentity.type` も `arn` も無い記録は、`invokedBy` があればそのサービス、`sourceIPAddress` か `userAgent` が `AWS Internal` なら `eventSource` のサービスを主体 (kind=service) にする。
+  監査対象アカウントの accountId だけが入った ECR の `PolicyExecutionEvent` などが、自アカウントの `:root` (unknown) として new_principal に出るのを避けるため。
+  サービスの主体は principal_seen にも new_principal にも出ない。本物の root は `type=Root` で root_usage が扱う。`type=AWSAccount` の外部アカウントは従来どおり `外部アカウント NNN`。
 - `tags` の語彙は `deploy` (ADR 0008) と `ai` (決定: Step 3。監査ロール・AI 用の主体。ai_path_usage が利用を毎回 info に出す)。approve は語彙外のタグを拒否する。
 - 決定 (ADR 0022): `expected_denied` は access_denied で数えない「想定済みの拒否」(「サービス:操作」の glob。`*` は任意の文字列、`?` は 1 文字、大文字小文字を区別)。
   主体に一致する期限内の項目すべての `expected_denied` の和で判定する (項目ごとに理由と期限が違ってよいため。タグの判定に使う項目の選び方と、同じ arn の重複の後勝ちは変えない)。
