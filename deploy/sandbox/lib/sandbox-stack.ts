@@ -166,6 +166,32 @@ export class SandboxStack extends Stack {
         autoDeleteObjects: true,
       });
       new CfnOutput(this, 'StoreBucketName', { value: storeBucket.bucketName });
+
+      // GitHub Actions の実行用ロール (examples/github-actions の試験用)。監査は読み取り専用ロールへ連鎖し、ストアはこのロールで書く。
+      // config が storeBucket.enabled を要求するので、ここにだけ置く
+      if (config.githubOidc.enabled) {
+        const { repository, branch, createProvider, storePrefix } = config.githubOidc;
+        const issuer = 'token.actions.githubusercontent.com';
+        // プロバイダはアカウントに 1 つだけ。既にあれば作らず ARN で指す
+        const providerArn = createProvider
+          ? new iam.OidcProviderNative(this, 'GithubOidcProvider', { url: `https://${issuer}`, clientIds: ['sts.amazonaws.com'] }).oidcProviderArn
+          : `arn:${this.partition}:iam::${this.account}:oidc-provider/${issuer}`;
+        const runner = new iam.Role(this, 'GithubActionsRole', {
+          roleName: `${p}-github-actions`,
+          description: 'arata sandbox: GitHub Actions runner (assumes the read-only role and writes the store)',
+          assumedBy: new iam.FederatedPrincipal(
+            providerArn,
+            { StringEquals: { [`${issuer}:aud`]: 'sts.amazonaws.com', [`${issuer}:sub`]: `repo:${repository}:ref:refs/heads/${branch}` } },
+            'sts:AssumeRoleWithWebIdentity',
+          ),
+        });
+        runner.addToPolicy(new iam.PolicyStatement({ actions: ['sts:AssumeRole'], resources: [readonlyRole.attrArn] }));
+        runner.addToPolicy(new iam.PolicyStatement({ actions: ['s3:GetObject', 's3:PutObject'], resources: [storeBucket.arnForObjects(`${storePrefix}/*`)] }));
+        // 決定: ListBucket は s3:prefix で絞らない。S3 は ListBucket が無い主体に、無いキーを 404 ではなく 403 で返す。
+        // arata は 404 だけを「無い」とみなすので、prefix の条件で 403 になると初回の run が STORE_UNAVAILABLE で止まり得る。見えるのはキーの名前だけ
+        runner.addToPolicy(new iam.PolicyStatement({ actions: ['s3:ListBucket'], resources: [storeBucket.bucketArn] }));
+        new CfnOutput(this, 'GithubActionsRoleArn', { value: runner.roleArn });
+      }
     }
 
     new CfnOutput(this, 'ReadonlyRoleArn', { value: readonlyRole.attrArn });
