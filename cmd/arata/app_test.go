@@ -8,6 +8,9 @@ import (
 	"testing"
 	"time"
 
+	waftypes "github.com/aws/aws-sdk-go-v2/service/wafv2/types"
+
+	"github.com/CircleAround/arata/internal/collect/account/accounttest"
 	"github.com/CircleAround/arata/internal/collect/cloudtrail/cloudtrailtest"
 	"github.com/CircleAround/arata/internal/collect/cwlogs/cwlogstest"
 )
@@ -283,4 +286,82 @@ func TestProfileOverridesAndUnusedChecks(t *testing.T) {
 		t.Fatalf("evaluate must warn: exit %d %v", code, c.codes())
 	}
 	c.assertCodesInVocabulary()
+}
+
+// wafv2 のソースの doctor (ADR 0028): resources を WebACL の資源と突き合わせ、Insights の費用を見積もる。max_scan_gb が無ければ warn。
+func TestDoctorWAF(t *testing.T) {
+	setup := func(t *testing.T, extra string) *cli {
+		c := newCLI(t)
+		c.appConfig(`  - id: waf
+    kind: cloudwatch-logs
+    log_group: aws-waf-logs-prod
+    format: wafv2
+    resources: ["123456789012:abcde12345:prod", "app/app-alb/*", "app/missing-alb/*"]
+` + extra)
+		c.logs.LogGroups = []string{"/app/nginx", "/app/rails", "aws-waf-logs-prod"}
+		resp := doctorRows(100, 0)
+		resp.BytesScanned = 5e9 // 直近 24h のスキャン量 = 1 日のログ 5 GB
+		c.logs.On("sort @timestamp desc", resp)
+		c.logs.On("as lines_total", cwlogstest.Response{BytesScanned: 4e9})
+		acl := accounttest.WebACL(waftypes.ScopeRegional, "ap-northeast-1", "prod-waf")
+		c.acct.WAF = &accounttest.WAF{
+			WebACLs: map[string][]waftypes.WebACL{"REGIONAL|ap-northeast-1": {acl}},
+			Logging: map[string][]string{*acl.ARN: {"arn:aws:logs:ap-northeast-1:123456789012:log-group:aws-waf-logs-prod"}},
+			Resources: map[string]map[waftypes.ResourceType][]string{*acl.ARN: {
+				waftypes.ResourceTypeApplicationLoadBalancer: {"arn:aws:elasticloadbalancing:ap-northeast-1:123456789012:loadbalancer/app/app-alb/50dc6c495c0c9188"},
+				waftypes.ResourceTypeApiGateway:              {"arn:aws:apigateway:ap-northeast-1::/restapis/abcde12345/stages/prod"},
+			}},
+		}
+		return c
+	}
+	rows := func(t *testing.T, c *cli, args ...string) map[string][2]string {
+		t.Helper()
+		if code := c.run(append([]string{"doctor", "--config", c.cfg, "--format", "json"}, args...)...); code != 0 {
+			t.Fatalf("exit %d\n%s%s", code, c.stdout, c.stderr)
+		}
+		var res struct {
+			Rows []struct{ Source, Item, Status, Detail string }
+		}
+		if err := json.Unmarshal(c.stdout.Bytes(), &res); err != nil {
+			t.Fatal(err)
+		}
+		out := map[string][2]string{}
+		for _, r := range res.Rows {
+			if r.Source == "waf" {
+				out[r.Item] = [2]string{r.Status, r.Detail}
+			}
+		}
+		return out
+	}
+
+	c := setup(t, "")
+	got := rows(t, c)
+	res := got["resources"]
+	if res[0] != "warn" || !strings.Contains(res[1], "app/missing-alb/*") || strings.Contains(res[1], "app/app-alb/*") || !strings.Contains(res[1], "prod-waf") {
+		t.Fatalf("resources: %v", res)
+	}
+	cost := got["cost"]
+	// 既定は直近 24h に解釈率の集計 (stats) を流して実測する (sandbox で sort+limit のスキャン量は約 75% に少なく出た。ADR 0028)。
+	// 実測した範囲・読み取り量・その費用も出す
+	for _, want := range []string{"4.00 GB", "実測", "直近 24h", "読み取り 4.00 GB", "約 0.03 USD", "daily", "80.14 GB", "10 本", "0.61 USD", "18.27 USD", "0.0076 USD/GB", "max_scan_gb", "推奨 121"} {
+		if !strings.Contains(cost[1], want) {
+			t.Fatalf("cost lacks %q: %v", want, cost)
+		}
+	}
+	if cost[0] != "warn" {
+		t.Fatalf("cost: %v", cost)
+	}
+
+	// max_scan_gb があり、resources がすべて見つかれば ok。--no-measure-scan は解釈率のサンプルのスキャン量からの推定 (追加の読み取りなし)
+	c = setup(t, "    max_scan_gb: 200\n")
+	c.acct.WAF.Resources[*c.acct.WAF.WebACLs["REGIONAL|ap-northeast-1"][0].ARN][waftypes.ResourceTypeApplicationLoadBalancer] = append(
+		c.acct.WAF.Resources[*c.acct.WAF.WebACLs["REGIONAL|ap-northeast-1"][0].ARN][waftypes.ResourceTypeApplicationLoadBalancer],
+		"arn:aws:elasticloadbalancing:ap-northeast-1:123456789012:loadbalancer/app/missing-alb/0123456789abcdef")
+	got = rows(t, c, "--no-measure-scan")
+	if got["resources"][0] != "ok" {
+		t.Fatalf("resources: %v", got["resources"])
+	}
+	if got["cost"][0] != "ok" || !strings.Contains(got["cost"][1], "5.00 GB") || !strings.Contains(got["cost"][1], "推定") || strings.Contains(got["cost"][1], "実測") {
+		t.Fatalf("cost: %v", got["cost"])
+	}
 }

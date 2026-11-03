@@ -33,6 +33,8 @@ const (
 	ProposalRateTight     = "rate_limit_tight"
 	ProposalUnusedRule    = "unused_rule"
 	ProposalObservation   = "observation"
+	// ProposalChallengeOnAppPath は正規の画面らしいパスで、多数の IP に Challenge / CAPTCHA を出し、多くが解いている (人が巻き込まれている疑い) (ADR 0028)。
+	ProposalChallengeOnAppPath = "challenge_on_app_path"
 )
 
 // observation で提案しなかった理由 (schema.Proposal.Reason)。
@@ -46,10 +48,13 @@ const (
 	ReasonInformational = "informational"
 )
 
+// AboutChallengeImpact は Challenge / CAPTCHA の状況 (observation の about)。出した数・解かれた割合を毎回載せる計画の材料 (ADR 0028)。
+const AboutChallengeImpact = "challenge_impact"
+
 // AboutCountRuleStatus は COUNT のルールの状況 (observation の about)。提案ではなく計画の材料。
 const AboutCountRuleStatus = "count_rule_status"
 
-var proposalOrder = map[string]int{ProposalFalsePositive: 0, ProposalProbeAllowed: 2, ProposalRateMissing: 3,
+var proposalOrder = map[string]int{ProposalFalsePositive: 0, ProposalChallengeOnAppPath: 1, ProposalProbeAllowed: 2, ProposalRateMissing: 3,
 	ProposalRateLoose: 4, ProposalRateTight: 5, ProposalUnusedRule: 6, ProposalObservation: 7}
 
 // Proposer は finding のほかに report.json の proposals を返すチェックが満たす (waf_review)。engine は Evaluate の代わりに呼ぶ。
@@ -160,7 +165,7 @@ func (c WAFReview) Propose(ctx context.Context, q store.Query, w collect.Window)
 		return nil, nil, err
 	}
 	r := &reviewer{c: c, q: q, acls: loadWAFConfig(items), end: dates[len(dates)-1]}
-	for _, f := range []func(context.Context) error{r.falsePositives, r.countRuleStatus, r.probeAllowed, r.rateLimits, r.unusedRules, r.positionLimits} {
+	for _, f := range []func(context.Context) error{r.falsePositives, r.challenges, r.countRuleStatus, r.probeAllowed, r.rateLimits, r.unusedRules, r.positionLimits} {
 		if err := f(ctx); err != nil {
 			return nil, nil, err
 		}
@@ -350,6 +355,207 @@ func (r *reviewer) falsePositives(ctx context.Context) error {
 	r.add(props)
 	r.add(notes)
 	return nil
+}
+
+// challengeAgg は Challenge / CAPTCHA の key (またはルール) ごとの期間の集計。IP は日ごとの値を足した「IP・日」(日をまたいで同じ IP を数え得る)。
+type challengeAgg struct {
+	issued, ipsMax, ipsSum, solvedSum, nonGet float64
+}
+
+func (a challengeAgg) ratio() float64 {
+	if a.ipsSum == 0 {
+		return 0
+	}
+	return math.Round(a.solvedSum/a.ipsSum*1000) / 1000
+}
+
+// challenges は Challenge / CAPTCHA の影響を評価する (ADR 0028)。
+//
+// 決定:
+//   - 解かれた割合 = 解いた IP / 出した IP (日ごとの値を期間で足して比べる)。解いた IP は出した IP のうち同じ日・同じパスで同じ種類のトークンが受理された IP
+//   - 割合が高い (challenge_solve_ratio 以上) = 人が解いている = 正規の利用者が巻き込まれている疑い。探索パスではない GET の画面で、
+//     出した IP (日ごとの最大) が challenge_min_distinct_ips 以上なら「対象の絞り込み (scope-down) を検討し様子を見る」を提案する (stage review)。
+//     これは仮説で、検証方法と前提は ADR 0028
+//   - GET 以外は提案しない。Challenge / CAPTCHA はブラウザが画面として受け取る GET でしか解けず、POST や XHR の割合が低いのは「人が居ない」ことを意味しない
+//   - 割合が低いものは提案しない (ボットを止めているのか、解けない通信なのかを区別できない)。challenge_impact に数字だけを載せる
+//   - challenge_impact は毎回、出した数の多い challenge_top_rules 個のルールについて事実だけを書く (解釈を書かない)
+func (r *reviewer) challenges(ctx context.Context) error {
+	cfg := r.c.Config
+	issued, err := r.load(ctx, cwlogs.MetricWAFChallengeIssued, cfg.Days)
+	if err != nil {
+		return err
+	}
+	ips, err := r.load(ctx, cwlogs.MetricWAFChallengeIssuedIPs, cfg.Days)
+	if err != nil {
+		return err
+	}
+	solved, err := r.load(ctx, cwlogs.MetricWAFChallengeSolvedIPs, cfg.Days)
+	if err != nil {
+		return err
+	}
+	ia, pa, sa := aggregate(issued), aggregate(ips), aggregate(solved)
+	byKey := map[string]*challengeAgg{}
+	byRule := map[string]*challengeAgg{}
+	for k, v := range ia {
+		parts := strings.SplitN(k, "|", 5)
+		if len(parts) != 5 {
+			continue
+		}
+		a := &challengeAgg{issued: v.sum}
+		if x := pa[k]; x != nil {
+			a.ipsMax, a.ipsSum = x.max, x.sum
+		}
+		if x := sa[k]; x != nil {
+			a.solvedSum = x.sum
+		}
+		byKey[k] = a
+		rk := parts[0] + "|" + parts[1] + "|" + parts[2]
+		ra := byRule[rk]
+		if ra == nil {
+			ra = &challengeAgg{}
+			byRule[rk] = ra
+		}
+		ra.issued += a.issued
+		ra.ipsSum += a.ipsSum
+		ra.solvedSum += a.solvedSum
+		ra.ipsMax = math.Max(ra.ipsMax, a.ipsMax)
+		if parts[3] != "GET" {
+			ra.nonGet += a.issued
+		}
+	}
+	keys := make([]string, 0, len(byKey))
+	for k := range byKey {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		a, b := byKey[keys[i]], byKey[keys[j]]
+		if a.ipsMax != b.ipsMax {
+			return a.ipsMax > b.ipsMax
+		}
+		if a.issued != b.issued {
+			return a.issued > b.issued
+		}
+		return keys[i] < keys[j]
+	})
+	var props, notes []schema.Proposal
+	for _, k := range keys {
+		parts := strings.SplitN(k, "|", 5)
+		acl, kind, rule, method, path := parts[0], parts[1], parts[2], parts[3], parts[4]
+		a := byKey[k]
+		if method != "GET" || hasPrefixAny(path, r.c.ProbePaths) || a.ipsMax < cfg.ChallengeMinDistinctIPs || a.ratio() < cfg.ChallengeSolveRatio {
+			continue
+		}
+		group, inner, _ := strings.Cut(rule, "/")
+		label := group
+		if inner != "" {
+			label += " の " + inner
+		}
+		ev := map[string]any{"kind": kind, "issued": a.issued, "distinct_ips_max_per_day": a.ipsMax, "distinct_ips_is_lower_bound": true,
+			"issued_ips_day_sum": a.ipsSum, "solved_ips_day_sum": a.solvedSum, "solve_ratio": a.ratio(), "min_solve_ratio": cfg.ChallengeSolveRatio, "days": cfg.Days}
+		facts := fmt.Sprintf("%s: %s の %s が %s %s で直近 %d 日に %.0f 件出され、出した IP の %.0f%% (日ごとの合計 %.0f / %.0f) が解いた (出した IP は日ごとの最大 %.0f)",
+			acl, label, kindLabel(kind), method, path, cfg.Days, a.issued, a.ratio()*100, a.solvedSum, a.ipsSum, a.ipsMax)
+		note := func(reason, why string) {
+			o := r.observation(ProposalChallengeOnAppPath, reason, acl)
+			o.Rule, o.RuleInGroup, o.Method, o.Path, o.Evidence = group, inner, method, path, ev
+			o.Summary = facts + "。" + why + "ため提案しない"
+			notes = append(notes, o)
+		}
+		ac := conf(r.acls, acl)
+		var rc record.SnapshotItem
+		ok := false
+		if ac != nil {
+			rc, ok = ac.rules[group]
+		}
+		switch {
+		case ac == nil:
+			note(ReasonUndetermined, "WebACL の設定と突き合わせられない (waf-config に無いか、同じ名前が複数ある)")
+		case !ok:
+			note(ReasonUndetermined, "ルールが WebACL の設定に無い")
+		case rc.String("type") == account.WAFRuleRateBased:
+			note(ReasonExcludedByRule, "レートベースのルールの Challenge / CAPTCHA は、多い利用者に解かせるのが狙いのことがある (レート制限の候補で扱う)")
+		case isIPSourceGroup(rc):
+			note(ReasonExcludedByRule, "送信元の評判で出すグループは多数の IP に出すのが正常")
+		case contains(r.c.SignInPaths, path):
+			note(ReasonExcludedByRule, "sign-in のパスの Challenge / CAPTCHA は総当たりへの備えとして意図したものが多い")
+		default:
+			p := r.proposal(ProposalChallengeOnAppPath, StageReview, acl)
+			p.Rule, p.RuleInGroup, p.Method, p.Path, p.Evidence = group, inner, method, path, ev
+			p.Summary = facts + "。人が解いている = 正規の利用者が巻き込まれている疑い。このパスを対象から外す (scope-down) か、" +
+				kindLabel(kind) + " を出す条件を絞ることを検討し、様子を見る"
+			props = append(props, p)
+		}
+	}
+	r.add(props)
+	r.add(notes)
+
+	// challenge_impact: 出した数の多いルールから challenge_top_rules 個
+	rules := make([]string, 0, len(byRule))
+	for k := range byRule {
+		rules = append(rules, k)
+	}
+	sort.Slice(rules, func(i, j int) bool {
+		if byRule[rules[i]].issued != byRule[rules[j]].issued {
+			return byRule[rules[i]].issued > byRule[rules[j]].issued
+		}
+		return rules[i] < rules[j]
+	})
+	if len(rules) > cfg.ChallengeTopRules {
+		rules = rules[:cfg.ChallengeTopRules]
+	}
+	var impact []schema.Proposal
+	for _, rk := range rules {
+		parts := strings.SplitN(rk, "|", 3)
+		acl, kind, rule := parts[0], parts[1], parts[2]
+		a := byRule[rk]
+		group, inner, _ := strings.Cut(rule, "/")
+		label := group
+		if inner != "" {
+			label += " の " + inner
+		}
+		// 主なパス (出した数の多い順に 5 個)
+		var paths []string
+		for _, k := range sortedChallengeKeys(byKey, acl+"|"+kind+"|"+rule+"|") {
+			if len(paths) == 5 {
+				break
+			}
+			x := byKey[k]
+			mp := strings.SplitN(k, "|", 5)
+			paths = append(paths, fmt.Sprintf("%s %s (%.0f 件、%.0f%%)", mp[3], mp[4], x.issued, x.ratio()*100))
+		}
+		o := r.observation(AboutChallengeImpact, ReasonInformational, acl)
+		o.Rule, o.RuleInGroup = group, inner
+		o.Evidence = map[string]any{"kind": kind, "issued": a.issued, "issued_ips_day_sum": a.ipsSum, "solved_ips_day_sum": a.solvedSum, "solve_ratio": a.ratio(),
+			"distinct_ips_max_per_day": a.ipsMax, "issued_non_get": a.nonGet, "paths": paths, "days": cfg.Days}
+		o.Summary = fmt.Sprintf("%s: %s の %s: 直近 %d 日で %.0f 件出し、解かれた割合 %.0f%% (解いた IP %.0f / 出した IP %.0f、日ごとの合計)。GET 以外 %.0f 件 (解けない)。主なパス: %s",
+			acl, kindLabel(kind), label, cfg.Days, a.issued, a.ratio()*100, a.solvedSum, a.ipsSum, a.nonGet, strings.Join(paths, ", "))
+		impact = append(impact, o)
+	}
+	r.add(impact)
+	return nil
+}
+
+// sortedChallengeKeys は prefix で始まる key を出した数の多い順に返す。
+func sortedChallengeKeys(m map[string]*challengeAgg, prefix string) []string {
+	var keys []string
+	for k := range m {
+		if strings.HasPrefix(k, prefix) {
+			keys = append(keys, k)
+		}
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if m[keys[i]].issued != m[keys[j]].issued {
+			return m[keys[i]].issued > m[keys[j]].issued
+		}
+		return keys[i] < keys[j]
+	})
+	return keys
+}
+
+func kindLabel(kind string) string {
+	if kind == "captcha" {
+		return "CAPTCHA"
+	}
+	return "Challenge"
 }
 
 // countRules は WebACL のうち COUNT で動いているルール (ログの識別子 → ルール名とグループの中のルール名)。

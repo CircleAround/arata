@@ -117,6 +117,12 @@ type WAFReview struct {
 	UnusedDays int `yaml:"unused_days"`
 	// MaxProposals は候補の種類ごとに出す上限 (根拠の強い順)。
 	MaxProposals int `yaml:"max_proposals"`
+	// ChallengeMinDistinctIPs は「正規の画面に Challenge / CAPTCHA」の提案に要る、出した異なり IP 数 (日ごとの値の最大) (ADR 0028)。
+	ChallengeMinDistinctIPs float64 `yaml:"challenge_min_distinct_ips"`
+	// ChallengeSolveRatio は同じ提案に要る、解かれた割合 (解いた IP / 出した IP) の下限。高い = 人が解いている = 正規の利用者が巻き込まれている疑い。
+	ChallengeSolveRatio float64 `yaml:"challenge_solve_ratio"`
+	// ChallengeTopRules は Challenge / CAPTCHA の状況 (challenge_impact の observation) を毎回載せるルールの数 (出した数の多い順)。
+	ChallengeTopRules int `yaml:"challenge_top_rules"`
 }
 
 // DefaultRatePathGroups は rate_path_groups の既定。
@@ -437,6 +443,9 @@ func (c *Checks) applyDefaults() {
 	setFloat(&wr.RateLooseFactor, 10)
 	setInt(&wr.UnusedDays, 30)
 	setInt(&wr.MaxProposals, 20)
+	setFloat(&wr.ChallengeMinDistinctIPs, 10)
+	setFloat(&wr.ChallengeSolveRatio, 0.5)
+	setInt(&wr.ChallengeTopRules, 10)
 	wb := &c.WAFBlockTrend
 	if wb.TopN == 0 {
 		wb.TopN = 5
@@ -538,6 +547,9 @@ func (w WAFReview) validate() error {
 	}
 	if w.RateFactor <= 1 || w.RateMargin <= 0 || w.RateFloor < 1 || w.RateLooseFactor <= 1 {
 		return fmt.Errorf("rate_factor > 1, rate_margin > 0, rate_floor >= 1, rate_loose_factor > 1")
+	}
+	if w.ChallengeMinDistinctIPs < 1 || w.ChallengeSolveRatio <= 0 || w.ChallengeSolveRatio > 1 || w.ChallengeTopRules < 1 {
+		return fmt.Errorf("challenge_min_distinct_ips >= 1, 0 < challenge_solve_ratio <= 1, challenge_top_rules >= 1")
 	}
 	for _, p := range append(append([]string{}, w.RatePathGroups...), w.ExpectedHighRatePaths...) {
 		if len(p) == 0 || p[0] != '/' {

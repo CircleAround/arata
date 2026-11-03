@@ -104,7 +104,8 @@ arata が決まった規則で作った、WAF の設定を変える候補。find
 
 - 1 件: `kind`、`stage`、`web_acl` / `scope` / `region`、`rule` (WebACL のルール名)、`rule_in_group` (ルールグループの中のルール名)、`method` / `path` (正規化したパス。数字・UUID は `:id`)、
   `summary`、`evidence` (根拠の数字と提案する値)、`finding_key` (low の finding にもした候補)
-- **提案** (`kind` が observation 以外): `false_positive` (誤検知の疑い)、`probe_allowed` (すり抜けている探索)、
+- **提案** (`kind` が observation 以外): `false_positive` (誤検知の疑い)、`challenge_on_app_path` (正規の画面に Challenge / CAPTCHA。人が解いている = 正規の利用者が巻き込まれている疑い。stage は review)、
+  `probe_allowed` (すり抜けている探索)、
   `rate_limit_missing` (レート制限の不足)、`rate_limit_loose` / `rate_limit_tight` (レート制限の値の見直し)、`unused_rule` (使われていないルール。削除は勧めない)
 - `stage`: `count_first` = まず COUNT で様子を見てから確定する、`review` = 人が見直す (変更を勧めるものではない)。
   **COUNT → BLOCK の切り替えは arata は勧めない** (運用で計画して行う作業)
@@ -113,12 +114,16 @@ arata が決まった規則で作った、WAF の設定を変える候補。find
   `excluded_by_rule` (決まった除外に一致。レートベースのルール・IP 評判のグループ・sign-in のパス)、`position_limit` (ログの配列の位置の上限を超え、数え漏れの可能性)
 - **COUNT のルールの状況** (`kind: observation`、`about: count_rule_status`、`reason: informational`): COUNT で動いているルールごとに毎回 1 件。提案ではなく、COUNT → BLOCK を計画するときの材料。
   `matches` (一致件数)、`suspect_ratio` (怪しい通信の割合 = 探索パスか、レート制限・既定の action・sign-in のパス以外で BLOCK された IP からの一致)、`matching_days` / `days` (一致した日数 / 集計の日数)
+- **Challenge / CAPTCHA の状況** (`kind: observation`、`about: challenge_impact`、`reason: informational`): 出した数の多いルールごとに毎回 1 件。`issued` (出した件数)、
+  `solve_ratio` (解かれた割合 = 解いた IP / 出した IP。日ごとの値を期間で足した比)、`issued_non_get` (GET 以外。構造上解けない)、`paths` (主なパスと割合)。
+  割合が低いのは「ボットを止めている」とも「解けない通信が止まっている」とも読めるので、解釈せず数字だけを書く
 - 根拠の読み方: `distinct_ips_max_per_day` は日ごとの異なり IP 数の最大で、期間全体の IP 数の**下限**。`count` などは期間 (`days` 日) の合計。
   レートの値 (`p99_per_5min`、`proposed_limit`、`current_limit_per_5min`) は 1 IP あたり 5 分間の件数
 
 書き起こし方:
 
 - 提案ごとに「何を・なぜ (evidence の数字)・段階 (まず COUNT で様子を見る / 見直す)」を書く。**候補に無い提案を足さない**。数字を作らない
+- challenge_on_app_path は「対象から外す (scope-down)・条件を絞る」方向だけを書く。Challenge / CAPTCHA を BLOCK に変えることは勧めない
 - count_rule_status は事実 (一致件数・割合・日数) だけを書く。「BLOCK に上げるべき」とは書かない (割合が高くても、切り替えは人が計画して決める)
 - observation は「提案はしないが気づいたこと」として、理由 (`reason`) と一緒に事実だけを書く。observation を提案に格上げしない
 - 攻撃そのもの (同じ IP の探索・総当たり) は findings (waf_block_trend・probe_paths・login_bruteforce) の方に出る。proposals と同じ IP・パスなら関連付けてよい

@@ -593,3 +593,41 @@ func TestEndpointAbuseConfig(t *testing.T) {
 		t.Fatalf("override threshold: %v", err)
 	}
 }
+
+// wafv2 のソースの resources (httpSourceId の完全一致か glob)。設計: WAF v2 (ADR 0028)
+func TestWAFResources(t *testing.T) {
+	src := "  - id: waf\n    kind: cloudwatch-logs\n    log_group: aws-waf-logs-prod\n    format: wafv2\n    resources: %s\nprofiles:"
+	cfg, err := Load(write(t, strings.Replace(minimal, "profiles:", fmt.Sprintf(src, `["123456789012:abcde12345:prod", "app-alb-*"]`), 1)))
+	if err != nil || strings.Join(cfg.Sources[1].Resources, ",") != "123456789012:abcde12345:prod,app-alb-*" {
+		t.Fatalf("%v %+v", err, cfg)
+	}
+	for _, bad := range []string{`[""]`, `["a/b c"]`} {
+		if _, err := Load(write(t, strings.Replace(minimal, "profiles:", fmt.Sprintf(src, bad), 1))); err == nil || !strings.Contains(err.Error(), "resources") {
+			t.Fatalf("%q: %v", bad, err)
+		}
+	}
+	nginx := "  - id: web\n    kind: cloudwatch-logs\n    log_group: prod-nginx-access\n    format: nginx_access\n    resources: [x]\nprofiles:"
+	if _, err := Load(write(t, strings.Replace(minimal, "profiles:", nginx, 1))); err == nil || !strings.Contains(err.Error(), "only for format wafv2") {
+		t.Fatalf("nginx: %v", err)
+	}
+}
+
+func TestWAFReviewChallengeConfig(t *testing.T) {
+	cfg, err := Load(write(t, minimal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wr := cfg.Checks.WAFReview
+	if wr.ChallengeMinDistinctIPs != 10 || wr.ChallengeSolveRatio != 0.5 || wr.ChallengeTopRules != 10 {
+		t.Fatalf("defaults: %+v", wr)
+	}
+	for _, bad := range []string{
+		"  waf_review:\n    challenge_solve_ratio: 1.5\n",
+		"  waf_review:\n    challenge_min_distinct_ips: -1\n",
+		"  waf_review:\n    challenge_top_rules: -1\n",
+	} {
+		if _, err := Load(write(t, minimal+"checks:\n"+bad)); err == nil || !strings.Contains(err.Error(), "challenge") {
+			t.Fatalf("%q: %v", bad, err)
+		}
+	}
+}

@@ -2,11 +2,13 @@
 # 試験用の WAF (config の waf.enabled: true) の API に curl で通信を送り、WAF のログ (aws-waf-logs-<prefix>) に
 # ALLOW / COUNT / BLOCK の行を作る。送るのは sandbox の API (mock 統合で固定の 200) だけ。送信元はこのホストの IP 1 つ。
 #
-#   SANDBOX_ACCOUNT=123456789012 ./06-waf-traffic.sh [正規 (既定 60)] [探索 (既定 20)] [攻撃らしいクエリ (既定 20)] [/login の連打 (既定 150)]
+#   SANDBOX_ACCOUNT=123456789012 ./06-waf-traffic.sh [正規 (既定 60)] [探索 (既定 20)] [攻撃らしいクエリ (既定 20)] [/login の連打 (既定 150)] [Challenge / CAPTCHA 宛 (既定 20)]
 #
 # 任意: LOGIN_INTERVAL  /login の連打の間隔 (秒、既定 0.4)。WAF のレート制限は検出まで数十秒かかるので、1 分ほどかけて送る
 #
-# 何が BLOCK / COUNT / ALLOW になるはずかは scenarios/README.md。
+# Challenge / CAPTCHA 宛は config の waf.challenge / waf.captcha を true で deploy したときに Challenge (GET /search) と CAPTCHA (/api/contact) を受ける。
+# curl はトークンを得られない (解かない) ので、ログには「出した」行だけが出る。無効なら ALLOW になるだけ。
+# 何が BLOCK / COUNT / ALLOW / CHALLENGE / CAPTCHA になるはずかは scenarios/README.md。
 # 書き込む: なし (AWS の API は sts:GetCallerIdentity と cloudformation:DescribeStacks を読むだけ。HTTP の通信で WAF のログが増える)
 source "$(dirname "$0")/lib.sh"
 require_sandbox_account
@@ -15,8 +17,9 @@ NORMAL="${1:-60}"
 PROBES="${2:-20}"
 ATTACKS="${3:-20}"
 LOGINS="${4:-150}"
+CHALLENGES="${5:-20}"
 LOGIN_INTERVAL="${LOGIN_INTERVAL:-0.4}"
-for n in "$NORMAL" "$PROBES" "$ATTACKS" "$LOGINS"; do
+for n in "$NORMAL" "$PROBES" "$ATTACKS" "$LOGINS" "$CHALLENGES"; do
   [[ "$n" =~ ^[0-9]+$ ]] || { echo "件数は 0 以上の整数で指定してください: $n" >&2; exit 2; }
 done
 
@@ -81,6 +84,16 @@ for _ in $(seq "$LOGINS"); do
   sleep "$LOGIN_INTERVAL"
 done
 
-echo "送った: $API_URL (正規 $NORMAL、探索 $PROBES、攻撃らしい $ATTACKS、/login $LOGINS)"
-echo "群 応答コード 件数 (403 は WAF の BLOCK か、API に無いパス。429 は API Gateway のスロットリング)"
+# 5. Challenge / CAPTCHA 宛 (ブラウザらしい Accept で GET。トークンは持たないので、ルールが有効なら Challenge は 202、CAPTCHA は 405)
+for n in $(seq "$CHALLENGES"); do
+  ua="${UAS[$((n % ${#UAS[@]}))]}"
+  if (( n % 2 == 0 )); then
+    send challenge -A "$ua" -H 'Accept: text/html' --get --data-urlencode "q=shoes $n" "$API_URL/search"
+  else
+    send captcha -A "$ua" -H 'Accept: text/html' "$API_URL/api/contact"
+  fi
+done
+
+echo "送った: $API_URL (正規 $NORMAL、探索 $PROBES、攻撃らしい $ATTACKS、/login $LOGINS、Challenge / CAPTCHA 宛 $CHALLENGES)"
+echo "群 応答コード 件数 (403 は WAF の BLOCK か、API に無いパス。429 は API Gateway のスロットリング。202 は Challenge、405 は CAPTCHA)"
 sort "$results" | uniq -c | awk '{ printf "  %-8s %s %d\n", $2, $3, $1 }'

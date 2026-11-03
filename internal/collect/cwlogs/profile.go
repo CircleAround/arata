@@ -83,6 +83,15 @@ func ProfileFor(src config.Source) (Profile, error) {
 	if src.StreamPrefix != "" {
 		body = "filter @logStream like /^" + regexLiteral(src.StreamPrefix) + "/\n| " + body
 	}
+	if len(src.Resources) > 0 {
+		// 決定 (ADR 0028): 資源 (httpSourceId) で絞るのは前処理に入れる。解釈率・全集計が同じ範囲を数える。
+		// Insights はロググループ全体をスキャンするので費用は減らない
+		alts := make([]string, len(src.Resources))
+		for i, r := range src.Resources {
+			alts[i] = GlobRegex(r)
+		}
+		body += "\n| filter httpSourceId like /^(" + strings.Join(alts, "|") + ")$/"
+	}
 	p.Prelude = body
 	return p, nil
 }
@@ -144,6 +153,12 @@ func insightsRegex(expr string) string {
 // regexLiteral は文字列を Insights の /.../ 内で文字どおりに一致させる表現にする。
 func regexLiteral(s string) string {
 	return strings.ReplaceAll(regexp.QuoteMeta(s), "/", `\/`)
+}
+
+// GlobRegex は glob (`*` = 任意の文字列、`?` = 任意の 1 文字) を Insights の /.../ 内の正規表現にする。
+func GlobRegex(glob string) string {
+	r := regexLiteral(glob)
+	return strings.NewReplacer(`\*`, ".*", `\?`, ".").Replace(r)
 }
 
 // stringLiteral は Insights の "..." 文字列リテラル。

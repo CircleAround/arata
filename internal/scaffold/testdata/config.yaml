@@ -54,7 +54,9 @@ sources:
   #   kind: cloudwatch-logs
   #   log_group: aws-waf-logs-my-app
   #   format: wafv2
+  #   max_scan_gb: 50                            # WAF のログは大きい。必ず設定する (目安は arata doctor の cost の推奨値)
   #   # strip_path_prefix: /prod                 # API Gateway の REST API はパスの前にステージ名が付く。探索パス・パスの群の判定の前に外す
+  #   # resources: ["app/app-alb/*"]             # 集計する資源 (ログの httpSourceId。glob 可)。WebACL を staging と共有するとき本番だけを見る。費用は減らない
 
 # チェック一覧 (周期 / 型 / 必要なレコード)。event 型は窓内の出来事、state 型は今の状態を報告する。
 #   root_usage            hourly  event  trail_event     ルートユーザーの利用 (critical)
@@ -155,6 +157,9 @@ checks:
     rate_loose_factor: 10                        # 既存のレート制限が観測の最大のこの倍より高ければ緩すぎる (p99 より低ければ厳しすぎる)
     unused_days: 30                              # 使われていないルールとみなす一致 0 の日数 (この日数分のデータが要る)
     max_proposals: 20                            # 候補の種類ごとに出す上限 (根拠の強い順)
+    challenge_min_distinct_ips: 10               # 正規の画面への Challenge / CAPTCHA の提案に要る、出した異なり IP (日ごとの最大)
+    challenge_solve_ratio: 0.5                   # 同じ提案に要る、解かれた割合 (解いた IP / 出した IP) の下限。高い = 人が解いている
+    challenge_top_rules: 10                      # Challenge / CAPTCHA の状況 (challenge_impact) を毎回載せるルールの数
   access_denied:
     error_codes: [AccessDenied, AccessDeniedException, UnauthorizedOperation, Client.UnauthorizedOperation] # 拒否とみなす CloudTrail の errorCode (完全一致)。events に残す条件なので overrides では変えられない。後から足したコードは過去分が無いので平常帯 0 から始まる
     min_distinct_apis: 5                         # 拒否された API の種類がこれ以上 (かつ平常帯超え) で報告 (medium)

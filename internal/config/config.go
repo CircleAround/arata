@@ -68,6 +68,9 @@ type Source struct {
 	// StripPathPrefix は wafv2 のログの httpRequest.uri の前に付く接頭辞 (API Gateway の REST API のステージ名 `/prod` など)。
 	// 探索パス・パスの群の判定とパスの正規化の前に外す (ADR 0023)。集計条件。wafv2 のときだけ。
 	StripPathPrefix string `yaml:"strip_path_prefix"`
+	// Resources は wafv2 のログのうち集計する資源 (httpSourceId の完全一致か、`*` / `?` の glob)。空なら全部。
+	// 1 つの WebACL を本番と staging の資源が共有するときに本番だけを監査する (ADR 0028)。集計条件。スキャン量 (費用) は減らない。
+	Resources []string `yaml:"resources"`
 	// MaxScanGB は 1 回の収集でこのソースが Insights でスキャンしてよい量 (GB)。0 なら無制限。超えたら QUERY_LIMIT。
 	MaxScanGB float64 `yaml:"max_scan_gb"`
 	// IngestDelay はイベントが起きてから取得できるようになるまでの遅延の見込み。収集は [From - IngestDelay, To) を引き、

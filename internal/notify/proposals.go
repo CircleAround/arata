@@ -57,6 +57,8 @@ var proposalKeys = map[string][]string{
 	"rate_limit_loose":   {"path_group", "current_limit_per_5min", "max_per_5min", "p99_per_5min", "proposed_limit"},
 	"rate_limit_tight":   {"path_group", "current_limit_per_5min", "max_per_5min", "p99_per_5min", "proposed_limit"},
 	"unused_rule":        {"days_without_match"},
+	// ADR 0028
+	"challenge_on_app_path": {"kind", "issued", "distinct_ips_max_per_day", "solve_ratio", "days"},
 }
 
 // Writeup は LLM が書き起こした提案 1 件 (id は proposalsInput が振ったもの)。
@@ -380,6 +382,7 @@ func ProposalsSystemPrompt(context, playbooks string) string {
 - 候補を BLOCK に強めない。COUNT → BLOCK の切り替えや、BLOCK のルールを足すことを勧めない。設定例の action は Count にするか、action を書かず変更点 (limit・scope-down・除外) だけを示す。設定例に Block の action を書かない。
   「BLOCK に切り替える」のような書き方は、否定や前提の説明の文でも使わない (通知の側で検査して、その項目を捨てる)。
 - stage が count_first なら「まず COUNT で様子を見る」、review なら「人が見直す (変更を勧めるものではない)」として進め方を書く。unused_rule は削除を勧めない。
+- challenge_on_app_path は Challenge / CAPTCHA を正規の画面から外す (scope-down・条件を絞る) 方向だけを書く。Challenge / CAPTCHA を BLOCK に変えることは勧めない。
 - 数字は evidence と summary にあるものだけを使い、作らない。重大度や判定は書かない。
 - ヘッダー・クエリ・Cookie などの生の値は入力に無い。推測で補わない。個人を特定できる値を書かない。
 - what・why・how は各 120 字程度。summary と evidence の数字は通知に別に表示されるので、全部を繰り返さない。
