@@ -30,6 +30,7 @@ var Descriptions = map[string]string{
 	"secret_access":        "秘匿値 (Secrets Manager・SSM SecureString) の初めての読み手・一括読み出し (low / medium / high)",
 	"login_bruteforce":     "sign-in 失敗の IP 別件数が平常帯超え (medium)",
 	"probe_paths":          "機密パス探索の 403/404 が平常帯超え (low)",
+	"endpoint_abuse":       "設定した画面への多数の IP からの短時間の集中・「A のあと B」の連鎖がふだん超え。endpoints が空なら何もしない (medium / low)",
 	"waf_block_trend":      "WAF の新しく鳴り始めたルール・Top IP の入れ替わり (low)",
 	"ai_path_usage":        "allowlist で tags: [ai] の主体の利用を主体 × 送信元 IP で毎回 1 行 (info。自己監査)",
 	"credential_hygiene":   "未使用のアクセスキー・MFA 無しのコンソールユーザー・ルートのアクセスキー (medium / high)",
@@ -57,6 +58,16 @@ var paramComments = map[string]string{
 	"probe_paths.min_count":                  "平常帯の下限",
 	"probe_paths.min_baseline_days":          "「初出」判定に要る過去日数",
 	"probe_paths.top_ip_min_count":           "その日の最多 IP が初出なら、この件数以上で報告",
+	"endpoint_abuse.endpoints":               "見る画面 (例 [{ name: signup, paths: [/signup], methods: [POST] }])。空なら何もしない。paths は glob (* は 1 区間、** は 0 区間以上、:id は数字か UUID)。sources: [<ソース ID>] で数えるソースを選ぶ (http_access のみ)。集計条件",
+	"endpoint_abuse.window":                  "集計の時間幅 (1 日を割り切る 1m〜1h)。集計条件",
+	"endpoint_abuse.baseline_days":           "平常帯 = 過去 baseline_days 日の全部の時間幅の p99",
+	"endpoint_abuse.min_baseline_days":       "平常帯を使うのに要る、ログを収集した過去日数 (足りない間は min_* の絶対の閾値だけで判定)",
+	"endpoint_abuse.factor":                  "閾値 = 平常帯 × factor (と min_* の大きいほう)",
+	"endpoint_abuse.min_distinct_ips":        "時間幅ごとの異なり IP 数の下限 (分散した集中。medium)",
+	"endpoint_abuse.min_count":               "時間幅ごとの件数の下限 (量。low)",
+	"endpoint_abuse.ua_concentration":        "同じ UA が min_ips 以上の IP にまたがり平常帯も超えたら根拠に添える (単独では報告しない。UA はハッシュだけ保存)",
+	"endpoint_abuse.follow_ups":              "「A のあと B」の連鎖 (例 [{ from: signup, to: message, within: 30m, min_ips: 5 }])。集計条件",
+	"endpoint_abuse.exclude_paths":           "endpoints に当たっても数えないパス (glob)。集計条件",
 	"waf_block_trend.top_n":                  "BLOCK 件数の Top IP の入れ替わりを見る数",
 	"waf_block_trend.min_count":              "Top IP の新顔として報告する BLOCK 件数の下限",
 	"waf_block_trend.new_rule_min_count":     "新しく鳴り始めたルールとして報告する BLOCK 件数の下限",
@@ -254,7 +265,7 @@ func flow(v any) string {
 	if err := n.Encode(v); err != nil {
 		panic(err) // 既定値の型は固定なので起きない
 	}
-	if n.Kind == yaml.SequenceNode {
+	if n.Kind == yaml.SequenceNode || n.Kind == yaml.MappingNode {
 		n.Style = yaml.FlowStyle
 	}
 	out, err := yaml.Marshal(&n)

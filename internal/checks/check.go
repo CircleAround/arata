@@ -97,7 +97,7 @@ func NewRegistryFor(c config.Checks) *Registry {
 		DefenseEvasion{Config: c.DefenseEvasion, LogBaselineDays: max(c.LoginBruteforce.Baseline.BaselineDays, c.ProbePaths.Baseline.BaselineDays)},
 		PublicExposure{Config: c.PublicExposure},
 		PrincipalNewSource{Config: c.PrincipalNewSource, AccessDenied: c.AccessDenied}, SecretAccess{Config: c.SecretAccess},
-		LoginBruteforce{Config: c.LoginBruteforce}, ProbePaths{Config: c.ProbePaths}, WAFBlockTrend{Config: c.WAFBlockTrend}, AIPathUsage{},
+		LoginBruteforce{Config: c.LoginBruteforce}, ProbePaths{Config: c.ProbePaths}, EndpointAbuse{Config: c.EndpointAbuse}, WAFBlockTrend{Config: c.WAFBlockTrend}, AIPathUsage{},
 		CredentialHygiene{Config: c.CredentialHygiene}, GuardDutyFindings{}, Posture{Config: c.Posture}, AccessAnalyzer{},
 		WAFReview{Config: c.WAFReview, SignInPaths: c.LoginBruteforce.Paths, ProbePaths: c.ProbePaths.Paths}} {
 		r.Register(ch)

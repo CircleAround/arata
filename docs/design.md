@@ -172,6 +172,16 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
   グループの中は `ruleGroupList.N.nonTerminatingMatchingRules.0.action`) が食い違うので両方を受け付ける。期限切れ (failureReason あり) は受理としない。
   解いた IP は「出した IP」との積集合 (同じ日・同じ method とパス・同じ種類)。トークンはルールで共有されるのでルールでは突き合わせない
 
+決定 (endpoint_abuse の集計。ADR 0030): http_access のソースは、`checks.endpoint_abuse.endpoints` の画面ごとに 1 本
+`filter <パス・メソッド・ステータス> | stats count(*), min(@timestamp), max(@timestamp) by bin(<window>), ip, ua` を流し、
+件数・異なり IP・同じ UA の広がり・連鎖を Go で数える (指標ごとに分けると画面 × 3 回スキャンし、Insights の count_distinct は概数のため)。
+- UA は結果を受け取った直後にハッシュにし、原文は保存・ログ出力しない。UA を出さない形式 (json で `ua` の対応が無いなど) では ua で group by しない
+- 行数の上限 (10000) は UTC の 1 日ずつ流して避け、それでも当たればその範囲を時間幅に揃えて半分に分けて引き直す (1h まで。分けてもスキャン量は範囲に比例するので、増えるのは引き直した分だけ)。
+  それでも当たれば WARN と `stats.truncated` (`endpoint_abuse:<画面>`)
+- 費用: 画面ごとに 1 回、既存の集計と同じ範囲 (窓の始まりの日の 0 時から窓の終わり) をスキャンする。画面 2 つなら http_access のソースのスキャンは 4 本 → 6 本 (約 1.5 倍)。
+  `max_scan_gb` がそのまま効く (超えたら QUERY_LIMIT)。`endpoints` が空なら流さない
+- 拡張点: 集計の軸 (`endpointGroupFields`) にフィールドを足せば行ごとの値として Go に渡る。次の段階でアプリのログからメールのドメインだけを取り出して画面に添えるときはここに足す
+
 ### 2-1. 形式プロファイルの種類 (JSON ログと非 JSON ログ)
 
 アプリの言語・フレームワークで形式は変わるので、プロファイルは「組み込み」と「汎用」の 2 系統にする。
@@ -407,7 +417,7 @@ S3 の条件付き書き込みでロック)。SQLite ファイルは数十 MB �
 | `principals` | arn, kind (user/role/assumed-role/root), first_seen, last_seen, status (unknown/approved/expired/baseline) | 主体の初出判定。決定: `init` のベースライン収集で初出した主体は `baseline` とし new_principal の対象外。evaluate 時に allowlist から approved / expired を同期する |
 | `principal_ips` | arn, ip, country, first_seen, last_seen, count | 主体 × IP の初出判定。決定: count は各 run の窓 [From, To) の件数の和 (再走査の重なり区間は行を初めて作るときだけ数える。3 章) |
 | `events` | time, source, name, principal_arn, ip, region, resource, data | 「注目イベント」のみ (ルート利用、IAM 変更など)。全 CloudTrail は保存しない。決定: 注目の判定は collector 側 (`cloudtrail.DefaultNotable`) で行い、ルート利用・AssumeRole*・IAM / CloudTrail / GuardDuty / Access Analyzer / Organizations の書き込み・秘匿値取得・SSM セッション・公開設定変更を残す。決定: defense_evasion / public_exposure が見る操作 (ログの削除・保持期間、フローログの削除、Config・Security Hub の停止、WAF のログ設定、S3 のバケットポリシーの削除・ライフサイクル、スナップショットの共有、Lambda の AddPermission など) だけを足し、全書き込みは足さない。一覧はチェック側 (`checks.DefenseEvasionAPIs` / `PublicExposureAPIs`) にあり、collector のテストで突き合わせる。該当する操作だけ requestParameters から判定に要る値を `data` に取り出す (ポリシー全文は残さない。ADR 0026)。決定: 拒否された呼び出し (errorCode が `checks.access_denied.error_codes` に入るもの) も読み取りを含めて残す (access_denied の元。コードは設定から `cloudtrail.NotableWith` に渡す。ADR 0021)。決定 (ADR 0027): 秘匿値の読み取り (GetSecretValue・BatchGetSecretValue・GetParameter(s)・GetParametersByPath) は名前 / ARN・パス・`recursive`・`with_decryption` (常に残す。無いのは以前の版で集めたもの) だけを `data` に取り出す (値は CloudTrail に入らない)。BatchGetSecretValue も注目イベントに足した (一覧は `checks.SecretReadAPIs`)。`event_id` で重複を排除する (複数リージョンを引いた場合の二重も同じ仕組みで防ぐ。collector 側でも同一 Collect 内の event_id は 1 回だけ数える)。決定: `collected_at` (最初に収集した run の時刻) を持ち、再走査で遅れて届いたイベントを見分ける (3 章、ADR 0013) |
-| `metrics` | date, source, metric, key, value | 日次集計 (`sign_in_failures` by ip、`admin_404` by ip、`waf_block` by rule)。平常帯の計算元。決定: 集計元のレコード種類 `from` 列を追加。主キーは (date, source, metric, key) で、後から来た値で**置き換える** (3 章の決定により後の値ほど完全)。raw JSONL には追記されるので rebuild は行順に適用すれば同じ結果になる。日は UTC。決定 (ADR 0027): cloudtrail collector も主体の活動の日次集計を出す: `principal_source` (key `<主体 ARN>\|<送信元の /24・/48>`)、`principal_source_writes` (同じ key の成功した書き込み)、`principal_write_region` (key `<主体 ARN>\|<リージョン>` の成功した書き込み)。対象は IAM ユーザーとロール (のセッション)、送信元は IP のときだけ。cloudtrail は日の頭から引き直さないので、置き換えの規則のため値は「その日を最後に引いた run が見た件数」(下限) になる。判定は「その日に有ったか」と下限値にだけ使う。期間レポートの推移表には出さない。Yields に metric は足さない (http_access / waf_action のチェックの skip 判定を変えないため)。行数の見積もり: 1 日あたり (主体数 × その日の送信元の数) × 2 + (主体数 × 書き込みのリージョン数)。主体 50・送信元 2 なら 1 日 250 行、400 日で 10 万行 (数十 MB 未満)。Lambda などサービスが引き受けるロールは送信元が多く、数十のロールが 1 日数十の /24 を使う環境では年 100 万行に近づく。多ければ prune を入れるときに `principal_*` の保持を baseline_days の数倍 (例 90 日) に短くする (判定は 30 日しか見ない) |
+| `metrics` | date, source, metric, key, value | 日次集計 (`sign_in_failures` by ip、`admin_404` by ip、`waf_block` by rule)。平常帯の計算元。決定: 集計元のレコード種類 `from` 列を追加。主キーは (date, source, metric, key) で、後から来た値で**置き換える** (3 章の決定により後の値ほど完全)。raw JSONL には追記されるので rebuild は行順に適用すれば同じ結果になる。日は UTC。決定 (ADR 0027): cloudtrail collector も主体の活動の日次集計を出す: `principal_source` (key `<主体 ARN>\|<送信元の /24・/48>`)、`principal_source_writes` (同じ key の成功した書き込み)、`principal_write_region` (key `<主体 ARN>\|<リージョン>` の成功した書き込み)。対象は IAM ユーザーとロール (のセッション)、送信元は IP のときだけ。cloudtrail は日の頭から引き直さないので、置き換えの規則のため値は「その日を最後に引いた run が見た件数」(下限) になる。判定は「その日に有ったか」と下限値にだけ使う。期間レポートの推移表には出さない。Yields に metric は足さない (http_access / waf_action のチェックの skip 判定を変えないため)。行数の見積もり: 1 日あたり (主体数 × その日の送信元の数) × 2 + (主体数 × 書き込みのリージョン数)。主体 50・送信元 2 なら 1 日 250 行、400 日で 10 万行 (数十 MB 未満)。Lambda などサービスが引き受けるロールは送信元が多く、数十のロールが 1 日数十の /24 を使う環境では年 100 万行に近づく。多ければ prune を入れるときに `principal_*` の保持を baseline_days の数倍 (例 90 日) に短くする (判定は 30 日しか見ない)。決定 (ADR 0030): cloudwatch-logs の http_access のソースは endpoint_abuse の画面ごとに `endpoint_abuse_count` / `endpoint_abuse_ips` (key `<画面>\|<HH:MM>`。時間幅の始まり、UTC)、`endpoint_abuse_ua_ips` (key `<画面>\|<HH:MM>\|<UA のハッシュ>`。その幅で最も多くの IP にまたがった UA 1 つ、2 IP 以上のときだけ)、`endpoint_abuse_follow` (key `<from>><to>\|<HH:MM>`。1 以上のときだけ) を出す。IP と UA の原文は保存しない。行数の見積もり: 1 日あたり最大で画面数 × 144 (10 分幅) × 3 + 連鎖数 × 144。画面 3・連鎖 1 で 1 日最大 1,440 行、400 日で 58 万行 (実際は来訪のある幅だけなのでずっと少ない) |
 | `findings` | id, check, key, severity, first_seen, last_seen, last_changed, status (open/resolved/acked/snoozed), reported_at, fingerprint, data, suppressed_severity | 差分判定の中核。決定: `fingerprint` 列を追加 (4-2)。決定: `suppressed_severity` (ack / snooze したときの重大度。open / resolved では空) を追加 (schema 5、ADR 0022)。移行では既存の acked / snoozed の行に今の severity を入れる |
 | `posture` | check, resource, value, first_seen, last_changed | 姿勢チェックの現在値。決定: 作らず `snapshot_items` にまとめた (ADR 0015) |
 | `snapshot_items` | kind, source, key, data, collected_at | 決定: アカウント単位の状態 (認証情報レポート・GuardDuty・Access Analyzer・姿勢・WAF の WebACL の設定) の最新のスナップショット。収集が成功したときだけ (kind, source) 単位で丸ごと置き換える (ADR 0015) |
@@ -534,6 +544,7 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 | ssm_session | daily | trail_event | StartSession の主体が allowlist 外、または深夜帯 | medium |
 | login_bruteforce | daily | http_access | sign-in 失敗の IP 別件数が平常帯 (14 日中央値 × 係数) 超え、Top IP 初出 | medium |
 | probe_paths | daily | http_access | 機密パス探索の 403/404 が平常帯超え | low |
+| endpoint_abuse | daily | http_access (+ ログの総行数 `lines_total`) | 設定した画面 (会員登録・メッセージ送信など) への時間幅 (既定 10 分) ごとの異なり IP 数・件数がふだん (過去の幅の p99) 超え、「A の画面のあと B の画面」の連鎖がふだん超え。決定: ADR 0030 | medium / low |
 | request_burst | daily | http_access | IP 別件数が平常帯超え (決済画面など除外パスを設定可) | low |
 | waf_block_trend | daily | waf_action | 新規に鳴り始めたルール、Top IP 入れ替わり | low |
 | admin_ops_unknown | daily | regex (admin) | 実行ユーザーが admin_users に無い | high |
@@ -562,6 +573,22 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 | login_bruteforce | event | `<ip>` | 重大度 + 理由 (`above_baseline` / `new_top_ip`) | `sign_in_failures` の日次値が「その IP 自身の直近 14 日の中央値 × factor (既定 3)、ただし min_count (既定 20) 以上」を超えた。または閾値未満でもその日の最多 IP が過去 14 日に一度も無く、top_ip_min_count (既定 5) 件以上 |
 | probe_paths | event | `<ip>` | 重大度 + 理由 | `probe_hits` について同上 (min_count 既定 10)。Data にその日の多かったパス (全 IP 合計の上位 5) を添える |
 | waf_block_trend | event | `rule\|<ルール ID>` / `top_ip\|<IP>` | 重大度 + 理由 (`new_rule` / `new_top_ip`) | 過去 14 日に BLOCK の無いルールが new_rule_min_count (既定 1) 件以上 BLOCK した / その日の BLOCK 件数 Top N (既定 5、min_count 10 以上) に過去 14 日合計の Top N に居ない IP が入った |
+
+決定 (endpoint_abuse。ADR 0030):
+
+| チェック | Mode | Key | Fingerprint | 判定 |
+|---|---|---|---|---|
+| endpoint_abuse | event | `<endpoint 名>` / 連鎖は `<from>><to>` | 重大度 + 理由 (`distributed_burst` / `volume` / `same_user_agent` / `follow_up`) | 時間幅ごとの異なり IP 数が `min_distinct_ips` (既定 10) 以上かつ平常帯 × factor (既定 3) 超えで medium。件数が `min_count` (既定 20) 以上かつ平常帯 × factor 超えで low (両方なら 1 件)。同じ UA が `ua_concentration.min_ips` (既定 5) 以上の IP にまたがり平常帯 × factor も超えれば根拠に添える (単独では報告しない)。連鎖した IP 数が `min_ips` (既定 5) 以上かつ平常帯 × factor 超えで medium |
+
+- 決定: 既定は `endpoints` が空 = 何もしない (Insights のクエリも流さない。ADR 0014)。画面は利用者が設定で増やす (会員登録・ログイン・モバイルアプリの API など、数の上限なし)。画面ごとに数えるソースを `sources: [<ソース ID>]` で選べる (空なら http_access を出す全部。複数のソースが同じ画面を数えると件数が重なる)
+- 決定: 今回は http_access のソース (nginx_access・alb_access・json・regex) だけ。wafv2 (ステータスが無く、UA はヘッダーの配列の中) と、アプリのログからの追加フィールド (メールのドメインなど) は次の段階。wafv2 のソースを `sources` に書くと「未対応」の読み込みエラー。対応するときは Needs を設定 (画面ごとのソース) から決める
+- 決定: 結果は事実 (件数・異なり IP・同じ UA の広がり・ふだんの上限) として伝え、遮断の提案にしない。重大度は medium まで。IP は保存しない (件数だけ)。UA は sha256 の先頭 8 文字と IP 数だけ (原文は保存・ログ出力しない)
+- 決定: 平常帯は評価する最初の日の前日から `baseline_days` (既定 14) 日のうち、ログを収集した日 (http_access のソースの `lines_total` のある日) の全部の時間幅の値 (無い幅は 0) の p99。`lines_total` はロググループ全体の行数なので、画面に来ない日も収集した日として数える (ADR 0027 の「収集し終えた日」の考え方。Web のログに行の無い日はほぼ無いので、run の stats に印を足す方式にはしない)。収集した日が `min_baseline_days` (既定 7) 未満の間は絶対の閾値 (`min_*`) だけで判定し、Data の `baseline_used: false` と Summary に出す。まれにしか使われない画面は p99 が 0 になり、閾値は `min_*` になる
+- 決定: 評価する幅は終わりが窓 (From, To] に入るもの (完了した幅を 1 回だけ)。連鎖は幅の終わり + `within` が窓に入るもの (to に来るのを待つ)。窓が 0 時の近くで始まるときは前日の連鎖の幅を前回の run の値 (それより後の to を見ていない) で評価する
+- 決定: 連鎖は同じソースの中で突き合わせる (from と to の画面を別々のソースで数えると連鎖は数えない。IP を保存しないため)
+- 決定: 報告は run ごとに画面 1 件と連鎖 1 件。Summary は最も異なり IP の多い幅、超えた幅は Data の `bins` (最大 10、`bins_total`)
+- 決定: パスはクエリを落とし、数字・UUID の区間を `:id` とみなして照合する (waf_review の正規化と同じ意味)。glob の `*` は 1 区間、`**` は 0 区間以上、`:id` (と数字だけの区間) は数字か UUID。Insights に正規表現の置換が無いので、glob を同じ意味の正規表現にして Insights の filter で絞る。`exclude_paths` も glob
+- 決定: ログインのパスは login_bruteforce と重なってよい (login_bruteforce は IP ごとの失敗、こちらは画面全体への分散した集中を見る)
 
 決定 (access_denied。ADR 0021):
 
