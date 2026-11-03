@@ -3,19 +3,24 @@
 (小) 10/20 09:00 〜 10/21 09:00 (UTC) ・ 提案 5 件 ・ 観察 4 件 | arata の規則による候補です。適用は人が判断します (aratam は WAF の設定を変えません)
 ---
 🛡️ *誤検知の疑い* — `CrossSiteScripting_BODY` が POST /posts/:id で 250 件 / 7 日
-→ このパスだけ `CrossSiteScripting_BODY` を COUNT にして様子を見る
+正規の画面らしい通信が BLOCK されている (7 日で 250 件・IP 最大 60/日)
+→ WebACL `prod-waf` のルール `CrossSiteScripting_BODY` を、`POST /posts/:id` に限って COUNT にする (RuleActionOverrides か scope-down)。1〜2 週間、この画面の一致が正規の通信かを見る
 (小) IP 最大 60/日・一致した日 7/7 日・ACL prod-waf
 🛡️ *探索パスが WAF を通過* — 14 件 / 7 日・2 パス
-→ 探索パスのルールを COUNT で追加して様子を見る
+設定ファイルや管理画面を探す通信が WAF を素通りしている (7 日で 14 件)
+→ WebACL `prod-waf` に、`/.env`・`/.git/config` を URI で照合するルールを COUNT で追加し、1〜2 週間、正規の通信が一致しないかを見る
 (小) /.env 13・/.git/config 1
 🛡️ *レート制限が無い* — `/api/*` で 1 IP 最大 400 件 / 5 分
-→ limit 100 のレートベースのルールを COUNT で足して様子を見る
+1 IP の大量アクセスを止めるルールが無い (最大 400 件 / 5 分)
+→ WebACL `prod-waf` に、`/api/*` を対象とする limit 100 / 5 分 (IP 単位) のレートベースのルールを COUNT で追加し、1〜2 週間、正規の利用者が当たらないかを見る
 (小) p99 20・提案 limit 100 / 5 分・7 日の観測
 🛡️ *レート制限が緩い* — `rate-login` limit 1000 / 5 分・観測の最大 9
-→ limit 100 への見直しを検討する
+limit が観測よりずっと高く、大量アクセスを止められない (limit 1000・最大 9)
+→ WebACL `prod-waf` のルール `rate-login` の limit を 1000 から 100 / 5 分に変えるかを、`/login` の観測 (最大 9・p99 4) と照らして見直す
 (小) p99 4・提案 limit 100・パスの群 /login
 🛡️ *一致していないルール* — `block-legacy-admin` 30 日一致なし
-→ 残す理由を確かめる (削除は勧めない)
+役割が分からないまま残っているルールの可能性がある (30 日一致なし)
+→ WebACL `prod-waf` のルール `block-legacy-admin` が何を守るためのものかを確かめ、残す理由を記録する (削除は勧めない)
 (小) action BLOCK
 ---
 *観察* (提案はしないが気づいたこと)

@@ -13,7 +13,8 @@ import (
 // WAF の改善提案 (2 通目) の Block Kit (slack.format: blocks。ADR 0029)。
 //
 // 決定 (試験チャンネルで「文章が長く俯瞰しにくい」という意見を受けて):
-//   - 提案 1 件 = 見出し (種類の日本語 + 主な数字) と「→ 次の一手」の section、根拠の context の 2 ブロック (表示は 3 行)。
+//   - 提案 1 件 = 見出し (種類の日本語 + 主な数字)・なぜ困るか (規則の固定文 + 数字)・「→ 次の一手」の section と、根拠の context の 2 ブロック (表示は 4 行まで)。
+//   - 「→」は「どこに (WebACL・ルール)・何を (パス・条件)・どうする」を具体的に書く (LLM の next、無ければ種類ごとのテンプレート。140 字まで)。
 //   - 規則の長い summary・LLM の何を・なぜ・進め方・設定例は Slack に出さない。全文は入力ディレクトリの waf-proposals.md に書き出し、最後の context にパスを書く。
 //   - LLM が Slack 用に書くのは「→」の 1 行 (Writeup.Next) だけ。候補に無いことを書かない・BLOCK に強めないの検査は書き起こし全体と同じ。
 //   - COUNT のルールの状況は 1 ルール 1 行 (「`名前` 140 件・怪しい 100%・7/7 日」)。一致なしは「一致なし: `a` `b`」の 1 行にまとめる。
@@ -173,27 +174,87 @@ func solveRatio(p schema.Proposal) string {
 
 var pathCount = regexp.MustCompile(`\s*\((\d+) 件\)$`)
 
+// maxProposalNextRunes は提案の「→」の上限 (rune 数)。
+// 決定: 80 字では「どこに・何を・どうする」が抜けて具体性がなくなった (試験チャンネルでの意見) ので 140 字にする。
+const maxProposalNextRunes = 140
+
+// probePaths は probe_allowed の上位のパス (件数を除いて `code` に。3 個まで) と、パスの総数。
+func probePaths(p schema.Proposal) ([]string, int) {
+	paths, _ := p.Evidence["paths"].([]any)
+	var out []string
+	for i, x := range paths {
+		if i == maxListItems {
+			break
+		}
+		out = append(out, code(pathCount.ReplaceAllString(fmt.Sprint(x), "")))
+	}
+	return out, len(paths)
+}
+
+func evStr(p schema.Proposal, key string) string {
+	if v, ok := p.Evidence[key]; ok && v != nil {
+		return fmt.Sprint(v)
+	}
+	return ""
+}
+
 // ruleNext は「→」の規則の文言 (provider: none と、LLM が書かなかった・捨てた候補)。
+// 決定: 種類ごとのテンプレートに evidence の値を埋め込み、「どこに (WebACL・ルール)・何を (パス・条件)・どうする (COUNT で何日・何を見る / 対象から外す)」を必ず書く。
+// BLOCK に強める書き方はしない (ADR 0023)。
 func ruleNext(p schema.Proposal) string {
+	acl := "WebACL " + code(p.WebACL)
 	limit := evNum(p, "proposed_limit")
+	target := code(strings.TrimSpace(p.Method + " " + p.Path))
 	switch p.Kind {
 	case "false_positive":
-		return "このパスだけ " + code(ruleName(p)) + " を COUNT にして様子を見る"
+		return fmt.Sprintf("%s のルール %s を、%s に限って COUNT にする (RuleActionOverrides か scope-down)。1〜2 週間、この画面の一致が正規の通信かを見る",
+			acl, code(ruleName(p)), target)
 	case "probe_allowed":
-		return "探索パスのルールを COUNT で追加して様子を見る"
+		ps, n := probePaths(p)
+		paths := strings.Join(ps, "・")
+		if n > len(ps) {
+			paths += fmt.Sprintf(" など %d パス", n)
+		}
+		return fmt.Sprintf("%s に、%s を URI で照合するルールを COUNT で追加し、1〜2 週間、正規の通信が一致しないかを見る", acl, paths)
 	case "rate_limit_missing":
-		return "limit " + Escape(limit) + " のレートベースのルールを COUNT で足して様子を見る"
+		return fmt.Sprintf("%s に、%s を対象とする limit %s / 5 分 (IP 単位) のレートベースのルールを COUNT で追加し、1〜2 週間、正規の利用者が当たらないかを見る",
+			acl, code(evStr(p, "path_group")), Escape(limit))
 	case "rate_limit_loose", "rate_limit_tight":
-		return "limit " + Escape(limit) + " への見直しを検討する"
+		return fmt.Sprintf("%s のルール %s の limit を %s から %s / 5 分に変えるかを、%s の観測 (最大 %s・p99 %s) と照らして見直す",
+			acl, code(ruleName(p)), Escape(evNum(p, "current_limit_per_5min")), Escape(limit), code(evStr(p, "path_group")),
+			Escape(evNum(p, "max_per_5min")), Escape(evNum(p, "p99_per_5min")))
 	case "unused_rule":
-		return "残す理由を確かめる (削除は勧めない)"
+		return fmt.Sprintf("%s のルール %s が何を守るためのものかを確かめ、残す理由を記録する (削除は勧めない)", acl, code(ruleName(p)))
 	case "challenge_on_app_path":
-		return "このパスを " + code(ruleName(p)) + " の対象から外す (scope-down) か条件を絞る"
+		return fmt.Sprintf("ルール %s の対象から %s を外す (scope-down) か、条件を Accept-Language などで絞る", code(ruleName(p)), target)
 	}
 	if s, ok := stageLabels[p.Stage]; ok {
-		return s
+		return acl + " で " + s
 	}
-	return "人が見直す"
+	return acl + " を人が見直す"
+}
+
+// proposalWhy は「なぜ困るか」の 1 行 (種類ごとの固定文 + 数字。規則)。種類が対応表に無ければ空。
+func proposalWhy(p schema.Proposal) string {
+	days := evNum(p, "days")
+	switch p.Kind {
+	case "false_positive":
+		return "正規の画面らしい通信が BLOCK されている" + withUnit(joinNonEmptyWith("・", withUnit(days, "%s 日で ")+withUnit(evNum(p, "count"), "%s 件"),
+			withUnit(evNum(p, "distinct_ips_max_per_day"), "IP 最大 %s/日")), " (%s)")
+	case "probe_allowed":
+		return "設定ファイルや管理画面を探す通信が WAF を素通りしている" + withUnit(withUnit(days, "%s 日で ")+withUnit(evNum(p, "count"), "%s 件"), " (%s)")
+	case "rate_limit_missing":
+		return "1 IP の大量アクセスを止めるルールが無い" + withUnit(evNum(p, "max_per_5min"), " (最大 %s 件 / 5 分)")
+	case "rate_limit_loose":
+		return "limit が観測よりずっと高く、大量アクセスを止められない" + withUnit(joinNonEmptyWith("・", withUnit(evNum(p, "current_limit_per_5min"), "limit %s"), withUnit(evNum(p, "max_per_5min"), "最大 %s")), " (%s)")
+	case "rate_limit_tight":
+		return "limit が観測に近く、正規の利用者が止められるおそれがある" + withUnit(joinNonEmptyWith("・", withUnit(evNum(p, "current_limit_per_5min"), "limit %s"), withUnit(evNum(p, "max_per_5min"), "最大 %s")), " (%s)")
+	case "unused_rule":
+		return "役割が分からないまま残っているルールの可能性がある" + withUnit(evNum(p, "days_without_match"), " (%s 日一致なし)")
+	case "challenge_on_app_path":
+		return "正規の画面で多くの人が " + challengeKind(p) + " を解かされている" + withUnit(solveRatio(p), " (%s)")
+	}
+	return ""
 }
 
 // observationShortLines は観察と COUNT のルールの状況の短い行 (合わせて maxObservationLines まで)。
@@ -296,9 +357,14 @@ func ProposalsBlocks(in *Input, warnings []string, writeups map[string]Writeup, 
 		nums, basis := proposalNumbers(p.Kind, p)
 		next := ruleNext(p)
 		if w, ok := writeups[proposalID(i)]; ok && oneLine(w.Next) != "" {
-			next = Escape(clipRunes(strings.TrimPrefix(oneLine(w.Next), "→ "), maxActionRunes))
+			next = Escape(clipRunes(strings.TrimPrefix(oneLine(w.Next), "→ "), maxProposalNextRunes))
 		}
-		bs := []Block{sectionBlock(fmt.Sprintf("🛡️ *%s*%s\n→ %s", Escape(kindLabel(p.Kind)), withUnit(nums, " — %s"), next))}
+		lines := []string{fmt.Sprintf("🛡️ *%s*%s", Escape(kindLabel(p.Kind)), withUnit(nums, " — %s"))}
+		if why := proposalWhy(p); why != "" {
+			lines = append(lines, why)
+		}
+		lines = append(lines, "→ "+next)
+		bs := []Block{sectionBlock(strings.Join(lines, "\n"))}
 		if basis != "" {
 			bs = append(bs, contextBlock(basis))
 		}
@@ -335,8 +401,10 @@ func ProposalsMarkdown(in *Input, writeups map[string]Writeup, notice string) st
 			next = oneLine(w.Next)
 		}
 		if next == "" {
-			next = strings.ReplaceAll(ruleNext(p), "`", "")
-			next = strings.NewReplacer("&lt;", "<", "&gt;", ">", "&amp;", "&").Replace(next)
+			next = strings.NewReplacer("&lt;", "<", "&gt;", ">", "&amp;", "&").Replace(ruleNext(p))
+		}
+		if why := proposalWhy(p); why != "" {
+			fmt.Fprintf(&b, "- なぜ困るか: %s\n", strings.NewReplacer("&lt;", "<", "&gt;", ">", "&amp;", "&").Replace(why))
 		}
 		fmt.Fprintf(&b, "- 次の一手: %s\n", next)
 		if !ok {

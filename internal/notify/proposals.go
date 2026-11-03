@@ -376,7 +376,7 @@ func ProposalsSystemPrompt(context, playbooks string) string {
 各候補を、次の JSON だけで書き起こしてください (前後に文章やコードフェンスを付けない)。
 
 {
-  "proposals": [{"id": "候補の id", "what": "何を変えるか (1 文)", "why": "なぜか (evidence の数字を根拠に 1〜2 文)", "how": "進め方 (stage に従う。1〜2 文)", "example": "設定例 (WebACL の JSON の断片か CDK の書き方。10 行程度。無ければ空文字)", "next": "通知に「→」として出す次の一手 (1 文、60 字程度。例: 探索パスのルールを COUNT で追加して様子を見る)"}]
+  "proposals": [{"id": "候補の id", "what": "何を変えるか (1 文)", "why": "なぜか (evidence の数字を根拠に 1〜2 文)", "how": "進め方 (stage に従う。1〜2 文)", "example": "設定例 (WebACL の JSON の断片か CDK の書き方。10 行程度。無ければ空文字)", "next": "通知に「→」として出す次の一手 (1〜2 文、100 字程度。どこに・何を・どうするを具体的に)"}]
 }
 
 規則:
@@ -387,7 +387,11 @@ func ProposalsSystemPrompt(context, playbooks string) string {
 - challenge_on_app_path は Challenge / CAPTCHA を正規の画面から外す (scope-down・条件を絞る) 方向だけを書く。Challenge / CAPTCHA を BLOCK に変えることは勧めない。
 - 数字は evidence と summary にあるものだけを使い、作らない。重大度や判定は書かない。
 - ヘッダー・クエリ・Cookie などの生の値は入力に無い。推測で補わない。個人を特定できる値を書かない。
-- next は通知の一覧に 1 行で出る。何をするかだけを短く書き、数字や理由は書かない (根拠の数字は通知に別に表示される)。
+- next は通知の一覧に「→」として 1 行で出る。必ず具体的な名前と値を入れる: どこに (WebACL 名・ルール名)、何を (対象のパス・条件の種類 (URI の照合・scope-down など))、
+  どうする (COUNT で追加して何日・何を見る / 対象から外す など)。「様子を見る」「検討する」だけで終わる抽象的な言い回しを避け、具体的な対象と確認方法を書く。
+  例: 「WebACL `+"`prod-waf`"+` に、`+"`/.env`・`/.git/config`"+` など 5 パスを URI で照合するルールを COUNT で追加し、1〜2 週間、正規の通信が一致しないかを見る」
+  例: 「ルール `+"`search-challenge`"+` の対象から `+"`GET /search`"+` を外す (scope-down) か、条件を Accept-Language などで絞る」
+  なぜ困るか・根拠の数字は通知に別に表示されるので書かない。140 字を超えた分は切られる。
 - what・why・how は各 120 字程度。summary と evidence の数字は通知に別に表示されるので、全部を繰り返さない。
 - 設定例にはコードフェンス (`+"```"+`) を付けない (通知の側で付ける)。
 

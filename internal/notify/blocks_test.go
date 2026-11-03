@@ -336,7 +336,11 @@ func TestBlocksProposals(t *testing.T) {
 	checkGolden(t, "blocks_proposals.txt", strings.ReplaceAll(PlainText(m), dir, "<dir>"))
 	txt := allText(m)
 	for _, want := range []string{
-		"🛡️ *探索パスが WAF を通過* — 14 件 / 7 日・2 パス\n→ 探索パスのルールを COUNT で追加して様子を見る",
+		"🛡️ *探索パスが WAF を通過* — 14 件 / 7 日・2 パス\n設定ファイルや管理画面を探す通信が WAF を素通りしている (7 日で 14 件)\n" +
+			"→ WebACL `prod-waf` に、`/.env`・`/.git/config` を URI で照合するルールを COUNT で追加し、1〜2 週間、正規の通信が一致しないかを見る",
+		"→ WebACL `prod-waf` のルール `CrossSiteScripting_BODY` を、`POST /posts/:id` に限って COUNT にする",
+		"→ WebACL `prod-waf` に、`/api/*` を対象とする limit 100 / 5 分 (IP 単位) のレートベースのルールを COUNT で追加し",
+		"→ WebACL `prod-waf` のルール `rate-login` の limit を 1000 から 100 / 5 分に変えるかを、`/login` の観測 (最大 9・p99 4) と照らして見直す",
 		"/.env 13・/.git/config 1",
 		"🛡️ *誤検知の疑い* — `CrossSiteScripting_BODY` が POST /posts/:id で 250 件 / 7 日",
 		"• `AWS-AWSManagedRulesKnownBadInputsRuleSet` 140 件・怪しい 100%・7/7 日",
@@ -348,15 +352,20 @@ func TestBlocksProposals(t *testing.T) {
 		}
 	}
 	// 規則の長い summary は出さない
-	for _, no := range []string{"RuleActionOverrides", "見直しの候補 (守りとして残す価値"} {
+	for _, no := range []string{"→ 様子を見て除外を確定する", "見直しの候補 (守りとして残す価値"} {
 		if strings.Contains(txt, no) {
 			t.Errorf("must not contain the long summary %q", no)
 		}
 	}
-	// 提案の section は 2 行 (見出しと →) まで
+	// 提案の section は 3 行 (見出し・なぜ困るか・→)。「様子を見る」だけで終わる抽象的な「→」にしない
 	for _, b := range m.Blocks {
-		if b.Type == "section" && b.Text != nil && strings.HasPrefix(b.Text.Text, "🛡️") && strings.Count(b.Text.Text, "\n") != 1 {
-			t.Errorf("a proposal section must be 2 lines: %q", b.Text.Text)
+		if b.Type == "section" && b.Text != nil && strings.HasPrefix(b.Text.Text, "🛡️") {
+			if strings.Count(b.Text.Text, "\n") != 2 {
+				t.Errorf("a proposal section must be 3 lines: %q", b.Text.Text)
+			}
+			if !strings.Contains(b.Text.Text, "`prod-waf`") || strings.HasSuffix(b.Text.Text, "様子を見る") {
+				t.Errorf("the next step must name the WebACL and how to check: %q", b.Text.Text)
+			}
 		}
 	}
 	if !strings.Contains(allText(s.got[0].msg), "WAF の改善提案は別のメッセージ") {
@@ -384,10 +393,10 @@ func TestBlocksProposalsLLM(t *testing.T) {
 	m := s.got[1].msg
 	checkLimits(t, m)
 	txt := allText(m)
-	if !strings.Contains(txt, "→ 投稿画面だけ XSS のルールを COUNT にする &lt;!here&gt;") || !strings.Contains(txt, "→ 探索パスのルールを COUNT で追加して様子を見る") {
+	if !strings.Contains(txt, "→ 投稿画面だけ XSS のルールを COUNT にする &lt;!here&gt;") || !strings.Contains(txt, "→ WebACL `prod-waf` に、`/.env`・`/.git/config` を URI で照合する") {
 		t.Fatalf("%s", txt)
 	}
-	for _, no := range []string{"何を", "RuleActionOverrides", "BLOCK に切り替える", "```"} {
+	for _, no := range []string{"何を:", "\"RuleActionOverrides\"", "BLOCK に切り替える", "```"} {
 		if strings.Contains(txt, no) {
 			t.Errorf("slack must not contain %q", no)
 		}
@@ -454,7 +463,9 @@ func TestBlocksProposalsChallenge(t *testing.T) {
 	checkLimits(t, m)
 	txt := allText(m)
 	for _, want := range []string{
-		"🛡️ *正規の画面に Challenge / CAPTCHA* — `CategoryHttpLibrary` が GET /products/:id で Challenge 160 件 / 7 日・解かれた 80%\n→ このパスを `CategoryHttpLibrary` の対象から外す (scope-down) か条件を絞る",
+		"🛡️ *正規の画面に Challenge / CAPTCHA* — `CategoryHttpLibrary` が GET /products/:id で Challenge 160 件 / 7 日・解かれた 80%\n" +
+			"正規の画面で多くの人が Challenge を解かされている (解かれた 80%)\n" +
+			"→ ルール `CategoryHttpLibrary` の対象から `GET /products/:id` を外す (scope-down) か、条件を Accept-Language などで絞る",
 		"IP 最大 30/日・ACL prod-waf",
 		"• 正規の画面に Challenge / CAPTCHA (閾値未満) — `captcha-login` が GET /login で CAPTCHA 12 件 / 7 日・解かれた 50%",
 		"*Challenge / CAPTCHA*",
@@ -499,5 +510,20 @@ func TestBlocksEndpointAbuse(t *testing.T) {
 	}
 	if strings.Contains(txt, "長い summary") {
 		t.Error("endpoint_abuse must not show the long summary")
+	}
+}
+
+// LLM の固定応答 (testdata/llm/proposals_ok.json) の next は具体的な名前と確認方法を含む見本。Slack の「→」にそのまま出る (140 字まで)。
+func TestBlocksProposalsLLMConcreteNext(t *testing.T) {
+	dir := inputDir(t, withProposals(t, goldenRun(t), testProposals(t)), "")
+	l := &fakeLLM{responses: []string{`{"summary": "要約", "next": []}`, fixture(t, "proposals_ok.json")}}
+	s := &fakeSender{}
+	run(t, dir, s, withBlocks, withLLM(l))
+	txt := allText(s.got[1].msg)
+	if !strings.Contains(txt, "→ WebACL `prod-waf` のルール `CrossSiteScripting_BODY` を `POST /posts/:id` に限って COUNT にし、1〜2 週間、一致した投稿が正規の利用者のものかを見る") {
+		t.Fatalf("%s", txt)
+	}
+	if !strings.Contains(l.systems[1], "抽象的な言い回しを避け") {
+		t.Fatal("the proposals system must ask for a concrete next step")
 	}
 }

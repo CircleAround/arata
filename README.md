@@ -40,7 +40,7 @@ arata を呼ばず、AWS の監査ロールもストアも使わない (出力�
 - Webhook の URL は設定ファイルに書かず、`slack.webhook_env` に書いた名前の環境変数で渡す。LLM に渡すデータは report.json (と下の提案の候補・前提) だけ
 - weekly の report.json に WAF の修正提案の候補 (`proposals`) があれば、「WAF の改善提案」を 2 通目として通常用に送る (ADR 0024)。
   種類・段階・根拠の数字は規則で書き、LLM は候補だけを受け取って「何を・なぜ・進め方・設定例」を書き起こす (候補に無い提案・BLOCK に強める提案は捨てる。observation は LLM に渡さない)。
-  Block Kit では提案 1 件を 3 行 (種類と数字・「→ 次の一手」・根拠) にし、全文と設定例は `--in` のディレクトリの `waf-proposals.md` に書き出す
+  Block Kit では提案 1 件を 4 行 (種類と数字・なぜ困るか・「→ 次の一手」(WebACL・ルール・パス・確認方法まで具体的に)・根拠) にし、全文と設定例は `--in` のディレクトリの `waf-proposals.md` に書き出す
 - `llm.context_file` にアプリの事情 (決済画面はリクエストが多い、監視の送信元など) を Markdown で書くと、LLM に「この監査対象の前提」として渡す。
   判定 (重大度・送り先) は変わらない。例は [examples/aratam-context.md](examples/aratam-context.md) (架空の値)。利用者の環境に置き、16 KiB まで
 
