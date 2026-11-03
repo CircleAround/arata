@@ -36,6 +36,7 @@ func newDoctorCmd(d *Deps, g *globalFlags) *subcmd.Command {
   - config   設定ファイルを読めて、検証を通るか
   - webhook  slack.webhook_env / urgent_webhook_env の環境変数があるか (URL は表示しない)
   - llm      LLM に短い問い合わせを 1 回送り、応答があるか (provider: none なら skip)
+  - context  llm.context_file を書いたとき、読めるか (読めない・16 KiB を超えるなら warn。notify は前提なしで続ける)
 
 ng が 1 つでもあれば終了コード 2。ng の行は標準エラーにも固定語彙の code 付きで出す。`,
 		Args: subcmd.NoArgs,
@@ -51,6 +52,9 @@ ng が 1 つでもあれば終了コード 2。ng の行は標準エラーにも
 			rows := []doctorRow{{status: "ok", item: "config", detail: fmt.Sprintf("%s (name %s、provider %s)", path, cfg.Name, cfg.LLM.Provider)}}
 			rows = append(rows, webhookRows(d, cfg)...)
 			rows = append(rows, llmRow(ctx, d, cfg))
+			if r, ok := contextRow(cfg); ok {
+				rows = append(rows, r)
+			}
 
 			tw := tabwriter.NewWriter(d.Stdout, 0, 0, 2, ' ', 0)
 			fmt.Fprintln(tw, "STATUS\tITEM\tDETAIL")
@@ -169,4 +173,19 @@ func newTestNotifyCmd(d *Deps, g *globalFlags) *subcmd.Command {
 	}
 	cmd.BoolVar(&urgent, "urgent", false, "緊急用の Webhook に送る")
 	return cmd
+}
+
+// contextRow は llm.context_file を読めるか。書いていなければ行を出さない。
+func contextRow(cfg *notify.Config) (doctorRow, bool) {
+	if cfg.LLM.ContextFile == "" {
+		return doctorRow{}, false
+	}
+	if cfg.LLM.Provider == notify.ProviderNone {
+		return doctorRow{"skip", "context", "provider: none では context_file を使わない", ""}, true
+	}
+	text, code, err := cfg.LoadContext()
+	if err != nil {
+		return doctorRow{"warn", "context", err.Error() + " (notify は前提なしで続ける)", code}, true
+	}
+	return doctorRow{"ok", "context", fmt.Sprintf("%s (%d バイト)", cfg.ContextPath(), len(text)), ""}, true
 }

@@ -15,15 +15,23 @@ import (
 )
 
 // fakeClaude は claude の偽の実行ファイル (実際の claude には接続しない)。標準入力・環境変数・作業ディレクトリを記録し、
-// FAKE_MODE が空なら $REC/response をそのまま出す。
+// FAKE_MODE が空なら $REC/response をそのまま出す。引数 (--system-prompt を含む) は呼び出しごとに $REC/args に足す。
+// 標準入力が JSON の配列 (提案の書き起こし) で $REC/response_proposals があれば、そちらを出す。
 const fakeClaude = `#!/bin/sh
 cat > "$REC/stdin"
 env > "$REC/env"
 pwd > "$REC/pwd"
+printf '%s\n' "$@" >> "$REC/args"
+echo "--- end of call ---" >> "$REC/args"
 case "$FAKE_MODE" in
 fail) echo "Not logged in" >&2; exit 1 ;;
 sleep) exec sleep 10 ;;
 esac
+if [ "$(head -c 1 "$REC/stdin")" = "[" ] && [ -f "$REC/response_proposals" ]; then
+  cp "$REC/stdin" "$REC/stdin_proposals"
+  cat "$REC/response_proposals"
+  exit 0
+fi
 cat "$REC/response"
 `
 
@@ -198,5 +206,94 @@ func TestDryRunOutputIsValidUTF8(t *testing.T) {
 		if strings.HasPrefix(l, "• f-002, f-001: ") && utf8.RuneCountInString(strings.TrimPrefix(l, "• f-002, f-001: ")) != 241 {
 			t.Fatalf("incident summary must be 240 runes + …: %d", utf8.RuneCountInString(l))
 		}
+	}
+}
+
+// proposalsInputDir は arata のゴールデンの report.json に proposals (aratam のテストの固定値) を足した出力ディレクトリ。
+func (c *cli) proposalsInputDir() string {
+	c.t.Helper()
+	in := c.inputDir()
+	var m map[string]any
+	b, _ := os.ReadFile(filepath.Join(in, "report.json"))
+	if err := json.Unmarshal(b, &m); err != nil {
+		c.t.Fatal(err)
+	}
+	var ps []any
+	if err := json.Unmarshal([]byte(llmFixture(c.t, "../proposals.json")), &ps); err != nil {
+		c.t.Fatal(err)
+	}
+	m["proposals"] = ps
+	b, _ = json.Marshal(m)
+	if err := os.WriteFile(filepath.Join(in, "report.json"), b, 0o600); err != nil {
+		c.t.Fatal(err)
+	}
+	return in
+}
+
+// claude-cli: 本文は要約、WAF の改善提案は別の呼び出しで書き起こして通常用に送る。
+// context_file (設定ファイル基準の相対パス) は両方の呼び出しの system に入る。提案の呼び出しには observation を渡さない。
+func TestNotifyClaudeCLIProposalsAndContext(t *testing.T) {
+	c := newCLI(t)
+	c.useClaude()
+	c.claudeOut = claudeOutput(t, llmFixture(t, "ok.json"))
+	c.claudeProposalsOut = claudeOutput(t, llmFixture(t, "proposals_ok.json"))
+	if err := os.WriteFile(filepath.Join(c.dir, "context.md"), []byte("- 決済画面 /checkout/* はリクエストが多いのが仕様\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c.setConfig(`context_file: ""`, "context_file: context.md")
+	if code := c.run("notify", "-c", c.cfg, "--in", c.proposalsInputDir()); code != 0 {
+		t.Fatalf("exit %d %s", code, c.stderr)
+	}
+	if got := c.hook.got[urgentPath]; len(got) != 1 || strings.Contains(got[0], "WAF の改善提案") {
+		t.Fatalf("urgent: %v", got)
+	}
+	if got := c.hook.got[normalPath]; len(got) != 1 || !strings.HasPrefix(got[0], "*WAF の改善提案*") || !strings.Contains(got[0], "何を: CrossSiteScripting_BODY") {
+		t.Fatalf("normal: %v", got)
+	}
+	args, _ := os.ReadFile(filepath.Join(c.rec, "args"))
+	if n := strings.Count(string(args), "決済画面 /checkout/* はリクエストが多いのが仕様"); n != 2 {
+		t.Fatalf("the context must be in both system prompts, got %d:\n%s", n, args)
+	}
+	stdin, _ := os.ReadFile(filepath.Join(c.rec, "stdin_proposals"))
+	if !strings.Contains(string(stdin), `"id": "p1"`) || strings.Contains(string(stdin), "observation") || strings.Contains(string(stdin), "findings") {
+		t.Fatalf("the proposals call gets the proposals only:\n%s", stdin)
+	}
+}
+
+// context_file が読めなければ WARN を出して前提なしで続ける (設定エラーにしない)。provider: none では読まない。
+func TestNotifyContextUnreadable(t *testing.T) {
+	c := newCLI(t)
+	c.useClaude()
+	c.claudeOut = claudeOutput(t, llmFixture(t, "ok.json"))
+	c.setConfig(`context_file: ""`, "context_file: missing.md")
+	if code := c.run("notify", "-c", c.cfg, "--in", c.inputDir()); code != 0 || !strings.Contains(strings.Join(c.codes(), ","), notify.CodeContextUnreadable) {
+		t.Fatalf("exit %d %s", code, c.stderr)
+	}
+	args, _ := os.ReadFile(filepath.Join(c.rec, "args"))
+	if strings.Contains(string(args), "この監査対象の前提") {
+		t.Fatal("no context section without a readable file")
+	}
+
+	c = newCLI(t)
+	c.setConfig(`context_file: ""`, "context_file: missing.md")
+	if code := c.run("notify", "-c", c.cfg, "--in", c.inputDir()); code != 0 || strings.Contains(strings.Join(c.codes(), ","), notify.CodeContextUnreadable) {
+		t.Fatalf("provider none must not read the context: exit %d %s", code, c.stderr)
+	}
+}
+
+// doctor は context_file を読めるかを表に出す (読めなければ warn)。
+func TestDoctorContext(t *testing.T) {
+	c := newCLI(t)
+	c.useClaude()
+	c.claudeOut = claudeOutput(t, "ok")
+	c.setConfig(`context_file: ""`, "context_file: missing.md")
+	if code := c.run("doctor", "-c", c.cfg); code != 0 || !strings.Contains(c.stdout.String(), "warn    context") || !strings.Contains(strings.Join(c.codes(), ","), notify.CodeContextUnreadable) {
+		t.Fatalf("exit %d\n%s\n%s", code, c.stdout, c.stderr)
+	}
+	if err := os.WriteFile(filepath.Join(c.dir, "missing.md"), []byte("前提"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code := c.run("doctor", "-c", c.cfg); code != 0 || !strings.Contains(c.stdout.String(), "ok      context") {
+		t.Fatalf("exit %d\n%s", code, c.stdout)
 	}
 }
