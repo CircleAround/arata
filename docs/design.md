@@ -21,7 +21,7 @@
 | リポジトリの例 | 決定: リポジトリ (例・テスト・文書) に特定の顧客の情報を書かない。例は架空の値を使う (アカウント ID は `123456789012` / 外部 SaaS は `111122223333`) |
 | 公開できない情報の検査 | 決定: 一般的な秘密は gitleaks (`.gitleaks.toml`)、禁止語は Actions の secrets の一覧と `tools/wordscan` で全履歴と GitHub の本文を CI で検査する。ログに語を出さない。運用は `docs/sensitive-scan.md`。ADR 0036 |
 | 設定の名前 | 決定: 設定のトップレベルキーは `customer` ではなく `name` (レポートに出す監査対象の名前)。`customer` は受託側の目線に寄りすぎており、自社アカウントを自社で監査する使い方もあるため中立な名前にした。利用者がいない段階の改名なので旧キーの互換は持たず、`customer` は未知のキーとして設定エラーになる |
-| サプライチェーン | 決定: GitHub Actions は 40 桁の SHA で固定し版をコメントに書く。全ワークフローに最小権限の `permissions:`、checkout は `persist-credentials: false`。依存は公開から 7 日待つ 2 段構え (提案: Dependabot の `cooldown`、強制: CI の `tools/agegate` が indirect を含む全モジュールの公開時刻を GOPROXY で確かめる)。CI で `go mod verify` と `govulncheck`。release は build provenance attestation (来歴証明) を付ける (公開リポジトリまたは Enterprise Cloud で有効。非公開の間は SHA256SUMS のみ)。ADR 0017 |
+| サプライチェーン | 決定: GitHub Actions は 40 桁の SHA で固定し版をコメントに書く。全ワークフローに最小権限の `permissions:`、checkout は `persist-credentials: false`。依存は公開から 7 日待つ 2 段構え (提案: Dependabot の `cooldown`、強制: CI の `tools/agegate` が indirect を含む全モジュールの公開時刻を GOPROXY で確かめる)。CI で `go mod verify` と `govulncheck`。release は build provenance attestation (来歴証明) を付ける (公開リポジトリまたは Enterprise Cloud で有効。非公開の間は SHA256SUMS のみ)。ADR 0017。CI の常時の検査 (Actions の固定と待機の強制、zizmor、週次の脆弱性検査)、release の権限の分離、SBOM は ADR 0035 と [supply-chain.md](supply-chain.md) |
 
 ## 2. ログの種類とロググループの紐付け (質問 2 への回答)
 
@@ -365,6 +365,7 @@ internal/checks/              Check インターフェースと各チェック (
 internal/allowlist/           既知リストの読み書き (approve / expire)
 internal/report/              JSON / Markdown 生成、期間集計 (period.go)。決定: report.json の型は標準ライブラリだけに依存する report/schema に置く (aratam と共有。ADR 0018)
 tools/agegate/                CI 用の依存の age-gate (エンジンには入らない小さな main。決定: internal/ ではなく tools/ に置く。ADR 0017)
+tools/actionsgate/            CI 用の Actions の検査 (SHA 固定・版の一致・7 日待機。ADR 0035)
 tools/wordscan/               CI 用の禁止語の検査 (語の一覧は secrets から読む。ADR 0036)
 docs/ai/*.md                  LLM 向けの使い方。embed でバイナリに入り `arata help ai [report|approve|playbook <check>]` で出る (決定: skills/ の同梱は取りやめ。ADR 0012)
 deploy/iam/readonly-role.yaml 顧客に配る読み取りロール + Roles Anywhere 用信頼ポリシーの CloudFormation (決定: 信頼先は AWS の主体と Roles Anywhere のトラストアンカーをパラメータで受ける。action は collector の一覧と Go のテストで一致させる。ADR 0020)
