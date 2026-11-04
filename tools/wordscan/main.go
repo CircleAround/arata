@@ -4,7 +4,7 @@
 //	SENSITIVE_PATTERNS="$(cat list.txt)" go run ./tools/wordscan -mode history
 //	go run ./tools/wordscan -patterns list.txt -mode tree
 //
-// コミットの作者欄は公開前提で、検査の対象外 (ADR 0036)。
+// コミットとタグの作者欄は公開前提で、検査の対象外 (ADR 0036)。
 // 一覧は 1 行 1 つの正規表現 (大文字小文字を区別しない)。空行と # で始まる行は読み飛ばす。
 //
 // モード:
@@ -138,9 +138,19 @@ func matchLine(ps []*pattern, line []byte) bool {
 	return false
 }
 
-// scanLines は一致した行の番号 (1 始まり) を hit に渡す。commit が真ならヘッダの署名 (base64) と作者欄を読み飛ばす。
-func scanLines(content []byte, ps []*pattern, commit bool, hit func(line int)) {
-	inHeader, inSig := commit, false
+// isIdentityLine はコミットとタグのヘッダの作者欄か。公開前提で、検査の対象外 (ADR 0036)。
+func isIdentityLine(line []byte) bool {
+	for _, p := range []string{"author ", "committer ", "tagger "} {
+		if bytes.HasPrefix(line, []byte(p)) {
+			return true
+		}
+	}
+	return false
+}
+
+// scanLines は一致した行の番号 (1 始まり) を hit に渡す。header が真ならコミットとタグのヘッダの署名 (base64) と作者欄を読み飛ばす。
+func scanLines(content []byte, ps []*pattern, header bool, hit func(line int)) {
+	inHeader, inSig := header, false
 	for i, line := range bytes.Split(content, []byte("\n")) {
 		if inHeader {
 			if len(line) == 0 {
@@ -154,7 +164,7 @@ func scanLines(content []byte, ps []*pattern, commit bool, hit func(line int)) {
 				continue
 			}
 			inSig = false
-			if bytes.HasPrefix(line, []byte("author ")) || bytes.HasPrefix(line, []byte("committer ")) {
+			if isIdentityLine(line) {
 				continue
 			}
 		}
@@ -289,7 +299,7 @@ func (s *scanner) history(repo string) error {
 		case "commit":
 			scanLines(content, s.ps, true, func(line int) { s.report("commit %s:%d", oid[:12], line) })
 		case "tag":
-			scanLines(content, s.ps, false, func(line int) { s.report("tag %s:%d", oid[:12], line) })
+			scanLines(content, s.ps, true, func(line int) { s.report("tag %s:%d", oid[:12], line) })
 		case "tree":
 			// ファイル名は tree に入っている。削除されたファイルの名前もここで見つかる
 			found := false

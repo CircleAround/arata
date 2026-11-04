@@ -231,6 +231,19 @@ func TestHistoryIgnoresAuthorAndCommitter(t *testing.T) {
 	}
 }
 
+func TestHistoryIgnoresTagger(t *testing.T) {
+	dir := newRepo(t)
+	cmd := exec.Command("git", "tag", "-a", "v1", "-m", "release")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_COMMITTER_NAME="+word, "GIT_COMMITTER_EMAIL=a@example.com")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if code, out := run(t, word, "-mode", "history", "-repo", dir); code != exitOK {
+		t.Errorf("code %d\n%s", code, out)
+	}
+}
+
 func TestHistoryClean(t *testing.T) {
 	dir := newRepo(t)
 	if code, out := run(t, word, "-mode", "history", "-repo", dir); code != exitOK {
