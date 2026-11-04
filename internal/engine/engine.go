@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -553,7 +554,8 @@ func (e *Engine) Collect(ctx context.Context, w collect.Window, o CollectOptions
 			}
 			e.log.Error("collect failed", attrs...)
 			res.SourcesFailed = append(res.SourcesFailed, src.ID)
-			msg := ce.Err.Error()
+			// 決定 (ADR 0037): AWS のエラー文は主体の ARN (セッション名) を含むので、そのままレポートに写さない
+			msg := record.MaskIdentity(ce.Err.Error())
 			if ce.Action != "" {
 				msg = ce.Action + ": " + msg
 			}
@@ -1089,6 +1091,7 @@ func (e *Engine) RunWith(ctx context.Context, profileName string, prepare func(*
 		"records": cr.Records, "denied_events": cr.DeniedEvents, "secret_read_events": cr.SecretReadEvents, "sources_ok": len(cr.SourcesOK), "sources_failed": len(cr.SourcesFailed),
 		"new": rep.Summary.New, "changed": rep.Summary.Changed, "recurred": rep.Summary.Recurred, "resolved": rep.Summary.Resolved, "still_open": rep.Summary.StillOpen,
 	}
+	stats[collectResultStat] = collectSummary{OK: cr.SourcesOK, Failed: cr.SourcesFailed, Errors: cr.Errors}
 	stats[sourceCoveredStat] = cu.advance(cr, base, w.To)
 	if len(cu.from) > 0 {
 		stats[catchupStat] = timesText(cu.from)
@@ -1129,11 +1132,11 @@ func (e *Engine) EvaluateWith(ctx context.Context, profileName string, prepare f
 	if err != nil {
 		return nil, err
 	}
-	ids := []string{}
-	for _, s := range e.cfg.Sources {
-		ids = append(ids, s.ID)
+	// 決定 (ADR 0037): evaluate は収集しないので、直近の collect の結果をそのまま報告する (全部取れたことにしない)
+	cr, err := e.lastCollect(ctx)
+	if err != nil {
+		return nil, err
 	}
-	cr := CollectResult{SourcesOK: ids, SourcesFailed: []string{}, Errors: []report.CollectError{}}
 	rep := e.buildReport(profileName, runID, w, now, cr, ev)
 	if prepare != nil {
 		if err := prepare(rep); err != nil {
@@ -1146,7 +1149,11 @@ func (e *Engine) EvaluateWith(ctx context.Context, profileName string, prepare f
 	if err := e.markReported(ctx, rep, now); err != nil {
 		return nil, err
 	}
-	return &RunResult{Report: rep, Exit: ExitOK}, nil
+	exit := ExitOK
+	if cr.partial() {
+		exit = ExitPartial
+	}
+	return &RunResult{Report: rep, Exit: exit}, nil
 }
 
 // CollectOnly は collect コマンド用。窓の長さを直接指定する。
@@ -1162,8 +1169,71 @@ func (e *Engine) CollectOnly(ctx context.Context, window time.Duration, sourceID
 	}
 	now := e.deps.Now()
 	w := collect.Window{From: now.Add(-window), To: now}
-	cr := e.Collect(ctx, w, CollectOptions{SourceIDs: sourceIDs, PrincipalStatus: store.PrincipalUnknown})
+	runID := e.deps.NewID()
+	if err := e.st.BeginRun(ctx, store.Run{ID: runID, Profile: collectRunProfile, WindowFrom: w.From, WindowTo: w.To, StartedAt: now, Status: "running"}); err != nil {
+		return nil, err
+	}
+	cr := e.Collect(ctx, w, CollectOptions{SourceIDs: sourceIDs, PrincipalStatus: store.PrincipalUnknown, RunID: runID})
+	status := "ok"
+	if cr.partial() {
+		status = "partial"
+	}
+	stats := map[string]any{collectResultStat: collectSummary{OK: cr.SourcesOK, Failed: cr.SourcesFailed, Errors: cr.Errors}}
+	if err := e.st.FinishRun(ctx, runID, status, stats); err != nil {
+		return nil, err
+	}
 	return &cr, nil
+}
+
+// collect コマンドの結果を evaluate に渡す run の記録 (ADR 0037)。
+const (
+	collectRunProfile = "collect-only"
+	collectResultStat = "collect_result"
+	// recentCollectRuns は収集の記録を探す run の数 (evaluate は記録の無い run を残さないので、ふつうは最新の 1 件で見つかる)。
+	recentCollectRuns = 20
+)
+
+type collectSummary struct {
+	OK     []string              `json:"ok"`
+	Failed []string              `json:"failed"`
+	Errors []report.CollectError `json:"errors"`
+}
+
+// lastCollect は直近の収集 (run または collect) の結果を返す。記録が無ければ「取れたソースは無い」とする (取れたと報告しない)。
+func (e *Engine) lastCollect(ctx context.Context) (CollectResult, error) {
+	cr := CollectResult{SourcesOK: []string{}, SourcesFailed: []string{}, Errors: []report.CollectError{}}
+	recent, err := e.st.RecentRuns(ctx, recentCollectRuns)
+	if err != nil {
+		return cr, err
+	}
+	var result any
+	for _, r := range recent {
+		if v, ok := r.Stats[collectResultStat]; ok {
+			result = v
+			break
+		}
+	}
+	if result == nil {
+		return cr, nil
+	}
+	b, err := json.Marshal(result)
+	if err != nil {
+		return cr, err
+	}
+	var s collectSummary
+	if err := json.Unmarshal(b, &s); err != nil {
+		return cr, err
+	}
+	if s.OK != nil {
+		cr.SourcesOK = s.OK
+	}
+	if s.Failed != nil {
+		cr.SourcesFailed = s.Failed
+	}
+	if s.Errors != nil {
+		cr.Errors = s.Errors
+	}
+	return cr, nil
 }
 
 // window は今回の run の窓を決める (設計書 3 章の決定)。

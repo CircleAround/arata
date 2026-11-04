@@ -235,6 +235,10 @@ func Parse(b []byte) (*List, error) {
 			if !strings.HasPrefix(e.ARNPattern, "arn:") {
 				return nil, fmt.Errorf("principals[%d]: arn_pattern %q must start with \"arn:\"", i, e.ARNPattern)
 			}
+			// 決定 (ADR 0037): アカウントの欄は固定する。`arn:*` のようなパターンは new_principal などを全部止めてしまう
+			if parts := strings.SplitN(e.ARNPattern, ":", 6); len(parts) < 6 || !accountRe.MatchString(parts[4]) {
+				return nil, fmt.Errorf("principals[%d]: arn_pattern %q must name a 12-digit account (arn:aws:iam::123456789012:role/ci-*)", i, e.ARNPattern)
+			}
 			re, err := globToRegexp(e.ARNPattern)
 			if err != nil {
 				return nil, fmt.Errorf("principals[%d]: arn_pattern: %w", i, err)

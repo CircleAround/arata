@@ -7,6 +7,7 @@ import (
 
 	"github.com/CircleAround/arata/internal/checks"
 	"github.com/CircleAround/arata/internal/collect"
+	"github.com/CircleAround/arata/internal/record"
 	"github.com/CircleAround/arata/internal/report/schema"
 	"github.com/CircleAround/arata/internal/store"
 )
@@ -128,9 +129,41 @@ func toFinding(f store.Finding) Finding {
 		d = map[string]any{}
 	}
 	return Finding{
-		ID: f.ID, Check: f.Check, Key: f.Key, Severity: f.Severity, Summary: f.Summary, Status: f.Status,
-		FirstSeen: ts(f.FirstSeen), LastSeen: ts(f.LastSeen), LastChanged: ts(f.LastChanged), ReportedAt: tsOrEmpty(f.ReportedAt), Data: d,
+		ID: f.ID, Check: f.Check, Key: record.MaskIdentity(f.Key), Severity: f.Severity, Summary: record.MaskIdentity(f.Summary), Status: f.Status,
+		FirstSeen: ts(f.FirstSeen), LastSeen: ts(f.LastSeen), LastChanged: ts(f.LastChanged), ReportedAt: tsOrEmpty(f.ReportedAt), Data: maskData(d),
 	}
+}
+
+// maskData は data の文字列から個人を特定できる値を伏せた複製を返す。
+// 決定 (ADR 0037): メール形式の IAM ユーザー名は、approve の対象を引くためにストアには残し、レポートと通知には出さない。人が見るのは `arata review`。
+func maskData(d map[string]any) map[string]any {
+	out := make(map[string]any, len(d))
+	for k, v := range d {
+		out[k] = maskValue(v)
+	}
+	return out
+}
+
+func maskValue(v any) any {
+	switch x := v.(type) {
+	case string:
+		return record.MaskIdentity(x)
+	case []string:
+		out := make([]string, len(x))
+		for i, s := range x {
+			out[i] = record.MaskIdentity(s)
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i, e := range x {
+			out[i] = maskValue(e)
+		}
+		return out
+	case map[string]any:
+		return maskData(x)
+	}
+	return v
 }
 
 func sortFindings(l []Finding) {
