@@ -65,7 +65,7 @@ cron では arata の後につなぐ。同じ run は `.aratam-notified` で二�
 ## 取得 (リリース版のバイナリ)
 
 `v*` タグを push すると GitHub Actions ([.github/workflows/release.yml](.github/workflows/release.yml)) が arata と aratam の linux/arm64・amd64 の静的バイナリを作り、
-`SHA256SUMS` と共に [GitHub Releases](https://github.com/CircleAround/arata/releases) に添付する。
+`SHA256SUMS` とバイナリごとの SBOM (`<バイナリ名>.spdx.json`、SPDX JSON) と共に [GitHub Releases](https://github.com/CircleAround/arata/releases) に添付する。
 
 ```sh
 VERSION=v0.2.0                      # 使う版
@@ -83,7 +83,7 @@ arata --version
 
 ### 来歴の検証 (build provenance attestation)
 
-公開リポジトリ (または GitHub Enterprise Cloud) では、release がバイナリに build provenance attestation を付ける。
+公開リポジトリ (または GitHub Enterprise Cloud) では、release がバイナリと SBOM に build provenance attestation を付ける。
 取得したバイナリがこのリポジトリの release ワークフローで作られたことを `gh` で確かめられる:
 
 ```sh
@@ -126,9 +126,10 @@ CI は [.github/workflows/test.yml](.github/workflows/test.yml): `go mod verify`
 Slack の Webhook など、値をリポジトリに書けないものは `.env` (git の管理外) に置く。書く項目は [.env.sample](.env.sample)。
 使うときは `set -a; . ./.env; set +a`。Webhook の URL は知っている人が誰でも投稿できるので、リポジトリ・PR・Issue に貼らない。
 
-サプライチェーン対策 (ADR 0017):
+サプライチェーン対策 (ADR 0017・0035。点検の結果と運用は [docs/supply-chain.md](docs/supply-chain.md)):
 
-- Actions は 40 桁の SHA で固定し、版をコメントに書く。ワークフローは最小権限の `permissions:`
+- Actions は 40 桁の SHA で固定し、版をコメントに書く。ワークフローは最小権限の `permissions:`。
+  CI の `tools/actionsgate` が固定・版の一致・公開から 7 日を確かめ、actionlint と zizmor がワークフローを検査する
 - 依存は公開から 7 日待つ。Dependabot ([.github/dependabot.yml](.github/dependabot.yml)) は cooldown 7 日で提案し、CI は
   `go list -m -json all | go run ./tools/agegate -days 7` で indirect を含む全モジュールの公開時刻を確かめて、7 日未満なら落ちる。
   手で `go get` するときも 7 日以上前の版を選ぶ (`curl -s https://proxy.golang.org/<module>/@v/<version>.info` の `Time`)
