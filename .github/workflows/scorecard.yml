@@ -1,0 +1,34 @@
+name: scorecard
+
+# OpenSSF Scorecard (ADR 0035)。結果の公開とコードスキャンへの登録は公開リポジトリで効くので、非公開の間はジョブごと飛ばす。
+# 公開すれば変更なしで動き始める。publish_results を使うワークフローは、scorecard-action の制約で
+# 許された action だけを使い、run のステップを持てない。
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '41 3 * * 1'   # 毎週月曜 03:41 UTC
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  analysis:
+    if: github.event.repository.visibility == 'public'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write   # 結果のコードスキャンへの登録
+      id-token: write          # 結果の公開 (Sigstore の OIDC)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ossf/scorecard-action@fa7117db83c52d787ae5a89f350999701505d78e # v2.5.0
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+      - uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          sarif_file: results.sarif

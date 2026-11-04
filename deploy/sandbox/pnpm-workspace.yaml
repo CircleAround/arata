@@ -2,3 +2,9 @@
 minimumReleaseAge: 10080
 # Node が package.json の engines (24 系) の範囲外なら install を止める (警告で済ませない)
 engineStrict: true
+# 間接の依存が git や URL を直接指すことを許さない (レジストリの外から入るのを防ぐ。ADR 0035)
+blockExoticSubdeps: true
+# 許可していない install スクリプトを持つ依存があれば、無視せずに止める
+strictDepBuilds: true
+# 過去の版より来歴の証拠が弱くなった版を拒む (乗っ取りの兆候)
+trustPolicy: no-downgrade

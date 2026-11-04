@@ -41,7 +41,7 @@ func fixture(t *testing.T) (*store.Dir, *allowlist.List, collect.Window) {
 		{EventID: "a3", Time: in(5), Name: "AssumeRole", EventSource: "sts.amazonaws.com", PrincipalARN: "arn:aws:iam::1:user/approved", PrincipalKind: record.PrincipalUser, IP: "198.51.100.1", Data: map[string]any{"role_arn": "arn:aws:iam::1:role/Admin"}, ReadOnly: true},
 		{EventID: "a4", Time: in(5), Name: "AssumeRole", EventSource: "sts.amazonaws.com", PrincipalARN: "arn:aws:iam::1:user/expired", PrincipalKind: record.PrincipalUser, IP: "198.51.100.1", Data: map[string]any{"role_arn": "arn:aws:iam::1:role/Admin"}, ReadOnly: true},
 		{EventID: "a5", Time: in(5), Name: "AssumeRole", EventSource: "sts.amazonaws.com", PrincipalARN: "ec2.amazonaws.com", PrincipalKind: record.PrincipalService, Data: map[string]any{"role_arn": "arn:aws:iam::1:role/EC2"}, ReadOnly: true},
-		{EventID: "a6", Time: in(5), Name: "AssumeRole", EventSource: "sts.amazonaws.com", PrincipalARN: "arn:aws:iam::111122223333:root", PrincipalKind: record.PrincipalUnknown, IP: "52.0.0.1", Data: map[string]any{"role_arn": "arn:aws:iam::1:role/ExampleSaaSRole"}, ReadOnly: true},
+		{EventID: "a6", Time: in(5), Name: "AssumeRole", EventSource: "sts.amazonaws.com", PrincipalARN: "arn:aws:iam::111122223333:root", PrincipalKind: record.PrincipalUnknown, IP: "198.51.100.201", Data: map[string]any{"role_arn": "arn:aws:iam::1:role/ExampleSaaSRole"}, ReadOnly: true},
 		{EventID: "i1", Time: in(6), Name: "AttachUserPolicy", EventSource: "iam.amazonaws.com", PrincipalARN: "arn:aws:iam::1:user/unknown", PrincipalKind: record.PrincipalUser, IP: "198.51.100.1", Data: map[string]any{"user_name": "carol", "policy_arn": "arn:aws:iam::aws:policy/AdministratorAccess"}},
 		{EventID: "i2", Time: in(7), Name: "PutRolePolicy", EventSource: "iam.amazonaws.com", PrincipalARN: "arn:aws:iam::1:role/Deploy", PrincipalKind: record.PrincipalAssumedRole, IP: "198.51.100.3", Data: map[string]any{"role_name": "AppRole", "policy_name": "inline"}},
 		{EventID: "i3", Time: in(8), Name: "GetUser", EventSource: "iam.amazonaws.com", PrincipalARN: "arn:aws:iam::1:user/unknown", PrincipalKind: record.PrincipalUser, ReadOnly: true},
@@ -66,7 +66,7 @@ func fixture(t *testing.T) (*store.Dir, *allowlist.List, collect.Window) {
 		{"arn:aws:iam::1:user/base", record.PrincipalUser, "198.51.100.1", store.PrincipalBaseline},
 		{"arn:aws:iam::1:root", record.PrincipalRoot, "203.0.113.1", store.PrincipalUnknown}, // root は root_usage が扱う
 		{"arn:aws:iam::1:role/Deploy", record.PrincipalAssumedRole, "198.51.100.3", store.PrincipalApproved},
-		{"arn:aws:iam::111122223333:root", record.PrincipalUnknown, "52.0.0.1", store.PrincipalUnknown}, // SaaS の外部アカウント
+		{"arn:aws:iam::111122223333:root", record.PrincipalUnknown, "198.51.100.201", store.PrincipalUnknown}, // SaaS の外部アカウント
 	}
 	for _, p := range ps {
 		if err := st.UpsertPrincipalSeen(ctx, record.PrincipalSeen{Time: in(2), FirstTime: in(4), Source: "trail", ARN: p.arn, Kind: p.kind, IP: p.ip, Count: 3}, p.status); err != nil {
