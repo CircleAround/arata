@@ -130,6 +130,9 @@ func (d *doctor) lastRunTo(ctx context.Context, profile string) (time.Time, bool
 	return t, err == nil
 }
 
+// maxSavedReportBytes は doctor が S3 から読むレポートの上限。
+const maxSavedReportBytes = 64 << 20
+
 // savedReport は保存した profile のレポート。doctor はストアを開かないので、s3:// ではそのオブジェクトだけを読む。
 func (d *doctor) savedReport(ctx context.Context, profile string) ([]byte, error) {
 	rel := filepath.Join("reports", profile+".json")
@@ -149,7 +152,8 @@ func (d *doctor) savedReport(ctx context.Context, profile string) ([]byte, error
 		return nil, err
 	}
 	defer out.Body.Close()
-	return io.ReadAll(out.Body)
+	// 上限を超えたら途中までになり、解釈できずに「無い」扱いになる
+	return io.ReadAll(io.LimitReader(out.Body, maxSavedReportBytes))
 }
 
 func sortedProfiles(cfg *config.Config) []string {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -60,7 +61,10 @@ const (
 //   - report.md が無ければ report.json から arata と同じ関数で作る (同じリポジトリの schema パッケージ)。
 func ReadInput(dir string, now time.Time, maxAge time.Duration) (*Input, error) {
 	path := filepath.Join(dir, ReportJSON)
-	b, err := os.ReadFile(path)
+	b, err := readLimited(path)
+	if errors.Is(err, errReportTooLarge) {
+		return nil, &InputError{Code: CodeInputInvalid, Reason: fmt.Sprintf("%s が上限 %d バイトを超えています", path, maxReportBytes)}
+	}
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, &InputError{Code: CodeInputMissing, Reason: fmt.Sprintf("%s がありません", path)}
 	}
@@ -97,7 +101,7 @@ func ReadInput(dir string, now time.Time, maxAge time.Duration) (*Input, error) 
 	if age := now.Sub(in.GeneratedAt); age > maxAge {
 		return nil, &InputError{Code: CodeInputStale, Reason: fmt.Sprintf("%s の generated_at %s は max_age %s より古い", path, head.GeneratedAt, maxAge)}
 	}
-	if md, err := os.ReadFile(filepath.Join(dir, ReportMD)); err == nil {
+	if md, err := readLimited(filepath.Join(dir, ReportMD)); err == nil {
 		in.Markdown = string(md)
 	} else if in.Run != nil {
 		in.Markdown = in.Run.Markdown()
@@ -105,6 +109,28 @@ func ReadInput(dir string, now time.Time, maxAge time.Duration) (*Input, error) 
 		in.Markdown = in.Period.Markdown()
 	}
 	return in, nil
+}
+
+// maxReportBytes は入力ファイルの上限 (変数なのはテストのため)。ふつうの report.json は MB に届かない。
+var maxReportBytes int64 = 64 << 20
+
+var errReportTooLarge = errors.New("report is too large")
+
+// readLimited は maxReportBytes までを読む。超えたら errReportTooLarge (メモリに全部を読まない)。
+func readLimited(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, maxReportBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(b)) > maxReportBytes {
+		return nil, errReportTooLarge
+	}
+	return b, nil
 }
 
 // Name は report.json の name。

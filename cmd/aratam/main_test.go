@@ -115,7 +115,8 @@ func (c *cli) run(args ...string) int {
 			if c.claudeProposalsOut != "" {
 				_ = os.WriteFile(filepath.Join(c.rec, "response_proposals"), []byte(c.claudeProposalsOut), 0o600)
 			}
-			return []string{"PATH=/usr/bin:/bin", "REC=" + c.rec, "FAKE_MODE=" + c.fakeMode,
+			_ = os.WriteFile(filepath.Join(c.rec, "mode"), []byte(c.fakeMode), 0o600)
+			return []string{"PATH=/usr/bin:/bin", "HOME=" + c.dir, "AWS_SECRET_ACCESS_KEY=aws-secret-value", "GH_TOKEN=gh-secret-value",
 				"ARATAM_SLACK_WEBHOOK=" + c.env["ARATAM_SLACK_WEBHOOK"], "ARATAM_SLACK_URGENT_WEBHOOK=" + c.env["ARATAM_SLACK_URGENT_WEBHOOK"]}
 		},
 		NewBedrock: func(_ context.Context, region, _, model string) (notify.Summarizer, error) {

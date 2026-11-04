@@ -115,7 +115,7 @@ LLM に求める出力:
 | provider | 呼び方 | 認証 |
 |---|---|---|
 | `bedrock` | `bedrockruntime` の Converse API。`model` (推論プロファイル ID) と `region` は設定で明示する | AWS SDK の標準認証チェーン (`profile` 指定可)。必要なのは `bedrock:InvokeModel` だけ |
-| `claude-cli` | `claude -p --output-format json` を子プロセスで起動し、プロンプトを標準入力で渡す。ツールは使わせない設定にし、作業ディレクトリは空の一時ディレクトリにする。決定: `--setting-sources project` で設定は project だけを読む (空のディレクトリなので project 設定は無く、ユーザー設定の hooks・権限設定・プラグインを読ませない。`--bare` は OAuth のログイン状態を読まなくなるので使わない) | `claude` 側のログイン状態 |
+| `claude-cli` | `claude -p --output-format json` を子プロセスで起動し、プロンプトを標準入力で渡す。ツールは使わせない設定にし、作業ディレクトリは空の一時ディレクトリにする。決定: `--setting-sources project` で設定は project だけを読む (空のディレクトリなので project 設定は無く、ユーザー設定の hooks・権限設定・プラグインを読ませない。`--bare` は OAuth のログイン状態を読まなくなるので使わない)。決定: system は引数でなく `--system-prompt-file` で渡す (引数は ps で見える)。作業ディレクトリは `/tmp` でなく利用者のキャッシュ (`~/.cache/aratam`) の下に作り、`CLAUDE_CODE_DISABLE_CLAUDE_MDS=1` で親の CLAUDE.md を読ませない。子プロセスの環境変数は動くのに要るものだけを許可リストで渡す (AWS の認証情報やトークンは渡さない。claude を Bedrock で使う設定も渡らないので、Bedrock は `provider: bedrock` を使う) | `claude` 側のログイン状態 |
 | `openai-api` (後続) | Chat Completions を `net/http` で呼ぶ | 環境変数の API キー |
 | `none` | LLM を呼ばない | - |
 
