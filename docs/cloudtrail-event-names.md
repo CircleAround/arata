@@ -3,9 +3,9 @@
 arata が見る eventName と eventSource を、AWS の公式の文書と照合した結果 (2026-11-04)。名前の誤りはテストの固定値も同じ誤りで通るので、名前を足したらここにも根拠を足す。
 
 - 「API 名がそのまま記録される」と明記する文書はほぼ無い。多くの行は「全 API が記録される」という記述と API の頁の組み合わせで OK としている。実際の記録例で名前を確かめた行は限られる
-- 「文書で確認できず」は実際のログで確かめる (`docs/roadmap.md` の「公開後の課題」)
+- 「実際の記録で確認」は開発用アカウントの CloudTrail の記録で確かめた行
 - Macie の文書は S3 の文書と Public Access Block の分類が食い違う。見逃す側に倒さないよう、コードは `PutPublicAccessBlock` と `PutBucketPublicAccessBlock` の両方を見る
-- 表の「誤り」は照合の時点のコードの状態で、ADR 0037 で直した
+- 表の「誤り」は以前のコードが使っていた名前で、ADR 0037 で直した
 
 # CloudTrail eventName / eventSource の照合
 
@@ -87,12 +87,12 @@ arata が見る eventName と eventSource を、AWS の公式の文書と照合�
 | s3.amazonaws.com | PutBucketAcl | OK | bucket-level 一覧に名前あり | https://docs.aws.amazon.com/AmazonS3/latest/userguide/cloudtrail-logging-s3-info.html |
 | s3.amazonaws.com | DeleteBucketPolicy | OK | bucket-level 一覧に名前あり | https://docs.aws.amazon.com/AmazonS3/latest/userguide/cloudtrail-logging-s3-info.html |
 | s3.amazonaws.com | PutBucketLifecycle | OK | bucket-level 一覧に名前あり。PutBucketLifecycleConfiguration はこの名前で記録 | https://docs.aws.amazon.com/AmazonS3/latest/userguide/cloudtrail-logging-s3-info.html |
-| s3.amazonaws.com | PutBucketPublicAccessBlock | OK | bucket-level 一覧に名前あり | https://docs.aws.amazon.com/AmazonS3/latest/userguide/cloudtrail-logging-s3-info.html |
-| s3.amazonaws.com | DeleteBucketPublicAccessBlock | OK | bucket-level 一覧に名前あり | https://docs.aws.amazon.com/AmazonS3/latest/userguide/cloudtrail-logging-s3-info.html |
-| s3.amazonaws.com | PutAccountPublicAccessBlock | 文書で確認できず | eventName は S3 文書で確認済み。eventSource がこの値という記述・記録例が無い。Macie 文書は分類が S3 文書と食い違う | https://docs.aws.amazon.com/AmazonS3/latest/userguide/cloudtrail-logging-s3-info.html ; https://docs.aws.amazon.com/macie/latest/user/monitoring-s3-how-it-works.html |
-| s3.amazonaws.com | DeleteAccountPublicAccessBlock | 文書で確認できず | eventName は S3 文書で確認済み。eventSource がこの値という記述・記録例が無い。Macie 文書は分類が S3 文書と食い違う | https://docs.aws.amazon.com/AmazonS3/latest/userguide/cloudtrail-logging-s3-info.html ; https://docs.aws.amazon.com/macie/latest/user/monitoring-s3-how-it-works.html |
-| s3.amazonaws.com | PutPublicAccessBlock (コミット 5c20e43。作業ツリーは修正済み) | 誤り | PutBucketPublicAccessBlock | https://docs.aws.amazon.com/AmazonS3/latest/userguide/cloudtrail-logging-s3-info.html |
-| s3.amazonaws.com | DeletePublicAccessBlock (コミット 5c20e43。作業ツリーは修正済み) | 誤り | DeleteBucketPublicAccessBlock | https://docs.aws.amazon.com/AmazonS3/latest/userguide/cloudtrail-logging-s3-info.html |
+| s3.amazonaws.com | PutBucketPublicAccessBlock | OK | 実際の記録で確認 (2026-11)。bucket-level 一覧にも名前あり | https://docs.aws.amazon.com/AmazonS3/latest/userguide/cloudtrail-logging-s3-info.html |
+| s3.amazonaws.com | DeleteBucketPublicAccessBlock | OK | bucket-level 一覧に名前あり。実際の記録は無い | https://docs.aws.amazon.com/AmazonS3/latest/userguide/cloudtrail-logging-s3-info.html |
+| s3.amazonaws.com | PutAccountPublicAccessBlock | OK | 実際の記録で確認 (2026-11)。eventSource は s3control.amazonaws.com ではなく s3.amazonaws.com | https://docs.aws.amazon.com/AmazonS3/latest/userguide/cloudtrail-logging-s3-info.html |
+| s3.amazonaws.com | DeleteAccountPublicAccessBlock | OK (eventSource は推定) | eventName は S3 の文書で確認。実際の記録は無く、eventSource は Put と同じと推定 | https://docs.aws.amazon.com/AmazonS3/latest/userguide/cloudtrail-logging-s3-info.html |
+| s3.amazonaws.com | PutPublicAccessBlock | 誤り (互換で残す) | 正しくは PutBucketPublicAccessBlock。確認の期間の実際の記録は 0 件。Macie の文書の記述があるのでコードは両方を見る | https://docs.aws.amazon.com/AmazonS3/latest/userguide/cloudtrail-logging-s3-info.html |
+| s3.amazonaws.com | DeletePublicAccessBlock | 誤り (互換で残す) | 正しくは DeleteBucketPublicAccessBlock。Macie の文書の記述があるのでコードは両方を見る | https://docs.aws.amazon.com/AmazonS3/latest/userguide/cloudtrail-logging-s3-info.html |
 | lambda.amazonaws.com | AddPermission (接頭辞一致) | OK | 実名 AddPermission20150331v2。接頭辞で一致 | https://docs.aws.amazon.com/lambda/latest/dg/logging-using-cloudtrail.html |
 | lambda.amazonaws.com | CreateFunction (compute_apis。版を除去) | OK | 実名 CreateFunction20150331。apiOf が除去 | https://docs.aws.amazon.com/lambda/latest/dg/logging-using-cloudtrail.html |
 | signin.amazonaws.com | ConsoleLogin | OK | 記録例あり | https://docs.aws.amazon.com/IAM/latest/UserGuide/cloudtrail-integration.html |

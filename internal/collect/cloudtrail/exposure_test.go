@@ -71,6 +71,8 @@ func TestNotableEventNameVariants(t *testing.T) {
 	cases := []struct{ source, name string }{
 		{"s3.amazonaws.com", "PutBucketPublicAccessBlock"}, {"s3.amazonaws.com", "DeleteBucketPublicAccessBlock"},
 		{"s3.amazonaws.com", "PutPublicAccessBlock"}, {"s3.amazonaws.com", "DeletePublicAccessBlock"},
+		// アカウント単位も eventSource は s3control ではなく s3 (実際の記録で確認)
+		{"s3.amazonaws.com", "PutAccountPublicAccessBlock"}, {"s3.amazonaws.com", "DeleteAccountPublicAccessBlock"},
 		{"sts.amazonaws.com", "AssumeRoot"},
 		{"securityhub.amazonaws.com", "DisableSecurityHubV2"},
 		{"config.amazonaws.com", "DeleteServiceLinkedConfigurationRecorder"},
