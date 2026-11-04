@@ -31,4 +31,4 @@ root の利用が 1 件 &lt;!channel&gt;
 
 *スキップしたチェック*: login_bruteforce (no http_access source)
 
-全文: <dir>/report.md
+全文: <dir>/report.md  |  要約と → は LLM による (ログの文字列に影響され得る)

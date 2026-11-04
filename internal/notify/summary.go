@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -20,6 +21,8 @@ type Summary struct {
 	Items              []Item       `json:"items"`
 	Incidents          []Incident   `json:"incidents"`
 	ApproveSuggestions []Suggestion `json:"approve_suggestions"`
+	// Rejected は検査で捨てた項目の理由 (ログ用。内容は書かない)。
+	Rejected []string `json:"-"`
 }
 
 // Item は finding 1 件の分類と説明。
@@ -108,7 +111,12 @@ func findingIndex(in *Input) ([]findingRef, map[string]findingRef) {
 //   - report.json に無い finding_id は捨てる (LLM が作った ID を表示しない)。class が action / confirm / info 以外の item も捨てる
 //     (捨てた finding が new / changed / recurred なら、規則で組み立てた行として末尾に足される)。同じ finding_id の 2 件目以降も捨てる。
 //   - incidents は知らない ID を除き、ID が残らなければ捨てる。approve_suggestions も知らない ID のものを捨てる。
-func ParseSummary(raw []byte, in *Input) (*Summary, error) {
+//
+// 決定 (ADR 0037): LLM は攻撃者の文に従い得る前提で、規則で次を固定する。
+//   - 自由文 (rejectLLMText) に URL・メンション・BLOCK に強める記述があれば、その項目を捨てる (finding は規則の行に戻る)。headline ならエラー。
+//   - new / changed / recurred で urgent 以上の finding は info にさせない (confirm に上げ、理由は捨てる)。
+//   - urgent 以上の finding への approve の提案は捨てる (approve は主体を以後報告しなくなるので、誘導されたときの被害が最も大きい)。
+func ParseSummary(raw []byte, in *Input, urgent string) (*Summary, error) {
 	b := bytes.TrimSpace(raw)
 	if i, j := bytes.IndexByte(b, '{'), bytes.LastIndexByte(b, '}'); i >= 0 && j > i {
 		b = b[i : j+1]
@@ -120,6 +128,9 @@ func ParseSummary(raw []byte, in *Input) (*Summary, error) {
 	if strings.TrimSpace(s.Headline) == "" {
 		return nil, errors.New("llm output has no headline")
 	}
+	if why := rejectLLMText(s.Headline); why != "" {
+		return nil, fmt.Errorf("llm headline rejected: %s", why)
+	}
 	_, byID := findingIndex(in)
 	seen := map[string]bool{}
 	items := []Item{}
@@ -127,12 +138,24 @@ func ParseSummary(raw []byte, in *Input) (*Summary, error) {
 		if _, ok := byID[it.FindingID]; !ok || seen[it.FindingID] || classLabel(it.Class) == "" {
 			continue
 		}
+		if why := rejectLLMText(it.Reason); why != "" {
+			s.Rejected = append(s.Rejected, it.FindingID+": "+why)
+			continue
+		}
 		seen[it.FindingID] = true
+		if f := byID[it.FindingID]; it.Class == "info" && f.required && atLeast(f.severity, urgent) {
+			it.Class, it.Reason = "confirm", ""
+			s.Rejected = append(s.Rejected, it.FindingID+": info is not allowed at this severity")
+		}
 		items = append(items, it)
 	}
 	s.Items = items
 	incidents := []Incident{}
 	for _, inc := range s.Incidents {
+		if why := rejectLLMText(inc.Summary); why != "" {
+			s.Rejected = append(s.Rejected, "incident: "+why)
+			continue
+		}
 		var ids []string
 		for _, id := range inc.FindingIDs {
 			if _, ok := byID[id]; ok {
@@ -147,13 +170,24 @@ func ParseSummary(raw []byte, in *Input) (*Summary, error) {
 	s.Incidents = incidents
 	sugs := []Suggestion{}
 	for _, sg := range s.ApproveSuggestions {
-		if _, ok := byID[sg.FindingID]; ok {
+		f, ok := byID[sg.FindingID]
+		if !ok {
+			continue
+		}
+		if why := rejectLLMText(sg.Reason); why != "" {
+			s.Rejected = append(s.Rejected, sg.FindingID+": "+why)
+			continue
+		}
+		if !atLeast(f.severity, urgent) {
 			sugs = append(sugs, sg)
 		}
 	}
 	s.ApproveSuggestions = sugs
 	return &s, nil
 }
+
+// atLeast は severity が urgent 以上か。
+func atLeast(severity, urgent string) bool { return severityRank[severity] >= severityRank[urgent] }
 
 func classLabel(c string) string {
 	for _, x := range classes {
@@ -234,7 +268,7 @@ func SummaryText(in *Input, d Decision, r Rules, warnings []string, s *Summary) 
 		}
 	}
 	tail = append(tail, coverageLines(in)...)
-	tail = append(tail, "", "全文: "+Escape(filepath.Join(in.Dir, ReportMD)))
+	tail = append(tail, "", "全文: "+Escape(filepath.Join(in.Dir, ReportMD))+"  |  "+LLMNotice)
 	tailText := strings.Join(tail, "\n")
 
 	var body string
@@ -244,7 +278,28 @@ func SummaryText(in *Input, d Decision, r Rules, warnings []string, s *Summary) 
 			return text
 		}
 	}
+	// 決定 (ADR 0037): 切り詰めるときは urgent 以上の finding を先頭に回す (低い重大度の「要対処」を並べて押し出させない)
+	body = classBody(promoteUrgent(s, byID, r.UrgentSeverity), byID, trimConfirmText)
 	return fit(headText, body, tailText, "…(長いため省略)")
+}
+
+// promoteUrgent は urgent 以上の finding を要対処の先頭に並べ替えた Summary を返す。
+func promoteUrgent(s *Summary, byID map[string]findingRef, urgent string) *Summary {
+	var top, rest []Item
+	for _, it := range s.Items {
+		if f := byID[it.FindingID]; f.required && atLeast(f.severity, urgent) {
+			it.Class = "action"
+			top = append(top, it)
+		} else {
+			rest = append(rest, it)
+		}
+	}
+	sort.SliceStable(top, func(i, j int) bool {
+		return severityRank[byID[top[i].FindingID].severity] > severityRank[byID[top[j].FindingID].severity]
+	})
+	c := *s
+	c.Items = append(top, rest...)
+	return &c
 }
 
 // classBody は分類ごとの行。level に応じて理由文や情報の行を削る。
@@ -258,7 +313,7 @@ func classBody(s *Summary, byID map[string]findingRef, level int) string {
 			}
 			l := byID[it.FindingID].line()
 			withReason := !(c.key == "info" && level >= trimInfoReason) && !(c.key == "confirm" && level >= trimConfirmText)
-			if withReason {
+			if withReason && it.Reason != "" {
 				l += "\n    理由: " + Escape(clipRunes(oneLine(it.Reason), maxReasonRunes))
 			}
 			ls = append(ls, l)
@@ -371,10 +426,11 @@ func SystemPrompt(kind, context, playbooks string) string {
 - approve は提案するだけ。あなたは approve しない。
 - 個人を特定できる値 (氏名・メールアドレスなど) を書かない。主体は ARN で書く。
 - 追加の照会はできない。report.json に書かれていることだけで判断し、推測は「可能性」と書く。
+%s
 - reason は 1〜2 文 (120 字程度)、incidents の summary は 200 字程度、approve_suggestions の reason も 1〜2 文にする。
   重大度・data の値は通知に別に表示されるので繰り返さない (「severity high。」や data.xxx= の書き方をしない)。何がなぜ問題かだけを書く。
 
 ---
 
-%s%s%s`, input, t.Markdown(), playbooks, contextSection(context))
+%s%s%s`, input, untrustedInputRule, t.Markdown(), playbooks, contextSection(context))
 }

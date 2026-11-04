@@ -165,7 +165,7 @@ func TestParseSummaryAcceptsFencedJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, err := ParseSummary([]byte(fixture(t, "fenced.txt")), in)
+	s, err := ParseSummary([]byte(fixture(t, "fenced.txt")), in, "high")
 	if err != nil || s.Headline != "コードフェンス付き" {
 		t.Fatalf("%+v %v", s, err)
 	}

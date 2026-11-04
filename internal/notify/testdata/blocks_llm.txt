@@ -21,4 +21,4 @@
 *確認推奨*
 🟠 *summary of 198.51.100.7*
 🟠 *summary of arn:aws:iam::1:user/x*
-(小) 全文と対処手順: `arata review` ・ `arata help ai playbook <check>` | <dir>/report.md
+(小) 全文と対処手順: `arata review` ・ `arata help ai playbook <check>`  |  要約と → は LLM による (ログの文字列に影響され得る) | <dir>/report.md
