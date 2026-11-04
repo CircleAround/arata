@@ -48,6 +48,11 @@ linters:
       - path: internal/.*test/
         linters:
           - gosec
+      # CI の検査の道具 (本体のバイナリには入らない)。git の固定のサブコマンドを動かし、自分のリポジトリの中を読む
+      - path: tools/wordscan/
+        linters:
+          - gosec
+        text: "G122|G204"
 
 issues:
   max-issues-per-linter: 0
