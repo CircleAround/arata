@@ -45,14 +45,13 @@ GitHub 公式の workflow dependency lockfiles (2026-10-14 public preview、[202
 - 形式は v0.0.3、拡張は 0.x で、変わる途中
 - 変更の見方: `commit` の変化は依存の更新として読む。`owner_id` / `repo_id` の変化は別のリポジトリにすり替わった疑いなので、調べてからマージする
 
-作り方 (`uses` を足した・変えたときも同じ。公開から 7 日以上の版の拡張を使う):
+**まだ導入していない。** SHA 固定との併用の形を確かめている途中で、CI は `actions.lock` が無ければ読み飛ばす。分かっていることは次のとおり (`gh actions-lock` v0.4.0、2026-11-04)。
 
-```bash
-gh extension install github/gh-actions-lock --pin v0.4.0
-gh actions-lock          # actions.lock を更新する。uses の書き換えが無いかも差分で見る
-```
+- 引数なしの `gh actions-lock` は SHA の `uses` をタグに書き換え、lock のキーもタグで作る
+- `uses` だけを SHA に戻してタグのキーの lock を残すと、**全ワークフローが `startup_failure` になる** (PR の CI で確認)。拡張の検査は同じ commit なら通す作りでも、実行時に拒否される。`uses` と lock は必ず同じコマンドの結果のまま commit する
+- `--no-narrow` は `uses` の SHA を保つ作りになっている (ソースで確認。実行時に通るかは未確認)
 
-Dependabot は onboard 済みのワークフローの action を上げるときに lock も更新する。新しいワークフローは自動では onboard されないが、CI の `--verify` で分かる。
+Dependabot は onboard 済みのワークフローの action を上げるときに lock も更新する (設定は要らない)。新しいワークフローは自動では onboard されないので、導入後は足すたびに lock を更新する。
 
 ## GitHub の画面で人が行う設定
 

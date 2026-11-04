@@ -33,7 +33,7 @@ LLM 向けの使い方は `go run ./cmd/arata help ai` (バイナリに埋め込
 - 標準ライブラリで無理なく書けるものは依存にしない。新しい依存は追加前に理由を PR で説明する
 - 依存は公開から **7 日以上**経った版だけ (CI の `tools/agegate` と Dependabot の cooldown の 2 段構え)。
   `go get` した直後の版は CI で落ちるので、1 つ前の版を選ぶ
-- GitHub Actions は SHA で固定し、版はコメントに書く。`permissions` は最小にする。CI の `tools/actionsgate`・zizmor が確かめる (ADR 0035)。`uses` を変えたら `actions.lock` も更新する (`docs/supply-chain.md`)
+- GitHub Actions は SHA で固定し、版はコメントに書く。`permissions` は最小にする。CI の `tools/actionsgate`・zizmor が確かめる (ADR 0035・`docs/supply-chain.md`)
 - SQLite (`modernc.org/sqlite`) は残す (決定済み)。cobra / x/time は使わない
 
 ### 判断の記録

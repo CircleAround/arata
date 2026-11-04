@@ -24,9 +24,9 @@
   govulncheck は `test.yml` からここへ移し、release にも置く
 - **Actions の検査は標準ライブラリと yaml.v3 だけの `tools/actionsgate`**。全 `uses` が 40 桁の SHA で版のコメントがあること、そのタグが SHA を指すこと、公開から 7 日以上であることを確かめる。
   判定できないものは通さない。ロックファイルがあれば推移的な依存の公開時刻も見る。固定の検査は `-offline` で `go test` からも動く
-- **SHA 固定とロックファイルを併用する**。公式はタグ + ロックファイルを勧め、SHA のままだと `sha-as-ref` の警告が出るが、SHA を残す。
-  見本を写す利用者にはロックファイルが届かず、zizmor と Scorecard の判定も SHA を見るため。ロックファイルは推移的な依存とリポジトリの同一性を足す層として使う
-- **ロックファイルは後から足せる形にする**。`actions.lock` があれば CI が `gh actions-lock --verify` を行い、無ければ読み飛ばす。拡張は公開から 7 日以上の版 (v0.4.0) を使う
+- **`uses` の SHA 固定は残す**。公式はタグ + ロックファイルを勧めるが、見本を写す利用者にはロックファイルが届かず、zizmor と Scorecard の判定も SHA を見るため
+- **ロックファイルは後から足せる形にする**。`actions.lock` があれば CI が `gh actions-lock --verify` を行い、無ければ読み飛ばす。拡張は公開から 7 日以上の版 (v0.4.0) を使う。
+  SHA の `uses` と組み合わせる形は未確定で、この ADR の時点では導入していない (タグをキーにした lock との組み合わせは `startup_failure` になった。docs/supply-chain.md)
 - **検査の道具も固定する**。Go 製 (actionlint・govulncheck・gh-actions-lock) は `go run pkg@version` で sum.golang.org の検証を受け、CI の `tools/agegate` で公開日を確かめる。
   go.mod には足さない。zizmor・osv-scanner・syft はリリースのバイナリを sha256 で照合する。これらの action は使わない (中で別の版を取りに行くものがあり、固定の範囲が広がるため)
 - **zizmor は全 action を SHA 固定の方針で動かす** (`.github/zizmor.yml`。既定は `actions/*` のタグ固定を許す)
@@ -56,5 +56,5 @@
 - 引き受けるコスト: zizmor・osv-scanner・syft の版は Dependabot が上げない。手で上げる (docs/supply-chain.md)
 - 引き受けるコスト: 脆弱性の公表の直後は、直った版が 7 日の待機の中にあって CI が赤くなることがある。ADR 0017 と同じく、理由を残して例外の PR を出す
 - 引き受けるコスト: CI が GitHub・OSV の API に依存する。落ちたときは判定できないものとして失敗する
-- SHA のままなのでロックファイルの導入後は `sha-as-ref` の警告が出続ける
+- ロックファイルの導入までは、推移的な action は固定されない
 - リポジトリの設定 (必須チェック・タグの保護など) はコードで担保できない。手順は docs/supply-chain.md
