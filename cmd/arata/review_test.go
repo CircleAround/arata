@@ -32,7 +32,7 @@ func seedFindings(t *testing.T, c *cli) map[string]reviewItem {
 	c.fake.Add(
 		cloudtrailtest.Event("n1", c.now.Add(-2*time.Hour), cloudtrailtest.User(acct, "mallory"), "sts.amazonaws.com", "AssumeRole", "ap-northeast-1", "198.51.100.7", true, map[string]any{"roleArn": "arn:aws:iam::" + acct + ":role/Admin"}),
 		cloudtrailtest.Event("n2", c.now.Add(-1*time.Hour), cloudtrailtest.Root(acct), "signin.amazonaws.com", "ConsoleLogin", "us-east-1", "198.51.100.8", false, nil),
-		cloudtrailtest.Event("n3", c.now.Add(-3*time.Hour), cloudtrailtest.Identity{"type": "AWSAccount", "principalId": "AIDAEXAMPLESAAS", "accountId": saas}, "sts.amazonaws.com", "AssumeRole", "ap-northeast-1", "52.68.0.1", true, map[string]any{"roleArn": "arn:aws:iam::" + acct + ":role/ExampleSaaSRole"}),
+		cloudtrailtest.Event("n3", c.now.Add(-3*time.Hour), cloudtrailtest.Identity{"type": "AWSAccount", "principalId": "AIDAEXAMPLESAAS", "accountId": saas}, "sts.amazonaws.com", "AssumeRole", "ap-northeast-1", "198.51.100.202", true, map[string]any{"roleArn": "arn:aws:iam::" + acct + ":role/ExampleSaaSRole"}),
 	)
 	if code := c.run("run", "--config", c.cfg, "--profile", "daily"); code != 0 {
 		t.Fatalf("run exit %d: %s", code, c.stderr)
