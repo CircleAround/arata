@@ -1,0 +1,50 @@
+# gitleaks の設定。既定の規則 (AWS のキー、トークン、Slack の Webhook、秘密鍵など) に、
+# このリポジトリの規則 (CLAUDE.md「顧客の情報を書かない」) を足す。
+# 語の検査 (顧客名など) はここに書けないので tools/wordscan が受け持つ (ADR 0036)。
+# ここに書く値は架空の値だけ。実在の値を許可リストに足して検査を通さない。
+
+title = "arata"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "公開レジストリのハッシュ (チェックサムの数字が 12 桁の規則に当たるだけで、秘密ではない)"
+paths = ['''(^|/)go\.sum$''', '''(^|/)pnpm-lock\.yaml$''']
+
+[[rules]]
+id = "aws-account-id"
+description = "架空の値以外の 12 桁の数字 (AWS アカウント ID のおそれ)"
+regex = '''(?:^|[^0-9A-Za-z.+/=_-])([0-9]{12})(?:[^0-9A-Za-z]|$)'''
+secretGroup = 1
+keywords = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
+
+[[rules.allowlists]]
+description = "架空のアカウント ID。自アカウント / 外部 SaaS / 試験の第三者"
+regexes = ['''^(123456789012|111122223333|444455556666|999999999999|111111111111)$''']
+
+[[rules]]
+id = "public-ipv4"
+description = "文書用の範囲 (RFC 5737) の外の IPv4 アドレス"
+regex = '''(?:^|[^0-9.])((?:[0-9]{1,3}\.){3}[0-9]{1,3})(?:[^0-9.]|$)'''
+secretGroup = 1
+keywords = ["."]
+
+[[rules.allowlists]]
+description = "文書用の範囲・未指定・ループバック・プライベート"
+regexes = ['''^(192\.0\.2\.|198\.51\.100\.|203\.0\.113\.|0\.0\.0\.0$|127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)''']
+
+[[rules.allowlists]]
+description = "範囲の境界の試験 (203.0.113.0/24 の 1 つ外) と、履歴に残る試験値 (ツリーでは文書用の範囲に直した)"
+regexes = ['''^(203\.0\.114\.1|1\.1\.1\.1|2\.2\.2\.2|52\.0\.0\.1|52\.68\.0\.1)$''']
+
+[[rules]]
+id = "email-address"
+description = "架空のドメイン以外のメールアドレス"
+regex = '''(?:^|[^A-Za-z0-9._%+-])([A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,})(?:[^A-Za-z0-9.-]|$)'''
+secretGroup = 1
+keywords = ["@"]
+
+[[rules.allowlists]]
+description = "架空のドメインと、コミットの署名に使うアドレス (Dependabot の Signed-off-by を含む)"
+regexes = ['''@example\.(com|org|net|co\.jp)$''', '''^noreply@anthropic\.com$''', '''@users\.noreply\.github\.com$''', '''^support@github\.com$''']

@@ -59,11 +59,11 @@ func TestDiff(t *testing.T) {
 			existing: []store.Finding{existing("k1", store.FindingOpen, earlier, "", map[string]any{"count": 1})},
 			obs:      []Observation{obs("k1", 2)}, want: map[string]Class{"k1": ClassChanged}, status: map[string]string{"k1": store.FindingOpen}},
 		{name: "open, same fingerprint, count differs → still_open", mode: ModeEvent,
-			existing: []store.Finding{existing("k1", store.FindingOpen, earlier, "high|1.1.1.1", map[string]any{"count": 1})},
-			obs:      []Observation{fpObs("k1", "high|1.1.1.1", 9)}, want: map[string]Class{"k1": ClassStillOpen}, status: map[string]string{"k1": store.FindingOpen}},
+			existing: []store.Finding{existing("k1", store.FindingOpen, earlier, "high|192.0.2.101", map[string]any{"count": 1})},
+			obs:      []Observation{fpObs("k1", "high|192.0.2.101", 9)}, want: map[string]Class{"k1": ClassStillOpen}, status: map[string]string{"k1": store.FindingOpen}},
 		{name: "open, fingerprint differs → changed", mode: ModeEvent,
-			existing: []store.Finding{existing("k1", store.FindingOpen, earlier, "high|1.1.1.1", map[string]any{"count": 1})},
-			obs:      []Observation{fpObs("k1", "high|1.1.1.1,2.2.2.2", 1)}, want: map[string]Class{"k1": ClassChanged}, status: map[string]string{"k1": store.FindingOpen}},
+			existing: []store.Finding{existing("k1", store.FindingOpen, earlier, "high|192.0.2.101", map[string]any{"count": 1})},
+			obs:      []Observation{fpObs("k1", "high|192.0.2.101,192.0.2.102", 1)}, want: map[string]Class{"k1": ClassChanged}, status: map[string]string{"k1": store.FindingOpen}},
 		{name: "open, severity differs → changed", mode: ModeState,
 			existing: []store.Finding{{ID: "x", Check: "c", Key: "k1", Severity: "medium", Status: store.FindingOpen, FirstSeen: dormant, LastSeen: earlier, LastChanged: dormant, Data: map[string]any{"count": 1}}},
 			obs:      []Observation{obs("k1", 1)}, want: map[string]Class{"k1": ClassChanged}, status: map[string]string{"k1": store.FindingOpen}},
@@ -71,11 +71,11 @@ func TestDiff(t *testing.T) {
 			existing: []store.Finding{existing("k1", store.FindingOpen, earlier, "", map[string]any{"count": 1})},
 			want:     map[string]Class{"k1": ClassResolved}, status: map[string]string{"k1": store.FindingResolved}},
 		{name: "event: open, not observed → stays open silently", mode: ModeEvent,
-			existing: []store.Finding{existing("k1", store.FindingOpen, earlier, "high|1.1.1.1", map[string]any{"count": 1})},
+			existing: []store.Finding{existing("k1", store.FindingOpen, earlier, "high|192.0.2.101", map[string]any{"count": 1})},
 			want:     map[string]Class{}, status: map[string]string{"k1": store.FindingOpen}},
 		{name: "event: dormant open, observed again → recurred", mode: ModeEvent,
-			existing: []store.Finding{existing("k1", store.FindingOpen, dormant, "high|1.1.1.1", map[string]any{"count": 1})},
-			obs:      []Observation{fpObs("k1", "high|1.1.1.1", 4)}, want: map[string]Class{"k1": ClassRecurred}, status: map[string]string{"k1": store.FindingOpen}},
+			existing: []store.Finding{existing("k1", store.FindingOpen, dormant, "high|192.0.2.101", map[string]any{"count": 1})},
+			obs:      []Observation{fpObs("k1", "high|192.0.2.101", 4)}, want: map[string]Class{"k1": ClassRecurred}, status: map[string]string{"k1": store.FindingOpen}},
 		{name: "state: dormant open, observed again → still_open (not recurred)", mode: ModeState,
 			existing: []store.Finding{existing("k1", store.FindingOpen, dormant, "", map[string]any{"count": 1})},
 			obs:      []Observation{obs("k1", 1)}, want: map[string]Class{"k1": ClassStillOpen}, status: map[string]string{"k1": store.FindingOpen}},
@@ -175,9 +175,9 @@ func TestDiff(t *testing.T) {
 }
 
 func TestFingerprintStableAcrossCounts(t *testing.T) {
-	a := fingerprint(High, map[string]bool{"2.2.2.2": true, "1.1.1.1": true}, "x")
-	b := fingerprint(High, map[string]bool{"1.1.1.1": true, "2.2.2.2": true}, "x")
-	if a != b || a != "high|1.1.1.1,2.2.2.2|x" {
+	a := fingerprint(High, map[string]bool{"192.0.2.102": true, "192.0.2.101": true}, "x")
+	b := fingerprint(High, map[string]bool{"192.0.2.101": true, "192.0.2.102": true}, "x")
+	if a != b || a != "high|192.0.2.101,192.0.2.102|x" {
 		t.Fatalf("%q %q", a, b)
 	}
 }
@@ -199,11 +199,11 @@ func TestDiffRecurredIgnoresRescan(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			st := newStore(t)
 			ctx := context.Background()
-			f := store.Finding{ID: "x", Check: "c", Key: "k1", Severity: "high", Status: store.FindingOpen, FirstSeen: tc.lastSeen, LastSeen: tc.lastSeen, LastChanged: tc.lastSeen, Fingerprint: "high|1.1.1.1"}
+			f := store.Finding{ID: "x", Check: "c", Key: "k1", Severity: "high", Status: store.FindingOpen, FirstSeen: tc.lastSeen, LastSeen: tc.lastSeen, LastChanged: tc.lastSeen, Fingerprint: "high|192.0.2.101"}
 			if err := st.UpsertFinding(ctx, f); err != nil {
 				t.Fatal(err)
 			}
-			o := Observation{Check: "c", Key: "k1", Severity: High, Fingerprint: "high|1.1.1.1"}
+			o := Observation{Check: "c", Key: "k1", Severity: High, Fingerprint: "high|192.0.2.101"}
 			res, err := Diff(ctx, st, DiffParams{Check: "c", Mode: ModeEvent, Window: w, Now: now, NewID: seqID()}, []Observation{o})
 			if err != nil || len(res) != 1 || res[0].Class != tc.want {
 				t.Fatalf("got %+v %v, want %s", res, err, tc.want)
@@ -219,14 +219,14 @@ func TestDiffEscalation(t *testing.T) {
 	dormant := now.Add(-3 * 24 * time.Hour)
 	suppressed := func(status, sev, suppressedSev string, last time.Time) store.Finding {
 		f := store.Finding{ID: "x", Check: "c", Key: "k1", Severity: sev, SuppressedSeverity: suppressedSev, Status: status, Summary: "old",
-			FirstSeen: dormant, LastSeen: last, LastChanged: dormant, ReportedAt: dormant, Fingerprint: sev + "|1.1.1.1", Data: map[string]any{"count": 1}}
+			FirstSeen: dormant, LastSeen: last, LastChanged: dormant, ReportedAt: dormant, Fingerprint: sev + "|192.0.2.101", Data: map[string]any{"count": 1}}
 		if status == store.FindingSnoozed {
 			f.SnoozeUntil = now.Add(48 * time.Hour)
 		}
 		return f
 	}
 	obs := func(sev Severity) Observation {
-		return Observation{Check: "c", Key: "k1", Severity: sev, Summary: "拒否された API 呼び出し", Fingerprint: string(sev) + "|2.2.2.2", Data: map[string]any{"count": 30}}
+		return Observation{Check: "c", Key: "k1", Severity: sev, Summary: "拒否された API 呼び出し", Fingerprint: string(sev) + "|192.0.2.102", Data: map[string]any{"count": 30}}
 	}
 	cases := []struct {
 		name     string

@@ -56,6 +56,7 @@ type workflow struct {
 	Jobs map[string]struct {
 		RunsOn         string            `yaml:"runs-on"`
 		TimeoutMinutes int               `yaml:"timeout-minutes"`
+		Permissions    map[string]string `yaml:"permissions"`
 		Env            map[string]string `yaml:"env"`
 		Steps          []step            `yaml:"steps"`
 	} `yaml:"jobs"`
@@ -129,8 +130,12 @@ func TestConcurrencyAndPermissions(t *testing.T) {
 	if w.Concurrency.Group == "" || w.Concurrency.CancelInProgress == nil || *w.Concurrency.CancelInProgress {
 		t.Errorf("concurrency must queue, not cancel: %+v", w.Concurrency)
 	}
-	if len(w.Permissions) != 2 || w.Permissions["id-token"] != "write" || w.Permissions["contents"] != "read" {
-		t.Errorf("permissions must be id-token: write and contents: read only: %v", w.Permissions)
+	if len(w.Permissions) != 0 {
+		t.Errorf("workflow-level permissions must be empty (grant them per job): %v", w.Permissions)
+	}
+	p := w.Jobs["audit"].Permissions
+	if len(p) != 2 || p["id-token"] != "write" || p["contents"] != "read" {
+		t.Errorf("permissions must be id-token: write and contents: read only: %v", p)
 	}
 	if w.Defaults.Run.Shell != "bash" {
 		t.Errorf("shell: bash is needed for pipefail: %q", w.Defaults.Run.Shell)
