@@ -83,6 +83,10 @@
 - `secret_access` が `GetParameterHistory` を見ない
 - Lambda の権限の条件 (`lambda_conditions`) も値を見ていない
 - CloudTrail の項目の型が想定と違う記録は無言で捨てる。捨てた件数を stats に出す
+- `s3express.amazonaws.com` (ディレクトリバケット) の `PutBucketPolicy`・`DeleteBucketPolicy` を `public_exposure` が評価しない
+- サインインの別の eventName (`UserAuthentication`・`CredentialVerification`・`CreateOAuth2Token` など) を残していない
+- `CreateFunctionUrlConfig`・`UpdateFunctionUrlConfig` (Lambda の公開) を見ていない
+- アカウント単位の Public Access Block の eventSource と、`PutPublicAccessBlock` の分類を実際のログで確かめる (`docs/cloudtrail-event-names.md`)
 
 堅牢さ:
 - `probe_paths` の key に json / regex 形式でクエリ文字列が残る。長さと件数の上限が無い

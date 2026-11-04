@@ -3,6 +3,8 @@ package cloudtrail
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/CircleAround/arata/internal/record"
 )
 
 // 全開放を複数の CIDR に分けても、広い範囲は公開として拾う。私設の範囲は公開ではない。
@@ -60,6 +62,22 @@ func TestPublicStatementsLooksAtConditionValues(t *testing.T) {
 	for _, s := range limited {
 		if ok, _ := publicStatements(policy(t, s)); ok {
 			t.Errorf("絞り込まれているのに公開とした: %s", s)
+		}
+	}
+}
+
+// 文書で見つけた別名も残す。名前の根拠は docs/cloudtrail-event-names.md。
+func TestNotableEventNameVariants(t *testing.T) {
+	cases := []struct{ source, name string }{
+		{"s3.amazonaws.com", "PutBucketPublicAccessBlock"}, {"s3.amazonaws.com", "DeleteBucketPublicAccessBlock"},
+		{"s3.amazonaws.com", "PutPublicAccessBlock"}, {"s3.amazonaws.com", "DeletePublicAccessBlock"},
+		{"sts.amazonaws.com", "AssumeRoot"},
+		{"securityhub.amazonaws.com", "DisableSecurityHubV2"},
+		{"config.amazonaws.com", "DeleteServiceLinkedConfigurationRecorder"},
+	}
+	for _, c := range cases {
+		if !notable(record.TrailEvent{EventSource: c.source, Name: c.name}) {
+			t.Errorf("%s を残していない", c.name)
 		}
 	}
 }

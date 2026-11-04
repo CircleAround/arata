@@ -32,7 +32,7 @@ func (PublicExposure) Needs() []record.Kind { return []record.Kind{record.KindTr
 
 var publicExposureAPIs = concatAPIs(
 	apisOf(srcEC2, "AuthorizeSecurityGroupIngress", "ModifySecurityGroupRules", "ModifySnapshotAttribute", "ModifyImageAttribute"),
-	apisOf(srcS3, "PutBucketPolicy", "PutBucketAcl", "PutBucketPublicAccessBlock", "DeleteBucketPublicAccessBlock", "PutAccountPublicAccessBlock", "DeleteAccountPublicAccessBlock"),
+	apisOf(srcS3, "PutBucketPolicy", "PutBucketAcl", "PutBucketPublicAccessBlock", "DeleteBucketPublicAccessBlock", "PutPublicAccessBlock", "DeletePublicAccessBlock", "PutAccountPublicAccessBlock", "DeleteAccountPublicAccessBlock"),
 	apisOf(srcRDS, "ModifyDBInstance", "CreateDBInstance", "ModifyDBCluster", "ModifyDBSnapshotAttribute", "ModifyDBClusterSnapshotAttribute"),
 	[]API{{Source: srcLambda, Name: "AddPermission", Prefix: true}},
 )
@@ -169,7 +169,7 @@ func exposureOf(api API, e record.TrailEvent, sensitive map[int]bool) exposure {
 				return exposure{}
 			}
 			x.sev, x.what = High, strings.Join(g, ",")
-		case "PutBucketPublicAccessBlock", "PutAccountPublicAccessBlock":
+		case "PutBucketPublicAccessBlock", "PutPublicAccessBlock", "PutAccountPublicAccessBlock":
 			off := dataStrings(d, "pab_disabled")
 			if len(off) == 0 {
 				return exposure{}

@@ -57,8 +57,8 @@ var defenseEvasionAPIs = concatAPIs(
 	apisOf(srcAccessAnalyzer, "DeleteAnalyzer", "CreateArchiveRule"),
 	apisOf(srcLogs, "DeleteLogGroup", "DeleteLogStream", "PutRetentionPolicy", "DeleteSubscriptionFilter"),
 	apisOf(srcEC2, "DeleteFlowLogs"),
-	apisOf(srcConfig, "StopConfigurationRecorder", "DeleteConfigurationRecorder", "DeleteDeliveryChannel"),
-	apisOf(srcSecurityHub, "DisableSecurityHub", "BatchDisableStandards"),
+	apisOf(srcConfig, "StopConfigurationRecorder", "DeleteConfigurationRecorder", "DeleteServiceLinkedConfigurationRecorder", "DeleteDeliveryChannel"),
+	apisOf(srcSecurityHub, "DisableSecurityHub", "DisableSecurityHubV2", "BatchDisableStandards"),
 	apisOf(srcWAFv2, "DeleteLoggingConfiguration", "PutLoggingConfiguration"),
 	apisOf(srcS3, "DeleteBucketPolicy", "PutBucketLifecycle"),
 )

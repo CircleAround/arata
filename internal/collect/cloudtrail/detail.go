@@ -279,7 +279,7 @@ func s3Detail(name string, rp map[string]any, d map[string]any) {
 		putList(d, "public_statements", sts)
 	case "PutBucketAcl":
 		putList(d, "acl_public_grants", publicGrants(rp))
-	case "PutBucketPublicAccessBlock", "PutAccountPublicAccessBlock":
+	case "PutBucketPublicAccessBlock", "PutPublicAccessBlock", "PutAccountPublicAccessBlock":
 		cfg, ok := rp["PublicAccessBlockConfiguration"].(map[string]any)
 		if !ok {
 			return
