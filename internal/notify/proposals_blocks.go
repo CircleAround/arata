@@ -95,11 +95,11 @@ func proposalNumbers(kind string, p schema.Proposal) (head, basis string) {
 	case "false_positive":
 		target := code(ruleName(p))
 		if p.Path != "" {
-			target += " が " + Escape(strings.TrimSpace(p.Method+" "+p.Path)) + " で"
+			target += " が " + Escape(oneLine(p.Method+" "+p.Path)) + " で"
 		}
 		head = joinNonEmptyWith(" ", target, withUnit(evNum(p, "count"), "%s 件")+withUnit(days, " / %s 日"))
 		basis = joinNonEmptyWith("・", withUnit(evNum(p, "distinct_ips_max_per_day"), "IP 最大 %s/日"),
-			withUnit(evNum(p, "matching_days"), "一致した日 %s")+withUnit(days, "/%s 日"), withUnit(Escape(p.WebACL), "ACL %s"))
+			withUnit(evNum(p, "matching_days"), "一致した日 %s")+withUnit(days, "/%s 日"), withUnit(Escape(oneLine(p.WebACL)), "ACL %s"))
 	case "probe_allowed":
 		paths, _ := p.Evidence["paths"].([]any)
 		head = joinNonEmptyWith("・", withUnit(evNum(p, "count"), "%s 件")+withUnit(days, " / %s 日"), withUnit(fmt.Sprint(len(paths)), "%s パス"))
@@ -109,7 +109,7 @@ func proposalNumbers(kind string, p schema.Proposal) (head, basis string) {
 				ps = append(ps, fmt.Sprintf("ほか %d", len(paths)-maxListItems))
 				break
 			}
-			ps = append(ps, Escape(pathCount.ReplaceAllString(fmt.Sprint(x), " $1")))
+			ps = append(ps, Escape(oneLine(pathCount.ReplaceAllString(fmt.Sprint(x), " $1"))))
 		}
 		basis = strings.Join(ps, "・")
 	case "rate_limit_missing":
@@ -119,14 +119,14 @@ func proposalNumbers(kind string, p schema.Proposal) (head, basis string) {
 		head = joinNonEmptyWith("・", joinNonEmptyWith(" ", code(ruleName(p)), withUnit(evNum(p, "current_limit_per_5min"), "limit %s / 5 分")),
 			withUnit(evNum(p, "max_per_5min"), "観測の最大 %s"))
 		basis = joinNonEmptyWith("・", withUnit(evNum(p, "p99_per_5min"), "p99 %s"), withUnit(evNum(p, "proposed_limit"), "提案 limit %s"),
-			withUnit(Escape(fmt.Sprint(p.Evidence["path_group"])), "パスの群 %s"))
+			withUnit(Escape(oneLine(fmt.Sprint(p.Evidence["path_group"]))), "パスの群 %s"))
 	case "challenge_on_app_path":
 		target := code(ruleName(p))
 		if p.Path != "" {
-			target += " が " + Escape(strings.TrimSpace(p.Method+" "+p.Path)) + " で"
+			target += " が " + Escape(oneLine(p.Method+" "+p.Path)) + " で"
 		}
 		head = joinNonEmptyWith("・", joinNonEmptyWith(" ", target, challengeKind(p)+withUnit(evNum(p, "issued"), " %s 件")+withUnit(days, " / %s 日")), solveRatio(p))
-		basis = joinNonEmptyWith("・", withUnit(evNum(p, "distinct_ips_max_per_day"), "IP 最大 %s/日"), withUnit(Escape(p.WebACL), "ACL %s"))
+		basis = joinNonEmptyWith("・", withUnit(evNum(p, "distinct_ips_max_per_day"), "IP 最大 %s/日"), withUnit(Escape(oneLine(p.WebACL)), "ACL %s"))
 	case aboutChallengeImpact:
 		head = joinNonEmptyWith("・", code(ruleName(p))+" "+challengeKind(p)+withUnit(evNum(p, "issued"), " %s 件"), solveRatio(p),
 			withUnit(evNum(p, "issued_non_get"), "GET 以外 %s"))
@@ -137,7 +137,7 @@ func proposalNumbers(kind string, p schema.Proposal) (head, basis string) {
 				ps = append(ps, fmt.Sprintf("ほか %d", len(paths)-maxListItems))
 				break
 			}
-			ps = append(ps, Escape(fmt.Sprint(x)))
+			ps = append(ps, Escape(oneLine(fmt.Sprint(x))))
 		}
 		basis = strings.Join(ps, "・")
 	case "unused_rule":
@@ -393,7 +393,7 @@ func ProposalsMarkdown(in *Input, writeups map[string]Writeup, notice string) st
 			stage = p.Stage
 		}
 		fmt.Fprintf(&b, "\n## %s. %s (%s)\n\n", proposalID(i), kindLabel(p.Kind), stage)
-		fmt.Fprintf(&b, "- 種類: %s\n- 対象: %s\n- 概要: %s\n", p.Kind, joinNonEmptyWith(" / ", p.WebACL, p.Rule, p.RuleInGroup, strings.TrimSpace(p.Method+" "+p.Path)), oneLine(p.Summary))
+		fmt.Fprintf(&b, "- 種類: %s\n- 対象: %s\n- 概要: %s\n", p.Kind, oneLine(joinNonEmptyWith(" / ", p.WebACL, p.Rule, p.RuleInGroup, strings.TrimSpace(p.Method+" "+p.Path))), oneLine(p.Summary))
 		fmt.Fprintf(&b, "- 根拠: %s\n", rawEvidence(p))
 		w, ok := writeups[proposalID(i)]
 		next := ""

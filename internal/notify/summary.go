@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/CircleAround/arata/docs/ai"
@@ -181,7 +182,7 @@ func (s *Summary) Missing(in *Input) []findingRef {
 
 // line は finding 1 件の行。重大度・概要・チェック名・主要キーは report.json の値を使う (LLM に重大度を変えさせない)。
 func (f findingRef) line() string {
-	l := fmt.Sprintf("• *[%s]* %s `%s` (%s)", Escape(f.severity), Escape(f.summary), Escape(f.check), f.diff)
+	l := fmt.Sprintf("• *[%s]* %s `%s` (%s)", Escape(f.severity), Escape(oneLine(f.summary)), Escape(f.check), f.diff)
 	if f.finding != nil {
 		return l + "\n    " + detail(*f.finding)
 	}
@@ -328,8 +329,15 @@ func coverageLines(in *Input) []string {
 	return out
 }
 
-// oneLine は LLM の説明を 1 行にする (改行で書式を崩させない)。
+// oneLine はログ由来の値と LLM の説明を 1 行にする (改行で偽の行を作らせない)。
+// 決定 (ADR 0037): 目に見えない文字 (制御文字、向きの制御、ゼロ幅) も除く。表示を入れ替えたり、後の検査をすり抜けたりさせないため。
 func oneLine(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if !unicode.IsSpace(r) && (unicode.IsControl(r) || unicode.Is(unicode.Cf, r)) {
+			return -1
+		}
+		return r
+	}, s)
 	return strings.Join(strings.Fields(s), " ")
 }
 

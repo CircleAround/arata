@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -371,9 +372,7 @@ func listObjects(ctx context.Context, api S3API, loc S3Location, sub string) ([]
 			return nil, unavailable(ctx, "list", prefix, err)
 		}
 		for _, o := range page.Contents {
-			key := aws.ToString(o.Key)
-			// 一時ディレクトリの外へ書かせるキーは取得しない
-			if rel, ok := strings.CutPrefix(key, loc.Key("")); ok && !strings.HasSuffix(rel, "/") && filepath.IsLocal(rel) {
+			if rel, ok := relativeKey(loc, sub, aws.ToString(o.Key)); ok {
 				out = append(out, rel)
 			}
 		}
@@ -382,6 +381,16 @@ func listObjects(ctx context.Context, api S3API, loc S3Location, sub string) ([]
 		}
 		in.ContinuationToken = page.NextContinuationToken
 	}
+}
+
+// relativeKey はキーをストアからの相対パスにする。sub の下の、正規化しても同じパスだけを受ける。
+// 決定 (ADR 0037): キーは信用しない。`reports/../audit.sqlite` のように、一時ディレクトリの外や sub の外のファイルを置き換えるキーは取得しない。
+func relativeKey(loc S3Location, sub, key string) (string, bool) {
+	rel, ok := strings.CutPrefix(key, loc.Key(""))
+	if !ok || !strings.HasPrefix(rel, sub) || path.Clean(rel) != rel || !filepath.IsLocal(rel) {
+		return "", false
+	}
+	return rel, true
 }
 
 // HTTPStatus は S3 の応答の状態 (応答が無ければ 0)。

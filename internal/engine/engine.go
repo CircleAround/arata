@@ -1195,7 +1195,11 @@ func WriteReport(dir, name string, rep *report.Report) error {
 }
 
 // LastReport は保存済みの最新レポート (JSON) を返す。無ければ nil。
+// 決定 (ADR 0037): 設定に無い profile は読まない (--profile の値をストアの外のパスにさせない)。
 func (e *Engine) LastReport(profileName string) ([]byte, error) {
+	if _, ok := e.cfg.Profiles[profileName]; !ok {
+		return nil, nil
+	}
 	b, err := os.ReadFile(filepath.Join(e.st.Path(), "reports", profileName+".json"))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil

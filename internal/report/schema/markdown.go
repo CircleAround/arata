@@ -102,7 +102,7 @@ func proposals(b *strings.Builder, l []Proposal) {
 		b.WriteString("提案はありません。\n\n")
 	}
 	for _, p := range props {
-		fmt.Fprintf(b, "- **[%s / %s]** %s\n", p.Kind, p.Stage, p.Summary)
+		fmt.Fprintf(b, "- **[%s / %s]** %s\n", p.Kind, p.Stage, inline(p.Summary))
 		evidence(b, p.Evidence)
 	}
 	if len(props) > 0 {
@@ -111,7 +111,7 @@ func proposals(b *strings.Builder, l []Proposal) {
 	if len(obs) > 0 {
 		fmt.Fprintf(b, "### 観察 (提案なし。COUNT のルールの状況を含む) (%d)\n\n", len(obs))
 		for _, p := range obs {
-			fmt.Fprintf(b, "- **[%s / %s]** %s\n", p.About, p.Reason, p.Summary)
+			fmt.Fprintf(b, "- **[%s / %s]** %s\n", p.About, p.Reason, inline(p.Summary))
 			evidence(b, p.Evidence)
 		}
 		b.WriteString("\n")
@@ -126,7 +126,7 @@ func evidence(b *strings.Builder, ev map[string]any) {
 	sort.Strings(keys)
 	parts := make([]string, 0, len(keys))
 	for _, k := range keys {
-		parts = append(parts, fmt.Sprintf("%s=%v", k, ev[k]))
+		parts = append(parts, inline(fmt.Sprintf("%s=%v", k, ev[k])))
 	}
 	if len(parts) > 0 {
 		fmt.Fprintf(b, "  - 根拠: %s\n", strings.Join(parts, ", "))
@@ -140,7 +140,7 @@ func section(b *strings.Builder, title string, l []Finding, empty string) {
 		return
 	}
 	for _, f := range l {
-		fmt.Fprintf(b, "- **[%s]** %s `%s`\n", f.Severity, f.Summary, f.Check)
+		fmt.Fprintf(b, "- **[%s]** %s `%s`\n", f.Severity, inline(f.Summary), f.Check)
 		keys := make([]string, 0, len(f.Data))
 		for k := range f.Data {
 			keys = append(keys, k)
@@ -149,14 +149,19 @@ func section(b *strings.Builder, title string, l []Finding, empty string) {
 		for _, k := range keys {
 			if k == "date" {
 				// 決定: 日次集計の日は UTC (設計書 3 章)。日本の顧客が JST の日と取り違えないよう明示する
-				fmt.Fprintf(b, "  - %s: %v (UTC)\n", k, f.Data[k])
+				fmt.Fprintf(b, "  - %s: %s (UTC)\n", k, inline(fmt.Sprint(f.Data[k])))
 				continue
 			}
-			fmt.Fprintf(b, "  - %s: %v\n", k, f.Data[k])
+			fmt.Fprintf(b, "  - %s: %s\n", k, inline(fmt.Sprint(f.Data[k])))
 		}
 		fmt.Fprintf(b, "  - id: %s (初出 %s)\n", f.ID, f.FirstSeen)
 	}
 	b.WriteString("\n")
+}
+
+// inline はログ由来の値の改行を空白にする (値の改行で偽の見出しや行を作らせない。ADR 0037)。
+func inline(s string) string {
+	return strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ").Replace(s)
 }
 
 func orNone(l []string) string {

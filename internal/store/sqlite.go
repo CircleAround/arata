@@ -91,6 +91,9 @@ const dbFile = "audit.sqlite"
 
 // openDB は SQLite のファイルを開く (接続は 1 本)。
 func openDB(path, journal string) (*sql.DB, error) {
+	if err := restrictDB(path); err != nil {
+		return nil, err
+	}
 	dsn := "file:" + path + "?_pragma=journal_mode(" + journal + ")&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -98,6 +101,26 @@ func openDB(path, journal string) (*sql.DB, error) {
 	}
 	db.SetMaxOpenConns(1)
 	return db, nil
+}
+
+// restrictDB は SQLite のファイルを 0640 で作る (あれば 0640 より緩い権限を狭める)。-wal と -shm は本体と同じ権限になる。
+// 決定 (ADR 0037): SQLite は umask のまま作るので、store の dir を利用者が 0755 で作っていると監査の結果を他のユーザーに読ませてしまう。
+func restrictDB(path string) error {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDONLY, 0o640)
+	if err != nil {
+		return fmt.Errorf("store: %w", err)
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("store: %w", err)
+	}
+	if p := fi.Mode().Perm(); p&0o027 != 0 {
+		if err := f.Chmod(p &^ 0o027); err != nil {
+			return fmt.Errorf("store: %w", err)
+		}
+	}
+	return nil
 }
 
 func (s *Dir) migrate() error {

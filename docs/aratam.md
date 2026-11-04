@@ -72,6 +72,8 @@ aratam notify --in /var/lib/arata/out/daily
   件数 0 の区分は出さない。カバレッジは問題 (取れなかったソース・解釈率の code・スキップしたチェック) があるときだけ出す。末尾に `全文: <dir>/report.md` を添える。
   期間レポートは report.md から件数 0 の節 (`## 見出し (0)`) を除き、見出しを `*見出し*`、`**太字**` を `*太字*` に置き換えて送る。
 - メッセージ: report 由来の文字列は `&` `<` `>` をエスケープする。ログ由来の値 (User-Agent など) が `<!channel>` やリンクとして働かないようにするため。メンションは設定に書いたものだけを付ける。
+- メッセージ (ADR 0037): ログ由来の値は 1 行にし、制御文字・向きの制御・ゼロ幅の文字を除いてから埋め込む。mrkdwn には `verbatim: true` を付け、`unfurl_links` / `unfurl_media` を false で送る (Slack に URL・チャンネル名・メンションを自動で解釈させず、ログの URL を取りに行かせない)。
+  このため `slack.urgent_mention` は `<!channel>` や `<@U012AB3CD>` の形で書く (`@channel` の文字列は働かない)。
 - メッセージ: 1 通は 3,800 文字までに切り詰める (Slack は text を 4,000 文字程度までにするよう求めている)。
   文字数は Unicode のコードポイント数 (Go の rune 数) で数え、バイト数では数えない (Slack の上限も文字数)。理由文などの上限を含め、切り詰めはすべて文字単位で行う。行の境目で切り、`…(長いため省略)` と report.md のパスを添える。
 - 入力 (ADR 0023): arata の weekly の report.json に `proposals` (WAF の修正提案の候補と observation) が足された。

@@ -882,3 +882,24 @@ func TestRunNewSourceAndSecretAccess(t *testing.T) {
 		t.Fatalf("existing checks must not react: %+v", r2.Report.Findings.New)
 	}
 }
+
+// --profile の値でストアの外のファイルを読ませない。設定に無い profile は「まだ無い」と同じ扱い。
+func TestLastReportRejectsUnknownProfile(t *testing.T) {
+	dir := t.TempDir()
+	secret := filepath.Join(dir, "secret.json")
+	if err := os.WriteFile(secret, []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e := &Engine{cfg: &config.Config{Profiles: map[string]config.Profile{"daily": {}}}, st: pathOnlyStore{dir: filepath.Join(dir, "store")}}
+	b, err := e.LastReport("../../secret")
+	if err != nil || b != nil {
+		t.Fatalf("got %q, %v", b, err)
+	}
+}
+
+type pathOnlyStore struct {
+	store.Store
+	dir string
+}
+
+func (s pathOnlyStore) Path() string { return s.dir }

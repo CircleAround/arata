@@ -337,6 +337,9 @@ func (c *Config) Validate() error {
 		if s.ID == "" {
 			return fmt.Errorf("config: source id is required")
 		}
+		if !safeName(s.ID) {
+			return fmt.Errorf("config: source id %q must not contain a path separator or be . or .. (it becomes a directory of the store)", s.ID)
+		}
 		if seen[s.ID] {
 			return fmt.Errorf("config: duplicate source id %q", s.ID)
 		}
@@ -363,6 +366,9 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("config: at least one profile is required (profiles:)")
 	}
 	for name, p := range c.Profiles {
+		if !safeName(name) {
+			return fmt.Errorf("config: profile %q must not contain a path separator or be . or .. (it becomes a file name of the store)", name)
+		}
 		if len(p.Checks) == 0 {
 			return fmt.Errorf("config: profile %s: checks is required", name)
 		}
@@ -375,6 +381,11 @@ func (c *Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+// safeName は source の id や profile 名をファイルのパスと S3 のキーに使えるか (ストアの外を指さないか)。ADR 0037
+func safeName(s string) bool {
+	return s != "." && s != ".." && !strings.ContainsAny(s, "/\\\x00")
 }
 
 // validateUnusedRegions は cloudtrail-unused-regions のソースに cloudtrail-lookup のソースがあるかを確かめる。

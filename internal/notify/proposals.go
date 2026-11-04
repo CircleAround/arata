@@ -241,7 +241,7 @@ func proposalBody(props []schema.Proposal, writeups map[string]Writeup, level in
 		if stage == "" {
 			stage = p.Stage
 		}
-		out = append(out, "", fmt.Sprintf("• *[%s / %s]* %s", Escape(p.Kind), Escape(stage), Escape(p.Summary)))
+		out = append(out, "", fmt.Sprintf("• *[%s / %s]* %s", Escape(p.Kind), Escape(stage), Escape(oneLine(p.Summary))))
 		if ev := evidenceText(p); ev != "" {
 			out = append(out, "    根拠: "+ev)
 		}
@@ -299,7 +299,7 @@ func evidenceText(p schema.Proposal) string {
 		}
 		parts = append(parts, k+" "+evidenceValue(v))
 	}
-	return Escape(strings.Join(parts, " · "))
+	return Escape(oneLine(strings.Join(parts, " · ")))
 }
 
 func evidenceValue(v any) string {
@@ -330,7 +330,7 @@ func observationLines(obs, status []schema.Proposal) []string {
 			if shown == maxObservationLines {
 				break
 			}
-			out = append(out, fmt.Sprintf("• [%s / %s] %s", Escape(p.About), Escape(p.Reason), Escape(p.Summary)))
+			out = append(out, fmt.Sprintf("• [%s / %s] %s", Escape(p.About), Escape(p.Reason), Escape(oneLine(p.Summary))))
 			shown++
 		}
 	}
@@ -340,7 +340,7 @@ func observationLines(obs, status []schema.Proposal) []string {
 			if shown == maxObservationLines {
 				break
 			}
-			out = append(out, "• "+Escape(p.Summary))
+			out = append(out, "• "+Escape(oneLine(p.Summary)))
 			shown++
 		}
 	}
