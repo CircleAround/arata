@@ -446,6 +446,9 @@ type CollectOptions struct {
 	// Rescan は各ソースの ingest_delay だけ窓の前を再走査する (run。ADR 0013)。init のチャンクは取り込み済みの過去の日を
 	// 続けて引くので再走査しない (最後の日の終わり側は次の run の再走査が拾う)。
 	Rescan bool
+	// BaseFrom は再走査の基準 (ゼロなら窓の From)。SourceFrom はそこより前から引くソース (失敗した期間の追いつき。ADR 0038)。
+	BaseFrom   time.Time
+	SourceFrom map[string]time.Time
 }
 
 // Collect は設定の sources から窓内を収集し、ストアへ反映する。失敗したソースは記録して続行する。
@@ -510,7 +513,13 @@ func (e *Engine) Collect(ctx context.Context, w collect.Window, o CollectOptions
 			sw := w
 			sw.ScanFrom = time.Time{}
 			if o.Rescan {
-				sw.ScanFrom = w.From.Add(-src.IngestDelay)
+				if !o.BaseFrom.IsZero() {
+					sw.From = o.BaseFrom
+				}
+				if t, ok := o.SourceFrom[src.ID]; ok && t.Before(sw.From) {
+					sw.From = t
+				}
+				sw.ScanFrom = sw.From.Add(-src.IngestDelay)
 			}
 			err = c.Collect(ctx, sw, sink)
 			res.Records += n
@@ -1013,6 +1022,15 @@ type RunResult struct {
 
 // Run は collect → evaluate → report → 保存 を行う (prune は後続 Step)。
 func (e *Engine) Run(ctx context.Context, profileName string) (*RunResult, error) {
+	return e.RunWith(ctx, profileName, nil)
+}
+
+// RunWith は Run に、報告済みの印を付ける前の準備 (prepare) を足す。prepare はレポートの出力の準備で、失敗したら run を failed にして印を付けない。
+//
+// 決定 (ADR 0038): 順序は 準備 → saveReport → markReported → FinishRun で、呼び出し側が Commit → 公開 と続ける。
+// S3 の Commit は 1 回だけで、未確定の結果を通知しない (ADR 0034) ので、「公開してから印を付ける」はできない。
+// 準備で失敗の多くを先に出し、残る失敗の窓は公開の rename と標準出力だけにする。
+func (e *Engine) RunWith(ctx context.Context, profileName string, prepare func(*report.Report) error) (*RunResult, error) {
 	prof, ok := e.cfg.Profiles[profileName]
 	if !ok {
 		return nil, e.configErr(fmt.Errorf("profile %q is not defined", profileName))
@@ -1023,25 +1041,44 @@ func (e *Engine) Run(ctx context.Context, profileName string) (*RunResult, error
 	if err != nil {
 		return nil, err
 	}
+	base := w.From
+	cu, err := e.planCatchup(ctx, profileName, prof, base, now)
+	if err != nil {
+		return nil, err
+	}
+	// 集計のソースが遅れていれば、チェックの窓も広げる (日次集計は窓の中の日だけを見るため)
+	if cu.metricsFrom.Before(w.From) && !cu.metricsFrom.IsZero() {
+		w.From = cu.metricsFrom
+	}
 	// 再走査 (ADR 0013)。収集はソースごとの ingest_delay、評価は最大の ingest_delay まで遡って遅れて届いたイベントを見る
 	w.ScanFrom, w.CollectedAt = w.From.Add(-e.cfg.MaxIngestDelay()), now
+	// 追いついたイベントは「遅れて届いたもの」と同じ扱いで評価する
+	if t := cu.eventsFrom.Add(-e.cfg.MaxIngestDelay()); !cu.eventsFrom.IsZero() && t.Before(w.ScanFrom) {
+		w.ScanFrom = t
+	}
 	runID := e.deps.NewID()
 	e.runID, e.runProfile = runID, profileName
 	defer func() { e.runID, e.runProfile = "", "" }()
 	if err := e.st.BeginRun(ctx, store.Run{ID: runID, Profile: profileName, WindowFrom: w.From, WindowTo: w.To, StartedAt: now, Status: "running"}); err != nil {
 		return nil, err
 	}
-	cr := e.Collect(ctx, w, CollectOptions{Needs: e.neededKinds(prof), PrincipalStatus: store.PrincipalUnknown, RunID: runID, Rescan: true})
+	cr := e.Collect(ctx, w, CollectOptions{Needs: e.neededKinds(prof), PrincipalStatus: store.PrincipalUnknown, RunID: runID, Rescan: true, BaseFrom: base, SourceFrom: cu.from})
 	ev, err := e.Evaluate(ctx, profileName, w, &cr)
 	if err != nil {
 		_ = e.st.FinishRun(ctx, runID, "failed", map[string]any{"error": err.Error()})
 		return nil, err
 	}
 	rep := e.buildReport(profileName, runID, w, now, cr, ev)
-	if err := e.markReported(ctx, rep, now); err != nil {
-		return nil, err
+	if prepare != nil {
+		if err := prepare(rep); err != nil {
+			_ = e.st.FinishRun(ctx, runID, "failed", map[string]any{"error": err.Error()})
+			return nil, err
+		}
 	}
 	if err := e.saveReport(profileName, rep); err != nil {
+		return nil, err
+	}
+	if err := e.markReported(ctx, rep, now); err != nil {
 		return nil, err
 	}
 	status, exit := "ok", ExitOK
@@ -1051,6 +1088,10 @@ func (e *Engine) Run(ctx context.Context, profileName string) (*RunResult, error
 	stats := map[string]any{
 		"records": cr.Records, "denied_events": cr.DeniedEvents, "secret_read_events": cr.SecretReadEvents, "sources_ok": len(cr.SourcesOK), "sources_failed": len(cr.SourcesFailed),
 		"new": rep.Summary.New, "changed": rep.Summary.Changed, "recurred": rep.Summary.Recurred, "resolved": rep.Summary.Resolved, "still_open": rep.Summary.StillOpen,
+	}
+	stats[sourceCoveredStat] = cu.advance(cr, base, w.To)
+	if len(cu.from) > 0 {
+		stats[catchupStat] = timesText(cu.from)
 	}
 	addFormatStats(stats, cr.Formats)
 	if e.cfg.HasSourceKind(config.KindCloudTrailUnusedRegions) {
@@ -1069,6 +1110,11 @@ func (e *Engine) Run(ctx context.Context, profileName string) (*RunResult, error
 
 // EvaluateOnly は収集せずに評価とレポート生成だけを行う (evaluate コマンド)。
 func (e *Engine) EvaluateOnly(ctx context.Context, profileName string) (*RunResult, error) {
+	return e.EvaluateWith(ctx, profileName, nil)
+}
+
+// EvaluateWith は EvaluateOnly に出力の準備を足す (RunWith と同じ)。
+func (e *Engine) EvaluateWith(ctx context.Context, profileName string, prepare func(*report.Report) error) (*RunResult, error) {
 	prof, ok := e.cfg.Profiles[profileName]
 	if !ok {
 		return nil, e.configErr(fmt.Errorf("profile %q is not defined", profileName))
@@ -1089,10 +1135,15 @@ func (e *Engine) EvaluateOnly(ctx context.Context, profileName string) (*RunResu
 	}
 	cr := CollectResult{SourcesOK: ids, SourcesFailed: []string{}, Errors: []report.CollectError{}}
 	rep := e.buildReport(profileName, runID, w, now, cr, ev)
-	if err := e.markReported(ctx, rep, now); err != nil {
-		return nil, err
+	if prepare != nil {
+		if err := prepare(rep); err != nil {
+			return nil, err
+		}
 	}
 	if err := e.saveReport(profileName, rep); err != nil {
+		return nil, err
+	}
+	if err := e.markReported(ctx, rep, now); err != nil {
 		return nil, err
 	}
 	return &RunResult{Report: rep, Exit: ExitOK}, nil

@@ -85,6 +85,9 @@ func Diff(ctx context.Context, st store.Store, p DiffParams, obs []Observation) 
 			}
 			f = store.Finding{ID: id, Check: p.Check, Key: o.Key, FirstSeen: p.Now, Status: store.FindingOpen}
 			class = ClassNew
+		case f.Status == store.FindingOpen && f.ReportedAt.IsZero():
+			// 決定 (ADR 0038): 一度も報告していない open は new のまま (run が途中で止まった)。ID と初出は保つ
+			class = ClassNew
 		case (f.Status == store.FindingAcked || f.Status == store.FindingSnoozed) && escalates(o.Severity, f):
 			prev := f
 			escalated = &prev

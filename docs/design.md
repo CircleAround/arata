@@ -276,6 +276,8 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
 - **収集は必要な最小の粒度で行い、ストアに貯める**。daily のメトリクスが貯まっていれば、monthly はストアだけで作れる。
 - hourly は Lambda / cron どちらでも動くが、Logs Insights を hourly で回すのは費用が無駄なので、hourly プロファイルには Insights を使うチェックを入れない。
 
+決定 (ADR 0038): 窓は全ソース共通だが、失敗したソースは stats の `source_covered_to` の位置から次の run で追いつく (`max_catchup` まで)。追いついた run は stats の `catchup_from` と `SOURCE_CATCHUP` の WARN で分かる。集計のソースが遅れたらチェックの窓も広げる。
+
 決定 (実行が遅れた時の窓): `run` の窓は通常 `[now - window, now)` だが、同じ profile の直近の ok / partial な run があれば
 From = min(now - window, 前回の window_to) として、cron の遅延・欠落で空いた期間を取りこぼさない。追いつきは `profiles.<name>.max_catchup` (既定 7d) まで。
 超えた分は諦めて From = now - max_catchup とし、`RUN_MISSED` のログに `gap` と `covered_from`、`truncated: true` を添える。
@@ -491,6 +493,7 @@ retention:
 - 決定: 確定は `Engine.Commit` が行い、書き込み系のコマンド (`init` / `run` / `collect` / `evaluate` / `approve` / `ack` / `snooze` / `resolve`) が成功したときだけ呼ぶ。`rebuild` は自分で書き戻す。
   呼ばずに終われば (失敗・中断・パニック、読むだけの `report` / `review`) S3 は開始前のまま。一時ディレクトリは最後に消す
 - 決定: `run` の partial は Commit する。`init` は中断・部分失敗でも Commit する (`--resume` のため)。Commit に失敗したら、その実行の収集が失われたことと再実行の手順を出す
+- 決定 (ADR 0038): レポートの出力は 2 段にする。`--out` の一時ファイルまでを準備し、saveReport・報告済みの印・Commit の後に rename で公開する。
 - 決定: `run` / `evaluate` は Commit してからレポートを出す。衝突したら `--out` に何も書かないので、aratam が入力の問題として知らせる (`docs/aratam.md` 2 章)
 - 決定: S3 に問い合わせられない (権限・通信) ときは `STORE_UNAVAILABLE`。404 だけを「まだ無い」と扱う
 - 決定: S3 に SQLite が無いのに raw があれば、消えた可能性が高いので `init` / `run` / `collect` / `evaluate` / `approve` / `ack` / `snooze` / `resolve` は `STORE_CORRUPT` (終了コード 2) で止め、`arata rebuild --from-scratch` (とバージョニングからの復元) を案内する。

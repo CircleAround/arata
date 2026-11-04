@@ -99,7 +99,8 @@ func (d *doctor) wafCost(ctx context.Context, src config.Source, c *cwlogs.Colle
 	default:
 		detail += fmt.Sprintf("。max_scan_gb %.0f", src.MaxScanGB)
 	}
-	d.add(src, "cost", status, "", detail)
+	// 決定 (ADR 0038): 収集に失敗した期間は次の run で引き直すので、その分だけスキャン量が増える
+	d.add(src, "cost", status, "", detail+"。収集に失敗した期間は次の run で追いつくので、その分スキャン量が増える (max_scan_gb で止まり、coverage に出る)")
 }
 
 // scheduleMargin は範囲が最小になる実行時刻に足す余裕 (cron の揺れで範囲の始まりが 0 時の前に出ると、前日の 0 時からになり範囲が 24h 増える)。
