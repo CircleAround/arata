@@ -134,7 +134,7 @@ func TestNormalizeDetail(t *testing.T) {
 		{"s3.amazonaws.com", "PutBucketAcl", `{"bucketName":"b1","x-amz-grant-read":"uri=\"http://acs.amazonaws.com/groups/global/AuthenticatedUsers\""}`,
 			map[string]any{"acl_public_grants": []any{"AuthenticatedUsers:READ"}}, nil},
 		{"s3.amazonaws.com", "PutBucketAcl", `{"bucketName":"b1","x-amz-acl":["private"]}`, map[string]any{"bucket": "b1"}, []string{"acl_public_grants"}},
-		{"s3.amazonaws.com", "PutPublicAccessBlock", `{"bucketName":"b1","PublicAccessBlockConfiguration":{"BlockPublicAcls":true,"IgnorePublicAcls":true,"BlockPublicPolicy":false,"RestrictPublicBuckets":false}}`,
+		{"s3.amazonaws.com", "PutBucketPublicAccessBlock", `{"bucketName":"b1","PublicAccessBlockConfiguration":{"BlockPublicAcls":true,"IgnorePublicAcls":true,"BlockPublicPolicy":false,"RestrictPublicBuckets":false}}`,
 			map[string]any{"bucket": "b1", "pab_disabled": []any{"BlockPublicPolicy", "RestrictPublicBuckets"}}, nil},
 		{"s3.amazonaws.com", "PutAccountPublicAccessBlock", `{"PublicAccessBlockConfiguration":{"BlockPublicAcls":false,"IgnorePublicAcls":true,"BlockPublicPolicy":true,"RestrictPublicBuckets":true}}`,
 			map[string]any{"pab_disabled": []any{"BlockPublicAcls"}}, nil},

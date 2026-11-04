@@ -2,6 +2,7 @@ package cloudtrail
 
 import (
 	"encoding/json"
+	"net/netip"
 	"sort"
 	"strings"
 )
@@ -278,7 +279,7 @@ func s3Detail(name string, rp map[string]any, d map[string]any) {
 		putList(d, "public_statements", sts)
 	case "PutBucketAcl":
 		putList(d, "acl_public_grants", publicGrants(rp))
-	case "PutPublicAccessBlock", "PutAccountPublicAccessBlock":
+	case "PutBucketPublicAccessBlock", "PutPublicAccessBlock", "PutAccountPublicAccessBlock":
 		cfg, ok := rp["PublicAccessBlockConfiguration"].(map[string]any)
 		if !ok {
 			return
@@ -319,7 +320,9 @@ func publicStatements(v any) (bool, []string) {
 	}
 	var out []string
 	for i, st := range objects(pol["Statement"]) {
-		if e, _ := st["Effect"].(string); e != "Allow" || !publicPrincipal(st["Principal"]) || restricted(st["Condition"]) {
+		// Allow + NotPrincipal は「挙げた主体以外の全員」(ADR 0037)
+		everyone := publicPrincipal(st["Principal"]) || st["NotPrincipal"] != nil
+		if e, _ := st["Effect"].(string); e != "Allow" || !everyone || restricted(st["Condition"]) {
 			continue
 		}
 		sid, _ := st["Sid"].(string)
@@ -344,15 +347,51 @@ func publicPrincipal(p any) bool {
 	return contains(strs(objectOf(p)["AWS"]), "*")
 }
 
+// restricted は条件が送信元・組織・アカウントを実際に絞っているか。
+// 決定 (ADR 0037): 条件キーがあるだけでは絞り込みとみなさない。肯定の演算子 (StringEquals・StringLike・IpAddress・ArnEquals・ArnLike) で、
+// 値が全部具体的なときだけ絞り込みとする。否定の演算子 (NotIpAddress など) は「それ以外の全員」を許す。IfExists はキーが無ければ通る。
 func restricted(c any) bool {
-	for _, kv := range objectOf(c) {
-		for k := range objectOf(kv) {
-			if restrictingConditionKeys[strings.ToLower(k)] {
+	for op, kv := range objectOf(c) {
+		if !restrictingOperator(op) {
+			continue
+		}
+		for k, v := range objectOf(kv) {
+			if restrictingConditionKeys[strings.ToLower(k)] && specificValues(strs(v)) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func restrictingOperator(op string) bool {
+	op = strings.ToLower(strings.TrimPrefix(op, "ForAnyValue:"))
+	if strings.HasSuffix(op, "ifexists") {
+		return false
+	}
+	for _, p := range []string{"stringequals", "stringlike", "ipaddress", "arnequals", "arnlike"} {
+		if strings.HasPrefix(op, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// specificValues は条件の値が全部、誰でも一致する形でないか。
+func specificValues(vs []string) bool {
+	if len(vs) == 0 {
+		return false
+	}
+	for _, v := range vs {
+		if strings.Trim(v, "*?") == "" || publicCIDR(v) {
+			return false
+		}
+		// ARN のアカウントの欄が固定されていないものは絞り込みにならない
+		if parts := strings.SplitN(v, ":", 6); parts[0] == "arn" && (len(parts) < 6 || strings.ContainsAny(parts[4], "*?")) {
+			return false
+		}
+	}
+	return true
 }
 
 var publicGroups = []string{"AllUsers", "AuthenticatedUsers"}
@@ -387,7 +426,29 @@ func publicGrants(rp map[string]any) []string {
 	return dedupStrings(out)
 }
 
-func publicCIDR(c string) bool { return c == "0.0.0.0/0" || c == "::/0" }
+// maxPublicBits は公開とみなす CIDR の長さの上限。IPv4 の /8 は 1,600 万アドレス、IPv6 の /16 はそれ以上に広い。
+const (
+	maxPublicBits4 = 8
+	maxPublicBits6 = 16
+)
+
+// publicCIDR は誰でも届くとみなす広い範囲か。
+// 決定 (ADR 0037): 完全一致 (0.0.0.0/0) だけを見ると 0.0.0.0/1 + 128.0.0.0/1 の 2 ルールで全開放を隠せる。
+// 表記の揺れも含めて解析し、十分に広い範囲を公開とする。私設・リンクローカル・ループバックは公開ではない。
+func publicCIDR(c string) bool {
+	p, err := netip.ParsePrefix(c)
+	if err != nil {
+		return false
+	}
+	a := p.Masked().Addr()
+	if p.Bits() > 0 && (a.IsPrivate() || a.IsLinkLocalUnicast() || a.IsLoopback()) {
+		return false
+	}
+	if a.Is4() {
+		return p.Bits() <= maxPublicBits4
+	}
+	return p.Bits() <= maxPublicBits6
+}
 
 func protoOf(v any) string {
 	switch p := v.(type) {
