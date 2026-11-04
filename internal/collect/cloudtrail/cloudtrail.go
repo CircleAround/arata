@@ -420,10 +420,13 @@ func roleARNFromSession(arn string) string {
 	return "arn:aws:iam::" + acct + ":role/" + role
 }
 
+// 名前は CloudTrail の eventName で、API 名と違うことがある。照合の根拠は docs/cloudtrail-event-names.md。
+// 決定 (ADR 0037): バケット単位の Public Access Block は S3 の文書では PutBucketPublicAccessBlock。Macie の文書は別の分類を書いているので、
+// PutPublicAccessBlock も残す (実際のログで確かめるまで、見逃す側に倒さない)。
 var notableNames = map[string]bool{
 	"ConsoleLogin": true, "GetSecretValue": true, "BatchGetSecretValue": true, "GetParameter": true, "GetParameters": true, "GetParametersByPath": true,
 	"StartSession": true, "AuthorizeSecurityGroupIngress": true, "AuthorizeSecurityGroupEgress": true,
-	"ModifyDBInstance": true, "CreateDBInstance": true, "PutBucketPolicy": true, "PutBucketAcl": true, "PutBucketPublicAccessBlock": true, "DeleteBucketPublicAccessBlock": true,
+	"ModifyDBInstance": true, "CreateDBInstance": true, "PutBucketPolicy": true, "PutBucketAcl": true, "PutBucketPublicAccessBlock": true, "DeleteBucketPublicAccessBlock": true, "PutPublicAccessBlock": true, "DeletePublicAccessBlock": true,
 }
 
 // notableAPIs は defense_evasion / public_exposure のために残す、上の eventSource 単位の規則に入らない操作 (ADR 0026)。
@@ -432,8 +435,8 @@ var notableNames = map[string]bool{
 var notableAPIs = map[string]map[string]bool{
 	"logs.amazonaws.com":        {"DeleteLogGroup": true, "DeleteLogStream": true, "PutRetentionPolicy": true, "DeleteSubscriptionFilter": true},
 	"ec2.amazonaws.com":         {"DeleteFlowLogs": true, "ModifySecurityGroupRules": true, "ModifySnapshotAttribute": true, "ModifyImageAttribute": true},
-	"config.amazonaws.com":      {"StopConfigurationRecorder": true, "DeleteConfigurationRecorder": true, "DeleteDeliveryChannel": true},
-	"securityhub.amazonaws.com": {"DisableSecurityHub": true, "BatchDisableStandards": true},
+	"config.amazonaws.com":      {"StopConfigurationRecorder": true, "DeleteConfigurationRecorder": true, "DeleteServiceLinkedConfigurationRecorder": true, "DeleteDeliveryChannel": true},
+	"securityhub.amazonaws.com": {"DisableSecurityHub": true, "DisableSecurityHubV2": true, "BatchDisableStandards": true},
 	"wafv2.amazonaws.com":       {"DeleteLoggingConfiguration": true, "PutLoggingConfiguration": true},
 	"s3.amazonaws.com":          {"DeleteBucketPolicy": true, "PutBucketLifecycle": true, "PutAccountPublicAccessBlock": true, "DeleteAccountPublicAccessBlock": true},
 	"rds.amazonaws.com":         {"ModifyDBCluster": true, "ModifyDBSnapshotAttribute": true, "ModifyDBClusterSnapshotAttribute": true},
@@ -460,7 +463,7 @@ func notable(e record.TrailEvent) bool {
 	if e.PrincipalKind == record.PrincipalRoot {
 		return true
 	}
-	if strings.HasPrefix(e.Name, "AssumeRole") {
+	if strings.HasPrefix(e.Name, "AssumeRole") || e.Name == "AssumeRoot" {
 		return true
 	}
 	switch e.EventSource {
