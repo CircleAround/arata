@@ -190,13 +190,10 @@ func TestHistoryFindsDeletedFile(t *testing.T) {
 	assertNoLeak(t, out)
 }
 
-func TestHistoryFindsCommitMessageAuthorTagAndRef(t *testing.T) {
+func TestHistoryFindsCommitMessageTagAndRef(t *testing.T) {
 	cases := map[string]func(t *testing.T, dir string){
 		"message": func(t *testing.T, dir string) {
 			git(t, dir, "commit", "-q", "--allow-empty", "-m", "subject", "-m", "see "+word)
-		},
-		"author": func(t *testing.T, dir string) {
-			git(t, dir, "commit", "-q", "--allow-empty", "-m", "x", "--author", word+" <a@example.com>")
 		},
 		"annotated tag": func(t *testing.T, dir string) {
 			git(t, dir, "tag", "-a", "v1", "-m", word)
@@ -215,6 +212,22 @@ func TestHistoryFindsCommitMessageAuthorTagAndRef(t *testing.T) {
 			}
 			assertNoLeak(t, out)
 		})
+	}
+}
+
+// コミットの作者欄は公開前提で、検査の対象外 (ADR 0036)。
+func TestHistoryIgnoresAuthorAndCommitter(t *testing.T) {
+	dir := newRepo(t)
+	git(t, dir, "commit", "-q", "--allow-empty", "-m", "x", "--author", word+" <"+word+"@example.com>")
+	if code, out := run(t, word, "-mode", "history", "-repo", dir); code != exitOK {
+		t.Errorf("code %d\n%s", code, out)
+	}
+
+	var hits []int
+	commit := "tree abc\nauthor fumu <a@example.com> 1 +0000\ncommitter fumu <a@example.com> 1 +0000\n\nauthor fumu in message\n"
+	scanLines([]byte(commit), patterns(t, "fumu"), true, func(n int) { hits = append(hits, n) })
+	if len(hits) != 1 || hits[0] != 5 {
+		t.Errorf("hits %v, want only the message line 5", hits)
 	}
 }
 

@@ -4,12 +4,13 @@
 //	SENSITIVE_PATTERNS="$(cat list.txt)" go run ./tools/wordscan -mode history
 //	go run ./tools/wordscan -patterns list.txt -mode tree
 //
+// コミットの作者欄は公開前提で、検査の対象外 (ADR 0036)。
 // 一覧は 1 行 1 つの正規表現 (大文字小文字を区別しない)。空行と # で始まる行は読み飛ばす。
 //
 // モード:
 //
 //	tree     作業ツリーの、git の管理下と未追跡のファイル (.gitignore のものは読まない)
-//	history  全参照から届く全オブジェクト (削除されたファイル、コミットの作者とメッセージ、タグ) と参照の名前
+//	history  全参照から届く全オブジェクト (削除されたファイル、コミットメッセージ、タグ) と参照の名前
 //	dir      -dir の下のファイル。GitHub の本文を書き出したものに使う
 //
 // 出力は場所だけ。CI のログは公開されるので、語・一致した行・語を含むファイル名を出さない。
@@ -137,7 +138,7 @@ func matchLine(ps []*pattern, line []byte) bool {
 	return false
 }
 
-// scanLines は一致した行の番号 (1 始まり) を hit に渡す。commit が真ならヘッダの署名 (base64) を読み飛ばす。
+// scanLines は一致した行の番号 (1 始まり) を hit に渡す。commit が真ならヘッダの署名 (base64) と作者欄を読み飛ばす。
 func scanLines(content []byte, ps []*pattern, commit bool, hit func(line int)) {
 	inHeader, inSig := commit, false
 	for i, line := range bytes.Split(content, []byte("\n")) {
@@ -153,6 +154,9 @@ func scanLines(content []byte, ps []*pattern, commit bool, hit func(line int)) {
 				continue
 			}
 			inSig = false
+			if bytes.HasPrefix(line, []byte("author ")) || bytes.HasPrefix(line, []byte("committer ")) {
+				continue
+			}
 		}
 		if matchLine(ps, line) {
 			hit(i + 1)
