@@ -5,7 +5,8 @@
       "type": "section",
       "text": {
         "type": "mrkdwn",
-        "text": "\u003c!channel\u003e"
+        "text": "\u003c!channel\u003e",
+        "verbatim": true
       }
     },
     {
@@ -21,27 +22,33 @@
       "fields": [
         {
           "type": "mrkdwn",
-          "text": "*期間* 10/20 09:00 〜 10/21 09:00 (UTC)"
+          "text": "*期間* 10/20 09:00 〜 10/21 09:00 (UTC)",
+          "verbatim": true
         },
         {
           "type": "mrkdwn",
-          "text": "*新規* 🚨 critical 1 ・ 🟠 medium 2"
+          "text": "*新規* 🚨 critical 1 ・ 🟠 medium 2",
+          "verbatim": true
         },
         {
           "type": "mrkdwn",
-          "text": "変化 1 件 ・ 再発 1 件"
+          "text": "変化 1 件 ・ 再発 1 件",
+          "verbatim": true
         },
         {
           "type": "mrkdwn",
-          "text": "解消 1 件 ・ 未対応 1 件"
+          "text": "解消 1 件 ・ 未対応 1 件",
+          "verbatim": true
         },
         {
           "type": "mrkdwn",
-          "text": "本日報告済み 1 件"
+          "text": "本日報告済み 1 件",
+          "verbatim": true
         },
         {
           "type": "mrkdwn",
-          "text": "情報 1 件 (件数のみ)"
+          "text": "情報 1 件 (件数のみ)",
+          "verbatim": true
         }
       ]
     },
@@ -49,45 +56,16 @@
       "type": "section",
       "text": {
         "type": "mrkdwn",
-        "text": "まず対応 3 件 (最も重いのは「summary of arn:aws:iam::1:root|203.0.113.1」)、確認推奨 2 件。"
+        "text": "まず対応 3 件 (最も重いのは「summary of arn:aws:iam::1:root|203.0.113.1」)、確認推奨 2 件。",
+        "verbatim": true
       }
     },
     {
       "type": "section",
       "text": {
         "type": "mrkdwn",
-        "text": "⚠️ *取れていないもの* (結果が欠けている可能性があります)\n*取れなかったソース*\n• trail-us: `QUERY_LIMIT` 取れた期間 2026-10-20T20:00:00Z 〜 2026-10-21T09:00:00Z\n*形式の解釈率の警告*\n• app (json): 解釈率 0.50、閾値 0.40 `FORMAT_DRIFT`\n*スキップしたチェック*: login_bruteforce (no http_access source)"
-      }
-    },
-    {
-      "type": "divider"
-    },
-    {
-      "type": "section",
-      "text": {
-        "type": "mrkdwn",
-        "text": "*まず対応*"
-      }
-    },
-    {
-      "type": "section",
-      "text": {
-        "type": "mrkdwn",
-        "text": "🚨 *summary of arn:aws:iam::1:root|203.0.113.1*\n→ 封じ込め (侵害の疑い): ルートのパスワードを変える、ルートのアクセスキーがあれば無効化・削除する"
-      }
-    },
-    {
-      "type": "section",
-      "text": {
-        "type": "mrkdwn",
-        "text": "🚨 *summary of arn:aws:iam::1:root|192.0.2.1* (再発)\n→ 封じ込め (侵害の疑い): ルートのパスワードを変える、ルートのアクセスキーがあれば無効化・削除する"
-      }
-    },
-    {
-      "type": "section",
-      "text": {
-        "type": "mrkdwn",
-        "text": "🔴 *summary of a-\u0026gt;b* (変化)\n→ 封じ込め (侵害の疑い): ロールの信頼ポリシーから不審な主体を外す"
+        "text": "⚠️ *取れていないもの* (結果が欠けている可能性があります)\n*取れなかったソース*\n• trail-us: `QUERY_LIMIT` 取れた期間 2026-10-20T20:00:00Z 〜 2026-10-21T09:00:00Z\n*形式の解釈率の警告*\n• app (json): 解釈率 0.50、閾値 0.40 `FORMAT_DRIFT`\n*スキップしたチェック*: login_bruteforce (no http_access source)",
+        "verbatim": true
       }
     },
     {
@@ -97,21 +75,59 @@
       "type": "section",
       "text": {
         "type": "mrkdwn",
-        "text": "*確認推奨*"
+        "text": "*まず対応*",
+        "verbatim": true
       }
     },
     {
       "type": "section",
       "text": {
         "type": "mrkdwn",
-        "text": "🟠 *summary of 198.51.100.7*"
+        "text": "🚨 *summary of arn:aws:iam::1:root|203.0.113.1*\n→ 封じ込め (侵害の疑い): ルートのパスワードを変える、ルートのアクセスキーがあれば無効化・削除する",
+        "verbatim": true
       }
     },
     {
       "type": "section",
       "text": {
         "type": "mrkdwn",
-        "text": "🟠 *summary of arn:aws:iam::1:user/x*"
+        "text": "🚨 *summary of arn:aws:iam::1:root|192.0.2.1* (再発)\n→ 封じ込め (侵害の疑い): ルートのパスワードを変える、ルートのアクセスキーがあれば無効化・削除する",
+        "verbatim": true
+      }
+    },
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "🔴 *summary of a-\u0026gt;b* (変化)\n→ 封じ込め (侵害の疑い): ロールの信頼ポリシーから不審な主体を外す",
+        "verbatim": true
+      }
+    },
+    {
+      "type": "divider"
+    },
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "*確認推奨*",
+        "verbatim": true
+      }
+    },
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "🟠 *summary of 198.51.100.7*",
+        "verbatim": true
+      }
+    },
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "🟠 *summary of arn:aws:iam::1:user/x*",
+        "verbatim": true
       }
     },
     {
@@ -119,13 +135,17 @@
       "elements": [
         {
           "type": "mrkdwn",
-          "text": "全文と対処手順: `arata review` ・ `arata help ai playbook \u003ccheck\u003e`"
+          "text": "全文と対処手順: `arata review` ・ `arata help ai playbook \u003ccheck\u003e`",
+          "verbatim": true
         },
         {
           "type": "mrkdwn",
-          "text": "<dir>/report.md"
+          "text": "<dir>/report.md",
+          "verbatim": true
         }
       ]
     }
-  ]
+  ],
+  "unfurl_links": false,
+  "unfurl_media": false
 }

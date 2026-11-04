@@ -54,7 +54,7 @@ func detail(f schema.Finding) string {
 		parts = append(parts, k+" "+s)
 	}
 	parts = append(parts, fmt.Sprintf("id %s (初出 %s)", f.ID, f.FirstSeen))
-	return Escape(strings.Join(parts, " · "))
+	return Escape(oneLine(strings.Join(parts, " · ")))
 }
 
 // valueText は値を短い文字列にする。summary に既に入っている値なら false。
@@ -97,7 +97,7 @@ func valueText(v any, summary string) (string, bool) {
 
 // findingLines は finding 1 件の 2 行 (重大度・概要・チェック名の行と、主要キーの行)。値は report.json のもの。
 func findingLines(f schema.Finding) string {
-	return fmt.Sprintf("• *[%s]* %s `%s`\n    %s", Escape(f.Severity), Escape(f.Summary), Escape(f.Check), detail(f))
+	return fmt.Sprintf("• *[%s]* %s `%s`\n    %s", Escape(f.Severity), Escape(oneLine(f.Summary)), Escape(f.Check), detail(f))
 }
 
 // RunText は run の report.json から作る通知の本文 (件数が 0 の区分は出さない)。

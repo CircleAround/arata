@@ -745,3 +745,22 @@ func TestStoreInvalid(t *testing.T) {
 		})
 	}
 }
+
+// source の id と profile 名はファイルのパスと S3 のキーになる。ストアの外へ書かせない。
+func TestNamesUsedInPaths(t *testing.T) {
+	for _, bad := range []string{"../../etc/cron.d/x", "a/b", `a\b`, "..", "."} {
+		src := strings.Replace(minimal, "id: trail", fmt.Sprintf("id: %q", bad), 1)
+		if _, err := Load(write(t, src)); err == nil || !strings.Contains(err.Error(), "source id") {
+			t.Errorf("source id %q: %v", bad, err)
+		}
+		prof := strings.Replace(minimal, "  daily:\n", fmt.Sprintf("  %q:\n", bad), 1)
+		if _, err := Load(write(t, prof)); err == nil || !strings.Contains(err.Error(), "profile") {
+			t.Errorf("profile %q: %v", bad, err)
+		}
+	}
+	for _, good := range []string{"nginx-access", "waf_prod", "trail.ap-northeast-1"} {
+		if _, err := Load(write(t, strings.Replace(minimal, "id: trail", "id: "+good, 1))); err != nil {
+			t.Errorf("source id %q: %v", good, err)
+		}
+	}
+}

@@ -25,9 +25,13 @@ const (
 
 // Message は Slack に送る 1 通。Blocks が空なら text だけを送る (slack.format: text)。
 // Blocks があるとき Text は通知 (プッシュ通知・検索) 用の短い 1 行。
+//
+// 決定 (ADR 0037): ログ由来の URL を Slack に取りに行かせない (プレビューの偽装を防ぐ)。ゼロ値の false のまま payload に出す。
 type Message struct {
-	Text   string  `json:"text"`
-	Blocks []Block `json:"blocks,omitempty"`
+	Text        string  `json:"text"`
+	Blocks      []Block `json:"blocks,omitempty"`
+	UnfurlLinks bool    `json:"unfurl_links"`
+	UnfurlMedia bool    `json:"unfurl_media"`
 }
 
 // Block は Block Kit のブロック (aratam が使う header / section / divider / context だけ)。
@@ -43,7 +47,11 @@ type TextObj struct {
 	Type  string `json:"type"`
 	Text  string `json:"text"`
 	Emoji bool   `json:"emoji,omitempty"`
+	// Verbatim は mrkdwn で URL・チャンネル名・メンションを自動で解釈させない。書式と、設定に書いた <!channel> は効く (ADR 0037)。
+	Verbatim bool `json:"verbatim,omitempty"`
 }
+
+func mrkdwn(s string) *TextObj { return &TextObj{Type: "mrkdwn", Text: s, Verbatim: true} }
 
 func headerBlock(s string) Block {
 	return Block{Type: "header", Text: &TextObj{Type: "plain_text", Text: clipRunes(oneLine(s), MaxHeaderRunes-1), Emoji: true}}
@@ -51,7 +59,7 @@ func headerBlock(s string) Block {
 
 // sectionBlock は mrkdwn の section。3000 字を超えたら行の境目で切る。
 func sectionBlock(s string) Block {
-	return Block{Type: "section", Text: &TextObj{Type: "mrkdwn", Text: clipLines(s, MaxSectionRunes)}}
+	return Block{Type: "section", Text: mrkdwn(clipLines(s, MaxSectionRunes))}
 }
 
 func fieldsBlock(fs ...string) Block {
@@ -60,7 +68,7 @@ func fieldsBlock(fs ...string) Block {
 		if i == MaxFields {
 			break
 		}
-		b.Fields = append(b.Fields, &TextObj{Type: "mrkdwn", Text: clipLines(f, MaxFieldRunes)})
+		b.Fields = append(b.Fields, mrkdwn(clipLines(f, MaxFieldRunes)))
 	}
 	return b
 }
@@ -70,7 +78,7 @@ func dividerBlock() Block { return Block{Type: "divider"} }
 func contextBlock(es ...string) Block {
 	b := Block{Type: "context"}
 	for _, e := range es {
-		b.Elements = append(b.Elements, &TextObj{Type: "mrkdwn", Text: clipLines(e, maxContextRunes)})
+		b.Elements = append(b.Elements, mrkdwn(clipLines(e, maxContextRunes)))
 	}
 	return b
 }
