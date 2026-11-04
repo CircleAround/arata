@@ -287,26 +287,74 @@ func (o *outputFlags) bind(cmd *subcmd.Command) {
 	cmd.StringVar(&o.format, "format", "json", "標準出力の形式 (json|md)")
 }
 
-func (o *outputFlags) emit(d *Deps, rep *report.Report) error {
+// staged は準備の済んだ出力。publish で公開し、cleanup で片付ける (公開の後に呼んでもよい)。
+type staged struct {
+	publish func() error
+	cleanup func()
+}
+
+// stage はレポートの出力を準備する。--format の検証、--out の一時ディレクトリへの書き込みまでを行い、まだ公開しない。
+// 決定 (ADR 0038): 出力できないことを、報告済みの印と Commit の前に分かるようにする。
+func (o *outputFlags) stage(d *Deps, rep *report.Report) (*staged, error) {
 	if o.out != "" {
 		if err := os.MkdirAll(o.out, 0o750); err != nil {
-			return err
+			return nil, err
 		}
-		return engine.WriteReport(o.out, "report", rep)
+		tmp, err := os.MkdirTemp(o.out, ".arata-out-")
+		if err != nil {
+			return nil, err
+		}
+		clean := func() { _ = os.RemoveAll(tmp) }
+		if err := engine.WriteReport(tmp, "report", rep); err != nil {
+			clean()
+			return nil, err
+		}
+		return &staged{cleanup: clean, publish: func() error {
+			// md を先に置く。aratam は json を入口にするので、json が見えたときに md も新しい
+			for _, name := range []string{"report.md", "report.json"} {
+				if err := os.Rename(filepath.Join(tmp, name), filepath.Join(o.out, name)); err != nil {
+					return err
+				}
+			}
+			return nil
+		}}, nil
 	}
+	var body []byte
 	switch o.format {
 	case "json":
 		b, err := rep.JSON()
 		if err != nil {
-			return err
+			return nil, err
 		}
-		_, err = d.Stdout.Write(b)
-		return err
+		body = b
 	case "md":
-		_, err := io.WriteString(d.Stdout, rep.Markdown())
+		body = []byte(rep.Markdown())
+	default:
+		return nil, &engine.ExitError{Code: engine.CodeConfigInvalid, Exit: engine.ExitConfig, Err: fmt.Errorf("unknown format %q (json|md)", o.format)}
+	}
+	return &staged{cleanup: func() {}, publish: func() error {
+		_, err := d.Stdout.Write(body)
+		return err
+	}}, nil
+}
+
+func (o *outputFlags) emit(d *Deps, rep *report.Report) error {
+	st, err := o.stage(d, rep)
+	if err != nil {
 		return err
 	}
-	return &engine.ExitError{Code: engine.CodeConfigInvalid, Exit: engine.ExitConfig, Err: fmt.Errorf("unknown format %q (json|md)", o.format)}
+	defer st.cleanup()
+	return st.publish()
+}
+
+// stager は RunWith / EvaluateWith に渡す準備の関数と、準備した出力を返す。
+func (o *outputFlags) stager(d *Deps) (func(*report.Report) error, func() *staged) {
+	var st *staged
+	return func(rep *report.Report) error {
+		var err error
+		st, err = o.stage(d, rep)
+		return err
+	}, func() *staged { return st }
 }
 
 func newRunCmd(d *Deps, g *globalFlags) *subcmd.Command {
@@ -321,15 +369,21 @@ func newRunCmd(d *Deps, g *globalFlags) *subcmd.Command {
 				return err
 			}
 			defer e.Close()
-			res, err := e.Run(ctx, profile)
+			prepare, output := o.stager(d)
+			defer func() {
+				if st := output(); st != nil {
+					st.cleanup()
+				}
+			}()
+			res, err := e.RunWith(ctx, profile, prepare)
 			if err != nil {
 				return err
 			}
-			// 決定: 確定してからレポートを出す。STORE_CONFLICT のときに確定していない結果を aratam が通知しないように (ADR 0034)
+			// 決定: 確定してからレポートを公開する。STORE_CONFLICT のときに確定していない結果を aratam が通知しないように (ADR 0034)
 			if err := e.Commit(ctx); err != nil {
 				return err
 			}
-			if err := o.emit(d, res.Report); err != nil {
+			if err := output().publish(); err != nil {
 				return err
 			}
 			if res.Exit == engine.ExitPartial {
@@ -391,14 +445,26 @@ func newEvaluateCmd(d *Deps, g *globalFlags) *subcmd.Command {
 				return err
 			}
 			defer e.Close()
-			res, err := e.EvaluateOnly(ctx, profile)
+			prepare, output := o.stager(d)
+			defer func() {
+				if st := output(); st != nil {
+					st.cleanup()
+				}
+			}()
+			res, err := e.EvaluateWith(ctx, profile, prepare)
 			if err != nil {
 				return err
 			}
 			if err := e.Commit(ctx); err != nil {
 				return err
 			}
-			return o.emit(d, res.Report)
+			if err := output().publish(); err != nil {
+				return err
+			}
+			if res.Exit == engine.ExitPartial {
+				return errPartial
+			}
+			return nil
 		},
 	}
 	cmd.StringVar(&profile, "profile", "daily", "プロファイル名 (profiles のキー)")

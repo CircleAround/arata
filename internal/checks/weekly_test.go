@@ -92,8 +92,13 @@ func TestGuardDutyFindings(t *testing.T) {
 			t.Fatal(err)
 		}
 		out := map[string]Class{}
+		var ids []string
 		for _, r := range res {
 			out[r.Finding.Key] = r.Class
+			ids = append(ids, r.Finding.ID)
+		}
+		if err := st.MarkReported(ctx, ids, at); err != nil {
+			t.Fatal(err)
 		}
 		return out
 	}
@@ -147,7 +152,15 @@ func TestPostureCheck(t *testing.T) {
 	if m["s3_public_access_block"].Summary != "S3 のアカウント単位の Public Access Block に無効な項目がある: block_public_policy" || m["password_policy"].Severity != Medium || m["root_mfa"].Severity != High {
 		t.Fatalf("%+v", m)
 	}
-	if _, err := Diff(ctx, st, DiffParams{Check: "posture", Mode: ModeState, Window: weekly(), Now: now, NewID: seqID()}, obs); err != nil {
+	first, err := Diff(ctx, st, DiffParams{Check: "posture", Mode: ModeState, Window: weekly(), Now: now, NewID: seqID()}, obs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reported []string
+	for _, r := range first {
+		reported = append(reported, r.Finding.ID)
+	}
+	if err := st.MarkReported(ctx, reported, now); err != nil {
 		t.Fatal(err)
 	}
 	// 翌週: S3 とルート MFA の項目が権限不足で取れない → 前回の finding を維持 (resolved にしない)。直ったものは resolved

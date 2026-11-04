@@ -430,3 +430,23 @@ func compareGolden(t *testing.T, name string, got []byte) {
 		t.Fatalf("%s differs from golden (review, then `go test ./cmd/arata -update`):\n--- got ---\n%s", name, got)
 	}
 }
+
+// 出力できない run は、報告済みの印を付けず、次の run で new として出す (ADR 0038)。
+func TestRunWithBadFormatDoesNotConsumeFindings(t *testing.T) {
+	c := newCLI(t)
+	c.rootLogin("r1")
+	if code := c.run("run", "--config", c.cfg, "--profile", "daily", "--format", "xml"); code != 2 {
+		t.Fatalf("exit %d\n%s", code, c.stderr)
+	}
+	c.now = c.now.Add(time.Hour)
+	if code := c.run("run", "--config", c.cfg, "--profile", "daily"); code != 0 {
+		t.Fatalf("exit %d\n%s", code, c.stderr)
+	}
+	var rep map[string]any
+	if err := json.Unmarshal(c.stdout.Bytes(), &rep); err != nil {
+		t.Fatal(err)
+	}
+	if s := rep["summary"].(map[string]any); s["new"] == float64(0) {
+		t.Fatalf("%v", s)
+	}
+}
