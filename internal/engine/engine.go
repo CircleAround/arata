@@ -1188,10 +1188,11 @@ func WriteReport(dir, name string, rep *report.Report) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(dir, name+".json"), j, 0o640); err != nil {
+	// 決定: md を先に置く。aratam は json を入口にするので、json が見えたときに md も新しい
+	if err := report.WriteFileAtomic(filepath.Join(dir, name+".md"), []byte(rep.Markdown())); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, name+".md"), []byte(rep.Markdown()), 0o640)
+	return report.WriteFileAtomic(filepath.Join(dir, name+".json"), j)
 }
 
 // LastReport は保存済みの最新レポート (JSON) を返す。無ければ nil。

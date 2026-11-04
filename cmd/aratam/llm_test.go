@@ -15,13 +15,21 @@ import (
 )
 
 // fakeClaude は claude の偽の実行ファイル (実際の claude には接続しない)。標準入力・環境変数・作業ディレクトリを記録し、
-// FAKE_MODE が空なら $REC/response をそのまま出す。引数 (--system-prompt を含む) は呼び出しごとに $REC/args に足す。
+// FAKE_MODE が空なら $REC/response をそのまま出す。引数と system のファイルの中身 は呼び出しごとに $REC/args に足す。
 // 標準入力が JSON の配列 (提案の書き起こし) で $REC/response_proposals があれば、そちらを出す。
+// 子プロセスの環境は最小なので、記録先は実行ファイルの隣の rec、FAKE_MODE は $REC/mode から読む。
 const fakeClaude = `#!/bin/sh
+REC="$(dirname "$0")/../rec"
+FAKE_MODE="$(cat "$REC/mode" 2>/dev/null)"
 cat > "$REC/stdin"
 env > "$REC/env"
 pwd > "$REC/pwd"
-printf '%s\n' "$@" >> "$REC/args"
+prev=""
+for a in "$@"; do
+  printf '%s\n' "$a" >> "$REC/args"
+  if [ "$prev" = "--system-prompt-file" ]; then cat "$a" >> "$REC/args"; printf '\n' >> "$REC/args"; fi
+  prev="$a"
+done
 echo "--- end of call ---" >> "$REC/args"
 case "$FAKE_MODE" in
 fail) echo "Not logged in" >&2; exit 1 ;;

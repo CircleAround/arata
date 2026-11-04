@@ -34,6 +34,12 @@ var ErrDatabaseTooLarge = errors.New("store: the S3 database is larger than the 
 // 決定 (ADR 0037): 圧縮率の高いオブジェクトで実行環境のディスクを埋めさせない。設計書の見積もりは年に数百 MB までなので、十分に余裕を見た固定値にする (設定は足さない)。
 const maxDatabaseBytes int64 = 8 << 30
 
+// ErrObjectTooLarge は S3 のオブジェクトが maxObjectBytes を超えるとき。
+var ErrObjectTooLarge = errors.New("store: an S3 object is larger than the limit")
+
+// maxObjectBytes は S3 から取得する 1 オブジェクトの上限 (変数なのはテストのため)。決定の理由は maxDatabaseBytes と同じ。
+var maxObjectBytes int64 = 8 << 30
+
 // S3API はストアと doctor が使う S3 の操作。*s3.Client が満たす。
 type S3API interface {
 	GetObject(ctx context.Context, in *s3.GetObjectInput, opts ...func(*s3.Options)) (*s3.GetObjectOutput, error)
@@ -327,9 +333,14 @@ func download(ctx context.Context, api S3API, loc S3Location, rel, path string) 
 	}
 	defer f.Close()
 	h := sha256.New()
-	if _, err := io.Copy(io.MultiWriter(f, h), out.Body); err != nil {
+	n, err := io.Copy(io.MultiWriter(f, h), io.LimitReader(out.Body, maxObjectBytes+1))
+	if err != nil {
 		os.Remove(path)
 		return s3Object{}, unavailable(ctx, "get", key, err)
+	}
+	if n > maxObjectBytes {
+		os.Remove(path)
+		return s3Object{}, fmt.Errorf("%w: %s", ErrObjectTooLarge, key)
 	}
 	o := s3Object{etag: aws.ToString(out.ETag)}
 	copy(o.sum[:], h.Sum(nil))

@@ -477,10 +477,10 @@ func (o *outputFlags) emitPeriod(d *Deps, rep *report.PeriodReport) error {
 		if err := os.MkdirAll(o.out, 0o750); err != nil {
 			return err
 		}
-		if err := os.WriteFile(filepath.Join(o.out, "report.json"), j, 0o640); err != nil {
+		if err := report.WriteFileAtomic(filepath.Join(o.out, "report.md"), []byte(rep.Markdown())); err != nil {
 			return err
 		}
-		return os.WriteFile(filepath.Join(o.out, "report.md"), []byte(rep.Markdown()), 0o640)
+		return report.WriteFileAtomic(filepath.Join(o.out, "report.json"), j)
 	}
 	switch o.format {
 	case "json":

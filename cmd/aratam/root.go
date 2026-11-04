@@ -350,8 +350,8 @@ func newNotifyCmd(d *Deps, g *globalFlags) *subcmd.Command {
 func newSummarizer(ctx context.Context, d *Deps, cfg *notify.Config) (notify.Summarizer, error) {
 	switch cfg.LLM.Provider {
 	case notify.ProviderClaudeCLI:
-		// 決定: 子プロセスには aratam の環境変数を渡すが、Webhook の URL を入れた環境変数は除く (LLM に渡すのは report.json だけ)
-		env := llm.FilterEnv(d.Environ(), cfg.Slack.WebhookEnv, cfg.Slack.UrgentWebhookEnv)
+		// 決定: 子プロセスには claude が動くのに要る環境変数だけを渡す。Webhook の URL は名前が何であっても渡さない (LLM に渡すのは report.json だけ)
+		env := llm.ClaudeEnv(d.Environ(), cfg.Slack.WebhookEnv, cfg.Slack.UrgentWebhookEnv)
 		return &llm.ClaudeCLI{Command: cfg.LLM.Command, Model: cfg.LLM.Model, Env: env}, nil
 	case notify.ProviderBedrock:
 		s, err := d.NewBedrock(ctx, cfg.LLM.Region, cfg.LLM.Profile, cfg.LLM.Model)

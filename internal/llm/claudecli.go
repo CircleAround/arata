@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -20,8 +22,10 @@ type ClaudeCLI struct {
 	Command string
 	// Model は --model に渡す (空なら claude の既定)。
 	Model string
-	// Env は子プロセスの環境変数。呼び出し側が Webhook の URL などを除いて渡す (nil なら空の環境)。
+	// Env は子プロセスの環境変数。呼び出し側が ClaudeEnv で絞って渡す (nil なら空の環境)。
 	Env []string
+	// WorkRoot は作業用の一時ディレクトリを作る親 (空なら workRoot が決める)。
+	WorkRoot string
 }
 
 // claudeArgs は claude に渡す引数。
@@ -31,8 +35,9 @@ type ClaudeCLI struct {
 //   - 設定は project だけを読む (--setting-sources project)。作業ディレクトリは空なので project 設定は無く、ユーザー設定の
 //     hooks・権限設定・プラグインを読ませないことになる。--bare は OAuth のログイン状態を読まなくなるので使わない。
 //   - 出力は --output-format json (1 つの JSON。本文は result)。プロンプト (report.json) は標準入力で渡す。
-func (c *ClaudeCLI) claudeArgs(system string) []string {
-	args := []string{"-p", "--output-format", "json", "--tools", "", "--strict-mcp-config", "--no-session-persistence", "--setting-sources", "project", "--system-prompt", system}
+//   - system はファイルで渡す (--system-prompt-file)。引数は同じホストの他のユーザーに ps で見え、context_file の中身が載るため。
+func (c *ClaudeCLI) claudeArgs(systemFile string) []string {
+	args := []string{"-p", "--output-format", "json", "--tools", "", "--strict-mcp-config", "--no-session-persistence", "--setting-sources", "project", "--system-prompt-file", systemFile}
 	if c.Model != "" {
 		args = append(args, "--model", c.Model)
 	}
@@ -54,18 +59,24 @@ func (c *ClaudeCLI) Summarize(ctx context.Context, system string, reportJSON []b
 	if command == "" {
 		command = "claude"
 	}
-	dir, err := os.MkdirTemp("", "aratam-claude-")
+	root, err := os.MkdirTemp(c.workRoot(), "aratam-claude-")
 	if err != nil {
 		return nil, err
 	}
-	defer os.RemoveAll(dir)
-
-	cmd := exec.CommandContext(ctx, command, c.claudeArgs(system)...) // #nosec G204 -- シェルを通さない。command は利用者の設定 (llm.command)。ログ由来の値は標準入力でだけ渡す
-	cmd.Dir = dir
-	cmd.Env = c.Env
-	if cmd.Env == nil {
-		cmd.Env = []string{}
+	defer os.RemoveAll(root)
+	dir := filepath.Join(root, "work")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		return nil, err
 	}
+	systemFile := filepath.Join(root, "system-prompt.md")
+	if err := os.WriteFile(systemFile, []byte(system), 0o600); err != nil {
+		return nil, err
+	}
+
+	cmd := exec.CommandContext(ctx, command, c.claudeArgs(systemFile)...) // #nosec G204 -- シェルを通さない。command は利用者の設定 (llm.command)。ログ由来の値は標準入力でだけ渡す
+	cmd.Dir = dir
+	// 決定: 親のディレクトリの CLAUDE.md を読ませない (/tmp/CLAUDE.md は同じホストの誰でも置ける)
+	cmd.Env = append(append([]string{}, c.Env...), "CLAUDE_CODE_DISABLE_CLAUDE_MDS=1")
 	cmd.Stdin = bytes.NewReader(reportJSON)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -91,18 +102,53 @@ func (c *ClaudeCLI) Summarize(ctx context.Context, system string, reportJSON []b
 	return []byte(res.Result), nil
 }
 
-// FilterEnv は環境変数の一覧から names の変数を除く (子プロセスに Webhook の URL を渡さないため)。
-func FilterEnv(env []string, names ...string) []string {
+// workRoot は作業用の一時ディレクトリの親。
+// 決定: 誰でも書ける /tmp の下を避け、利用者のキャッシュの下に作る (上の環境変数を無視する版の claude でも、親の CLAUDE.md を他人に置かせない)。
+// HOME が無ければ OS の一時ディレクトリを使う。
+func (c *ClaudeCLI) workRoot() string {
+	if c.WorkRoot != "" {
+		if err := os.MkdirAll(c.WorkRoot, 0o700); err == nil {
+			return c.WorkRoot
+		}
+		return ""
+	}
+	var cache string
+	for _, kv := range c.Env {
+		k, v, _ := strings.Cut(kv, "=")
+		switch {
+		case k == "XDG_CACHE_HOME" && v != "":
+			cache = v
+		case k == "HOME" && v != "" && cache == "":
+			cache = filepath.Join(v, ".cache")
+		}
+	}
+	if cache == "" {
+		return ""
+	}
+	dir := filepath.Join(cache, "aratam")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return ""
+	}
+	return dir
+}
+
+// claudeEnvNames は claude の子プロセスに渡す環境変数 (動くのに要るものだけ)。
+var claudeEnvNames = map[string]bool{
+	"PATH": true, "HOME": true, "USER": true, "LOGNAME": true, "LANG": true, "LANGUAGE": true, "TZ": true, "TMPDIR": true, "TERM": true,
+	"XDG_CONFIG_HOME": true, "XDG_CACHE_HOME": true, "XDG_DATA_HOME": true, "XDG_STATE_HOME": true, "XDG_RUNTIME_DIR": true,
+	"HTTP_PROXY": true, "HTTPS_PROXY": true, "NO_PROXY": true, "ALL_PROXY": true, "http_proxy": true, "https_proxy": true, "no_proxy": true, "all_proxy": true,
+	"SSL_CERT_FILE": true, "SSL_CERT_DIR": true, "NODE_EXTRA_CA_CERTS": true,
+	"CLAUDE_CONFIG_DIR": true, "CLAUDE_CODE_OAUTH_TOKEN": true, "ANTHROPIC_API_KEY": true, "ANTHROPIC_AUTH_TOKEN": true, "ANTHROPIC_BASE_URL": true,
+}
+
+// ClaudeEnv は環境変数の一覧から claude に渡すものだけを残す。exclude (Webhook の環境変数の名前) は一覧にあっても渡さない。
+// 決定: 除くものを列挙せず、渡すものを列挙する。AWS の認証情報やトークンの名前は利用者ごとに違い、列挙しきれないため。
+// claude を Bedrock・Vertex で使う設定 (CLAUDE_CODE_USE_BEDROCK など) は渡さない。Bedrock は provider: bedrock を使う。
+func ClaudeEnv(env []string, exclude ...string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
 		k, _, _ := strings.Cut(kv, "=")
-		drop := false
-		for _, n := range names {
-			if n != "" && k == n {
-				drop = true
-			}
-		}
-		if !drop {
+		if (claudeEnvNames[k] || strings.HasPrefix(k, "LC_")) && !slices.Contains(exclude, k) {
 			out = append(out, kv)
 		}
 	}
