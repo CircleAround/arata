@@ -28,6 +28,11 @@ gh workflow run secrets-scan.yml -R CircleAround/arata   # 登録できたこと
 - 一覧をコミット・PR・Issue・ログに書かない
 - 語を足したら、上の手動実行で既存の履歴と本文に当たらないことを確かめる
 - 未登録のときは `words` が失敗する。これは意図した動きで、黙って通さないため
+- 改行は LF にする。Actions はステップの `env:` をログに表示し、secret を隠す。改行区切りの値も行ごとに隠れることを、最初の登録の直後に確かめる。次の結果が 0 でなければ、すぐにその実行のログを消して (`gh run delete <id>`) 原因を調べる
+
+```bash
+gh run view <run の id> -R CircleAround/arata --log | grep -ciE -f sensitive-patterns.txt
+```
 
 ## 必須チェックにする
 
