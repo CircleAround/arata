@@ -30,7 +30,7 @@ import (
 // IAM の action。
 const (
 	ActionGenerateCredentialReport = "iam:GenerateCredentialReport" // 書き込み系 (レポートの生成のみ。他に副作用は無い)
-	ActionGetCredentialReport      = "iam:GetCredentialReport"
+	ActionGetCredentialReport      = "iam:GetCredentialReport"      // #nosec G101 -- 名前に credential を含むだけの種類の識別子で、秘密の値ではない
 	ActionGetAccountSummary        = "iam:GetAccountSummary"
 	ActionGetPasswordPolicy        = "iam:GetAccountPasswordPolicy"
 	ActionListDetectors            = "guardduty:ListDetectors"
@@ -66,7 +66,7 @@ var RequiredActions = map[string][]string{
 
 // source.kind (config と同じ文字列)。
 const (
-	KindCredentialReport = "iam-credential-report"
+	KindCredentialReport = "iam-credential-report" // #nosec G101 -- 名前に credential を含むだけの種類の識別子で、秘密の値ではない
 	KindGuardDuty        = "guardduty"
 	KindAccessAnalyzer   = "access-analyzer"
 	KindPosture          = "posture"

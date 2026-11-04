@@ -145,20 +145,6 @@ func abuseFake() *cwlogstest.Fake {
 	return f
 }
 
-// inRange は問い合わせの範囲に時間幅の始まりが入る行だけを返す (本物の Insights と同じ)。
-func inRange(rows []map[string]string) func(in *cwl.StartQueryInput) []map[string]string {
-	return func(in *cwl.StartQueryInput) []map[string]string {
-		var out []map[string]string
-		for _, r := range rows {
-			t, _ := parseTime(r["t"])
-			if t.Unix() >= aws.ToInt64(in.StartTime) && t.Unix() <= aws.ToInt64(in.EndTime) {
-				out = append(out, r)
-			}
-		}
-		return out
-	}
-}
-
 func TestCollectEndpoints(t *testing.T) {
 	f := abuseFake()
 	c, err := New(nginxSource(), abuseChecks(), f)

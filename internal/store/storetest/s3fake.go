@@ -130,7 +130,7 @@ func (f *FakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	rec := S3Request{Method: r.Method, Key: key, IfMatch: r.Header.Get("If-Match"), IfNoneMatch: r.Header.Get("If-None-Match")}
-	status := http.StatusOK
+	var status int
 	switch {
 	case key == "" && q.Has("versioning"):
 		status = f.bucketConfig(w, "VERSIONING", func() string {

@@ -18,7 +18,7 @@ import (
 )
 
 // Descriptions はチェックの 1 行説明 (雛形のコメントに出す)。登録済みのチェックは全部ここに書く (テストで保証する)。
-var Descriptions = map[string]string{
+var Descriptions = map[string]string{ // #nosec G101 -- 設定の説明文の表で、秘密の値は含まない
 	"root_usage":             "ルートユーザーの利用 (critical)",
 	"unknown_assume_role":    "allowlist に無い呼び出し元の AssumeRole (high)",
 	"new_principal":          "allowlist にもベースラインにも無い主体 (medium)",
@@ -43,7 +43,7 @@ var Descriptions = map[string]string{
 }
 
 // paramComments は checks.<check>.<key> の説明。
-var paramComments = map[string]string{
+var paramComments = map[string]string{ // #nosec G101 -- 設定の説明文の表で、秘密の値は含まない
 	"login_bruteforce.paths":                      "sign-in の送信先。前方一致ではなく完全一致 (クエリ文字列は除いて比べる)。Devise のスコープ付きパス (/admin/users/sign_in など) は実際のパスに合わせる。集計条件なので overrides では変えられない",
 	"login_bruteforce.methods":                    "sign-in 試行とみなす HTTP メソッド",
 	"login_bruteforce.failure_statuses":           "失敗とみなすステータス (Devise の再表示は 401 / 422、成功は 302 / 303)",

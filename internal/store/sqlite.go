@@ -240,7 +240,7 @@ func (s *Dir) LastRun(ctx context.Context, profile string, statuses []string) (*
 	q := `SELECT id, profile, window_from, window_to, started_at, COALESCE(finished_at,''), status, stats FROM runs WHERE profile=?`
 	args := []any{profile}
 	if len(statuses) > 0 {
-		q += ` AND status IN (` + placeholders(len(statuses)) + `)`
+		q += ` AND status IN (` + placeholders(len(statuses)) + `)` // #nosec G202 -- 結合するのは定数と placeholders() の ? だけ。値はすべて束縛する
 		for _, st := range statuses {
 			args = append(args, st)
 		}
@@ -350,7 +350,7 @@ func (s *Dir) Principals(ctx context.Context, f PrincipalFilter) ([]Principal, e
 	q := `SELECT arn, kind, first_seen, last_seen, status FROM principals`
 	var args []any
 	if len(f.Statuses) > 0 {
-		q += ` WHERE status IN (` + placeholders(len(f.Statuses)) + `)`
+		q += ` WHERE status IN (` + placeholders(len(f.Statuses)) + `)` // #nosec G202 -- 結合するのは定数と placeholders() の ? だけ。値はすべて束縛する
 		for _, st := range f.Statuses {
 			args = append(args, st)
 		}
@@ -458,7 +458,7 @@ func (s *Dir) Events(ctx context.Context, from, to time.Time, f EventFilter) ([]
 		q += ` AND read_only = 0`
 	}
 	if len(f.ErrorCodes) > 0 {
-		q += ` AND error_code IN (` + placeholders(len(f.ErrorCodes)) + `)`
+		q += ` AND error_code IN (` + placeholders(len(f.ErrorCodes)) + `)` // #nosec G202 -- 結合するのは定数と placeholders() の ? だけ。値はすべて束縛する
 		for _, c := range f.ErrorCodes {
 			args = append(args, c)
 		}
@@ -508,7 +508,7 @@ func (s *Dir) Metrics(ctx context.Context, f MetricFilter) ([]record.Metric, err
 		args = append(args, f.To)
 	}
 	if len(f.Sources) > 0 {
-		q += ` AND source IN (` + placeholders(len(f.Sources)) + `)`
+		q += ` AND source IN (` + placeholders(len(f.Sources)) + `)` // #nosec G202 -- 結合するのは定数と placeholders() の ? だけ。値はすべて束縛する
 		for _, src := range f.Sources {
 			args = append(args, src)
 		}
@@ -552,7 +552,7 @@ func (s *Dir) MarkReported(ctx context.Context, ids []string, at time.Time) erro
 	for _, id := range ids {
 		args = append(args, id)
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE findings SET reported_at=? WHERE id IN (`+placeholders(len(ids))+`)`, args...)
+	_, err := s.db.ExecContext(ctx, `UPDATE findings SET reported_at=? WHERE id IN (`+placeholders(len(ids))+`)`, args...) // #nosec G202 -- 結合するのは定数と placeholders() の ? だけ。値はすべて束縛する
 	return wrap(err)
 }
 
@@ -736,7 +736,7 @@ func (s *Dir) Findings(ctx context.Context, check string, statuses []string) ([]
 }
 
 func (s *Dir) queryFindings(ctx context.Context, where string, args []any) ([]Finding, error) {
-	q := `SELECT id, "check", key, severity, summary, first_seen, last_seen, last_changed, status, COALESCE(reported_at,''), COALESCE(snooze_until,''), fingerprint, data, suppressed_severity FROM findings WHERE 1=1` + where + ` ORDER BY "check", key`
+	q := `SELECT id, "check", key, severity, summary, first_seen, last_seen, last_changed, status, COALESCE(reported_at,''), COALESCE(snooze_until,''), fingerprint, data, suppressed_severity FROM findings WHERE 1=1` + where + ` ORDER BY "check", key` // #nosec G202 -- where は内部で組み立てた定数と ? だけ。値はすべて束縛する
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, wrap(err)

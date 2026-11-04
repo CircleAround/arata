@@ -216,7 +216,7 @@ func carry(ctx context.Context, db *sql.DB, oldPath string) error {
 	}
 	defer tx.Rollback()
 	for _, t := range carriedTables {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO main.`+t.name+`(`+t.cols+`) SELECT `+t.cols+` FROM old.`+t.name); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO main.`+t.name+`(`+t.cols+`) SELECT `+t.cols+` FROM old.`+t.name); err != nil { // #nosec G202 -- 表名と列名は定数の carriedTables だけ
 			return fmt.Errorf("store: carry %s: %w", t.name, err)
 		}
 	}

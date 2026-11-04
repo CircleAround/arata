@@ -1,0 +1,83 @@
+name: sast
+
+# 安全でないコードの静的解析 (ADR 0037)。依存の検査は supply-chain、秘密の検査は secrets-scan の担当で、ここでは重ねない。
+# 最小権限。Actions は SHA で固定し、版はコメントに書く (ADR 0017)。
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '23 3 * * 1' # 週 1 回。コードが変わらなくても CodeQL の新しいクエリで見直す
+
+permissions:
+  contents: read
+
+env:
+  # 公開から 7 日以上の版。golangci-lint はリポジトリの Go でビルドする (配布バイナリは古い Go で作られていると新しい Go の型を読めない)。
+  # `go run` は sum.golang.org で検証するが、版の中身を CI でも固定するため h1 チェックサムを照合する。
+  # 上げるときは `go mod download -json github.com/golangci/golangci-lint/v2@<版>` の Sum を写す
+  GOLANGCI_VERSION: v2.15.0
+  GOLANGCI_SUM: h1:w94zf8HAYI7hm3164kwKsvZRuqXvY+YxeFoTbu1OLg8=
+
+jobs:
+  golangci:
+    name: gosec + staticcheck
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: golangci-lint のチェックサムを照合する
+        run: |
+          got="$(go mod download -json "github.com/golangci/golangci-lint/v2@${GOLANGCI_VERSION}" | jq -r .Sum)"
+          if [ "$got" != "$GOLANGCI_SUM" ]; then
+            echo "golangci-lint ${GOLANGCI_VERSION} のチェックサムが違います: $got" >&2
+            exit 1
+          fi
+      - name: golangci-lint (設定は .golangci.yml)
+        run: go run "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${GOLANGCI_VERSION}" run ./...
+      - name: 抑制には理由を書く
+        # `#nosec` は `#nosec <規則> -- <理由>` の形だけを許す
+        run: |
+          if git grep -nE '#nosec' -- '*.go' | grep -vE '#nosec G[0-9]+ -- .+'; then
+            echo '理由の無い #nosec があります' >&2
+            exit 1
+          fi
+
+  codeql:
+    name: CodeQL (${{ matrix.language }})
+    # 非公開のリポジトリの Code Scanning は GitHub Advanced Security が要る。公開したら動く (release.yml の attestation と同じ扱い)
+    if: github.event.repository.visibility == 'public'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write # 結果の登録
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: go
+            build-mode: autobuild
+          - language: javascript-typescript # deploy/sandbox (CDK)
+            build-mode: none
+          - language: actions # .github/workflows と examples/github-actions
+            build-mode: none
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - if: matrix.language == 'go'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          queries: security-extended
+      - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          category: /language:${{ matrix.language }}

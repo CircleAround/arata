@@ -161,8 +161,6 @@ func diffTables(t *testing.T, want, got map[string][]string, tables ...string) {
 	}
 }
 
-var rawTables = []string{"events", "principals", "principal_ips", "metrics", "snapshot_items"}
-
 func TestRebuildMatchesIncrementalStore(t *testing.T) {
 	st, dir := open(t)
 	buildHistory(t, st)

@@ -25,6 +25,7 @@ LLM 向けの使い方は `go run ./cmd/arata help ai` (バイナリに埋め込
 - Go は `$HOME/.local/go/bin` の公式 tarball (README「開発」)。cgo は使わない (単一静的バイナリ。ADR 0002)
 - `go test ./...` / `go vet ./...` / `gofmt -l $(git ls-files '*.go')` を通してから push する。CI は `go mod verify`・age-gate・govulncheck・ビルドも回す
   (`gofmt -l .` は `deploy/sandbox/node_modules` の中の Go の雛形まで読んで失敗するので、git 管理のファイルだけを見る)
+- CI の `sast.yml` は golangci-lint (gosec・staticcheck。設定は `.golangci.yml`) を回す。抑制は `#nosec <規則> -- <理由>` の形で理由を必ず書く (ADR 0037)
 - `deploy/sandbox` (CDK、TypeScript) を変えたら `pnpm test` / `pnpm typecheck` / `pnpm synth` も通す (deploy はしない。ADR 0020)
 - 書き込み系の操作 (リリース作成、タグ push、設定変更) は目的と副作用を一言説明してから行う
 
@@ -63,6 +64,7 @@ LLM 向けの使い方は `go run ./cmd/arata help ai` (バイナリに埋め込
 - arata は LLM を使わない (ADR 0001)。LLM と通知は aratam が担い、両者は `--out` の出力ファイルだけで連携する (ADR 0018)
 - aratam は判定を LLM に任せない。重大度の下限・finding 欠落の補完・LLM 失敗時の原文送信・入力が無い/古いときの通知は規則で固定 (`docs/aratam.md` 2 章)
 - レポートと通知に個人を特定できる値 (メールアドレス、氏名) を書かない。主体は ARN や ID で表す
+- ログ由来の値と LLM の出力は信用しない。守りはプロンプトではなく規則に置く (ADR 0037)
 - 暗黙の既定を持たない。実行されるチェックは設定に書いたものだけ (ADR 0014)。新しい既定値を足したら `config init --diff` で見えるようにする
 - `cmd/aratam/deps_test.go` が aratam の依存を許可リストで固定している。aratam に SQLite や監査用 AWS SDK をつながない
 

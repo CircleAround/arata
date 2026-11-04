@@ -60,7 +60,7 @@ func (c *ClaudeCLI) Summarize(ctx context.Context, system string, reportJSON []b
 	}
 	defer os.RemoveAll(dir)
 
-	cmd := exec.CommandContext(ctx, command, c.claudeArgs(system)...)
+	cmd := exec.CommandContext(ctx, command, c.claudeArgs(system)...) // #nosec G204 -- シェルを通さない。command は利用者の設定 (llm.command)。ログ由来の値は標準入力でだけ渡す
 	cmd.Dir = dir
 	cmd.Env = c.Env
 	if cmd.Env == nil {
