@@ -114,7 +114,7 @@ amd64 なら `linux-amd64` に読み替える。チェックサムは https://go
 
 ```sh
 make test          # go test ./... (ユニット + コマンドレベルの e2e)
-make lint          # go vet + golangci-lint (入っていれば)
+make lint          # go vet + golangci-lint (入っていれば。gosec・staticcheck。CI の sast.yml と同じ設定)
 make build         # bin/{arata,aratam}-linux-{arm64,amd64} (CGO_ENABLED=0 の静的バイナリ)
 make build-local   # このホスト向けの bin/arata と bin/aratam
 ```

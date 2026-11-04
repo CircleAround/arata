@@ -25,7 +25,7 @@ const (
 	KindPostureItem Kind = "posture_item"
 	KindGuardDuty   Kind = "guardduty"
 	// KindCredentialReport は IAM 認証情報レポートの 1 行 (ユーザー 1 人)。
-	KindCredentialReport Kind = "iam_credential_report"
+	KindCredentialReport Kind = "iam_credential_report" // #nosec G101 -- 名前に credential を含むだけの種類の識別子で、秘密の値ではない
 	// KindAccessAnalyzer は IAM Access Analyzer の ACTIVE な finding 1 件。
 	KindAccessAnalyzer Kind = "access_analyzer"
 	// KindWAFConfig は WAFv2 の WebACL の設定 (WebACL 1 件か、その中のルール 1 件)。

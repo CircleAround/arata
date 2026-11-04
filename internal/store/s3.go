@@ -26,6 +26,13 @@ var ErrConflict = errors.New("store: another run updated the S3 store first; not
 // ErrS3Unavailable は S3 に問い合わせられなかったとき (権限・通信。code: STORE_UNAVAILABLE)。ストアの破損とは区別する。
 var ErrS3Unavailable = errors.New("store: S3 store is unavailable")
 
+// ErrDatabaseTooLarge は S3 の SQLite を展開すると maxDatabaseBytes を超えるとき。バケットの中身の破損か改ざんを疑う。
+var ErrDatabaseTooLarge = errors.New("store: the S3 database is larger than the limit when decompressed")
+
+// maxDatabaseBytes は S3 の SQLite を展開するときの上限。
+// 決定 (ADR 0037): 圧縮率の高いオブジェクトで実行環境のディスクを埋めさせない。設計書の見積もりは年に数百 MB までなので、十分に余裕を見た固定値にする (設定は足さない)。
+const maxDatabaseBytes int64 = 8 << 30
+
 // S3API はストアと doctor が使う S3 の操作。*s3.Client が満たす。
 type S3API interface {
 	GetObject(ctx context.Context, in *s3.GetObjectInput, opts ...func(*s3.Options)) (*s3.GetObjectOutput, error)
@@ -110,7 +117,7 @@ func openS3(ctx context.Context, api S3API, loc S3Location, work string) (*S3, e
 		return nil, err
 	}
 	if obj.etag != "" {
-		if err := gunzipFile(gz, filepath.Join(dir, dbFile)); err != nil {
+		if err := gunzipFile(gz, filepath.Join(dir, dbFile), maxDatabaseBytes); err != nil {
 			return nil, fmt.Errorf("store: %s: %w", loc.URL(S3DatabaseObject), err)
 		}
 	}
@@ -272,7 +279,7 @@ func RebuildS3(ctx context.Context, api S3API, loc S3Location, o RebuildOptions)
 		return nil, err
 	}
 	if db.etag != "" && !o.FromScratch {
-		if err := gunzipFile(gz, filepath.Join(dir, dbFile)); err != nil {
+		if err := gunzipFile(gz, filepath.Join(dir, dbFile), maxDatabaseBytes); err != nil {
 			return nil, fmt.Errorf("store: %s: %w", loc.URL(S3DatabaseObject), err)
 		}
 	}
@@ -428,7 +435,8 @@ func gzipFile(src, dst string) error {
 	return out.Close()
 }
 
-func gunzipFile(src, dst string) error {
+// gunzipFile は src を dst に展開する。limit バイトを超えたら ErrDatabaseTooLarge で止め、dst を消す。
+func gunzipFile(src, dst string, limit int64) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
@@ -443,8 +451,14 @@ func gunzipFile(src, dst string) error {
 		return err
 	}
 	defer out.Close()
-	if _, err := io.Copy(out, zr); err != nil {
+	n, err := io.Copy(out, io.LimitReader(zr, limit+1))
+	if err != nil {
 		return err
+	}
+	if n > limit {
+		out.Close()
+		os.Remove(dst)
+		return ErrDatabaseTooLarge
 	}
 	return out.Close()
 }

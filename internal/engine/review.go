@@ -390,7 +390,7 @@ func OSUser() string {
 
 // RunGit は dir で git を実行する。
 func RunGit(ctx context.Context, dir string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...) // #nosec G204 -- シェルを通さない。git の固定の引数と、人が渡した承認の文 (-m の値) だけ
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return out, fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))

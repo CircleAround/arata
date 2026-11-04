@@ -233,7 +233,7 @@ func Parse(b []byte) (*List, error) {
 		}
 		if e.ARNPattern != "" {
 			if !strings.HasPrefix(e.ARNPattern, "arn:") {
-				return nil, fmt.Errorf("principals[%d]: arn_pattern %q must start with arn:", i, e.ARNPattern)
+				return nil, fmt.Errorf("principals[%d]: arn_pattern %q must start with \"arn:\"", i, e.ARNPattern)
 			}
 			re, err := globToRegexp(e.ARNPattern)
 			if err != nil {

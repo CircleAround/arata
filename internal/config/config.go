@@ -145,7 +145,7 @@ const (
 	KindCloudTrailLookup = "cloudtrail-lookup"
 	KindCloudWatchLogs   = "cloudwatch-logs"
 	// 以下はアカウント単位の状態 (スナップショット) を取る。窓に依らず、取るたびに丸ごと置き換える (ADR 0015)。
-	KindCredentialReport = "iam-credential-report"
+	KindCredentialReport = "iam-credential-report" // #nosec G101 -- 名前に credential を含むだけの種類の識別子で、秘密の値ではない
 	KindGuardDuty        = "guardduty"
 	KindAccessAnalyzer   = "access-analyzer"
 	KindPosture          = "posture"

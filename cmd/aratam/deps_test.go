@@ -2,8 +2,6 @@ package main
 
 import (
 	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -52,8 +50,8 @@ var forbiddenDeps = []string{
 }
 
 func TestDependenciesStaySeparateFromArata(t *testing.T) {
-	gobin := filepath.Join(runtime.GOROOT(), "bin", "go")
-	out, err := exec.Command(gobin, "list", "-deps", "-f", "{{if not .Standard}}{{.ImportPath}}{{end}}", ".").Output()
+	// go test は子プロセスの PATH の先頭に GOROOT/bin を足すので、テストと同じ版の go が見つかる
+	out, err := exec.Command("go", "list", "-deps", "-f", "{{if not .Standard}}{{.ImportPath}}{{end}}", ".").Output()
 	if err != nil {
 		t.Skipf("go list is not available: %v", err)
 	}

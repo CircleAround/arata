@@ -28,7 +28,7 @@ test:
 vet:
 	$(GO) vet ./...
 
-## lint: go vet + golangci-lint (入っていれば)
+## lint: go vet + golangci-lint (入っていれば。設定は .golangci.yml。gosec と staticcheck を含み、CI の sast.yml と同じ)
 lint: vet
 	@if [ -n "$(GOLANGCI)" ]; then $(GOLANGCI) run ./...; else echo "golangci-lint not found; skipped (go vet only)"; fi
 
