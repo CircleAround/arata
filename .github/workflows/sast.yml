@@ -30,6 +30,8 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+      - name: age-gate (golangci-lint も公開から 7 日以上)
+        run: go list -m -json "github.com/golangci/golangci-lint/v2@${GOLANGCI_VERSION}" | go run ./tools/agegate -days 7
       - name: golangci-lint のチェックサムを照合する
         run: |
           got="$(go mod download -json "github.com/golangci/golangci-lint/v2@${GOLANGCI_VERSION}" | jq -r .Sum)"

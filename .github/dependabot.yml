@@ -10,8 +10,9 @@ updates:
     groups:
       aws-sdk:
         patterns: ["github.com/aws/*"]
+  # /examples/github-actions は利用者が写す見本。.github/workflows の外なので明示する (ADR 0035)
   - package-ecosystem: github-actions
-    directory: /
+    directories: ["/", "/examples/github-actions"]
     schedule:
       interval: weekly
     cooldown:

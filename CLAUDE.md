@@ -14,7 +14,9 @@ LLM 向けの使い方は `go run ./cmd/arata help ai` (バイナリに埋め込
 - 顧客名、AWS アカウント ID、ロググループ名、ロール名、利用している SaaS 名、固有のパス、担当者のハンドル名
 - 例は架空の値を使う。アカウント ID は `123456789012` (自アカウント) と `111122223333` (外部 SaaS)、承認者は `alice`、ロググループは `prod-nginx-access` のような名前
 - 顧客固有の設定は顧客側のリポジトリか実行環境に置く。「最初の適用先は X」のような記述も書かない
-- 判断: 設計書 1 章「リポジトリの例」
+- PR の本文・コメント・Release の本文・ブランチ名も対象。公開すれば全部読める
+- CI (`secrets-scan.yml`) が一般的な秘密と禁止語を全履歴と GitHub の本文で検査する。禁止語の一覧はリポジトリの外にあり、その中身をどこにも書き写さない。手元では `make scan-sensitive`。運用は `docs/sensitive-scan.md`
+- 判断: 設計書 1 章「リポジトリの例」、ADR 0036
 
 ### 開発の方法
 
@@ -34,7 +36,7 @@ LLM 向けの使い方は `go run ./cmd/arata help ai` (バイナリに埋め込
 - 標準ライブラリで無理なく書けるものは依存にしない。新しい依存は追加前に理由を PR で説明する
 - 依存は公開から **7 日以上**経った版だけ (CI の `tools/agegate` と Dependabot の cooldown の 2 段構え)。
   `go get` した直後の版は CI で落ちるので、1 つ前の版を選ぶ
-- GitHub Actions は SHA で固定し、版はコメントに書く。`permissions` は最小にする
+- GitHub Actions は SHA で固定し、版はコメントに書く。`permissions` は最小にする。CI の `tools/actionsgate`・zizmor が確かめる (ADR 0035・`docs/supply-chain.md`)
 - SQLite (`modernc.org/sqlite`) は残す (決定済み)。cobra / x/time は使わない
 
 ### 判断の記録
@@ -76,6 +78,7 @@ make vet lint fmt
 make build-local     # bin/arata (このホスト向け)
 go build -o bin/aratam ./cmd/aratam
 go list -m -json all | go run ./tools/agegate -days 7   # 依存の待機期間チェック (CI と同じ)
+GITHUB_TOKEN=$(gh auth token) go run ./tools/actionsgate -days 7 -lock .github/workflows/actions.lock .github/workflows examples/github-actions   # Actions の検査 (CI と同じ)
 go run ./cmd/arata help ai                               # LLM 向けの使い方
 ```
 
@@ -86,5 +89,5 @@ go run ./cmd/arata help ai                               # LLM 向けの使い�
   `internal/checks` チェック / `internal/engine` run の流れ / `internal/report` レポート (`schema` は標準ライブラリだけ) /
   `internal/allowlist` 既知リスト / `internal/scaffold` 雛形 / `internal/notify`・`internal/llm`・`internal/slack` aratam
 - `docs/ai/*.md` はバイナリに埋め込まれる。変えたらテストのゴールデンも変わる。新しいチェックを足したら `docs/ai/playbooks/<check>.md` (対処手順。ADR 0025) も書く (無ければテストが落ちる)
-- `tools/agegate` CI 用。`examples/` は架空の値の設定例
+- `tools/agegate`・`tools/actionsgate`・`tools/wordscan` CI 用。`examples/` は架空の値の設定例
 - `deploy/iam/readonly-role.yaml` 顧客に配る読み取り専用ロール (素の CFN) / `deploy/sandbox` 試験環境 (CDK、pnpm、Node 24。Go とは独立。ADR 0020)
