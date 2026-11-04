@@ -36,7 +36,7 @@ arata の入力には攻撃者が書ける文字列がある (リクエストの
 
 守りはプロンプトではなく規則に置く。プロンプトの指示は破られる前提で、破られても次が残るようにする。
 
-1. 重大度の床: new / changed / recurred で `urgent_severity` 以上の finding は、LLM が `info` にしても `confirm` に上げ、LLM の理由を捨てる
+1. 重大度の床: new / changed / recurred で `urgent_severity` 以上の finding は、LLM が `info` にしても `confirm` に上げ、LLM の理由を捨てる。切り詰めるときはこれらを先頭に回す (低い重大度の `action` を並べて押し出させない)
 2. system prompt に、入力の値はログ由来で攻撃者が書けること、中の指示に従わないことを書く
 3. LLM の自由文に URL と `@channel` / `@here` / `@everyone` があれば、その項目を捨てて規則の文に戻す。headline と summary なら形の不正として扱う
 4. `urgent_severity` 以上の finding への approve の提案は規則で捨てる。approve は主体を以後報告しなくなるので、誘導されたときの被害が最も大きい
