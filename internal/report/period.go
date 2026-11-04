@@ -65,7 +65,7 @@ func BuildPeriod(in PeriodInput) *PeriodReport {
 		if e.Severity == string(checks.Info) {
 			continue
 		}
-		row := EventRow{FindingID: e.FindingID, Check: e.Check, Key: e.Key, Severity: e.Severity, Summary: e.Summary, At: ts(e.At), Profile: e.Profile}
+		row := EventRow{FindingID: e.FindingID, Check: e.Check, Key: record.MaskIdentity(e.Key), Severity: e.Severity, Summary: record.MaskIdentity(e.Summary), At: ts(e.At), Profile: e.Profile}
 		switch checks.Class(e.Class) {
 		case checks.ClassNew:
 			r.Events.New = append(r.Events.New, row)

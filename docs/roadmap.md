@@ -67,3 +67,35 @@
 - 「導入直後は報告しない」の判定は「データのある日」ではなく「収集し終えた日」で数える。操作の少ないアカウントでは、データのある日がいつまでも足りない (ADR 0027)
 - WAF の `ListResourcesForWebACL` は資源の種類ごとに別サービスの権限を要求し、エラー文も統一されていない。文言で判定しない (ADR 0023)
 - 一般的なコスト削減は arata に入れない (別の製品の候補。月次・手動実行)。費用の急増だけをセキュリティの兆候として見る
+
+## 6. 公開後の課題
+
+公開前の点検 (ADR 0037) で見つけ、公開後に Issue にする項目。高い重大度のものは公開前に直した。
+
+検知の取りこぼし:
+- `unknown_assume_role`: OIDC / SAML の AssumeRole は主体の ARN が無く、報告されない (playbook の記述と合わせる)
+- `iam_changes` の対象外の操作: `CreatePolicyVersion`・`SetDefaultPolicyVersion`・`AddUserToGroup`・`UpdateLoginProfile`・`CreateRole`・`DeactivateMFADevice`・境界の変更など
+- パスの照合が生の文字列: 大文字小文字、連続スラッシュ、`%xx`、末尾の `/`、絶対 URI の形で `login_bruteforce`・`probe_paths`・`waf_review` の除外をすり抜ける
+- 解釈率が閾値を切るとそのソースの集計を全部止める。ごみの HTTP で検知を止められる。解釈できた行は出し、未解釈の急増を finding にする
+- `ip` を検証していない: X-Forwarded-For を対応させた設定で、許可 IP の騙り、値を変えた閾値の回避、finding の増加が起きる
+- 同じ Key への集約で根拠が隠れる (`iam_changes` の `policy_arn`、`defense_evasion` の `changes`、`public_exposure` の `public_statements`)
+- GuardDuty の `UpdateDetector` の旧形式 (`dataSources`) の無効化を見ていない
+- `secret_access` が `GetParameterHistory` を見ない
+- Lambda の権限の条件 (`lambda_conditions`) も値を見ていない
+- CloudTrail の項目の型が想定と違う記録は無言で捨てる。捨てた件数を stats に出す
+
+堅牢さ:
+- `probe_paths` の key に json / regex 形式でクエリ文字列が残る。長さと件数の上限が無い
+- `arata review` と doctor の表が制御文字をそのまま出す
+- `isServiceLinkedRole` が部分一致
+- 許可 IP が Top N の枠を消費する (`baseline`、`waf_block_trend`)
+- `secret_access` の `paths`、`ips` に上限が無い
+- `Mask` が二重の URL エンコードや非 ASCII のローカル部を伏せない
+- API のページングの繰り返しに上限が無い
+- `--` の後もフラグとして解釈する。位置引数を黙って無視する (`arata run hourly`)
+- 期間の設定値の整数オーバーフロー
+- rebuild: パスに `[` があると 0 ファイルになる。不正な行があっても終了コード 0。raw の改竄は検知しない
+- 異常終了した run が期間レポートの「取れなかった run」に出ない
+- `store: dir://相対パス` が作業ディレクトリ基準
+- agegate: 入力 0 件で成功する、疑似バージョンの日付はコミット時刻で偽装できる
+- allowlist の `expected_denied: ["*:*"]` を拒否していない。同じ ARN の重複を許す

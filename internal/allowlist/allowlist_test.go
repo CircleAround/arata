@@ -302,3 +302,17 @@ secrets_access:
 		}
 	}
 }
+
+// arn_pattern はアカウントを固定する。広いパターンは主体の承認を丸ごと止めてしまう。
+func TestArnPatternMustFixTheAccount(t *testing.T) {
+	for _, p := range []string{"arn:*", "arn:aws:iam::*:role/x", "arn:aws:*:*:*:*", "arn:aws:iam::12345*:role/x", "arn:aws:iam::123456789012"} {
+		if _, err := Parse([]byte("principals:\n  - arn_pattern: \"" + p + "\"\n")); err == nil {
+			t.Errorf("%s を通した", p)
+		}
+	}
+	for _, p := range []string{"arn:aws:iam::123456789012:role/ci-*", "arn:aws:sts::123456789012:assumed-role/x/*"} {
+		if _, err := Parse([]byte("principals:\n  - arn_pattern: \"" + p + "\"\n")); err != nil {
+			t.Errorf("%s: %v", p, err)
+		}
+	}
+}

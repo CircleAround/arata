@@ -903,3 +903,83 @@ type pathOnlyStore struct {
 }
 
 func (s pathOnlyStore) Path() string { return s.dir }
+
+// collect に失敗した後の evaluate は、取れたと報告しない (ADR 0037)。
+func TestEvaluateReportsTheLastCollectFailure(t *testing.T) {
+	h := newHarness(t)
+	h.fake.Err = cloudtrailtest.APIError{Code: "AccessDeniedException"}
+	e := h.open(t)
+	ctx := context.Background()
+	if _, err := e.CollectOnly(ctx, 24*time.Hour, nil); err != nil {
+		t.Fatal(err)
+	}
+	r, err := e.EvaluateOnly(ctx, "daily")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := r.Report.Coverage
+	if r.Exit != ExitPartial || len(c.SourcesOK) != 0 || len(c.SourcesFailed) != 1 || c.SourcesFailed[0].Source != "trail" || c.SourcesFailed[0].Code != "ACCESS_DENIED" {
+		t.Fatalf("exit=%d coverage=%+v", r.Exit, c)
+	}
+}
+
+func TestEvaluateAfterSuccessfulCollect(t *testing.T) {
+	h := newHarness(t)
+	e := h.open(t)
+	ctx := context.Background()
+	if _, err := e.CollectOnly(ctx, 24*time.Hour, nil); err != nil {
+		t.Fatal(err)
+	}
+	r, err := e.EvaluateOnly(ctx, "daily")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Exit != ExitOK || len(r.Report.Coverage.SourcesOK) != 1 || len(r.Report.Coverage.SourcesFailed) != 0 {
+		t.Fatalf("exit=%d coverage=%+v", r.Exit, r.Report.Coverage)
+	}
+}
+
+// 収集の記録が無ければ、取れたとは書かない。
+func TestEvaluateWithoutCollectClaimsNothing(t *testing.T) {
+	h := newHarness(t)
+	e := h.open(t)
+	r, err := e.EvaluateOnly(context.Background(), "daily")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Report.Coverage.SourcesOK) != 0 {
+		t.Fatalf("%+v", r.Report.Coverage)
+	}
+}
+
+// AWS のエラー文のセッション名とメールアドレスをレポートに写さない。
+func TestCollectErrorHidesIdentity(t *testing.T) {
+	h := newHarness(t)
+	h.fake.Err = cloudtrailtest.APIError{Code: "AccessDeniedException", Message: "arn:aws:sts::123456789012:assumed-role/Audit/alice@example.com is not authorized"}
+	e := h.open(t)
+	r, err := e.Run(context.Background(), "daily")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := r.Report.Summary.CollectErrors[0].Message; strings.Contains(m, "alice") {
+		t.Fatalf("%s", m)
+	}
+}
+
+// 外部アカウントの finding に、別のアカウントのパターンで approve させない。
+func TestApprovePatternMustPointAtTheTarget(t *testing.T) {
+	cases := []struct {
+		pattern, arn, account string
+		ok                    bool
+	}{
+		{"arn:aws:iam::111122223333:role/x", "", "111122223333", true},
+		{"arn:aws:iam::999999999999:role/x", "", "111122223333", false},
+		{"arn:aws:iam::123456789012:role/ci-*", "arn:aws:iam::123456789012:role/ci-a", "", true},
+		{"arn:aws:iam::123456789012:role/ci-*", "arn:aws:iam::123456789012:role/app", "", false},
+	}
+	for _, c := range cases {
+		if err := checkPatternTarget(c.pattern, c.arn, c.account); (err == nil) != c.ok {
+			t.Errorf("%+v: %v", c, err)
+		}
+	}
+}

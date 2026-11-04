@@ -423,7 +423,7 @@ func roleARNFromSession(arn string) string {
 var notableNames = map[string]bool{
 	"ConsoleLogin": true, "GetSecretValue": true, "BatchGetSecretValue": true, "GetParameter": true, "GetParameters": true, "GetParametersByPath": true,
 	"StartSession": true, "AuthorizeSecurityGroupIngress": true, "AuthorizeSecurityGroupEgress": true,
-	"ModifyDBInstance": true, "CreateDBInstance": true, "PutBucketPolicy": true, "PutBucketAcl": true, "PutPublicAccessBlock": true, "DeletePublicAccessBlock": true,
+	"ModifyDBInstance": true, "CreateDBInstance": true, "PutBucketPolicy": true, "PutBucketAcl": true, "PutBucketPublicAccessBlock": true, "DeleteBucketPublicAccessBlock": true,
 }
 
 // notableAPIs は defense_evasion / public_exposure のために残す、上の eventSource 単位の規則に入らない操作 (ADR 0026)。

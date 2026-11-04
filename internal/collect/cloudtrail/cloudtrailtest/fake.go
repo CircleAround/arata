@@ -152,9 +152,14 @@ func WithError(ev types.Event, code string) types.Event {
 }
 
 // APIError は smithy.APIError を満たす最小のエラー。
-type APIError struct{ Code string }
+type APIError struct{ Code, Message string }
 
-func (e APIError) Error() string                 { return e.Code }
+func (e APIError) Error() string {
+	if e.Message != "" {
+		return e.Code + ": " + e.Message
+	}
+	return e.Code
+}
 func (e APIError) ErrorCode() string             { return e.Code }
 func (e APIError) ErrorMessage() string          { return e.Code }
 func (e APIError) ErrorFault() smithy.ErrorFault { return smithy.FaultClient }

@@ -265,10 +265,8 @@ func (e *Engine) Approve(ctx context.Context, id string, o ApproveOptions) (*App
 	switch {
 	case o.ARNPattern != "":
 		entry.ARNPattern = o.ARNPattern
-		if target.ARN != "" {
-			if ok, err := allowlist.MatchPattern(o.ARNPattern, target.ARN); err != nil || !ok {
-				return nil, e.configErr(fmt.Errorf("--arn-pattern %q does not match %s", o.ARNPattern, target.ARN))
-			}
+		if err := checkPatternTarget(o.ARNPattern, target.ARN, target.Account); err != nil {
+			return nil, e.configErr(err)
 		}
 	case o.Account || target.Account != "":
 		entry.Account = target.Account
@@ -340,6 +338,21 @@ func (e *Engine) Approve(ctx context.Context, id string, o ApproveOptions) (*App
 		res.Committed = true
 	}
 	return res, nil
+}
+
+// checkPatternTarget は --arn-pattern が finding の対象を指すかを確かめる。
+// 決定 (ADR 0037): 外部アカウントの finding (ARN が無く account だけ) では、パターンのアカウントの欄が一致することを求める。
+func checkPatternTarget(pattern, arn, account string) error {
+	if arn != "" {
+		if ok, err := allowlist.MatchPattern(pattern, arn); err != nil || !ok {
+			return fmt.Errorf("--arn-pattern %q does not match %s", pattern, arn)
+		}
+		return nil
+	}
+	if parts := strings.SplitN(pattern, ":", 6); len(parts) < 6 || parts[4] != account {
+		return fmt.Errorf("--arn-pattern %q is not in the account %s of the finding", pattern, account)
+	}
+	return nil
 }
 
 // SetStatus は ack / snooze / resolve。snooze は until (その日の 0 時 UTC まで沈黙し、以後の再観測で new として再報告) が必要。
