@@ -16,4 +16,4 @@
 • daily `RUN_MISSED` 2026-10-20T09:00:00Z 〜 2026-10-31T09:00:00Z
 • daily `failed` 2026-10-31T09:00:00Z
 
-全文: <dir>/report.md
+全文: <dir>/report.md  |  要約と → は LLM による (ログの文字列に影響され得る)

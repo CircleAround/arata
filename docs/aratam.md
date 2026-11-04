@@ -104,6 +104,11 @@ LLM に求める出力:
 - `finding_id` が report.json に無いものは捨てる (LLM が作った ID を表示しない)。
 - `approve_suggestions` は提案として表示するだけ。aratam は approve を実行しない。表示には `arata approve <id> --note "..."` の形を添える。
 - 個人を特定できる値を書かないよう system で指示する。入力の report.json もその前提で作られている。
+- 決定 (ADR 0037): 入力の値はログ由来で攻撃者が書ける。LLM が攻撃者の文に従っても次が残るよう、規則で検査する (プロンプトの指示は破られる前提)。
+  - new / changed / recurred で `urgent_severity` 以上の finding は `info` にさせない (`confirm` に上げ、LLM の理由を捨てる)。切り詰めるときはこれらを先頭に回す。
+  - `urgent_severity` 以上の finding への `approve_suggestions` は捨てる。
+  - 自由文 (`headline`・`reason`・`incidents` の `summary`・blocks の `summary` と `next`・提案の書き起こし) に URL、`@channel` / `@here` / `@everyone`、BLOCK に強める記述があれば項目を捨てて規則の行に戻す。`headline` と blocks の `summary` なら形の不正 (再試行し、だめなら LLM の失敗と同じ扱い)。捨てたら `LLM_OUTPUT_REJECTED` の WARN (理由だけ。文の中身はログに写さない)。
+  - LLM の文が載る通知は、既存の末尾の行に「要約と → は LLM による (ログの文字列に影響され得る)」を添える。`provider: none` と LLM の失敗では出さない。
 
 ### 3-1. プロバイダ
 

@@ -50,6 +50,8 @@ func sevEmoji(s string) string {
 type BlockNotes struct {
 	Summary string            `json:"summary"`
 	Next    map[string]string `json:"-"`
+	// Rejected は検査で捨てた項目の理由 (ログ用。内容は書かない)。
+	Rejected []string `json:"-"`
 }
 
 // groupRule はまとめ方の対応表の 1 行。name は 1 件の主体の表示 (mrkdwn。値はエスケープ済み)。
@@ -488,6 +490,9 @@ func RunBlocks(in *Input, d Decision, r Rules, warnings []string, notes *BlockNo
 	if in.Run != nil && len(in.Run.Proposals) > 0 {
 		foot = append(foot, "WAF の改善提案は別のメッセージ")
 	}
+	if notes != nil {
+		foot = append(foot, LLMNotice)
+	}
 	foot = append(foot, Escape(filepath.Join(in.Dir, ReportMD)))
 	tail := []Block{contextBlock(strings.Join(foot[:len(foot)-1], "  |  "), foot[len(foot)-1])}
 
@@ -598,10 +603,11 @@ func BlocksSystemPrompt(kind, context, playbooks string, targets []findingRef) s
 - 封じ込め・設定の変更・approve / ack / snooze / resolve は人への提案にとどめる。あなたは実行しない。
 - 個人を特定できる値 (氏名・メールアドレスなど) を書かない。主体は ARN や ID で書く。
 - 追加の照会はできない。report.json に書かれていることだけで判断し、推測は「可能性」と書く。
+%s
 
 ---
 
-%s%s%s`, input, list, t.Markdown(), playbooks, contextSection(context))
+%s%s%s`, input, list, untrustedInputRule, t.Markdown(), playbooks, contextSection(context))
 }
 
 // ParseBlockNotes は blocks の契約の出力を検証する。summary が空なら形が不正 (再試行し、だめなら規則で組み立てる)。
@@ -624,6 +630,9 @@ func ParseBlockNotes(raw []byte, targets []findingRef) (*BlockNotes, error) {
 	if strings.TrimSpace(out.Summary) == "" {
 		return nil, errors.New("llm output has no summary")
 	}
+	if why := rejectLLMText(out.Summary); why != "" {
+		return nil, fmt.Errorf("llm summary rejected: %s", why)
+	}
 	allowed := map[string]bool{}
 	for _, f := range targets {
 		allowed[f.id] = true
@@ -635,6 +644,10 @@ func ParseBlockNotes(raw []byte, targets []findingRef) (*BlockNotes, error) {
 			continue
 		}
 		if _, dup := n.Next[x.FindingID]; dup {
+			continue
+		}
+		if why := rejectLLMText(a); why != "" {
+			n.Rejected = append(n.Rejected, x.FindingID+": "+why)
 			continue
 		}
 		n.Next[x.FindingID] = clipRunes(strings.TrimPrefix(a, "→ "), maxActionRunes)

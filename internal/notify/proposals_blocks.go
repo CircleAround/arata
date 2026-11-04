@@ -343,7 +343,11 @@ func ProposalsBlocks(in *Input, warnings []string, writeups map[string]Writeup, 
 	if file == "" {
 		detail = "詳しい説明: " + code(filepath.Join(in.Dir, ReportMD))
 	}
-	tail := []Block{contextBlock(detail, "対処手順: `arata help ai playbook waf_review`")}
+	guide := "対処手順: `arata help ai playbook waf_review`"
+	if len(writeups) > 0 {
+		guide += "  |  " + LLMNotice
+	}
+	tail := []Block{contextBlock(detail, guide)}
 	var obsBlocks []Block
 	if ls := observationShortLines(obs, status); len(ls) > 0 {
 		obsBlocks = []Block{dividerBlock(), sectionBlock(strings.Join(ls, "\n"))}

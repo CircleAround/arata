@@ -29,6 +29,8 @@ const (
 	CodeMarkFailed      = "MARK_FAILED"
 	CodeLLMRetry        = "LLM_RETRY"
 	CodeLLMFailed       = "LLM_FAILED"
+	// CodeLLMOutputRejected は LLM の出力の項目を検査で捨てた (WARN。ADR 0037)。
+	CodeLLMOutputRejected = "LLM_OUTPUT_REJECTED"
 )
 
 // FallbackNotice は LLM が使えず原文を送るときに冒頭へ書く注記。
@@ -266,9 +268,12 @@ func summarize(ctx context.Context, o Options, log *slog.Logger, in *Input) (*Su
 	system := SystemPrompt(in.Kind, o.Context, playbooksPrompt(orderedChecks(in), log))
 	err := callLLM(ctx, o, log, system, in.JSON, func(raw []byte) error {
 		var err error
-		s, err = ParseSummary(raw, in)
+		s, err = ParseSummary(raw, in, o.Rules.UrgentSeverity)
 		return err
 	})
+	if err == nil {
+		logRejected(log, s.Rejected)
+	}
 	return s, err
 }
 
@@ -282,7 +287,17 @@ func summarizeBlocks(ctx context.Context, o Options, log *slog.Logger, in *Input
 		n, err = ParseBlockNotes(raw, top)
 		return err
 	})
+	if err == nil {
+		logRejected(log, n.Rejected)
+	}
 	return n, err
+}
+
+// logRejected は検査で捨てた LLM の項目を警告に出す。理由だけを書き、文の中身は書かない (攻撃者の文をログに写さない)。
+func logRejected(log *slog.Logger, rejected []string) {
+	for _, r := range rejected {
+		log.Warn("LLM の出力の項目を捨てました (規則の行を載せます)", "code", CodeLLMOutputRejected, "reason", r)
+	}
 }
 
 // callLLM は LLM を呼び、parse で検証する。失敗 (エラー・時間切れ・形が合わない) なら 1 回だけ再試行する。timeout は 1 回ごと。

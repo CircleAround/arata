@@ -52,4 +52,4 @@ new wafv2.CfnWebACL(this, 'Acl', { rules: [{ name: 'rate-api', action: { count: 
 • prod-waf: COUNT の AWS-AWSManagedRulesKnownBadInputsRuleSet: 直近 7 日で 140 件一致、うち怪しい通信 100%、一致した日 7 / 7 日
 • prod-waf: COUNT の count-geo: 直近 7 日で 12 件一致、うち怪しい通信 25%、一致した日 3 / 7 日
 
-全文: <dir>/report.md
+全文: <dir>/report.md  |  要約と → は LLM による (ログの文字列に影響され得る)

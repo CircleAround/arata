@@ -39,4 +39,4 @@ root の利用が 2 件 (新規・再発)。既知リストに無い AssumeRole 
 
 *スキップしたチェック*: login_bruteforce (no http_access source)
 
-全文: <dir>/report.md
+全文: <dir>/report.md  |  要約と → は LLM による (ログの文字列に影響され得る)
