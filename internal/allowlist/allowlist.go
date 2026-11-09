@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 )
@@ -131,7 +132,12 @@ func MatchPattern(pattern, arn string) (bool, error) {
 }
 
 // globToRegexp は glob を先頭から末尾までの一致の正規表現にする。
+// 決定 (ADR 0041。ファズで見つけた): UTF-8 として不正な glob はエラーにする。不正なバイトは 1 つの置き換え文字として扱われるので、
+// 別々の不正なバイト列が同じものとして一致してしまう (承認の照合を曖昧にしない)。
 func globToRegexp(glob string) (*regexp.Regexp, error) {
+	if !utf8.ValidString(glob) {
+		return nil, fmt.Errorf("pattern %q is not valid UTF-8", glob)
+	}
 	var b strings.Builder
 	b.WriteString("^")
 	for _, r := range glob {

@@ -84,6 +84,54 @@ func TestUrgentFindingsSurviveTruncation(t *testing.T) {
 	}
 }
 
+// インシデント候補・approve の提案を大量に並べても、本文は上限に収まり、高い重大度の行は残る (ファズで見つけた。ADR 0041)。
+func TestLLMCannotFloodOptionalSections(t *testing.T) {
+	in := boundaryInput("low", "high", "critical")
+	long := strings.Repeat("あ", 300)
+	var incs, sugs []string
+	for i := 0; i < 40; i++ {
+		incs = append(incs, `{"finding_ids":["f0","f0","f0"],"summary":"`+long+`"}`)
+		sugs = append(sugs, `{"finding_id":"f0","reason":"`+long+`"}`)
+	}
+	// f1 は items にあり、f2 は漏れている (規則で足される)。どちらも残る
+	s := parse(t, in, `{"headline":"h","items":[{"finding_id":"f0","class":"action","reason":"r"},{"finding_id":"f1","class":"confirm","reason":"r"}],
+		"incidents":[`+strings.Join(incs, ",")+`],"approve_suggestions":[`+strings.Join(sugs, ",")+`]}`)
+	if len(s.Incidents) > maxIncidents || len(s.ApproveSuggestions) != 1 {
+		t.Fatalf("incidents %d, suggestions %d", len(s.Incidents), len(s.ApproveSuggestions))
+	}
+	for _, inc := range s.Incidents {
+		if len(inc.FindingIDs) != 1 {
+			t.Fatalf("同じ id を重ねて書けた: %v", inc.FindingIDs)
+		}
+	}
+	text := SummaryText(in, Decision{Route: RouteUrgent}, Rules{Name: "n", UrgentSeverity: urgent}, nil, s)
+	if n := len([]rune(text)); n > MaxTextRunes {
+		t.Fatalf("本文が %d 文字", n)
+	}
+	for _, want := range []string{"*[high]*", "*[critical]*", LLMNotice} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("%s が無い:\n%s", want, text)
+		}
+	}
+}
+
+// 規則で足す行 (漏れた finding) だけで上限を超えるときも、上限に収め、高い重大度を先に残す。
+func TestMissingFindingsFitInLimit(t *testing.T) {
+	sevs := make([]string, 60)
+	for i := range sevs {
+		sevs[i] = "low"
+	}
+	sevs[59] = "critical"
+	in := boundaryInput(sevs...)
+	text := SummaryText(in, Decision{Route: RouteUrgent}, Rules{Name: "n", UrgentSeverity: urgent}, nil, parse(t, in, `{"headline":"h"}`))
+	if n := len([]rune(text)); n > MaxTextRunes {
+		t.Fatalf("本文が %d 文字", n)
+	}
+	if !strings.Contains(text, "*[critical]*") || !strings.Contains(text, LLMNotice) {
+		t.Fatalf("critical か注記が無い:\n%s", text)
+	}
+}
+
 func TestUrgentFindingsAreNotApproveSuggestions(t *testing.T) {
 	in := boundaryInput("critical", "high", "medium")
 	s := parse(t, in, `{"headline":"h","items":[],"approve_suggestions":[{"finding_id":"f0","reason":"正当"},{"finding_id":"f1","reason":"正当"},{"finding_id":"f2","reason":"正当"}]}`)

@@ -379,7 +379,7 @@ func ProposalsBlocks(in *Input, warnings []string, writeups map[string]Writeup, 
 		body = append(body, bs...)
 	}
 	blocks := append(append(append(head, body...), obsBlocks...), tail...)
-	return Message{Text: Escape(fmt.Sprintf("%s: WAF の改善提案 %d 件 (観察 %d 件)", title(in), len(props), len(obs)+len(status))), Blocks: blocks}
+	return Message{Text: clipRunes(Escape(fmt.Sprintf("%s: WAF の改善提案 %d 件 (観察 %d 件)", title(in), len(props), len(obs)+len(status))), maxNotifyRunes), Blocks: blocks}
 }
 
 // ProposalsMarkdown は waf-proposals.md の中身 (提案ごとの概要・根拠・次の一手・何を・なぜ・進め方・設定例の全文。Markdown なのでエスケープしない)。

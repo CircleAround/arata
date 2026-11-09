@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -474,10 +475,11 @@ func parseS3Store(u, rest string) (Store, error) {
 	if bucket == "" {
 		return Store{}, fmt.Errorf("config: store %q: bucket is empty (want s3://<bucket>/<prefix>)", u)
 	}
-	prefix = strings.TrimSuffix(prefix, "/")
+	// 決定 (ADR 0041。ファズで見つけた): 空の区間は末尾の / を外す前に見る。外した後に見ると s3://b/p// が通り、接頭辞が "p/" になる
 	if strings.Contains(prefix, "//") || strings.HasPrefix(prefix, "/") {
 		return Store{}, fmt.Errorf("config: store %q: prefix has an empty path segment", u)
 	}
+	prefix = strings.TrimSuffix(prefix, "/")
 	return Store{Scheme: "s3", Bucket: bucket, Prefix: prefix}, nil
 }
 
@@ -515,6 +517,10 @@ func dedup(l []string) []string {
 	return out
 }
 
+// MaxDurationDays は `d` (日) で書ける上限 (time.Duration に収まる日数。約 292 年)。
+// 決定 (ADR 0041。ファズで見つけた): 超える値は桁あふれで別の長さになる (213504d が 25 分になる) ので、エラーにする。
+const MaxDurationDays = int(math.MaxInt64 / (24 * time.Hour))
+
 // ParseDuration は time.ParseDuration に `d` (日) を加えた形式を解釈する。負値は拒否する。
 func ParseDuration(s string) (time.Duration, error) {
 	if s == "" {
@@ -523,7 +529,7 @@ func ParseDuration(s string) (time.Duration, error) {
 	var d time.Duration
 	if strings.HasSuffix(s, "d") {
 		n, err := strconv.Atoi(strings.TrimSuffix(s, "d"))
-		if err != nil {
+		if err != nil || n > MaxDurationDays || n < -MaxDurationDays {
 			return 0, fmt.Errorf("invalid duration %q", s)
 		}
 		d = time.Duration(n) * 24 * time.Hour

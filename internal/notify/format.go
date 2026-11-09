@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -26,15 +27,35 @@ var (
 )
 
 // Mrkdwn は report.md (Markdown) を Slack の mrkdwn に整形する。見出しと太字だけを置き換え、それ以外はそのまま。
+//
+// 決定 (ADR 0041。ファズで見つけた): 行ごとに目に見えない文字を除く (cleanLine)。report.md は arata が書くが、中の summary はログ由来で、
+// 期間レポートの text の書式ではこの経路だけ oneLine を通らず、向きの制御やゼロ幅の文字がそのまま Slack に出ていた。
 func Mrkdwn(md string) string {
 	lines := strings.Split(Escape(strings.TrimRight(md, "\n")), "\n")
 	for i, l := range lines {
+		l = cleanLine(l)
 		if m := mdHeading.FindStringSubmatch(l); m != nil {
 			l = "*" + strings.ReplaceAll(m[1], "**", "") + "*"
 		}
 		lines[i] = mdBold.ReplaceAllString(l, "*$1*")
 	}
 	return strings.Join(lines, "\n")
+}
+
+// cleanLine は 1 行から目に見えない文字 (制御文字、向きの制御、ゼロ幅) を除き、空白以外の空白類 (タブ、行・段落の区切りなど) を空白にする。
+// oneLine と違い、行頭の字下げと空白の数は保つ (Markdown の箇条書きの入れ子を崩さない)。
+func cleanLine(l string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r == ' ':
+			return r
+		case unicode.IsSpace(r):
+			return ' '
+		case unicode.IsControl(r) || unicode.Is(unicode.Cf, r):
+			return -1
+		}
+		return r
+	}, l)
 }
 
 // title は通知の 1 行目に出す報告の名前。
@@ -65,7 +86,7 @@ func QuietText(in *Input, d Decision, r Rules, warnings []string) string {
 	lines := head(d.Route, r, "", warnings)
 	lines = append(lines, fmt.Sprintf("*%s* %s 〜 %s: 新規なし (変化・再発なし、取得の失敗なし。未対応 %d 件)",
 		Escape(title(in)), Escape(in.Run.Window.From), Escape(in.Run.Window.To), in.Run.Summary.StillOpen))
-	return strings.Join(lines, "\n")
+	return clipLines(strings.Join(lines, "\n"), MaxTextRunes)
 }
 
 // ReportText は通知の本文 (provider: none、または LLM が使えなかったときの原文)。
@@ -83,18 +104,23 @@ func ReportText(in *Input, d Decision, r Rules, warnings []string, notice string
 	return fit(strings.Join(lines, "\n"), body, "全文: "+full, "…(長いため省略)")
 }
 
+// maxProblemRunes は入力の問題の理由の上限。理由には report.json の値 (kind・generated_at) が入るので、長さを規則で止める。
+const maxProblemRunes = 500
+
 // InputProblemText は arata の出力が無い・読めない・古いときの通知 (LLM を通さず、緊急用に送る)。
+// 決定 (ADR 0041): 静かな通知とこの通知も、名前や理由が極端に長いときは上限で切る (どの通知も Slack の上限を超えない)。
 func InputProblemText(dir string, e *InputError, r Rules) string {
 	lines := head(RouteUrgent, r, "", nil)
 	lines = append(lines,
 		fmt.Sprintf("*arata の出力が無いか古いため、監査結果を通知できません (%s)*", Escape(r.Name)),
-		"- 理由: "+Escape(e.Reason)+" (`"+e.Code+"`)",
+		"- 理由: "+Escape(clipRunes(oneLine(e.Reason), maxProblemRunes))+" (`"+e.Code+"`)",
 		"- 入力: "+Escape(dir),
 		"arata が実行されていないか、失敗しています。cron と arata のログを確認してください。")
-	return strings.Join(lines, "\n")
+	return clipLines(strings.Join(lines, "\n"), MaxTextRunes)
 }
 
 // fit は head + body + footer を MaxTextRunes に収める。収まらなければ body を行の境目で切り、cut を足す。
+// 決定 (ADR 0041): head と footer だけで上限を超えるとき (警告や名前が極端に長い) は、全体を行の境目で切る。どの入力でも上限を超えない。
 func fit(head, body, footer, cut string) string {
 	join := func(parts ...string) string {
 		var out []string
@@ -109,6 +135,9 @@ func fit(head, body, footer, cut string) string {
 		return s
 	}
 	budget := MaxTextRunes - utf8.RuneCountInString(join(head, cut, footer)) - 1
+	if budget < 0 {
+		return clipLines(join(head, cut, footer), MaxTextRunes)
+	}
 	var kept []string
 	n := 0
 	for _, l := range strings.Split(body, "\n") {

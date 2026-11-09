@@ -281,6 +281,9 @@ func (r *PeriodReport) JSON() ([]byte, error) {
 }
 
 // Markdown は人向けの期間レポート。
+//
+// 決定 (ADR 0041。ファズで見つけた): summary と主体の表示はログ由来なので、run の report.md と同じく改行を空白にする (inline)。
+// 期間レポートだけ抜けていて、summary の改行で偽の見出しや指摘の行を作れた (report.md は Slack の本文にもなる)。
 func (r *PeriodReport) Markdown() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# arata 期間レポート (%s)\n\n", r.Name)
@@ -310,7 +313,7 @@ func (r *PeriodReport) Markdown() string {
 	} else {
 		b.WriteString("| 主体 | 種類 | 初出 | 状態 |\n|---|---|---|---|\n")
 		for _, p := range r.NewPrincipals {
-			fmt.Fprintf(&b, "| %s | %s | %s | %s |\n", p.Label, p.Kind, p.FirstSeen, p.Status)
+			fmt.Fprintf(&b, "| %s | %s | %s | %s |\n", inline(p.Label), p.Kind, p.FirstSeen, p.Status)
 		}
 		b.WriteString("\n")
 	}
@@ -320,7 +323,7 @@ func (r *PeriodReport) Markdown() string {
 		b.WriteString("未対応 (open / acked) の指摘はありません。\n\n")
 	} else {
 		for _, f := range r.Open {
-			fmt.Fprintf(&b, "- **[%s]** %s `%s` (%s、初出 %s、id %s)\n", f.Severity, f.Summary, f.Check, f.Status, f.FirstSeen, f.ID)
+			fmt.Fprintf(&b, "- **[%s]** %s `%s` (%s、初出 %s、id %s)\n", f.Severity, inline(f.Summary), f.Check, f.Status, f.FirstSeen, f.ID)
 		}
 		b.WriteString("\n")
 	}
@@ -376,7 +379,7 @@ func eventSection(b *strings.Builder, title string, l []EventRow) {
 		if by == "" {
 			by = "人の操作 / allowlist"
 		}
-		fmt.Fprintf(b, "- %s **[%s]** %s `%s` (%s、id %s)\n", e.At, e.Severity, e.Summary, e.Check, by, e.FindingID)
+		fmt.Fprintf(b, "- %s **[%s]** %s `%s` (%s、id %s)\n", e.At, e.Severity, inline(e.Summary), e.Check, by, e.FindingID)
 	}
 	b.WriteString("\n")
 }

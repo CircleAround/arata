@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/CircleAround/arata/docs/ai"
@@ -166,10 +167,23 @@ func rejectWriteup(w Writeup) string {
 			return why
 		}
 	}
-	if blockAction.MatchString(w.Example) {
+	if blockAction.MatchString(cleanExample(w.Example)) {
 		return "example sets a Block action"
 	}
 	return ""
+}
+
+// cleanExample は設定例から目に見えない文字 (制御文字、向きの制御、ゼロ幅) を除く。改行とタブは残し、改行は \n に揃える。
+// 決定 (ADR 0041): 設定例は複数行なので oneLine を通せない。検査 (Block の action・コードフェンス) の前に除く。
+// 除かないと、Block の action の名前やバッククォート 3 つの間にゼロ幅の文字を挟んだものが検査を通り、Slack と waf-proposals.md にそのまま出る (ファズで見つけた)。
+func cleanExample(s string) string {
+	s = strings.NewReplacer("\r\n", "\n", "\r", "\n", "\u2028", "\n", "\u2029", "\n", "\u0085", "\n", "\v", "\n", "\f", "\n").Replace(s)
+	return strings.Map(func(r rune) rune {
+		if r != '\n' && r != '\t' && (unicode.IsControl(r) || unicode.Is(unicode.Cf, r)) {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 // ParseWriteups は提案の書き起こしの出力を検証する。形が合わなければエラー (候補を規則の書式で載せる)。
@@ -209,6 +223,7 @@ func ParseWriteups(raw []byte, props []schema.Proposal) (map[string]Writeup, []s
 			rejected = append(rejected, w.ID+": duplicate")
 			continue
 		}
+		w.Example = cleanExample(w.Example)
 		if why := rejectWriteup(w); why != "" {
 			got[w.ID] = Writeup{ID: w.ID} // 2 件目で上書きさせない
 			rejected = append(rejected, w.ID+": "+why)

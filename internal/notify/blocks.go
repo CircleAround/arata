@@ -552,7 +552,7 @@ func QuietBlocks(in *Input, d Decision, r Rules, warnings []string) Message {
 	blocks = append(blocks,
 		headerBlock(fmt.Sprintf("✅ %s — %s", name, target)),
 		sectionBlock(fmt.Sprintf("%s: *新規なし* (変化・再発なし、取得の失敗なし。未対応 %d 件)", Escape(windowText(in)), in.Run.Summary.StillOpen)))
-	return Message{Text: Escape(title(in)) + ": 新規なし", Blocks: blocks}
+	return Message{Text: clipRunes(Escape(title(in))+": 新規なし", maxNotifyRunes), Blocks: blocks}
 }
 
 // InputProblemBlocks は arata の出力が無い・読めない・古いときの Block Kit (緊急用)。
@@ -560,9 +560,9 @@ func InputProblemBlocks(dir string, e *InputError, r Rules) Message {
 	blocks := topSection(RouteUrgent, r, "", nil)
 	blocks = append(blocks,
 		headerBlock("⚠️ arata の出力が無いか古い — "+r.Name),
-		sectionBlock("*監査結果を通知できません*\n• 理由: "+Escape(e.Reason)+" (`"+e.Code+"`)\n• 入力: "+Escape(dir)),
+		sectionBlock("*監査結果を通知できません*\n• 理由: "+Escape(clipRunes(oneLine(e.Reason), maxProblemRunes))+" (`"+e.Code+"`)\n• 入力: "+Escape(dir)),
 		contextBlock("arata が実行されていないか、失敗しています。cron と arata のログを確認してください。"))
-	return Message{Text: Escape(fmt.Sprintf("arata の出力が無いか古いため、監査結果を通知できません (%s)", r.Name)), Blocks: blocks}
+	return Message{Text: clipRunes(Escape(fmt.Sprintf("arata の出力が無いか古いため、監査結果を通知できません (%s)", r.Name)), maxNotifyRunes), Blocks: blocks}
 }
 
 // BlocksSystemPrompt は blocks の書式で LLM に渡す system。LLM が書くのは要約と「まず対応」の「→」だけ。

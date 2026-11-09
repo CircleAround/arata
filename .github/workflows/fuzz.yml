@@ -1,0 +1,41 @@
+name: fuzz
+
+# 信用できない入力 (ログ由来の値・LLM の出力・利用者のファイル) を解釈する箇所のファズテスト (ADR 0041)。
+# seed と、見つかった失敗 (testdata/fuzz) の回帰は、ふだんの `go test ./...` (test.yml) が毎回確かめる。
+# ここでは新しい入力の探索だけを、対象ごとに短い時間回す。時間がかかるので PR では回さない (必須チェックにしない)。
+# 最小権限。Actions は SHA で固定し、版はコメントに書く (ADR 0017・0039)。
+on:
+  schedule:
+    - cron: '17 4 * * 2' # 毎週火曜 04:17 UTC
+  workflow_dispatch:
+    inputs:
+      fuzztime:
+        description: 対象 1 つあたりの時間 (go test -fuzztime の書式。例 30s・2m)
+        default: 30s
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90 # 27 対象 × 30 秒で 15 分ほど。手動で 2m を指定しても収まる
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: ファズテストを対象ごとに回す
+        env:
+          FUZZTIME: ${{ inputs.fuzztime || '30s' }}
+        run: tools/fuzz.sh "$FUZZTIME"
+      - name: 失敗した入力を残す (testdata/fuzz に置いて本体を直す。手順は docs/fuzzing.md)
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-failures
+          path: '**/testdata/fuzz/**'
+          if-no-files-found: ignore
+          retention-days: 14
