@@ -1,0 +1,2 @@
+ok    <dir>/aratam.yaml: name acme, provider claude-cli, format text
+ok    llm.context_file: <dir>/context.md (43 バイト)

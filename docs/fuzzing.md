@@ -44,6 +44,7 @@ CI は `.github/workflows/fuzz.yml` が週 1 回と手動 (`workflow_dispatch`�
 | `internal/record` `internal/report` | `FuzzMask` `FuzzFindingMasksIdentity` | 任意の文字列の間に置いたメールアドレス・セッション名 | レポートに元の形で残らない。冪等 |
 | `internal/report/schema` | `FuzzParse` `FuzzMarkdownLogValues` | report.json、ログ由来の値 | 読めたものは書き直しても同じ。report.md の行を増やせない (run と期間レポート) |
 | `internal/allowlist` | `FuzzParse` `FuzzMatchPattern` | allowlist.yaml、glob | 主体の指定は 1 つ・arn_pattern はアカウントを固定。書いていないアカウントの主体を承認しない |
+| | `FuzzCheck` | allowlist.yaml (`config check`) | エラーの有無が `Parse` と一致する (check が通したものは run でも読める)。エラーは 1 件まで、重複の警告は重複の数と一致。行番号がファイルの行数を超えない |
 | `internal/config` | `FuzzParseDuration` `FuzzParseStore` `FuzzLoad` | 設定の値、arata.yaml | 受け入れた値は書いたとおりの意味。source の id と profile 名にパスの区切りが無い |
 | `internal/collect/account` | `FuzzParseCredentialReport` | 認証情報レポートの CSV | 行の形 (日時は RFC 3339 の UTC か空、キーは 2 本まで) |
 

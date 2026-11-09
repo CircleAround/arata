@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -95,6 +96,7 @@ arata とは出力ディレクトリだけで連携する (arata を呼ばず、
 
 はじめに:
   1. aratam config init                    設定の雛形を ./aratam.yaml に書き出す (name・llm・slack を確認する)
+     aratam config check                   設定の形だけを確かめる (Slack にも LLM にも繋がない。PR の CI 向け)
   2. aratam doctor                         Webhook の環境変数と LLM の疎通を確かめる (送信はしない)
   3. aratam test-notify                    Slack に試験メッセージを 1 通送る
   4. aratam notify --in <dir> --dry-run    送らずに、送る内容を標準出力に出す
@@ -113,7 +115,7 @@ func NewRootCmd(d *Deps) *subcmd.Command {
 		Stdout:  d.Stdout,
 	}
 	root.PersistentStringVarP(&g.config, "config", "c", "", "設定ファイル (YAML)。省略時は環境変数 "+envConfig+"、無ければ ./"+defaultConfigFile)
-	root.AddCommand(newConfigCmd(d), newNotifyCmd(d, g), newDoctorCmd(d, g), newTestNotifyCmd(d, g))
+	root.AddCommand(newConfigCmd(d, g), newNotifyCmd(d, g), newDoctorCmd(d, g), newTestNotifyCmd(d, g))
 	return root
 }
 
@@ -161,8 +163,8 @@ func configErr(d *Deps, err error) error {
 	return &exitError{code: notify.ExitConfig}
 }
 
-func newConfigCmd(d *Deps) *subcmd.Command {
-	cmd := &subcmd.Command{Use: "config", Short: "設定の雛形を書き出す (config init)"}
+func newConfigCmd(d *Deps, g *globalFlags) *subcmd.Command {
+	cmd := &subcmd.Command{Use: "config", Short: "設定の雛形を書き出す (config init)、設定をオフラインで検査する (config check)"}
 	var out string
 	var force bool
 	initCmd := &subcmd.Command{
@@ -200,8 +202,52 @@ func newConfigCmd(d *Deps) *subcmd.Command {
 	}
 	initCmd.StringVar(&out, "out", defaultConfigFile, "書き出すファイル (- で標準出力)")
 	initCmd.BoolVar(&force, "force", false, "既存のファイルを上書きする")
-	cmd.AddCommand(initCmd)
+	cmd.AddCommand(initCmd, newConfigCheckCmd(d, g))
 	return cmd
+}
+
+func newConfigCheckCmd(d *Deps, g *globalFlags) *subcmd.Command {
+	return &subcmd.Command{
+		Use:   "check",
+		Short: "設定の形をオフラインで検査する (Slack にも LLM にも繋がない。問題があれば終了コード 2)",
+		Long: `設定 (-c、省略時は ARATAM_CONFIG か ./aratam.yaml) の形を検査する: 未知のキー、型、必須項目、値の選択肢
+(notify / doctor が起動時にする検証と同じ規則)。Slack にも LLM にも繋がず、秘密も要らない。PR の CI で使う。
+
+  - Webhook の環境変数 (slack.webhook_env の名前の環境変数) があるかは見ない。PR の CI には秘密を渡さないため (aratam doctor が見る)
+  - llm.context_file は、書いてあれば読めるかを見る (読めない・16 KiB を超えるなら warn。notify は前提なしで続ける)
+
+行ごとに ok / warn / ng / skip を出す。ng が 1 つでもあれば終了コード 2 (warn だけなら 0)。`,
+		Args: subcmd.NoArgs,
+		Run: func(context.Context, []string) error {
+			path, err := configPath(d, g)
+			if err != nil {
+				return err
+			}
+			abs, err := filepath.Abs(path)
+			if err != nil {
+				return err
+			}
+			if wd, err := os.Getwd(); err == nil {
+				// カレントディレクトリの下なら相対で出す (CI のログで読みやすい)
+				if rel, err := filepath.Rel(wd, abs); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+					abs = rel
+				}
+			}
+			row := func(status, where, msg string) {
+				fmt.Fprintf(d.Stdout, "%-4s  %s: %s\n", status, where, strings.ReplaceAll(msg, "\n", "\n      "))
+			}
+			cfg, err := notify.LoadConfig(path)
+			if err != nil {
+				row("ng", abs, err.Error())
+				return configErr(d, err)
+			}
+			row("ok", abs, fmt.Sprintf("name %s, provider %s, format %s", cfg.Name, cfg.LLM.Provider, cfg.Slack.Format))
+			if r, ok := contextRow(cfg); ok {
+				row(r.status, "llm.context_file", r.detail)
+			}
+			return nil
+		},
+	}
 }
 
 // webhooks は Webhook の URL を環境変数から読む。URL はログにも標準出力にも出さない。

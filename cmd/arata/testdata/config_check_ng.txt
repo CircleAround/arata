@@ -1,0 +1,2 @@
+ok    <dir>/config.yaml: name acme, sources 1, profiles 3
+ng    <dir>/allowlist.yaml:5: principals[1]: exactly one of arn, account, arn_pattern is required
