@@ -61,21 +61,24 @@ Dependabot は onboard 済みのワークフローの action を上げるとき�
 
 ## GitHub の画面で人が行う設定
 
-コードで担保できないもの。公開の前後に行う。
+コードで担保できないもの。2026-11-09 に API (`gh api`) で 1〜5・8 を設定した (非公開のうち)。確かめるときは `gh api repos/CircleAround/arata/rulesets` などで読める。
 
-1. **ブランチ保護 (main)**: PR 必須、レビュー必須、force push と削除の禁止、管理者にも適用
-2. **必須チェック**: `test`、`actions`、`zizmor`、`vulnerabilities` と、B・C のワークフローのジョブ
-3. **タグの保護**: ruleset で `v*` の作成・更新・削除を管理者に限る。release はタグの push で動くので、これが release の権限の境界になる
-4. **Immutable releases を有効にする**: 公開後のリリースの差し替えを防ぐ
+1. **ブランチ保護 (main)**: ruleset「main を守る」。PR 必須、force push と削除の禁止、bypass なし (管理者にも適用)。
+   決定: レビューの件数は 0。開発は 1 つのアカウントで PR を作りマージするので、自分の PR は承認できず、1 件以上にするとマージできなくなる。人の確認はリーダーのレビューと実データでの確認で担保し、メンバーが増えたら必須にする
+2. **必須チェック**: `test`、`gosec + staticcheck`、`gitleaks`、`words`、`actions`、`zizmor`、`vulnerabilities`。
+   path や条件で飛ばされるジョブ (`github-text`、CodeQL、sandbox) は入れない。入れると結果が届かずマージできなくなる。
+   同じ理由で `[skip ci]` は使わない。ジョブの名前を変えたら ruleset も直す
+3. **タグの保護**: ruleset「リリースのタグ v* を管理者に限る」で `v*` の作成・更新・削除を管理者 (bypass) だけにする。release はタグの push で動くので、これが release の権限の境界になる
+4. **Immutable releases**: 有効。公開後のリリースの差し替えを防ぐ
 5. **Actions の権限**: `Settings > Actions > General`
-   - 「Require actions to be pinned to a full-length commit SHA」を有効にする
-   - 許可する action を、使うものだけにする。ロックファイルの導入後はタグではなく SHA かワイルドカードで書く (公式の注意)
-   - `GITHUB_TOKEN` の既定を read-only に、「Actions が PR を作成・承認する」を無効にする
-   - 公開後は fork の PR の実行を「すべての外部の貢献者に承認を要求」にする
-6. **Require lockfile ポリシー**: `actions.lock` の導入後、全ワークフローが onboard されてから有効にする。Evaluate モードは Enterprise Cloud のみなので、`gh actions-lock --verify` が通るのを確かめてから Active にする
-7. **CODEOWNERS**: `.github/` と `actions.lock` の担当者を決めて必須レビューにする (公式の推奨)
-8. **Dependabot alerts / security updates と private vulnerability reporting を有効にする**
-9. **公開後の確認**: 最初のリリースで `gh attestation verify` が通ること、`scorecard` が動くこと
+   - 「Require actions to be pinned to a full-length commit SHA」: 有効
+   - 許可する action: GitHub 製 (`actions/*`・`github/*`) と `ossf/scorecard-action@*` だけ。action を足すときはここにも足す (足さないとワークフローが起動しない)
+   - `GITHUB_TOKEN` の既定は read-only、「Actions が PR を作成・承認する」は無効
+   - (公開時) fork の PR の実行を「すべての外部の貢献者に承認を要求」にする
+6. **Require lockfile ポリシー**: 未設定。Dependabot の最初の更新 PR で lock が正しく更新されるのを確かめてから Active にする。Evaluate モードは Enterprise Cloud のみ
+7. **CODEOWNERS**: 見送り。レビューの件数が 0 の間は強制力が無く、個人のハンドル名は書かない規則 (CLAUDE.md) なので、メンバーが増えて必須レビューにするときに arata 専用のチームを作って `.github/` と `actions.lock` などに書く
+8. **Dependabot alerts / security updates**: 有効。(公開時) private vulnerability reporting を有効にする (非公開のリポジトリでは API が 404 を返す)
+9. **公開後の確認**: 最初のリリースで `gh attestation verify` が通ること、`scorecard` と CodeQL が動くこと
 
 ## 道具の版を上げる
 

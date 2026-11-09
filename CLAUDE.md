@@ -49,7 +49,7 @@ LLM 向けの使い方は `go run ./cmd/arata help ai` (バイナリに埋め込
 ### コミット・PR の書式
 
 - コミットメッセージは日本語。末尾に `Co-Authored-By: <使ったモデル名> <noreply@anthropic.com>` (例: `Claude Fable 5.1`)
-- 文書だけの変更は `[skip ci]` を付ける
+- `[skip ci]` は付けない。main の必須チェックが結果待ちのままになりマージできなくなる。文書の変更も禁止語の検査を通す (`docs/supply-chain.md`)
 - PR タイトルは `[AI]` で始める。本文の末尾に `🤖 Generated with [Claude Code](https://claude.com/claude-code)`
 - PR 本文には、何を・なぜ・どう確かめたか (テスト、実動確認の内容) を書く
 
