@@ -21,7 +21,7 @@ arata の版は v0.5.1 以降を使います (S3 ストアは v0.4.0 から。v0
 ## 用意するもの
 
 設定ファイルを置くリポジトリは **非公開** にしてください。allowlist にはアカウント ID や ARN が入り、Actions のログもリポジトリを読める人に見えます。
-このリポジトリは、ストアへの書き込み・Slack の Webhook・監査対象の読み取りロールへの入口を持ちます。fork の禁止、main の保護、Actions の設定などの前提は、下の「実行するリポジトリと環境を堅くする」にまとめています。手順 1〜6 と合わせて設定してください。
+このリポジトリは、ストアへの書き込み・Slack の Webhook・監査対象の読み取りロールへの入口を持ちます。fork の禁止、main の保護、Actions の設定などの前提は、下の「実行するリポジトリと環境を堅くする」にまとめています。手順 1〜7 と合わせて設定してください。
 
 ### 1. 実行の仕組み (OIDC プロバイダ・ストアのバケット・実行用ロール)
 
@@ -174,6 +174,20 @@ llm:
 | `ARATAM_SLACK_WEBHOOK` | 通常用の Webhook |
 | `ARATAM_SLACK_URGENT_WEBHOOK` | 緊急用の Webhook |
 
+**Slack の疎通を確かめる**: Webhook を secrets に入れたら、同じ URL で手元から試験メッセージを 1 通送ります。チャンネルと Webhook の対応 (通常用と緊急用の取り違え) は、送ってみないと分かりません。
+
+```sh
+read -rs ARATAM_SLACK_WEBHOOK && export ARATAM_SLACK_WEBHOOK                  # 貼り付けて Enter (シェルの履歴に残さない)
+read -rs ARATAM_SLACK_URGENT_WEBHOOK && export ARATAM_SLACK_URGENT_WEBHOOK
+aratam doctor -c arata/aratam.yaml                  # 送らない。Webhook の環境変数があるかと、LLM の疎通を見る
+aratam test-notify -c arata/aratam.yaml             # 実際に送る。通常用のチャンネルに 1 通
+aratam test-notify -c arata/aratam.yaml --urgent    # 実際に送る。緊急用のチャンネルに 1 通
+```
+
+- `doctor` は Slack に何も送りません (届くかは分かりません)。`test-notify` は本当に届くので、チャンネルの人に一言伝えてから実行します
+- secrets に入れた値そのものは、最初の `workflow_dispatch` の実行 (手順 5 の最後) で確かめられます。`on_quiet: short` なら、新規が無くても 1 行届きます。
+  決定: 見本のワークフローに test-notify 用の入力は足しません。手動の実行が同じことを確かめ、入力を増やすと監査のワークフローの分岐が増えるためです
+
 ### 5. 初回の収集は手元で
 
 `arata init` はワークフローの認証の期限 (1 時間) を超え得るので、手元で同じ `arata.yaml` を使って実行します。**定時のワークフローを main に入れるのは、この収集が終わってから**にしてください (理由は下)。
@@ -184,7 +198,7 @@ AWS_PROFILE=example-store-writer arata doctor -c arata/arata.yaml
 AWS_PROFILE=example-store-writer arata init -c arata/arata.yaml
 ```
 
-`store: s3://` のまま実行するので、結果はそのままバケットへ置かれ、次のワークフローの run が続きから動きます。実行できたら `workflow_dispatch` で 1 回動かして確かめます (LLM を使うなら、その前に手順 6)。
+`store: s3://` のまま実行するので、結果はそのままバケットへ置かれ、次のワークフローの run が続きから動きます。実行できたら `workflow_dispatch` で 1 回動かして確かめます (その前に手順 6 と、LLM を使うなら手順 7)。
 
 - **かかる時間**: 収集する期間 (`--window`。既定は 7 日、CloudTrail の履歴は最長 90 日) とリージョンの数、その間のイベントの量に比例し、数十分〜数時間です。
   CloudTrail の LookupEvents は毎秒 2 リクエストまでで、arata はこれを超えないように引くためです。進み具合は標準エラーのログで分かります (1 日分ずつ進みます)
@@ -201,7 +215,33 @@ AWS_PROFILE=example-store-writer arata init -c arata/arata.yaml
   ストアは壊れませんが、init が後になれば数時間の収集を失います (`concurrency` は Actions の中の排他で、手元の実行は止められません)。
   初めてなら、ワークフローを main に入れるのを init の後にします。既に動いているなら、Actions の画面でワークフローを無効 (Disable workflow) にし、init が終わったら有効に戻します
 
-### 6. 監査対象の前提 (LLM を使うとき)
+### 6. 最初の run は通知せずに中身を見る
+
+`arata init` はベースラインを作るだけで、finding を出しません。その後の**最初の run** は、長く溜まっていた設定や主体 (古いアクセスキー、公開の設定、承認していない主体など) が一度に出て、通知が多くなり得ます。
+チャンネルの人を驚かせないよう、最初の run は手元で実行し、Slack に送らずに中身を見ます。手順 5 と同じ認証で、init の直後に行います (定時のワークフローを main に入れる前)。
+
+```sh
+out=$(mktemp -d)
+AWS_PROFILE=example-store-writer arata run -c arata/arata.yaml --profile daily --out "$out/daily"
+aratam notify -c arata/aratam.yaml --in "$out/daily" --dry-run --llm none    # 送らずに、通知になる内容を標準出力へ
+AWS_PROFILE=example-store-writer arata review -c arata/arata.yaml            # 未対応の一覧
+
+# weekly も同じ (アカウントの今の状態を見るチェックは weekly にあり、最初は多くなりやすい)
+AWS_PROFILE=example-store-writer arata run -c arata/arata.yaml --profile weekly --out "$out/weekly"
+aratam notify -c arata/aratam.yaml --in "$out/weekly" --dry-run --llm none
+```
+
+- **手元の run もストアに確定します** (`store: s3://` のまま実行するため)。ここで出た finding は報告済みになり、以後の定時の実行は「新規」としては報せません
+  (未対応の件数には残ります。重大度が上がれば再報告されます)。定時の実行が報せるのは、その後に新しく起きたことだけです
+- `--dry-run` は Slack に送らず、Webhook の環境変数も要りません。`--llm none` を外すと LLM の要約も確かめられます (手元の認証で LLM を呼びます)
+- 出た finding は、定時の実行に任せる前に片付けます。正当な主体は allowlist.yaml の PR で承認し (下の「approve は PR で allowlist.yaml を直す」)、
+  確認が済んだものは `arata ack`、直したものは `arata resolve`、後で直すものは `arata snooze --until` にします。直すべきものは、ここで担当を決めます
+- `$out` には ARN などが入っています。見終わったら消します
+- 通知の本文には上限があり、多いときは情報の行や理由文から削って収めます (全文はストアの `reports/`)。それでも最初の 1 通が長くなるのは変わらないので、この手順を踏みます
+- 決定: 見本のワークフローに「通知しない」入力は足しません。手順 5 で手元にストアを書ける認証が既にあり、同じ場所で続けて行えること、
+  Actions で動かすと中身を見る場所が無いこと (ログと Summary には finding の中身を出さない方針です) が理由です
+
+### 7. 監査対象の前提 (LLM を使うとき)
 
 `llm.provider` を `none` 以外にしたら、最初の通知の前 (定時のワークフローを main に入れる前) に、`llm.context_file` を書きます。
 aratam が LLM に「この監査対象の前提」として渡す Markdown です。**無くても動きます**。ただ、無いと LLM はアプリの事情を知らないので、正規の動作にも一般的で慎重な助言しか書けません。
@@ -225,7 +265,7 @@ llm:
 同じレポートで前提の有無を比べると、前提ありの要約は「前提のどれに合うか・何だけ確かめればよいか」を書き、前提と食い違う点 (未承認の主体など) は隠さずに指摘しました。
 前提は承認の代わりにはなりません。「正規」と書いても allowlist には入らず、未承認の主体は報告され続けます。
 
-最初の収集 (手順 5) の後なら、AI (LLM) に下書きさせられます。`arata help ai runtime` を読ませ、`arata review` の結果と、読み取り専用ロールで読める構成から下書きを PR にさせて、
+最初の収集と最初の run (手順 5・6) の後なら、AI (LLM) に下書きさせられます。`arata help ai runtime` を読ませ、`arata review` の結果と、読み取り専用ロールで読める構成から下書きを PR にさせて、
 **人が事実を確かめてマージします**。事実が変わったら (デプロイの方式、送信元、ロールの入れ替え) PR で直します。古い前提は、LLM に誤った安心を書かせます。
 `aratam config check` (下の「PR で設定を検査する」) が、ファイルが読めるかと大きさを確かめます。
 

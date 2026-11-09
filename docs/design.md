@@ -976,6 +976,11 @@ Actions のログには arata / aratam の `level`・`code`・`source` と終了
   ロールの ARN は `sub` が合わないので引き受けられない。GitHub の environment に置いてデプロイできるブランチを main に限る案は、ジョブの `sub` が
   `repo:...:environment:<名前>` に変わり (ブランチが `sub` から消える)、今の `runner.yaml` では引き受けられないので、いまは採らない (ADR 0040 のまま)。
   テンプレートの対応はロードマップに残し、それまでは書き込み権限を持つ人を最小にすることで守る
+- 決定 (最初の run と Slack の疎通): 最初の run は手元で実行して `aratam notify --dry-run` で中身を見てから、定時の実行に任せる (見本の README の手順 6)。
+  run は finding を報告済みとしてストアに確定するので (ADR 0038)、以後の定時の実行は新しく起きたことだけを報せる。
+  見本のワークフローに「通知しない」入力や test-notify の入力は足さない: 初回の収集で手元にストアを書ける認証が既にあり、Actions では中身を見る場所が無い
+  (ログと Summary に finding の中身を出さない方針)。入力を増やすと、定時の監査と同じワークフローに分岐とテストが増える。
+  Slack の疎通は手元の `aratam test-notify` (実際に送る。`doctor` は送らない) と、最初の `workflow_dispatch` (`on_quiet: short` の 1 行) で確かめる
 aratam は arata の失敗後も動かす (`if: always()`)。実行環境が毎回消えるので report.json が無く、`max_age` を待たずに緊急用に届く。`waf-proposals.md` は実行環境と一緒に消えるのでストアの `reports/` に置く。artifacts はリポジトリを読める人に見えるので使わない。
 
 LLM 要約は `arata help ai report` (バイナリに埋め込んだ手順) に従い、`report.json` を入力に「新規 / 変化 / 再発 / 解消 / 未対応 / 取れなかったもの」の順で書く。
