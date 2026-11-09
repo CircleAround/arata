@@ -64,3 +64,4 @@
 | [0038](0038-source-catchup-and-reported-after-staging.md) | 失敗したソースはソースごとの位置から追いつき、報告済みの印は出力の準備の後に付ける | 採用 |
 | [0039](0039-actions-lock-with-sha-pins.md) | Actions のロックファイルを、uses の SHA 固定と併用して `--no-narrow` で作る | 採用 |
 | [0040](0040-github-actions-runner-template.md) | GitHub Actions の実行の仕組みは素の CloudFormation で配り、信頼は `sub` の完全一致に絞る | 採用 |
+| [0041](0041-fuzz-untrusted-input.md) | 信用できない入力を解釈する箇所を、Go 標準のファズテストで確かめる | 採用 |

@@ -114,11 +114,13 @@ amd64 なら `linux-amd64` に読み替える。チェックサムは https://go
 ```sh
 make test          # go test ./... (ユニット + コマンドレベルの e2e)
 make lint          # go vet + golangci-lint (入っていれば。gosec・staticcheck。CI の sast.yml と同じ設定)
+make fuzz          # ファズテストを対象ごとに 30 秒ずつ探索する (FUZZTIME=2m で変える。docs/fuzzing.md)
 make build         # bin/{arata,aratam}-linux-{arm64,amd64} (CGO_ENABLED=0 の静的バイナリ)
 make build-local   # このホスト向けの bin/arata と bin/aratam
 ```
 
 CI は [.github/workflows/test.yml](.github/workflows/test.yml): `go mod verify` → age-gate → go vet → go test → govulncheck → make build。
+`go test` はファズテストの seed と `testdata/fuzz` の入力も走らせる。新しい入力の探索は週 1 回の [fuzz.yml](.github/workflows/fuzz.yml) が行う ([docs/fuzzing.md](docs/fuzzing.md))。
 
 ### 環境変数 (.env)
 

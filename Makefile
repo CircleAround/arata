@@ -5,7 +5,7 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 BIN := bin
 
-.PHONY: build build-local test lint vet fmt clean scan-sensitive scan-sensitive-history scan-sensitive-github
+.PHONY: build build-local test fuzz lint vet fmt clean scan-sensitive scan-sensitive-history scan-sensitive-github
 
 CMDS := arata aratam
 
@@ -23,6 +23,11 @@ build-local:
 ## test: 全テスト (ユニット + コマンドレベル e2e)
 test:
 	$(GO) test ./...
+
+## fuzz: ファズテストを対象ごとに FUZZTIME ずつ探索する (ADR 0040、docs/fuzzing.md。CI の fuzz.yml と同じ)
+FUZZTIME ?= 30s
+fuzz:
+	GO=$(GO) tools/fuzz.sh $(FUZZTIME)
 
 ## vet: go vet
 vet:
