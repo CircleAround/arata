@@ -16,7 +16,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const workflowFile = "arata-audit.yml"
+// 見本は 2 つ。1 つのアカウントを監査する形と、複数のアカウントを matrix で監査する形。
+const (
+	singleFile = "arata-audit.yml"
+	multiFile  = "arata-audit-multi.yml"
+)
+
+var workflowFiles = []string{singleFile, multiFile}
 
 type step struct {
 	ID             string            `yaml:"id"`
@@ -30,8 +36,14 @@ type step struct {
 	ContinueOnErr  any               `yaml:"continue-on-error"`
 }
 
+type concurrency struct {
+	Group            string `yaml:"group"`
+	CancelInProgress *bool  `yaml:"cancel-in-progress"`
+}
+
 type workflow struct {
-	On struct {
+	file string
+	On   struct {
 		Schedule []struct {
 			Cron string `yaml:"cron"`
 		} `yaml:"schedule"`
@@ -42,10 +54,7 @@ type workflow struct {
 			} `yaml:"inputs"`
 		} `yaml:"workflow_dispatch"`
 	} `yaml:"on"`
-	Concurrency struct {
-		Group            string `yaml:"group"`
-		CancelInProgress *bool  `yaml:"cancel-in-progress"`
-	} `yaml:"concurrency"`
+	Concurrency concurrency       `yaml:"concurrency"`
 	Permissions map[string]string `yaml:"permissions"`
 	Env         map[string]string `yaml:"env"`
 	Defaults    struct {
@@ -54,7 +63,14 @@ type workflow struct {
 		} `yaml:"run"`
 	} `yaml:"defaults"`
 	Jobs map[string]struct {
-		RunsOn         string            `yaml:"runs-on"`
+		RunsOn      string      `yaml:"runs-on"`
+		Concurrency concurrency `yaml:"concurrency"`
+		Strategy    struct {
+			FailFast *bool `yaml:"fail-fast"`
+			Matrix   struct {
+				Account []string `yaml:"account"`
+			} `yaml:"matrix"`
+		} `yaml:"strategy"`
 		TimeoutMinutes int               `yaml:"timeout-minutes"`
 		Permissions    map[string]string `yaml:"permissions"`
 		Env            map[string]string `yaml:"env"`
@@ -62,19 +78,30 @@ type workflow struct {
 	} `yaml:"jobs"`
 }
 
-func load(t *testing.T) (*workflow, string) {
+func load(t *testing.T, file string) (*workflow, string) {
 	t.Helper()
-	b, err := os.ReadFile(workflowFile)
+	b, err := os.ReadFile(file)
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := &workflow{}
+	w := &workflow{file: file}
 	dec := yaml.NewDecoder(bytes.NewReader(b))
 	dec.KnownFields(false)
 	if err := dec.Decode(w); err != nil {
 		t.Fatal(err)
 	}
 	return w, string(b)
+}
+
+// forEachWorkflow は両方の見本に同じ検査をかける。
+func forEachWorkflow(t *testing.T, fn func(t *testing.T, w *workflow, text string)) {
+	t.Helper()
+	for _, f := range workflowFiles {
+		t.Run(f, func(t *testing.T) {
+			w, text := load(t, f)
+			fn(t, w, text)
+		})
+	}
 }
 
 func steps(t *testing.T, w *workflow) []step {
@@ -100,7 +127,10 @@ func stepByID(t *testing.T, w *workflow, id string) step {
 }
 
 func TestSchedule(t *testing.T) {
-	w, _ := load(t)
+	forEachWorkflow(t, testSchedule)
+}
+
+func testSchedule(t *testing.T, w *workflow, text string) {
 	if len(w.On.Schedule) != 2 {
 		t.Fatalf("want daily and weekly crons: %+v", w.On.Schedule)
 	}
@@ -126,9 +156,23 @@ func TestSchedule(t *testing.T) {
 }
 
 func TestConcurrencyAndPermissions(t *testing.T) {
-	w, _ := load(t)
-	if w.Concurrency.Group == "" || w.Concurrency.CancelInProgress == nil || *w.Concurrency.CancelInProgress {
-		t.Errorf("concurrency must queue, not cancel: %+v", w.Concurrency)
+	forEachWorkflow(t, testConcurrencyAndPermissions)
+}
+
+func testConcurrencyAndPermissions(t *testing.T, w *workflow, text string) {
+	// 排他はストアごと。1 つのストアならワークフローに、アカウントごとのストアならジョブ (matrix) に置く
+	c := w.Concurrency
+	if w.file == multiFile {
+		if c.Group != "" {
+			t.Errorf("a workflow-level group would queue the whole matrix behind one run: %+v", c)
+		}
+		c = w.Jobs["audit"].Concurrency
+		if !strings.Contains(c.Group, "${{ matrix.account }}") {
+			t.Errorf("the group must be per store (per account): %q", c.Group)
+		}
+	}
+	if c.Group == "" || c.CancelInProgress == nil || *c.CancelInProgress {
+		t.Errorf("concurrency must queue, not cancel: %+v", c)
 	}
 	if len(w.Permissions) != 0 {
 		t.Errorf("workflow-level permissions must be empty (grant them per job): %v", w.Permissions)
@@ -143,7 +187,10 @@ func TestConcurrencyAndPermissions(t *testing.T) {
 }
 
 func TestActionsArePinnedToSHA(t *testing.T) {
-	_, text := load(t)
+	forEachWorkflow(t, testActionsArePinnedToSHA)
+}
+
+func testActionsArePinnedToSHA(t *testing.T, w *workflow, text string) {
 	uses := regexp.MustCompile(`(?m)^\s*(?:- )?uses:\s*(.+)$`).FindAllStringSubmatch(text, -1)
 	if len(uses) == 0 {
 		t.Fatal("no uses found")
@@ -157,7 +204,10 @@ func TestActionsArePinnedToSHA(t *testing.T) {
 }
 
 func TestCredentials(t *testing.T) {
-	w, _ := load(t)
+	forEachWorkflow(t, testCredentials)
+}
+
+func testCredentials(t *testing.T, w *workflow, text string) {
 	s := stepByID(t, w, "aws")
 	if !strings.HasPrefix(s.Uses, "aws-actions/configure-aws-credentials@") {
 		t.Fatalf("uses: %s", s.Uses)
@@ -177,7 +227,10 @@ func TestCredentials(t *testing.T) {
 
 // Actions のログに機微な値を出さない。run には式を埋め込まない (ログの表示と注入を避け、env で渡す)。
 func TestNoSensitiveOutput(t *testing.T) {
-	w, text := load(t)
+	forEachWorkflow(t, testNoSensitiveOutput)
+}
+
+func testNoSensitiveOutput(t *testing.T, w *workflow, text string) {
 	for _, s := range steps(t, w) {
 		if strings.Contains(s.Run, "${{") {
 			t.Errorf("step %q: pass values through env, not ${{ }} in run", s.Name)
@@ -200,7 +253,10 @@ func TestNoSensitiveOutput(t *testing.T) {
 }
 
 func TestSecretsReachOnlyTheStepsThatNeedThem(t *testing.T) {
-	w, _ := load(t)
+	forEachWorkflow(t, testSecretsReachOnlyTheStepsThatNeedThem)
+}
+
+func testSecretsReachOnlyTheStepsThatNeedThem(t *testing.T, w *workflow, text string) {
 	for k, v := range w.Env {
 		if strings.Contains(v, "secrets.") {
 			t.Errorf("workflow env %s must not hold a secret", k)
@@ -218,9 +274,17 @@ func TestSecretsReachOnlyTheStepsThatNeedThem(t *testing.T) {
 			if !strings.Contains(v, "secrets.") {
 				continue
 			}
-			want := map[string]string{"GH_TOKEN": "install", "AUDIT_ROLE_ARN": "aws-config", "ARATAM_SLACK_WEBHOOK": "notify", "ARATAM_SLACK_URGENT_WEBHOOK": "notify"}[k]
+			want := map[string]string{"GH_TOKEN": "install", "AUDIT_ROLE_ARN": "aws-config", "AUDIT_ROLE_ARNS": "aws-config", "ARATAM_SLACK_WEBHOOK": "notify", "ARATAM_SLACK_URGENT_WEBHOOK": "notify"}[k]
 			if want != s.ID {
 				t.Errorf("secret %s must not be given to step %q", k, s.ID)
+			}
+		}
+	}
+	// secrets[...] や toJSON(secrets) は、ジョブにすべての secrets を渡すことになるので使わない
+	for _, expr := range regexp.MustCompile(`\$\{\{[^}]*\}\}`).FindAllString(text, -1) {
+		for _, bad := range []string{"secrets[", "(secrets)", "secrets.*"} {
+			if strings.Contains(expr, bad) {
+				t.Errorf("must name each secret statically: %s", expr)
 			}
 		}
 	}
@@ -232,7 +296,10 @@ func TestSecretsReachOnlyTheStepsThatNeedThem(t *testing.T) {
 
 // arata が失敗しても (認証の失敗で走らなくても) aratam は「実行されていない」を送る。
 func TestNotifyRunsWhenAuditFails(t *testing.T) {
-	w, _ := load(t)
+	forEachWorkflow(t, testNotifyRunsWhenAuditFails)
+}
+
+func testNotifyRunsWhenAuditFails(t *testing.T, w *workflow, text string) {
 	n := stepByID(t, w, "notify")
 	if !strings.Contains(n.If, "always()") || !strings.Contains(n.If, "steps.install.outcome == 'success'") {
 		t.Errorf("notify must run after any failure once the binaries are installed: %q", n.If)
@@ -259,7 +326,10 @@ func TestNotifyRunsWhenAuditFails(t *testing.T) {
 }
 
 func TestRunScriptsParse(t *testing.T) {
-	w, _ := load(t)
+	forEachWorkflow(t, testRunScriptsParse)
+}
+
+func testRunScriptsParse(t *testing.T, w *workflow, text string) {
 	for _, s := range steps(t, w) {
 		if s.Run == "" {
 			continue
@@ -313,7 +383,10 @@ echo 'panic: not json 123456789012' >&2
 `
 
 func TestAuditAndNotifyLogOnlyCodesAndKeepExitCode(t *testing.T) {
-	w, _ := load(t)
+	forEachWorkflow(t, testAuditAndNotifyLogOnlyCodesAndKeepExitCode)
+}
+
+func testAuditAndNotifyLogOnlyCodesAndKeepExitCode(t *testing.T, w *workflow, text string) {
 	for id, tool := range map[string]string{"audit": "arata", "notify": "aratam"} {
 		for _, exit := range []int{0, 2, 3} {
 			t.Run(fmt.Sprintf("%s/exit=%d", id, exit), func(t *testing.T) {
@@ -336,7 +409,10 @@ func TestAuditAndNotifyLogOnlyCodesAndKeepExitCode(t *testing.T) {
 }
 
 func TestAuditRunsWithExpectedArguments(t *testing.T) {
-	w, _ := load(t)
+	forEachWorkflow(t, testAuditRunsWithExpectedArguments)
+}
+
+func testAuditRunsWithExpectedArguments(t *testing.T, w *workflow, text string) {
 	bin := fakeBin(t, "arata", `printf '%s\n' "$@" >"$RUNNER_TEMP/args"`+"\n")
 	_, code, tmp := runStep(t, stepByID(t, w, "audit").Run, bin)
 	if code != 0 {
@@ -353,10 +429,27 @@ func TestAuditRunsWithExpectedArguments(t *testing.T) {
 }
 
 func TestAWSConfigStepWritesAuditProfile(t *testing.T) {
-	w, _ := load(t)
-	_, code, tmp := runStep(t, stepByID(t, w, "aws-config").Run, t.TempDir(), "AUDIT_ROLE_ARN=arn:aws:iam::123456789012:role/arata-readonly")
+	forEachWorkflow(t, testAWSConfigStepWritesAuditProfile)
+}
+
+func testAWSConfigStepWritesAuditProfile(t *testing.T, w *workflow, text string) {
+	vars := []string{"AUDIT_ROLE_ARN=arn:aws:iam::123456789012:role/arata-readonly"}
+	if w.file == multiFile {
+		// アカウントごとのロールは 1 つの secret (JSON) から、matrix の名前で取り出す
+		vars = []string{"ACCOUNT=prod", `AUDIT_ROLE_ARNS={"staging":"arn:aws:iam::111122223333:role/arata-readonly","prod":"arn:aws:iam::123456789012:role/arata-readonly"}`}
+	}
+	out, code, tmp := runStep(t, stepByID(t, w, "aws-config").Run, t.TempDir(), vars...)
 	if code != 0 {
-		t.Fatalf("exit %d", code)
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if strings.Contains(out, "111122223333") {
+		t.Errorf("another account's role must stay out of the log:\n%s", out)
+	}
+	// 取り出した ARN は secret の一部で自動では隠れないので、::add-mask:: で隠す (それ以外には出さない)
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if strings.Contains(line, "123456789012") && !strings.HasPrefix(line, "::add-mask::") {
+			t.Errorf("the role ARN must not be printed: %s", line)
+		}
 	}
 	b, err := os.ReadFile(filepath.Join(tmp, "aws-config"))
 	if err != nil {
@@ -389,7 +482,10 @@ func sumLine(content, name string) string {
 }
 
 func TestInstallVerifiesChecksums(t *testing.T) {
-	w, _ := load(t)
+	forEachWorkflow(t, testInstallVerifiesChecksums)
+}
+
+func testInstallVerifiesChecksums(t *testing.T, w *workflow, text string) {
 	script := stepByID(t, w, "install").Run
 	good := sumLine("fake-arata", "arata-linux-amd64") + sumLine("fake-aratam", "aratam-linux-amd64") + sumLine("other", "arata-linux-arm64")
 
@@ -423,7 +519,10 @@ func TestInstallVerifiesChecksums(t *testing.T) {
 }
 
 func TestSaveProposalsOnlyWhenTheFileExists(t *testing.T) {
-	w, _ := load(t)
+	forEachWorkflow(t, testSaveProposalsOnlyWhenTheFileExists)
+}
+
+func testSaveProposalsOnlyWhenTheFileExists(t *testing.T, w *workflow, text string) {
 	script := stepByID(t, w, "save-proposals").Run
 	bin := fakeBin(t, "aws", `printf '%s\n' "$@" >"$RUNNER_TEMP/aws-args"; echo 'upload: s3://bucket 123456789012'`+"\n")
 
@@ -449,5 +548,85 @@ func TestSaveProposalsOnlyWhenTheFileExists(t *testing.T) {
 	}
 	if !strings.Contains(string(b), "s3://example-arata-store/example/reports/waf-proposals.md") {
 		t.Errorf("aws args: %s", b)
+	}
+}
+
+// 複数のアカウントの見本: 1 つの secret からそのアカウントのロールが取れなければ、何も書かずに失敗する。
+func TestMultiAWSConfigFailsWithoutTheAccountRole(t *testing.T) {
+	w, _ := load(t, multiFile)
+	script := stepByID(t, w, "aws-config").Run
+	for name, env := range map[string][]string{
+		"missing account": {"ACCOUNT=prod", `AUDIT_ROLE_ARNS={"staging":"arn:aws:iam::111122223333:role/arata-readonly"}`},
+		"not json":        {"ACCOUNT=prod", "AUDIT_ROLE_ARNS=arn:aws:iam::111122223333:role/arata-readonly"},
+		"empty secret":    {"ACCOUNT=prod", "AUDIT_ROLE_ARNS="},
+		"not a string":    {"ACCOUNT=prod", `AUDIT_ROLE_ARNS={"prod":{"arn":"arn:aws:iam::111122223333:role/arata-readonly"}}`},
+		"not a role arn":  {"ACCOUNT=prod", `AUDIT_ROLE_ARNS={"prod":"111122223333"}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			out, code, tmp := runStep(t, script, t.TempDir(), env...)
+			if code == 0 {
+				t.Errorf("must fail\n%s", out)
+			}
+			if strings.Contains(out, "111122223333") {
+				t.Errorf("the secret must stay out of the log:\n%s", out)
+			}
+			if _, err := os.Stat(filepath.Join(tmp, "github_env")); err == nil {
+				t.Errorf("must not set AWS_CONFIG_FILE")
+			}
+		})
+	}
+}
+
+// 複数のアカウントの見本: アカウントごとにジョブを分け、設定の置き場所・ストアの prefix・排他をアカウントごとにする。
+func TestMultiMatrix(t *testing.T) {
+	w, _ := load(t, multiFile)
+	j := w.Jobs["audit"]
+	if j.Strategy.FailFast == nil || *j.Strategy.FailFast {
+		t.Errorf("fail-fast must be false (one account's failure must not cancel the others)")
+	}
+	if len(j.Strategy.Matrix.Account) < 2 {
+		t.Fatalf("the example needs two or more accounts: %v", j.Strategy.Matrix.Account)
+	}
+	name := regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`) // パスと prefix と排他の名前に使う
+	for _, a := range j.Strategy.Matrix.Account {
+		if !name.MatchString(a) {
+			t.Errorf("account name %q", a)
+		}
+	}
+	want := map[string]string{
+		"ACCOUNT":          "${{ matrix.account }}",
+		"ARATA_CONFIG_DIR": "aws/${{ matrix.account }}",
+		"ARATA_STORE_URL":  "s3://example-arata-store/${{ matrix.account }}",
+	}
+	for k, v := range want {
+		if j.Env[k] != v {
+			t.Errorf("job env %s = %q, want %q", k, j.Env[k], v)
+		}
+		if _, ok := w.Env[k]; ok {
+			t.Errorf("%s must be per job, not per workflow", k)
+		}
+	}
+}
+
+// 2 つの見本は、監査ロールのプロファイルを書く step のほかは同じ (片方だけを直して食い違うのを防ぐ)。
+func TestMultiSharesStepsWithSingle(t *testing.T) {
+	a, _ := load(t, singleFile)
+	b, _ := load(t, multiFile)
+	sa, sb := steps(t, a), steps(t, b)
+	if len(sa) != len(sb) {
+		t.Fatalf("steps: %d and %d", len(sa), len(sb))
+	}
+	for i := range sa {
+		if sa[i].ID == "aws-config" {
+			continue
+		}
+		x, _ := yaml.Marshal(sa[i])
+		y, _ := yaml.Marshal(sb[i])
+		if string(x) != string(y) {
+			t.Errorf("step %q differs:\n%s\n---\n%s", sa[i].ID, x, y)
+		}
+	}
+	if a.Jobs["audit"].Env["PROFILE"] != b.Jobs["audit"].Env["PROFILE"] {
+		t.Errorf("PROFILE differs")
 	}
 }
