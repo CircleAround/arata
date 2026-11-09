@@ -1,9 +1,9 @@
-# ロードマップと引き継ぎ (2026-11-03 時点、v0.3.0 リリース後)
+# ロードマップと引き継ぎ (2026-11-09 時点、v0.5.0 リリースとリポジトリの公開の後)
 
 ここは「今どこまでできていて、次に何をするか」をまとめる文書。仕様は `design.md` / `aratam.md`、判断の経緯は `adr/`。
 更新は PR ごとに行い、終わった項目は消す (履歴は git に残る)。
 
-## 1. 現状 (v0.3.0)
+## 1. 現状 (v0.5.0)
 
 - arata: 設計書 10 章の Step 1〜3 に加え、次のチェックを実装済み。すべて sandbox (`deploy/sandbox`、ADR 0020) で本物の AWS を相手に、
   `scenarios/01〜10` どおりに出ることを確認した
@@ -15,17 +15,25 @@
     sandbox ではシナリオ 12 と doctor (権限・モニターの検出) で確かめる (異常の発生は試験できないので cost_anomaly の判定はテストのフェイクで固定)
   - チェックごとの対処手順 (`arata help ai playbook <check>`。ADR 0025)
 - aratam: WAF の改善提案の 2 通目、利用者の事情 (`llm.context_file`。ADR 0024)、出たチェックの対処手順を LLM に渡す
-- サプライチェーン対策 (ADR 0017) と依存削減 (ADR 0019) は適用済み
-- 未確認: aratam の Slack への実送信と `bedrock`、`report --month`
+- v0.4.0: `endpoint_abuse` (ADR 0031)、S3 ストア (`store: s3://`、ADR 0034) と `arata rebuild` (ADR 0033)、GitHub Actions の見本 (`examples/github-actions/`)、aratam の Block Kit
+- v0.5.0: 公開前の点検 (ADR 0035〜0039)。サプライチェーン (actions の lock、SBOM、release の権限の分離)、秘密と禁止語の検査、SAST、
+  LLM と Slack への攻撃の守り、失敗したソースの追いつき (ADR 0038)、検知の取りこぼしの修正
+- 2026-11-09 にリポジトリを公開 (MIT)。GitHub の設定は `docs/supply-chain.md`「GitHub の画面で人が行う設定」
+- 未確認: GitHub Actions の見本の実際の実行 (OIDC の引き受け・`concurrency`)、aratam の `bedrock`、`report --month`
 
 ## 2. すぐにやること
 
-1. **段階 E**: `endpoint_abuse` (会員登録・パスワード再設定・メッセージ送信などへの分散した連打)。主役は短い時間幅の画面全体の件数と、
-   同じ User-Agent が多数の IP にまたがること。結果は遮断の提案にせず件数の異常として伝える。利用者側のふだんの件数が分かってから閾値を決める
-2. **aratam の実送信試験**: 試験用チャンネルの Incoming Webhook で `aratam doctor` → `test-notify` → `notify` を 1 回ずつ。
-   `bedrock` は sandbox の `bedrock.enabled` で推論プロファイルを作り、`doctor` で応答を確かめる
-3. **小さな残り**: 自アカウントの root を「外部アカウント」と表示しない守り (CloudTrail の recipientAccountId を使う)、
-   「本日報告済み」の欄が still_open のとき Data を更新しない件 (expected_denied を足した直後に古い件数が見える)
+1. **実行の仕組みのテンプレート** (`deploy/github-actions/runner.yaml`): OIDC プロバイダ・ストアのバケット・実行用ロール (任意で Bedrock の呼び出し) を
+   1 コマンドで置く素の CloudFormation。見本の手順を `aws cloudformation deploy` の 2 つにし、複数のアカウントの書き方 (matrix) を足す (作業中)
+2. **最初の利用者での運用の開始**: 非公開の運用リポジトリで、上のテンプレートと見本をそのまま使って GitHub Actions で毎日動かす。
+   ここで面倒だった手順を、4 の配り方の材料にする
+3. **ファズテスト**: 信用できない入力 (LLM の出力・ログの行・CloudTrail・利用者のファイル) の解釈 (作業中)
+4. **使うための道具の配り方** (2 の後):
+   - 中心: バイナリに雛形とテンプレートを入れ、`arata scaffold github-actions` (名前は仮) で書き出す。バイナリの版と雛形の版が必ず揃い、`config init --diff` のように新しい版との差分も見せられる
+   - 同じテンプレートを Release にも添付する (来歴証明と `SHA256SUMS` で本物か確かめられる)
+   - 利用者が増えたら、取得と照合をまとめた action (`setup-arata` など) を足す。ワークフロー全体の共有 (reusable workflow) は OIDC の信頼の条件が arata 側のワークフローになり分かりにくいので採らない
+   - GitHub のテンプレートリポジトリは作らない (作った後の更新が利用者に届かず、書き出しと中身が二重になる)。作るなら書き出しを置いただけの薄いもの
+5. **v0.5.1**: 公開してから最初のリリース (来歴証明が初めて付く)。3 と 1 が入ったら
 
 ## 3. 残項目 (優先度順の案。利用者側の意見を反映)
 
@@ -47,7 +55,6 @@
 
 ## 4. 未決の判断 (利用者側に確認する)
 
-- リポジトリを公開するか。公開すると Release の来歴証明が自動で有効になる。公開前に `git log` と PR / Release の本文に顧客情報が無いことを再確認する
 - ~~Slack の書式 (mrkdwn の本文だけで続けるか Block Kit にするか)~~ (決定: Block Kit。`slack.format: text` で従来の本文も選べる。ADR 0029)
 - hourly と daily の通知をまとめるか (今は別々)
 - `aratam` の `--in` に既定を持たせない方針を維持するか (`docs/aratam.md` 5 章の決定)
