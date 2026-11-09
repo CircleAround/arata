@@ -64,9 +64,8 @@ jobs:
       - id: install
         name: arata と aratam を取得する
         env:
-          # arata のリポジトリが公開なら github.token で読める。非公開の間は、arata の contents: read だけの
-          # fine-grained token を ARATA_RELEASE_TOKEN に入れる。このステップ以外には渡さない
-          GH_TOKEN: ${{ secrets.ARATA_RELEASE_TOKEN || github.token }}
+          # arata のリポジトリは公開なので、Release は github.token で読める (ほかのトークンは要らない)
+          GH_TOKEN: ${{ github.token }}
         run: |
           dir="$RUNNER_TEMP/arata-bin"
           mkdir -p "$dir"
