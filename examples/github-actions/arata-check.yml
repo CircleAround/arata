@@ -19,7 +19,7 @@ defaults:
     shell: bash     # -eo pipefail で動く
 
 env:
-  ARATA_VERSION: v0.6.0        # config check を含む版が要る (v0.6.0 以降)。監査のワークフローと同じ版にする
+  ARATA_VERSION: v0.6.0        # config check を含む版が要る (v0.6.0 以降)。監査のワークフローも v0.6.0 以降に上げたら、同じ版に揃える
 
 jobs:
   check:
