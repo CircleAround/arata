@@ -70,7 +70,7 @@ jobs:
       - name: zizmor
         env:
           GH_TOKEN: ${{ github.token }}   # 固定した commit の偽装や既知の脆弱な action を調べるオンラインの検査に使う
-        run: '"$RUNNER_TEMP/zizmor" --config .github/zizmor.yml . examples/github-actions/arata-audit.yml examples/github-actions/arata-audit-multi.yml'
+        run: '"$RUNNER_TEMP/zizmor" --config .github/zizmor.yml . examples/github-actions/*.yml'
 
   # 依存の既知の脆弱性。Go は呼び出し経路まで見る govulncheck、deploy/sandbox の pnpm の依存は osv-scanner
   vulnerabilities:

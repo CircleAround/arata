@@ -1,0 +1,76 @@
+# PR で設定 (arata.yaml・aratam.yaml) と allowlist.yaml の形を検査する見本。
+# allowlist.yaml の書き間違い (主体の指定が 2 つ、expires の日付の形、未知のキーなど) を、マージの前に止める。
+# マージ後に気づくと、次の定時の監査が設定エラーで止まる (aratam が「実行されていない」と知らせる)。
+# 利用者のリポジトリの .github/workflows/ に写して使う (arata のリポジトリの CI では動かさない)。
+# 使い方は同じディレクトリの README.md「PR で設定を検査する」。例の値はすべて架空。
+#
+# AWS にも Slack にも繋がない。認証も secrets も使わないので、権限は contents: read だけ。
+# 検査するのはリポジトリの中の arata.yaml と aratam.yaml のすべて (1 つのアカウントの形でも、複数のアカウントの形でも同じ)。
+name: arata-check
+
+on:
+  # paths では絞らない。必須のチェックにしたとき、絞ると対象外の PR で結果待ちのままになる
+  pull_request:
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash     # -eo pipefail で動く
+
+env:
+  ARATA_VERSION: v0.6.0        # config check を含む版が要る (v0.6.0 以降)。監査のワークフローと同じ版にする
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read    # 設定ファイルの checkout
+    steps:
+      - id: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # 照合の SHA256SUMS は同じリリースのものなので、壊れた取得は防げるがリリース自体のすり替えは防げない。
+      # 公開リポジトリのリリースなら gh attestation verify で来歴も確かめられる (arata の README「来歴の検証」)。
+      - id: install
+        name: arata と aratam を取得する
+        env:
+          # arata のリポジトリは公開なので、Release は github.token で読める (ほかのトークンは要らない)
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          dir="$RUNNER_TEMP/arata-bin"
+          mkdir -p "$dir"
+          gh release download "$ARATA_VERSION" -R CircleAround/arata -D "$dir" \
+            -p arata-linux-amd64 -p aratam-linux-amd64 -p SHA256SUMS
+          cd "$dir"
+          for name in arata aratam; do
+            grep " ${name}-linux-amd64\$" SHA256SUMS | sha256sum --check --strict --quiet -
+            install -m 0755 "${name}-linux-amd64" "$name"
+          done
+          echo "$dir" >>"$GITHUB_PATH"
+
+      # 出力はそのまま出す。検査の結果に出るのは PR のファイルの中身 (行番号と項目) で、PR を読める人には元から見えている。
+      # 標準エラーの JSON のログは同じ内容の繰り返しなので出さない。
+      # 設定が 1 つも見つからなければ失敗にする (置き場所を変えたのに、何も検査しないまま通るのを防ぐ)。
+      - id: check
+        name: arata config check / aratam config check
+        run: |
+          status=0
+          count=0
+          while IFS= read -r file; do
+            count=$((count + 1))
+            case "$file" in
+              */aratam.yaml) tool=aratam ;;
+              *) tool=arata ;;
+            esac
+            echo "== $tool config check -c $file"
+            "$tool" config check -c "$file" </dev/null 2>/dev/null || status=1
+          done < <(find . -path ./.git -prune -o -type f \( -name arata.yaml -o -name aratam.yaml \) -print | sort)
+          if [ "$count" -eq 0 ]; then
+            echo "::error::arata.yaml / aratam.yaml が見つからない"
+            exit 1
+          fi
+          exit "$status"

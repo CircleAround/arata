@@ -4,6 +4,12 @@
 実行環境は毎回消えるので、ストアは S3 に置きます (README「S3 ストア」、ADR 0034)。ここの値はすべて架空です。
 複数の AWS アカウントを 1 つのリポジトリで監査するなら [arata-audit-multi.yml](arata-audit-multi.yml) を使います (下の「複数のアカウントを 1 つのリポジトリで監査する」)。
 
+| 見本 | いつ動くか | すること |
+|---|---|---|
+| [arata-audit.yml](arata-audit.yml) / [arata-audit-multi.yml](arata-audit-multi.yml) | 定時 (と手動) | 監査して Slack に通知する |
+| [arata-triage.yml](arata-triage.yml) | 手動 (Actions の画面) | finding を ack / snooze / resolve する (下の「finding を片付ける」) |
+| [arata-check.yml](arata-check.yml) | PR | 設定と allowlist.yaml の形を検査する (下の「PR で設定を検査する」) |
+
 ```
 schedule → OIDC で実行用ロール ┬→ 読み取り専用ロールへ連鎖 → 監査対象 (読むだけ)
                                └→ ストアのバケット (読み書き)
@@ -163,7 +169,7 @@ llm:
 
 ### 5. 初回の収集は手元で
 
-`arata init` は数時間かかることがあり、ワークフローの認証の期限 (1 時間) を超え得ます。手元で同じ `arata.yaml` を使って実行してください。
+`arata init` はワークフローの認証の期限 (1 時間) を超え得るので、手元で同じ `arata.yaml` を使って実行します。**定時のワークフローを main に入れるのは、この収集が終わってから**にしてください (理由は下)。
 
 ```sh
 # ~/.aws/config に同じ名前の arata-audit のプロファイルを用意し、ストアを書ける認証を標準の連鎖で渡す
@@ -172,6 +178,20 @@ AWS_PROFILE=example-store-writer arata init -c arata/arata.yaml
 ```
 
 `store: s3://` のまま実行するので、結果はそのままバケットへ置かれ、次のワークフローの run が続きから動きます。実行できたら `workflow_dispatch` で 1 回動かして確かめます。
+
+- **かかる時間**: 収集する期間 (`--window`。既定は 7 日、CloudTrail の履歴は最長 90 日) とリージョンの数、その間のイベントの量に比例し、数十分〜数時間です。
+  CloudTrail の LookupEvents は毎秒 2 リクエストまでで、arata はこれを超えないように引くためです。進み具合は標準エラーのログで分かります (1 日分ずつ進みます)
+- **手元の認証の期限で止まり得ます**: 収集は読み取りの認証 (`arata-audit` のプロファイル) を、結果の保存はストアを書く認証を使います。
+  どちらも期限が収集より短いと途中で切れます。自動で更新される認証 (`role_arn` を書いたプロファイルや IAM Identity Center のプロファイル) を使うか、期限に収まる `--window` にします
+  - 読み取りの認証だけが切れたとき: その日の収集が失敗して止まり (終了コード 3)、終わった日までをストアに確定します。認証を取り直して `arata init --resume -c arata/arata.yaml` で続きから再開できます
+  - ストアを書く認証も切れていたとき: 最後の保存ができず、**その実行で収集した分は失われます** (メッセージで知らせます。S3 のストアは実行の最後にまとめて書き戻すため)。
+    `arata init --resume` (保存済みの init が無ければ `arata init`) でやり直します
+- **中断しても続きから再開できます**: Ctrl-C (SIGINT) や SIGTERM で止めると、終わった日までをストアに確定して終了コード 3 で終わります。
+  `arata init --resume` は止まった日の頭から引き直し、窓の終わりは再開した時点まで延びます。完了した init に `--resume` しても何もしません。
+  `--resume` を付けずに `arata init` すると最初からやり直しになるので注意してください
+- **実行中は Actions の定時の実行を止めておきます**: 収集の途中で定時の監査が同じストアに書くと、後から書こうとした側が `STORE_CONFLICT` で失敗します。
+  ストアは壊れませんが、init が後になれば数時間の収集を失います (`concurrency` は Actions の中の排他で、手元の実行は止められません)。
+  初めてなら、ワークフローを main に入れるのを init の後にします。既に動いているなら、Actions の画面でワークフローを無効 (Disable workflow) にし、init が終わったら有効に戻します
 
 ## 複数のアカウントを 1 つのリポジトリで監査する
 
@@ -219,10 +239,73 @@ name: prod                                # 通知に出す名前。アカウン
 
   アカウントごとに secret を分けて `secrets[...]` で選ぶ形にはしません (式で動的に選ぶと、ジョブにすべての secrets が渡ります)
 - **allowlist**: 実行用ロールの `principals` の行を、各アカウントの `allowlist.yaml` に書きます
-- **初回の収集**: アカウントごとに手元で `arata init -c aws/<名前>/arata.yaml` を実行します
+- **初回の収集**: アカウントごとに手元で `arata init -c aws/<名前>/arata.yaml` を実行します (ストアはアカウントごとなので、順番でも並べてもかまいません。時間と認証の期限の注意は「初回の収集は手元で」)
 - **Slack**: Webhook は全アカウントで共通です。宛先を分けたいときは、アカウントごとの `aratam.yaml` の `webhook_env` に別の名前を書き、ワークフローの notify の `env` に足します
 
 実行用ロールは全アカウントの prefix を読み書きできます (分けるのは置き場所で、権限ではありません)。権限まで分けたいときは、アカウントごとにリポジトリと実行の仕組みを分けます。
+
+## finding を片付ける (ack / snooze / resolve)
+
+ストアが S3 にあると、手元にストアを書ける認証が無い人は `arata ack` を実行できません。[arata-triage.yml](arata-triage.yml) を `.github/workflows/` に置くと、Actions の画面から行えます。
+見本は複数のアカウントの形です。1 つのアカウントで使うときの直し方は、ファイルの先頭のコメントにあります。
+
+1. Slack の通知で finding の ID (`id 0123456789ab` の 12 桁) を確かめます
+2. GitHub の Actions → **arata-triage** → **Run workflow** を開き、ブランチは **main** のまま、次を入れて実行します
+
+   | 入力 | 中身 |
+   |---|---|
+   | `account` | アカウント (ディレクトリの名前) |
+   | `action` | `ack` = 確認した。再報告しないが未対応の一覧には残る / `snooze` = 期日まで沈黙させる / `resolve` = 対応が終わった (再び観測されたら新規として報告) |
+   | `finding_id` | 通知の ID |
+   | `reason` | 理由 (必須、1 行)。ARN やアカウント ID は書かないでください (リポジトリを読める人に見えます) |
+   | `until` | `snooze` の期日 (`YYYY-MM-DD`。その日の 0 時 UTC まで)。`snooze` のときだけ |
+
+3. 実行の Summary に、誰が・どの finding を・どうしたか・理由が残ります
+
+知っておくこと:
+
+- **理由と操作した人はストアに残りません**。arata の `ack` / `snooze` / `resolve` には理由や操作した人を記録する欄が無いので、記録は Actions の実行履歴 (Summary) が持ちます。
+  Actions の実行の記録には保持期間があります (リポジトリの設定。ログの既定は 90 日)。長く残したい判断は、Issue などにも書いてください
+- **main で動かします**。実行用ロールの信頼は 1 つのブランチだけ (既定は `main`) なので、ほかのブランチを選ぶと OIDC の引き受けで失敗します。
+  `runner.yaml` の `GitHubWorkflowRef` で監査のワークフローのファイルに絞っている場合は、このワークフローからは引き受けられません (`GitHubWorkflowRef` を空にするか、手元で実行します)
+- **監査が走っていれば待ちます**。定時の監査と同じ `concurrency` の group (アカウントごと) なので、同じストアへは順番に書きます。
+  同じ group で待てるのは 1 つだけです。待っている間にもう 1 つ実行すると、先に待っていたほうが取り消されます。続けて行うときは、前の実行が終わってからにします
+- **失敗の見分け**: ログの方針は監査と同じで、出るのは `code` と終了コードだけです。`CONFIG_INVALID` は ID が無い・既に resolved・期日が過去、`STORE_CONFLICT` は同時に書かれた (もう一度実行します)
+- ack / snooze 中でも、重大度が上がれば再報告されます (ADR 0022)
+
+### approve は PR で allowlist.yaml を直す
+
+主体の承認 (approve) はこのワークフローに入れていません。`arata approve` は allowlist.yaml への追記と同時にストアの finding も解消するので、追記の PR がマージされる前に finding が消えてしまいます。
+承認は allowlist.yaml の差分としてレビューします。
+
+1. ブランチを切り、`aws/<名前>/allowlist.yaml` (1 つのアカウントなら `arata/allowlist.yaml`) の `principals` の末尾に項目を足します
+
+   ```yaml
+     - arn: arn:aws:iam::123456789012:role/github-actions-deploy   # arn / account / arn_pattern のどれか 1 つ
+       note: GitHub Actions のデプロイロール
+       approved_by: alice
+       approved_at: 2026-11-09
+       tags: [deploy]
+   ```
+
+2. PR を作ります。[arata-check.yml](arata-check.yml) が形を検査します
+3. 人が差分を見てマージします
+4. 次の定時の監査が、承認に一致する finding を allowlisted として解消します (`resolve` は要りません)
+
+AI に頼むときは、`arata help ai approve` (承認してよい主体の目安、`account` と `arn_pattern` の使い分け、期限、PR の作り方) を最初に読ませてから PR を作らせ、**人が差分を見てマージします**。
+AI には `arata approve` を実行させません。手元で形を確かめるなら `arata config check -c aws/<名前>/arata.yaml` です (AWS にもストアにも繋ぎません)。
+
+## PR で設定を検査する
+
+[arata-check.yml](arata-check.yml) を `.github/workflows/` に置くと、PR のたびにリポジトリの中の `arata.yaml` と `aratam.yaml` のすべてに
+`arata config check` / `aratam config check` をかけます (1 つのアカウントの形でも、複数のアカウントの形でも、そのまま使えます)。
+
+- 検査するのは形だけです: 未知のキー、型、必須項目、allowlist.yaml の各項目 (主体の指定は 1 つだけ、`expires` の日付、`expected_denied` の書式など)。定時の監査が起動時にする検証と同じ規則なので、ここを通った設定は、監査でも同じように読めます
+- AWS にも Slack にも繋がず、認証も secrets も使いません。権限は `contents: read` だけです
+- 誤りは「ファイル:行」と一緒に出ます。同じ主体の重複は `warn` で、PR は止めません (片方の `expires` や `tags` しか使われないので、1 つにまとめます)
+- 権限やロググループは見ません (AWS に問い合わせる `arata doctor` の仕事です)
+- `config check` を含む版 (v0.6.0 以降) が要ります。`ARATA_VERSION` は監査のワークフローと同じ版にします (別の版だと、検査を通った設定が監査で読めないことがあります)
+- main のブランチ保護で必須のチェックにすると、形の誤った allowlist.yaml はマージできなくなります
 
 ## 失敗したとき
 

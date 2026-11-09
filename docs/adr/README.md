@@ -65,3 +65,4 @@
 | [0039](0039-actions-lock-with-sha-pins.md) | Actions のロックファイルを、uses の SHA 固定と併用して `--no-narrow` で作る | 採用 |
 | [0040](0040-github-actions-runner-template.md) | GitHub Actions の実行の仕組みは素の CloudFormation で配り、信頼は `sub` の完全一致に絞る | 採用 |
 | [0041](0041-fuzz-untrusted-input.md) | 信用できない入力を解釈する箇所を、Go 標準のファズテストで確かめる | 採用 |
+| [0042](0042-offline-config-check-and-triage-workflow.md) | 設定と allowlist の形はオフラインの `config check` で PR の時点に確かめ、finding の片付けは Actions の手動実行で行う | 採用 |
