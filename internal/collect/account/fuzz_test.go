@@ -9,7 +9,7 @@ import (
 	"github.com/CircleAround/arata/internal/collect/account/accounttest"
 )
 
-// ファズテスト (ADR 0040)。認証情報レポートは IAM が返す CSV だが、ユーザー名は利用者 (と侵入者) が決められる。
+// ファズテスト (ADR 0041)。認証情報レポートは IAM が返す CSV だが、ユーザー名は利用者 (と侵入者) が決められる。
 // 壊れた CSV でもパニックせず、読めた行は決まった形 (日時は RFC 3339 の UTC か空、キーは 2 本まで) になる。
 func FuzzParseCredentialReport(f *testing.F) {
 	t0 := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)

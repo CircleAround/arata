@@ -16,7 +16,7 @@ import (
 	"github.com/CircleAround/arata/internal/report/schema"
 )
 
-// ファズテスト (ADR 0040)。LLM の出力・ログ由来の値・report.json を信用しない入力として与え、
+// ファズテスト (ADR 0041)。LLM の出力・ログ由来の値・report.json を信用しない入力として与え、
 // パニックしないことと、規則で固定した守り (ADR 0037) が入力に依らず残ることを確かめる。
 // ふだんの `go test` は seed (f.Add と testdata/fuzz) だけを走らせる。探索は `go test -fuzz` (CI の fuzz.yml)。
 

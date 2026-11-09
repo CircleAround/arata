@@ -28,7 +28,7 @@ LLM 向けの使い方は `go run ./cmd/arata help ai` (バイナリに埋め込
 - `go test ./...` / `go vet ./...` / `gofmt -l $(git ls-files '*.go')` を通してから push する。CI は `go mod verify`・age-gate・govulncheck・ビルドも回す
   (`gofmt -l .` は `deploy/sandbox/node_modules` の中の Go の雛形まで読んで失敗するので、git 管理のファイルだけを見る)
 - 信用できない入力 (ログ由来の値・LLM の出力・利用者のファイル) を解釈する関数を足す・変えるときは、ファズテスト (`Fuzz*`) も足す・通す。
-  性質は「パニックしない」だけにせず、守る規則を書く。失敗した入力は seed か `testdata/fuzz` に残して本体を直す (ADR 0040、`docs/fuzzing.md`)
+  性質は「パニックしない」だけにせず、守る規則を書く。失敗した入力は seed か `testdata/fuzz` に残して本体を直す (ADR 0041、`docs/fuzzing.md`)
 - CI の `sast.yml` は golangci-lint (gosec・staticcheck。設定は `.golangci.yml`) を回す。抑制は `#nosec <規則> -- <理由>` の形で理由を必ず書く (ADR 0037)
 - `deploy/sandbox` (CDK、TypeScript) を変えたら `pnpm test` / `pnpm typecheck` / `pnpm synth` も通す (deploy はしない。ADR 0020)
 - 書き込み系の操作 (リリース作成、タグ push、設定変更) は目的と副作用を一言説明してから行う

@@ -208,7 +208,7 @@ func ParseDuration(s string) (time.Duration, error) {
 	var d time.Duration
 	if n, ok := strings.CutSuffix(s, "d"); ok {
 		days, err := strconv.Atoi(n)
-		// time.Duration に収まらない日数は桁あふれで別の長さになるので、エラーにする (arata の設定と同じ。ADR 0040)
+		// time.Duration に収まらない日数は桁あふれで別の長さになるので、エラーにする (arata の設定と同じ。ADR 0041)
 		if err != nil || days > maxDurationDays || days < -maxDurationDays {
 			return 0, fmt.Errorf("invalid duration %q", s)
 		}

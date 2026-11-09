@@ -282,7 +282,7 @@ func (r *PeriodReport) JSON() ([]byte, error) {
 
 // Markdown は人向けの期間レポート。
 //
-// 決定 (ADR 0040。ファズで見つけた): summary と主体の表示はログ由来なので、run の report.md と同じく改行を空白にする (inline)。
+// 決定 (ADR 0041。ファズで見つけた): summary と主体の表示はログ由来なので、run の report.md と同じく改行を空白にする (inline)。
 // 期間レポートだけ抜けていて、summary の改行で偽の見出しや指摘の行を作れた (report.md は Slack の本文にもなる)。
 func (r *PeriodReport) Markdown() string {
 	var b strings.Builder

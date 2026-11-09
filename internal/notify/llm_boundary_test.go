@@ -84,7 +84,7 @@ func TestUrgentFindingsSurviveTruncation(t *testing.T) {
 	}
 }
 
-// インシデント候補・approve の提案を大量に並べても、本文は上限に収まり、高い重大度の行は残る (ファズで見つけた。ADR 0040)。
+// インシデント候補・approve の提案を大量に並べても、本文は上限に収まり、高い重大度の行は残る (ファズで見つけた。ADR 0041)。
 func TestLLMCannotFloodOptionalSections(t *testing.T) {
 	in := boundaryInput("low", "high", "critical")
 	long := strings.Repeat("あ", 300)

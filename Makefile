@@ -24,7 +24,7 @@ build-local:
 test:
 	$(GO) test ./...
 
-## fuzz: ファズテストを対象ごとに FUZZTIME ずつ探索する (ADR 0040、docs/fuzzing.md。CI の fuzz.yml と同じ)
+## fuzz: ファズテストを対象ごとに FUZZTIME ずつ探索する (ADR 0041、docs/fuzzing.md。CI の fuzz.yml と同じ)
 FUZZTIME ?= 30s
 fuzz:
 	GO=$(GO) tools/fuzz.sh $(FUZZTIME)

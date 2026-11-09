@@ -559,7 +559,7 @@ func parseDay(s string) (string, bool) {
 }
 
 // num は Insights の結果の数値 (件数・パーセンタイル・時刻) を読む。読めない値は 0。
-// 決定 (ADR 0040。ファズで見つけた): NaN・無限大・負の値も 0 にする。fmt.Sscan は "NaN" や "Inf" を数として読むので、
+// 決定 (ADR 0041。ファズで見つけた): NaN・無限大・負の値も 0 にする。fmt.Sscan は "NaN" や "Inf" を数として読むので、
 // そのまま metric の値にすると JSON に書けず、その run の保存が失敗する。件数に負の値は無い。
 func num(s string) float64 {
 	var f float64

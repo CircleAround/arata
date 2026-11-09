@@ -117,7 +117,7 @@ func findingIndex(in *Input) ([]findingRef, map[string]findingRef) {
 //   - new / changed / recurred で urgent 以上の finding は info にさせない (confirm に上げ、理由は捨てる)。
 //   - urgent 以上の finding への approve の提案は捨てる (approve は主体を以後報告しなくなるので、誘導されたときの被害が最も大きい)。
 //
-// 決定 (ADR 0040。ファズで見つけた): LLM が任意に増やせる節で本文を埋めさせない。
+// 決定 (ADR 0041。ファズで見つけた): LLM が任意に増やせる節で本文を埋めさせない。
 //   - incidents は maxIncidents 件まで。1 件の中の同じ finding_id は 1 つにする。
 //   - approve_suggestions は finding 1 件につき 1 つ (2 件目以降は捨てる)。
 func ParseSummary(raw []byte, in *Input, urgent string) (*Summary, error) {
@@ -261,7 +261,7 @@ const (
 // 決定: 3,800 文字に収まらなければ、情報の理由文 → 情報の行 (件数だけ残す) → 確認依頼の理由文 の順に削る。
 // 見出し・要対処・インシデント候補・承認の提案・漏れた finding・取れなかったものは削らない。
 //
-// 決定 (ADR 0040。ファズで見つけた): それでも収まらなければ、緊急の finding と取れなかったものを先に並べ直して、後ろから行の境目で切る。
+// 決定 (ADR 0041。ファズで見つけた): それでも収まらなければ、緊急の finding と取れなかったものを先に並べ直して、後ろから行の境目で切る。
 // 並びは、漏れた finding のうち urgent 以上 → 取れなかったもの → 分類 (urgent 以上を要対処の先頭に。ADR 0037) → 残りの漏れた finding。
 // インシデント候補と approve の提案は、合わせて maxKeptLLMRunes 文字までなら以前と同じく必ず残し、超えるなら最後に回して切る。
 // 以前は長さに依らず残していたので、LLM がこの節を増やすと規則の行 (緊急の finding) の方が押し出され、本文も上限を超えた。

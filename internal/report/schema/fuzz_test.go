@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-// ファズテスト (ADR 0040)。report.json は arata が書いて aratam と人が読む。壊れた・想定外の形の JSON でもパニックせず、
+// ファズテスト (ADR 0041)。report.json は arata が書いて aratam と人が読む。壊れた・想定外の形の JSON でもパニックせず、
 // 読めたものは書き直しても同じになる。ログ由来の値 (summary・data・evidence) は report.md の行を増やせない (ADR 0037)。
 
 func seedFiles(f *testing.F) {

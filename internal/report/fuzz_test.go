@@ -8,7 +8,7 @@ import (
 	"github.com/CircleAround/arata/internal/store"
 )
 
-// ファズテスト (ADR 0040)。レポートと通知に個人を特定できる値 (メールアドレス、assumed-role のセッション名) を出さない (ADR 0037)。
+// ファズテスト (ADR 0041)。レポートと通知に個人を特定できる値 (メールアドレス、assumed-role のセッション名) を出さない (ADR 0037)。
 // finding の key・summary・data のどの深さに置いても、report.json に元の形で残らないことを確かめる。
 func FuzzFindingMasksIdentity(f *testing.F) {
 	for _, s := range [][3]string{{"", "", `{}`}, {"user ", " からのログイン", `{"ips":["203.0.113.1"],"n":1}`}, {"a@b.", ".c", `[{"k":["x"]}]`}, {"assumed-role/r/", ",x", `"s"`}, {"\xff", "\n", `null`}} {

@@ -12,7 +12,7 @@ import (
 	"github.com/CircleAround/arata/internal/record"
 )
 
-// ファズテスト (ADR 0040)。CloudTrail のイベントの本文 (JSON) は API を呼んだ側が書ける値 (requestParameters・userAgent・ポリシーの本文) を含む。
+// ファズテスト (ADR 0041)。CloudTrail のイベントの本文 (JSON) は API を呼んだ側が書ける値 (requestParameters・userAgent・ポリシーの本文) を含む。
 // 形が想定と違ってもパニックせず、取り出す値の上限と、公開の判定の規則 (ADR 0037) が保たれることを確かめる。
 
 var fuzzEventTime = time.Date(2026, 10, 21, 1, 0, 0, 0, time.UTC)

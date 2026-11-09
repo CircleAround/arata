@@ -8,7 +8,7 @@ import (
 	"unicode/utf8"
 )
 
-// ファズテスト (ADR 0040)。allowlist.yaml は利用者が書くファイル。壊れた YAML でもパニックせず、
+// ファズテスト (ADR 0041)。allowlist.yaml は利用者が書くファイル。壊れた YAML でもパニックせず、
 // 読めたものは「誰を承認するか」の規則 (主体の指定は 1 つだけ・arn_pattern はアカウントを固定。ADR 0037) を守る。
 func FuzzParse(f *testing.F) {
 	b, err := os.ReadFile("../../examples/allowlist.yaml")

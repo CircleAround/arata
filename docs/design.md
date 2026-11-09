@@ -20,7 +20,7 @@
 | 任意期間レポート | `report --from --to` で月次・四半期・任意期間を生成 |
 | リポジトリの例 | 決定: リポジトリ (例・テスト・文書) に特定の顧客の情報を書かない。例は架空の値を使う (アカウント ID は `123456789012` / 外部 SaaS は `111122223333`) |
 | 公開できない情報の検査 | 決定: 一般的な秘密は gitleaks (`.gitleaks.toml`)、禁止語は Actions の secrets の一覧と `tools/wordscan` で全履歴と GitHub の本文を CI で検査する。ログに語を出さない。運用は `docs/sensitive-scan.md`。ADR 0036 |
-| ファズテスト | 決定: 信用できない入力 (ログの行と Insights の結果・CloudTrail のイベント・LLM の出力・利用者のファイル) を解釈する箇所に、Go 標準のファズテスト (`testing.F`) を置く。性質は「パニックしない」だけでなく、その関数が守る規則 (伏せ字が元の値を残さない、通知に `<` `>` や目に見えない文字が残らない、公開の判定が見逃す側に倒れない、など) を書く。`go test ./...` は seed と `testdata/fuzz` だけを走らせ、探索は週次の `fuzz.yml` (`tools/fuzz.sh`、対象ごとに 30 秒)。見つかった失敗は seed か `testdata/fuzz` に残して本体を直す。対象の一覧と手順は `docs/fuzzing.md`。ADR 0040 |
+| ファズテスト | 決定: 信用できない入力 (ログの行と Insights の結果・CloudTrail のイベント・LLM の出力・利用者のファイル) を解釈する箇所に、Go 標準のファズテスト (`testing.F`) を置く。性質は「パニックしない」だけでなく、その関数が守る規則 (伏せ字が元の値を残さない、通知に `<` `>` や目に見えない文字が残らない、公開の判定が見逃す側に倒れない、など) を書く。`go test ./...` は seed と `testdata/fuzz` だけを走らせ、探索は週次の `fuzz.yml` (`tools/fuzz.sh`、対象ごとに 30 秒)。見つかった失敗は seed か `testdata/fuzz` に残して本体を直す。対象の一覧と手順は `docs/fuzzing.md`。ADR 0041 |
 | 設定の名前 | 決定: 設定のトップレベルキーは `customer` ではなく `name` (レポートに出す監査対象の名前)。`customer` は受託側の目線に寄りすぎており、自社アカウントを自社で監査する使い方もあるため中立な名前にした。利用者がいない段階の改名なので旧キーの互換は持たず、`customer` は未知のキーとして設定エラーになる |
 | サプライチェーン | 決定: GitHub Actions は 40 桁の SHA で固定し版をコメントに書く。全ワークフローに最小権限の `permissions:`、checkout は `persist-credentials: false`。依存は公開から 7 日待つ 2 段構え (提案: Dependabot の `cooldown`、強制: CI の `tools/agegate` が indirect を含む全モジュールの公開時刻を GOPROXY で確かめる)。CI で `go mod verify` と `govulncheck`。release は build provenance attestation (来歴証明) を付ける (公開リポジトリまたは Enterprise Cloud で有効。非公開の間は SHA256SUMS のみ)。ADR 0017。CI の常時の検査 (Actions の固定と待機の強制、zizmor、週次の脆弱性検査)、release の権限の分離、SBOM は ADR 0035 と [supply-chain.md](supply-chain.md) |
 
@@ -224,9 +224,9 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
 - **閾値判定**: 解釈率が `expected_match_rate` (既定 0.8) を下回ったら `FORMAT_MISMATCH`。そのソースを必要とするチェックは skip し、終了コード 3。
 - **ドリフト判定**: 閾値を上回っていても、直近 7 回の平均から 20 ポイント以上落ちたら `FORMAT_DRIFT` (警告)。アプリのデプロイでログ形式が変わった時に気づくため。
 - **サンプルの扱い**: 解釈できなかった行の例を最大 3 行、長さ 200 文字に切り、メールアドレスらしき文字列をマスクしてエラーに添える (原因特定用)。個人情報を含み得るログでは `sample_lines: false` で抑止できる。
-  決定 (ADR 0040): マスクの前に制御文字・向きの制御・ゼロ幅の文字を除き、空白類は空白にする。サンプル行は doctor が端末に出すので、ログの行のエスケープシーケンスで端末を操作させない。
+  決定 (ADR 0041): マスクの前に制御文字・向きの制御・ゼロ幅の文字を除き、空白類は空白にする。サンプル行は doctor が端末に出すので、ログの行のエスケープシーケンスで端末を操作させない。
 - **エンジン自身のログ**: 標準エラーに JSON 行で出し、`code` を固定語彙にする。組み込み側はこの `code` を監視して通知すればよい。
-- **集計値の読み取り**: 決定 (ADR 0040): Insights の結果の数値 (件数・パーセンタイル) は、読めない値に加えて `NaN`・無限大・負の値も 0 として扱う。そのまま metric の値にすると JSON に書けず、その run の保存が失敗する。
+- **集計値の読み取り**: 決定 (ADR 0041): Insights の結果の数値 (件数・パーセンタイル) は、読めない値に加えて `NaN`・無限大・負の値も 0 として扱う。そのまま metric の値にすると JSON に書けず、その run の保存が失敗する。
 
 ```json
 {"level":"error","code":"FORMAT_MISMATCH","source":"rails_app","log_group":"prod-app.log","format":"json","match_rate":0.12,"expected":0.6,"samples":["..."],"run_id":"..."}
@@ -290,7 +290,7 @@ From = min(now - window, 前回の window_to) として、cron の遅延・欠�
 決定 (記録の遅延と再走査。ADR 0013): CloudTrail はイベントの記録まで通常 5〜15 分、CloudWatch Logs は取り込みに数分遅れる。
 窓の終わり To は now のまま記録し (次回の From になる)、**各ソースの収集範囲は `[From - ingest_delay, To)`** とする (前回の窓の末尾を遅延分だけ再走査する)。
 `sources[].ingest_delay` は ParseDuration 形式で、既定は cloudtrail-lookup = 15m、cloudwatch-logs = 5m (`0` で再走査しない)。
-決定 (ADR 0040): `d` (日) で書ける上限は time.Duration に収まる日数 (約 292 年)。超える値は桁あふれで別の長さになる (`213504d` が 25 分になった) ので、エラーにする (aratam の `max_age` も同じ)。
+決定 (ADR 0041): `d` (日) で書ける上限は time.Duration に収まる日数 (約 292 年)。超える値は桁あふれで別の長さになる (`213504d` が 25 分になった) ので、エラーにする (aratam の `max_age` も同じ)。
 
 - events は event_id で重複を排除し、最初に収集した run の時刻を `collected_at` に残す (再走査で同じイベントが来ても変わらない)。
 - イベント型チェック (root_usage / unknown_assume_role / iam_changes) は `[From, To)` に加えて、`[From - 最大の ingest_delay, From)` のうち
@@ -486,7 +486,7 @@ retention:
 
 決定 (ADR 0034): 実行のたびに一時ディレクトリへ作業用の複製を出し入れし、読み書きは `dir://` の実装がそのまま担う。`s3://` と書いたときだけ有効で、`dir://` の動きは変わらない。
 
-決定 (ADR 0040): prefix に空の区間 (`//`、先頭の `/`) があればエラー。末尾の `/` 1 つは外す。検査は外す前に行う (`s3://b/p//` を通さない)。
+決定 (ADR 0041): prefix に空の区間 (`//`、先頭の `/`) があればエラー。末尾の `/` 1 つは外す。検査は外す前に行う (`s3://b/p//` を通さない)。
 
 | オブジェクト (prefix の下) | 取得 | 書き戻し |
 |---|---|---|
@@ -542,11 +542,11 @@ secrets_access:
 ```
 
 決定: `allowlist.yaml` が無い場合は空のリストとして扱う (init 直後の運用を許す)。主体 ARN の突合は完全一致。AssumedRole 主体はセッション ARN ではなくロール ARN (`sessionContext.sessionIssuer.arn`) に正規化してから突合する (セッション名に個人名やメールが入るため)。
-決定 (ADR 0040): userIdentity の種類が知らないものでも、ARN がセッションの形 (`arn:aws:sts::<アカウント>:assumed-role/<ロール>/<セッション>`) ならロール ARN に寄せる。アカウントの欄が無い壊れた ARN は寄せない。
+決定 (ADR 0041): userIdentity の種類が知らないものでも、ARN がセッションの形 (`arn:aws:sts::<アカウント>:assumed-role/<ロール>/<セッション>`) ならロール ARN に寄せる。アカウントの欄が無い壊れた ARN は寄せない。
 
 決定 (principals の指定方法。Step 2):
 - 1 エントリの主体の指定は `arn` (完全一致) / `account` (12 桁の文字列。そのアカウントの全主体を承認。監視 SaaS など SaaS 連携用) / `arn_pattern` (glob。`*` は `/` や `:` も含む任意の文字列、`?` は 1 文字) のどれか 1 つ。
-  決定 (ADR 0040): glob (`arn_pattern`・`expected_denied`・`secrets`) は UTF-8 として不正ならエラーにする (不正なバイト列どうしが同じものとして一致するため)。
+  決定 (ADR 0041): glob (`arn_pattern`・`expected_denied`・`secrets`) は UTF-8 として不正ならエラーにする (不正なバイト列どうしが同じものとして一致するため)。
 - 複数のエントリに一致するときは、有効な (expires 前の) 承認が 1 つでもあれば approved。返すエントリ (タグの判定に使う) は有効なもののうち最も具体的なもの (arn > arn_pattern > account)。一致したものが全部期限切れなら expired。
 - CloudTrail の `userIdentity.type` が `AWSAccount` (他アカウントからのクロスアカウント AssumeRole) の主体は `arn:aws:iam::<アカウント>:root` (kind は unknown) に正規化される。
   レポートの文面ではこれを「外部アカウント NNN」と書き、Data に `external_account` を添える。自アカウントの Root (kind=root、root_usage が扱う) とは区別する。
@@ -917,7 +917,7 @@ arata rebuild   [--from-scratch [--baseline]] [--format text|json]   # raw JSONL
   aratam は未知のフィールドを無視するので、古い aratam でも止まらない (テストで固定)。`coverage.formats[].truncated` (行の上限に当たった集計) も足す。report.md には「WAF の修正提案の候補」の節を出す
 
 決定 (期間レポート。ADR 0016): `report --from --to` (`--month`) は `"kind": "period"` の別の形を出す。
-決定 (ADR 0040): 期間レポートの report.md でも、summary と主体の表示 (ログ由来) の改行は空白にする (run の report.md と同じ。抜けていて、改行で偽の見出しや指摘の行を作れた)。
+決定 (ADR 0041): 期間レポートの report.md でも、summary と主体の表示 (ログ由来) の改行は空白にする (run の report.md と同じ。抜けていて、改行で偽の見出しや指摘の行を作れた)。
 `period` / `notes` (履歴の無い期間の注意) / `summary` (new / changed / recurred / resolved / by_severity / open) / `events` / `new_principals` / `open` /
 `metrics` (日 × 指標の合計、UTC) / `runs_missing` (partial / failed / RUN_MISSED) / `profiles` (プロファイルごとの run 数)。info は数えない。
 

@@ -17,7 +17,7 @@ import (
 	"github.com/CircleAround/arata/internal/record"
 )
 
-// ファズテスト (ADR 0040)。ログの行と Insights の結果は攻撃者が書ける値 (パス・X-Forwarded-For・User-Agent・JSON の項目) を含む。
+// ファズテスト (ADR 0041)。ログの行と Insights の結果は攻撃者が書ける値 (パス・X-Forwarded-For・User-Agent・JSON の項目) を含む。
 // パニックしないことと、伏せ字・正規化・クエリへの埋め込みの規則が入力に依らず成り立つことを確かめる。
 
 // fuzzEmail は架空のメールアドレス。入力のどこに置いても、出力に元の形で残ってはいけない。
