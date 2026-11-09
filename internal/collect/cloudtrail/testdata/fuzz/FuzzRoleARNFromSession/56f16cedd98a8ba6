@@ -1,0 +1,2 @@
+go test fuzz v1
+string("arn:aws:sts::assumed-role/0")

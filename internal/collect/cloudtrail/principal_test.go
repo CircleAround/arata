@@ -36,6 +36,12 @@ func TestPrincipalOfInternalRecords(t *testing.T) {
 		{"type 無しでも外部 IP で AWS Internal でなければ従来どおり",
 			`{"userIdentity":{"accountId":"111122223333"},"sourceIPAddress":"198.51.100.7","eventSource":"sts.amazonaws.com"}`,
 			"arn:aws:iam::111122223333:root", record.PrincipalUnknown},
+		{"知らない種類でも、セッションの ARN はロールに寄せる (セッション名を主体に残さない)",
+			`{"userIdentity":{"type":"FutureType","arn":"arn:aws:sts::123456789012:assumed-role/Admin/alice@example.com","accountId":"123456789012"}}`,
+			"arn:aws:iam::123456789012:role/Admin", record.PrincipalAssumedRole},
+		{"アカウントの欄が無い壊れた ARN からロールの ARN を作らない",
+			`{"userIdentity":{"arn":"arn:aws:sts::assumed-role/0"}}`,
+			"arn:aws:sts::assumed-role/0", record.PrincipalUnknown},
 	}
 	for _, tc := range cases {
 		arn, kind := principalOf(parseRaw(t, tc.json))

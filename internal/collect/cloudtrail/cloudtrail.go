@@ -396,6 +396,11 @@ func principalOf(r rawEvent) (string, record.PrincipalKind) {
 		}
 	}
 	if u.ARN != "" {
+		// 決定 (ADR 0040。ファズで見つけた): 知らない種類でも、ARN がセッションの形ならロールに寄せる。
+		// 寄せないと、AWS が新しい種類を足したときにセッション名 (個人名やメール) が主体に残り、セッションごとに新しい主体になる
+		if role := roleARNFromSession(u.ARN); role != "" {
+			return role, record.PrincipalAssumedRole
+		}
 		return u.ARN, record.PrincipalUnknown
 	}
 	if u.AccountID != "" {
@@ -405,14 +410,17 @@ func principalOf(r rawEvent) (string, record.PrincipalKind) {
 }
 
 // roleARNFromSession は arn:aws:sts::ACCT:assumed-role/ROLE/SESSION を arn:aws:iam::ACCT:role/ROLE に変換する。
+// 決定 (ADR 0040。ファズで見つけた): 接頭辞を外してから `:assumed-role/` を探す。先に探すと、アカウントの欄が無い壊れた ARN
+// (arn:aws:sts::assumed-role/x) で接頭辞と重なり、arn:aws:iam::arn:aws:sts::role/x という主体を作っていた。
 func roleARNFromSession(arn string) string {
-	const marker = ":assumed-role/"
-	i := strings.Index(arn, marker)
-	if i < 0 || !strings.HasPrefix(arn, "arn:aws:sts::") {
+	rest, ok := strings.CutPrefix(arn, "arn:aws:sts::")
+	if !ok {
 		return ""
 	}
-	acct := strings.TrimPrefix(arn[:i], "arn:aws:sts::")
-	rest := arn[i+len(marker):]
+	acct, rest, ok := strings.Cut(rest, ":assumed-role/")
+	if !ok {
+		return ""
+	}
 	role, _, _ := strings.Cut(rest, "/")
 	if role == "" {
 		return ""
