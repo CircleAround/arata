@@ -116,6 +116,10 @@ func findingIndex(in *Input) ([]findingRef, map[string]findingRef) {
 //   - 自由文 (rejectLLMText) に URL・メンション・BLOCK に強める記述があれば、その項目を捨てる (finding は規則の行に戻る)。headline ならエラー。
 //   - new / changed / recurred で urgent 以上の finding は info にさせない (confirm に上げ、理由は捨てる)。
 //   - urgent 以上の finding への approve の提案は捨てる (approve は主体を以後報告しなくなるので、誘導されたときの被害が最も大きい)。
+//
+// 決定 (ADR 0040。ファズで見つけた): LLM が任意に増やせる節で本文を埋めさせない。
+//   - incidents は maxIncidents 件まで。1 件の中の同じ finding_id は 1 つにする。
+//   - approve_suggestions は finding 1 件につき 1 つ (2 件目以降は捨てる)。
 func ParseSummary(raw []byte, in *Input, urgent string) (*Summary, error) {
 	b := bytes.TrimSpace(raw)
 	if i, j := bytes.IndexByte(b, '{'), bytes.LastIndexByte(b, '}'); i >= 0 && j > i {
@@ -157,21 +161,29 @@ func ParseSummary(raw []byte, in *Input, urgent string) (*Summary, error) {
 			continue
 		}
 		var ids []string
+		inIncident := map[string]bool{}
 		for _, id := range inc.FindingIDs {
-			if _, ok := byID[id]; ok {
+			if _, ok := byID[id]; ok && !inIncident[id] {
+				inIncident[id] = true
 				ids = append(ids, id)
 			}
 		}
-		if len(ids) > 0 {
-			inc.FindingIDs = ids
-			incidents = append(incidents, inc)
+		if len(ids) == 0 {
+			continue
 		}
+		if len(incidents) == maxIncidents {
+			s.Rejected = append(s.Rejected, "incident: too many")
+			break
+		}
+		inc.FindingIDs = ids
+		incidents = append(incidents, inc)
 	}
 	s.Incidents = incidents
 	sugs := []Suggestion{}
+	suggested := map[string]bool{}
 	for _, sg := range s.ApproveSuggestions {
 		f, ok := byID[sg.FindingID]
-		if !ok {
+		if !ok || suggested[sg.FindingID] {
 			continue
 		}
 		if why := rejectLLMText(sg.Reason); why != "" {
@@ -179,6 +191,7 @@ func ParseSummary(raw []byte, in *Input, urgent string) (*Summary, error) {
 			continue
 		}
 		if !atLeast(f.severity, urgent) {
+			suggested[sg.FindingID] = true
 			sugs = append(sugs, sg)
 		}
 	}
@@ -223,6 +236,12 @@ func (f findingRef) line() string {
 	return l + "\n    id " + Escape(f.id)
 }
 
+// maxIncidents はインシデント候補の上限。finding の数に依らず LLM が増やせる唯一の節なので、件数を規則で止める。
+const maxIncidents = 10
+
+// maxKeptLLMRunes は、本文が上限に収まらないときにも必ず残すインシデント候補と approve の提案の長さ (本文の上限の 2 割ほど)。
+const maxKeptLLMRunes = 800
+
 // LLM の文字列の上限 (文字数 = rune 数。バイト数ではない)。system でも短く書くよう指示しているが、守られなくても書式を崩さないよう組み立て側で切る。
 const (
 	maxReasonRunes   = 200
@@ -241,35 +260,45 @@ const (
 // 件数・取れなかったソース・漏れた finding は規則で書く。
 // 決定: 3,800 文字に収まらなければ、情報の理由文 → 情報の行 (件数だけ残す) → 確認依頼の理由文 の順に削る。
 // 見出し・要対処・インシデント候補・承認の提案・漏れた finding・取れなかったものは削らない。
-// それでも収まらなければ分類の部分 (要対処の行) を末尾から切り、インシデント候補と承認の提案は必ず残す。
+//
+// 決定 (ADR 0040。ファズで見つけた): それでも収まらなければ、緊急の finding と取れなかったものを先に並べ直して、後ろから行の境目で切る。
+// 並びは、漏れた finding のうち urgent 以上 → 取れなかったもの → 分類 (urgent 以上を要対処の先頭に。ADR 0037) → 残りの漏れた finding。
+// インシデント候補と approve の提案は、合わせて maxKeptLLMRunes 文字までなら以前と同じく必ず残し、超えるなら最後に回して切る。
+// 以前は長さに依らず残していたので、LLM がこの節を増やすと規則の行 (緊急の finding) の方が押し出され、本文も上限を超えた。
+// 全文の案内と LLM の注記は必ず残す。
 func SummaryText(in *Input, d Decision, r Rules, warnings []string, s *Summary) string {
 	_, byID := findingIndex(in)
 	lines := head(d.Route, r, "", warnings)
 	lines = append(lines, "*"+Escape(title(in))+"* "+Escape(period(in)), counts(in), Escape(clipRunes(oneLine(s.Headline), maxReasonRunes)))
 	headText := strings.Join(lines, "\n")
 
-	var tail []string
+	var llmTail []string
 	if len(s.Incidents) > 0 {
-		tail = append(tail, "", "*インシデント候補*")
+		llmTail = append(llmTail, "", "*インシデント候補*")
 		for _, inc := range s.Incidents {
-			tail = append(tail, fmt.Sprintf("• %s: %s", Escape(strings.Join(inc.FindingIDs, ", ")), Escape(clipRunes(oneLine(inc.Summary), maxIncidentRunes))))
+			llmTail = append(llmTail, fmt.Sprintf("• %s: %s", Escape(strings.Join(inc.FindingIDs, ", ")), Escape(clipRunes(oneLine(inc.Summary), maxIncidentRunes))))
 		}
 	}
 	if len(s.ApproveSuggestions) > 0 {
-		tail = append(tail, "", "*approve の提案* (提案のみ。aratam は approve しない。人が判断して実行する)")
+		llmTail = append(llmTail, "", "*approve の提案* (提案のみ。aratam は approve しない。人が判断して実行する)")
 		for _, sg := range s.ApproveSuggestions {
-			tail = append(tail, fmt.Sprintf("• %s: %s\n    `arata approve %s --note \"...\"`", Escape(sg.FindingID), Escape(clipRunes(oneLine(sg.Reason), maxReasonRunes)), Escape(sg.FindingID)))
+			llmTail = append(llmTail, fmt.Sprintf("• %s: %s\n    `arata approve %s --note \"...\"`", Escape(sg.FindingID), Escape(clipRunes(oneLine(sg.Reason), maxReasonRunes)), Escape(sg.FindingID)))
 		}
 	}
-	if miss := s.Missing(in); len(miss) > 0 {
-		tail = append(tail, "", "*要約に含まれていなかった指摘* (規則で追加)")
-		for _, f := range miss {
-			tail = append(tail, f.line())
+	miss := s.Missing(in)
+	missing := func(fs []findingRef) string {
+		if len(fs) == 0 {
+			return ""
 		}
+		out := []string{"", "*要約に含まれていなかった指摘* (規則で追加)"}
+		for _, f := range fs {
+			out = append(out, f.line())
+		}
+		return strings.Join(out, "\n")
 	}
-	tail = append(tail, coverageLines(in)...)
-	tail = append(tail, "", "全文: "+Escape(filepath.Join(in.Dir, ReportMD))+"  |  "+LLMNotice)
-	tailText := strings.Join(tail, "\n")
+	llmText, coverage := strings.Join(llmTail, "\n"), strings.Join(coverageLines(in), "\n")
+	footer := "\n全文: " + Escape(filepath.Join(in.Dir, ReportMD)) + "  |  " + LLMNotice
+	tailText := joinNonEmpty(llmText, missing(miss), coverage, footer)
 
 	var body string
 	for level := trimNone; level <= trimConfirmText; level++ {
@@ -278,9 +307,24 @@ func SummaryText(in *Input, d Decision, r Rules, warnings []string, s *Summary) 
 			return text
 		}
 	}
-	// 決定 (ADR 0037): 切り詰めるときは urgent 以上の finding を先頭に回す (低い重大度の「要対処」を並べて押し出させない)
+	var missUrgent, missRest []findingRef
+	for _, f := range miss {
+		if atLeast(f.severity, r.UrgentSeverity) {
+			missUrgent = append(missUrgent, f)
+		} else {
+			missRest = append(missRest, f)
+		}
+	}
+	sort.SliceStable(missUrgent, func(i, j int) bool {
+		return severityRank[missUrgent[i].severity] > severityRank[missUrgent[j].severity]
+	})
 	body = classBody(promoteUrgent(s, byID, r.UrgentSeverity), byID, trimConfirmText)
-	return fit(headText, body, tailText, "…(長いため省略)")
+	// インシデント候補と approve の提案は、短ければ (maxKeptLLMRunes まで) 必ず残す。長ければ最後に回して切る
+	keep, last := joinNonEmpty(llmText, footer), ""
+	if utf8.RuneCountInString(llmText) > maxKeptLLMRunes {
+		keep, last = footer, llmText
+	}
+	return fit(headText, joinNonEmpty(missing(missUrgent), coverage, body, missing(missRest), last), keep, "…(長いため省略)")
 }
 
 // promoteUrgent は urgent 以上の finding を要対処の先頭に並べ替えた Summary を返す。

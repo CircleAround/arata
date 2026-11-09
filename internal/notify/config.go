@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -196,6 +197,9 @@ func (c *Config) Rules(urgentWebhookSet bool) Rules {
 	return r
 }
 
+// maxDurationDays は `d` (日) で書ける上限 (time.Duration に収まる日数)。
+const maxDurationDays = int(math.MaxInt64 / (24 * time.Hour))
+
 // ParseDuration は time.ParseDuration に `d` (日) を加えた形式を解釈する。正の値だけを受ける (arata の設定と同じ書式)。
 func ParseDuration(s string) (time.Duration, error) {
 	if s == "" {
@@ -204,7 +208,8 @@ func ParseDuration(s string) (time.Duration, error) {
 	var d time.Duration
 	if n, ok := strings.CutSuffix(s, "d"); ok {
 		days, err := strconv.Atoi(n)
-		if err != nil {
+		// time.Duration に収まらない日数は桁あふれで別の長さになるので、エラーにする (arata の設定と同じ。ADR 0040)
+		if err != nil || days > maxDurationDays || days < -maxDurationDays {
 			return 0, fmt.Errorf("invalid duration %q", s)
 		}
 		d = time.Duration(days) * 24 * time.Hour
