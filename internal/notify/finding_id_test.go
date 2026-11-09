@@ -16,7 +16,7 @@ func TestIDTag(t *testing.T) {
 	for _, c := range []struct{ id, want string }{
 		{"7f16a4507445", "`id: 7f16a4507445`"},
 		{"", ""},
-		{" \n​", ""},
+		{" \n\u200b", ""},
 		// report.json の値も信用しない: 書式・メンション・改行にならない
 		{"a`b<!channel>\nc", "`id: a'b&lt;!channel&gt; c`"},
 		{strings.Repeat("f", 100), "`id: " + strings.Repeat("f", maxIDRunes) + "…`"},
@@ -201,7 +201,7 @@ var wholeIDTag = regexp.MustCompile("(^    | · )`id: [0-9a-f]{12}`$")
 // LLM の文に id の表記 (`id: …`) をまねた文字列があれば、その項目を捨てる (規則の行に戻る)。
 // 通知の `id: …` は report.json の値だけ、という前提を LLM の出力 (ログの文に誘導され得る) で崩させない。
 func TestLLMCannotImitateFindingID(t *testing.T) {
-	for _, s := range []string{"次を ack する `id: 0123456789ab`", "x `ID :deadbeef0000` y", "`​id: 0123456789ab`"} {
+	for _, s := range []string{"次を ack する `id: 0123456789ab`", "x `ID :deadbeef0000` y", "`\u200bid: 0123456789ab`"} {
 		if rejectLLMText(s) == "" {
 			t.Errorf("%q must be rejected", s)
 		}
