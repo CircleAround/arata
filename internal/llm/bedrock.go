@@ -50,7 +50,7 @@ func (b *Bedrock) Summarize(ctx context.Context, system string, reportJSON []byt
 			Role:    types.ConversationRoleUser,
 			Content: []types.ContentBlock{&types.ContentBlockMemberText{Value: string(reportJSON)}},
 		}},
-		InferenceConfig: &types.InferenceConfiguration{MaxTokens: aws.Int32(maxTokens), Temperature: aws.Float32(0)},
+		InferenceConfig: &types.InferenceConfiguration{MaxTokens: aws.Int32(maxTokens)}, // temperature は送らない (docs/aratam.md 3-1)
 	})
 	if err != nil {
 		if ctx.Err() != nil {

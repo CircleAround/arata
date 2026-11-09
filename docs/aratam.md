@@ -144,7 +144,8 @@ LLM に求める出力:
   ツールも MCP サーバーも使わせず、セッションをディスクに残さない。作業ディレクトリは空の一時ディレクトリ (終わったら消す)。
   子プロセスの環境変数は aratam のものから Webhook の環境変数 (`slack.webhook_env` / `urgent_webhook_env`) を除いて渡す。
   `--output-format json` の `is_error` が真なら失敗。実行ファイルは `llm.command` (空なら PATH の `claude`。cron の PATH が狭い場合に絶対パスで書く)。
-- `bedrock`: SDK の自動再試行は切る (RetryMaxAttempts 1。再試行は共通部分で 1 回までと決めているため重ねない)。温度 0、maxTokens 4096。
+- `bedrock`: SDK の自動再試行は切る (RetryMaxAttempts 1。再試行は共通部分で 1 回までと決めているため重ねない)。maxTokens 4096。
+  決定: `temperature` は送らない (モデルの既定に任せる)。以前は 0 を送っていたが、新しいモデル (例: Claude Haiku 5.5) は Converse の `temperature` を「廃止」として ValidationException で拒否し、要約が毎回失敗して原文の送信になった (2026-11-09、実際の Bedrock で確認)。aratam は判定を LLM に任せず、出力は規則で検証するので、ばらつきは通知の振り分けに影響しない
   stopReason が max_tokens なら失敗 (途中で切れた JSON を検証に回さない)。
 
 ### 3-2. WAF の改善提案 (proposals)

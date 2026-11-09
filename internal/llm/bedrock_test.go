@@ -63,7 +63,7 @@ func TestBedrockConverse(t *testing.T) {
 		t.Fatalf("path %s", path)
 	}
 	got, _ := json.Marshal(map[string]any{"system": body["system"], "messages": body["messages"], "inferenceConfig": body["inferenceConfig"]})
-	want := `{"inferenceConfig":{"maxTokens":4096,"temperature":0},"messages":[{"content":[{"text":"{\"name\":\"acme\"}"}],"role":"user"}],"system":[{"text":"SYSTEM"}]}`
+	want := `{"inferenceConfig":{"maxTokens":4096},"messages":[{"content":[{"text":"{\"name\":\"acme\"}"}],"role":"user"}],"system":[{"text":"SYSTEM"}]}`
 	if string(got) != want {
 		t.Fatalf("request:\n%s\nwant\n%s", got, want)
 	}
