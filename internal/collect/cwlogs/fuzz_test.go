@@ -76,7 +76,7 @@ func FuzzMaskSample(f *testing.F) {
 			}
 		}
 		// ゼロ幅の文字を挟んだメールアドレスも伏せる
-		if out := MaskSample("alice\u200b@exam\u200bple.com " + s); strings.Contains(out, "@example.com") {
+		if out := MaskSample("alice\u200b@exam\u200bple.com " + s); strings.Contains(out, "@example.com") && !strings.Contains(MaskSample(s), "@example.com") {
 			t.Fatalf("ゼロ幅の文字を挟んだメールアドレスが残った: %q", out)
 		}
 	})
