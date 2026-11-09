@@ -40,7 +40,7 @@ func TestDiff(t *testing.T) {
 		return o
 	}
 	existing := func(key, status string, last time.Time, fp string, data map[string]any) store.Finding {
-		return store.Finding{ID: "x-" + key, Check: "c", Key: key, Severity: "high", Status: status, FirstSeen: dormant, LastSeen: last, LastChanged: dormant, Fingerprint: fp, Data: data}
+		return store.Finding{ID: "x-" + key, Check: "c", Key: key, Severity: "high", Status: status, ReportedAt: dormant, FirstSeen: dormant, LastSeen: last, LastChanged: dormant, Fingerprint: fp, Data: data}
 	}
 	cases := []struct {
 		name     string
@@ -65,7 +65,7 @@ func TestDiff(t *testing.T) {
 			existing: []store.Finding{existing("k1", store.FindingOpen, earlier, "high|192.0.2.101", map[string]any{"count": 1})},
 			obs:      []Observation{fpObs("k1", "high|192.0.2.101,192.0.2.102", 1)}, want: map[string]Class{"k1": ClassChanged}, status: map[string]string{"k1": store.FindingOpen}},
 		{name: "open, severity differs → changed", mode: ModeState,
-			existing: []store.Finding{{ID: "x", Check: "c", Key: "k1", Severity: "medium", Status: store.FindingOpen, FirstSeen: dormant, LastSeen: earlier, LastChanged: dormant, Data: map[string]any{"count": 1}}},
+			existing: []store.Finding{{ID: "x", Check: "c", Key: "k1", Severity: "medium", Status: store.FindingOpen, ReportedAt: dormant, FirstSeen: dormant, LastSeen: earlier, LastChanged: dormant, Data: map[string]any{"count": 1}}},
 			obs:      []Observation{obs("k1", 1)}, want: map[string]Class{"k1": ClassChanged}, status: map[string]string{"k1": store.FindingOpen}},
 		{name: "state: open, not observed → resolved", mode: ModeState,
 			existing: []store.Finding{existing("k1", store.FindingOpen, earlier, "", map[string]any{"count": 1})},
@@ -104,7 +104,7 @@ func TestDiff(t *testing.T) {
 			existing: []store.Finding{
 				existing("k1", store.FindingOpen, earlier, "", map[string]any{"count": 1}),
 				existing("k2", store.FindingOpen, earlier, "", map[string]any{"count": 1}),
-				{ID: "o", Check: "other", Key: "k1", Severity: "high", Status: store.FindingOpen, FirstSeen: dormant, LastSeen: earlier, LastChanged: dormant, Data: map[string]any{"count": 1}},
+				{ID: "o", Check: "other", Key: "k1", Severity: "high", Status: store.FindingOpen, ReportedAt: dormant, FirstSeen: dormant, LastSeen: earlier, LastChanged: dormant, Data: map[string]any{"count": 1}},
 			},
 			obs:    []Observation{obs("k1", 1), obs("k3", 1)},
 			want:   map[string]Class{"k1": ClassStillOpen, "k2": ClassResolved, "k3": ClassNew},
@@ -199,7 +199,7 @@ func TestDiffRecurredIgnoresRescan(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			st := newStore(t)
 			ctx := context.Background()
-			f := store.Finding{ID: "x", Check: "c", Key: "k1", Severity: "high", Status: store.FindingOpen, FirstSeen: tc.lastSeen, LastSeen: tc.lastSeen, LastChanged: tc.lastSeen, Fingerprint: "high|192.0.2.101"}
+			f := store.Finding{ID: "x", Check: "c", Key: "k1", Severity: "high", Status: store.FindingOpen, ReportedAt: time.Unix(1, 0), FirstSeen: tc.lastSeen, LastSeen: tc.lastSeen, LastChanged: tc.lastSeen, Fingerprint: "high|192.0.2.101"}
 			if err := st.UpsertFinding(ctx, f); err != nil {
 				t.Fatal(err)
 			}
@@ -287,5 +287,24 @@ func TestDiffEscalation(t *testing.T) {
 				t.Fatalf("next run: %+v %v", res, err)
 			}
 		})
+	}
+}
+
+// 一度も報告していない open (run が途中で止まった) は、ID と初出を保ったまま new に戻す (ADR 0038)。
+func TestDiffUnreportedOpenIsNew(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC)
+	first := now.Add(-time.Hour)
+	if err := st.UpsertFinding(ctx, store.Finding{ID: "x", Check: "c", Key: "k1", Severity: "high", Status: store.FindingOpen, FirstSeen: first, LastSeen: first, LastChanged: first}); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Diff(ctx, st, DiffParams{Check: "c", Mode: ModeEvent, Window: collect.Window{From: now.Add(-24 * time.Hour), To: now}, Now: now, NewID: seqID()},
+		[]Observation{{Check: "c", Key: "k1", Severity: High, Fingerprint: "f"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res) != 1 || res[0].Class != ClassNew || res[0].Finding.ID != "x" || !res[0].Finding.FirstSeen.Equal(first) {
+		t.Fatalf("%+v", res)
 	}
 }

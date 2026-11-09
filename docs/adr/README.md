@@ -61,3 +61,4 @@
 | [0035](0035-supply-chain-ci.md) | サプライチェーンの検査を CI で常に行い、Actions の 7 日待機を強制し、release を権限で分ける | 採用 |
 | [0036](0036-sensitive-info-scan.md) | 公開できない情報の検査は、一般的な秘密を gitleaks、禁止語を secrets の一覧と `tools/wordscan` で行い、CI で常に回す | 採用 |
 | [0037](0037-sast-and-untrusted-log-values.md) | 静的解析を CI で常に回し、ログ由来の値と LLM の出力を信用しない前提で通知を組み立てる | 採用 |
+| [0038](0038-source-catchup-and-reported-after-staging.md) | 失敗したソースはソースごとの位置から追いつき、報告済みの印は出力の準備の後に付ける | 採用 |
