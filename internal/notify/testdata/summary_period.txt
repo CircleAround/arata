@@ -4,11 +4,11 @@
 
 *要約に含まれていなかった指摘* (規則で追加)
 • *[critical]* ルートユーザーの利用 `root_usage` (新規)
-    id f1
+    `id: f1`
 • *[high]* ルートユーザーに MFA が無い `posture` (新規)
-    id f2
+    `id: f2`
 • *[medium]* GuardDuty: Recon (4 回) `guardduty_findings` (変化)
-    id f4
+    `id: f4`
 
 *取れなかった run*
 • daily `partial` 2026-10-07T09:00:00Z

@@ -99,11 +99,11 @@ func TestSummaryMissingFindingsAreAppended(t *testing.T) {
 	}
 	_, missing, _ := strings.Cut(text, "*要約に含まれていなかった指摘* (規則で追加)\n")
 	for _, id := range []string{"f-010", "f-001", "f-003", "f-009"} {
-		if !strings.Contains(missing, "id "+id+" ") {
+		if !strings.Contains(missing, "`id: "+id+"`") {
 			t.Errorf("%s must be appended:\n%s", id, missing)
 		}
 	}
-	if strings.Contains(missing, "id f-002 ") || strings.Contains(missing, "id f-005 ") {
+	if strings.Contains(missing, "`id: f-002`") || strings.Contains(missing, "`id: f-005`") {
 		t.Errorf("classified findings must not be appended:\n%s", missing)
 	}
 }
@@ -215,7 +215,7 @@ func TestSummaryLongResponseKeepsPriorities(t *testing.T) {
 	if res.Exit != ExitOK || utf8.RuneCountInString(text) > MaxTextRunes {
 		t.Fatalf("%+v len %d", res, utf8.RuneCountInString(text))
 	}
-	for _, want := range []string{"見出し", "*要対処*", "id f-009", "*インシデント候補*", "*approve の提案*", "`arata approve f-001 --note \"...\"`", "*取れなかったソース*", "全文: "} {
+	for _, want := range []string{"見出し", "*要対処*", "`id: f-009`", "*インシデント候補*", "*approve の提案*", "`arata approve f-001 --note \"...\"`", "*取れなかったソース*", "全文: "} {
 		if !strings.Contains(text, want) {
 			t.Errorf("%q must remain:\n%s", want, text)
 		}
@@ -227,7 +227,7 @@ func TestSummaryLongResponseKeepsPriorities(t *testing.T) {
 		}
 	}
 	// 情報は件数だけになり、個々の行は出ない
-	if strings.Contains(text, "id f-120 ") || !strings.Contains(text, "*情報* 40 件 (長いため省略)") {
+	if strings.Contains(text, "`id: f-120`") || !strings.Contains(text, "*情報* 40 件 (長いため省略)") {
 		t.Errorf("info must be collapsed:\n%s", text)
 	}
 	if strings.Contains(text, "…(長いため省略)") {

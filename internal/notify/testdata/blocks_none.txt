@@ -11,14 +11,14 @@
 *スキップしたチェック*: login_bruteforce (no http_access source)
 ---
 *まず対応*
-🚨 *summary of arn:aws:iam::1:root|203.0.113.1*
+🚨 *summary of arn:aws:iam::1:root|203.0.113.1* `id: f-002`
 → 封じ込め (侵害の疑い): ルートのパスワードを変える、ルートのアクセスキーがあれば無効化・削除する
-🚨 *summary of arn:aws:iam::1:root|192.0.2.1* (再発)
+🚨 *summary of arn:aws:iam::1:root|192.0.2.1* (再発) `id: f-009`
 → 封じ込め (侵害の疑い): ルートのパスワードを変える、ルートのアクセスキーがあれば無効化・削除する
-🔴 *summary of a-&gt;b* (変化)
+🔴 *summary of a-&gt;b* (変化) `id: f-003`
 → 封じ込め (侵害の疑い): ロールの信頼ポリシーから不審な主体を外す
 ---
 *確認推奨*
-🟠 *summary of 198.51.100.7*
-🟠 *summary of arn:aws:iam::1:user/x*
+🟠 *summary of 198.51.100.7* `id: f-010`
+🟠 *summary of arn:aws:iam::1:user/x* `id: f-001`
 (小) 全文と対処手順: `arata review` ・ `arata help ai playbook <check>` | <dir>/report.md

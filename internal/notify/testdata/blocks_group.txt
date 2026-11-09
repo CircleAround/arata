@@ -9,14 +9,17 @@
 *スキップしたチェック*: login_bruteforce (no http_access source)
 ---
 *まず対応*
-🔴 *GuardDuty: インスタンスの認証情報が AWS の外で使われた*
+🔴 *GuardDuty: インスタンスの認証情報が AWS の外で使われた* `id: g-1`
 → 封じ込め: 資源の種類に合わせる
 ---
 *確認推奨*
 🟠 *MFA の無いコンソールユーザー* 5 人
 `alice` `bob` `carol` `dave` `erin`
+id: `m-0` `m-1` `m-2` `m-3` `m-4`
 🟠 *使われていないアクセスキー* 2 本
 `alice` 469 日 ・ `bob` 120 日
+id: `k-1` `k-2`
 🟠 *新しく観測した主体* 2 件
 `role/vendor-reader` (111122223333) ・ `user/deploy`
+id: `n-1` `n-2`
 (小) 全文と対処手順: `arata review` ・ `arata help ai playbook <check>` | <dir>/report.md

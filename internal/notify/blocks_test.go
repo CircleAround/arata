@@ -141,7 +141,7 @@ func TestBlocksGroupSameCheck(t *testing.T) {
 		"🟠 *MFA の無いコンソールユーザー* 5 人\n`alice` `bob` `carol` `dave` `erin`",
 		"🟠 *使われていないアクセスキー* 2 本\n`alice` 469 日 ・ `bob` 120 日",
 		"🟠 *新しく観測した主体* 2 件\n`role/vendor-reader` (111122223333) ・ `user/deploy`",
-		"🔴 *GuardDuty: インスタンスの認証情報が AWS の外で使われた*\n→ ",
+		"🔴 *GuardDuty: インスタンスの認証情報が AWS の外で使われた* `id: g-1`\n→ ",
 		"🔴 high 1 ・ 🟠 medium 9",
 	} {
 		if !strings.Contains(txt, want) {
@@ -501,8 +501,8 @@ func TestBlocksEndpointAbuse(t *testing.T) {
 	checkLimits(t, m)
 	txt := allText(m)
 	for _, want := range []string{
-		"🟠 *画面への分散した集中* — `signup` 25 IP / 10 分\n→ " + abuseNext,
-		"🟠 *「A のあと B」の連鎖* 2 件\n`signup → post` 12 IP / 10 分 ・ `login → reset` 8 IP / 1 時間\n→ " + abuseNext,
+		"🟠 *画面への分散した集中* — `signup` 25 IP / 10 分 `id: e-1`\n→ " + abuseNext,
+		"🟠 *「A のあと B」の連鎖* 2 件\n`signup → post` 12 IP / 10 分 ・ `login → reset` 8 IP / 1 時間\nid: `e-2` `e-3`\n→ " + abuseNext,
 	} {
 		if !strings.Contains(txt, want) {
 			t.Errorf("missing %q\n%s", want, txt)

@@ -83,7 +83,7 @@
       "type": "section",
       "text": {
         "type": "mrkdwn",
-        "text": "🚨 *summary of arn:aws:iam::1:root|203.0.113.1*\n→ 封じ込め (侵害の疑い): ルートのパスワードを変える、ルートのアクセスキーがあれば無効化・削除する",
+        "text": "🚨 *summary of arn:aws:iam::1:root|203.0.113.1* `id: f-002`\n→ 封じ込め (侵害の疑い): ルートのパスワードを変える、ルートのアクセスキーがあれば無効化・削除する",
         "verbatim": true
       }
     },
@@ -91,7 +91,7 @@
       "type": "section",
       "text": {
         "type": "mrkdwn",
-        "text": "🚨 *summary of arn:aws:iam::1:root|192.0.2.1* (再発)\n→ 封じ込め (侵害の疑い): ルートのパスワードを変える、ルートのアクセスキーがあれば無効化・削除する",
+        "text": "🚨 *summary of arn:aws:iam::1:root|192.0.2.1* (再発) `id: f-009`\n→ 封じ込め (侵害の疑い): ルートのパスワードを変える、ルートのアクセスキーがあれば無効化・削除する",
         "verbatim": true
       }
     },
@@ -99,7 +99,7 @@
       "type": "section",
       "text": {
         "type": "mrkdwn",
-        "text": "🔴 *summary of a-\u0026gt;b* (変化)\n→ 封じ込め (侵害の疑い): ロールの信頼ポリシーから不審な主体を外す",
+        "text": "🔴 *summary of a-\u0026gt;b* (変化) `id: f-003`\n→ 封じ込め (侵害の疑い): ロールの信頼ポリシーから不審な主体を外す",
         "verbatim": true
       }
     },
@@ -118,7 +118,7 @@
       "type": "section",
       "text": {
         "type": "mrkdwn",
-        "text": "🟠 *summary of 198.51.100.7*",
+        "text": "🟠 *summary of 198.51.100.7* `id: f-010`",
         "verbatim": true
       }
     },
@@ -126,7 +126,7 @@
       "type": "section",
       "text": {
         "type": "mrkdwn",
-        "text": "🟠 *summary of arn:aws:iam::1:user/x*",
+        "text": "🟠 *summary of arn:aws:iam::1:user/x* `id: f-001`",
         "verbatim": true
       }
     },

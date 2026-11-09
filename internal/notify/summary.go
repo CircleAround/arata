@@ -227,13 +227,13 @@ func (s *Summary) Missing(in *Input) []findingRef {
 	return out
 }
 
-// line は finding 1 件の行。重大度・概要・チェック名・主要キーは report.json の値を使う (LLM に重大度を変えさせない)。
+// line は finding 1 件の行。重大度・概要・チェック名・主要キー・id は report.json の値を使う (LLM に重大度を変えさせない。id も LLM の出力から取らない)。
 func (f findingRef) line() string {
 	l := fmt.Sprintf("• *[%s]* %s `%s` (%s)", Escape(f.severity), Escape(oneLine(f.summary)), Escape(f.check), f.diff)
 	if f.finding != nil {
-		return l + "\n    " + detail(*f.finding)
+		return withDetail(l, detail(*f.finding))
 	}
-	return l + "\n    id " + Escape(f.id)
+	return withDetail(l, idTag(f.id)) // 期間レポートの events は data を持たない
 }
 
 // maxIncidents はインシデント候補の上限。finding の数に依らず LLM が増やせる唯一の節なので、件数を規則で止める。

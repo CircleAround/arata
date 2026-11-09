@@ -32,7 +32,8 @@ var defaultKeyFields = []string{"count", "ips"}
 // maxListItems はリストの値を何個まで出すか (残りは「他 N」)。
 const maxListItems = 3
 
-// detail は finding の主要キーと id・初出の 1 行。
+// detail は finding の主要キー・初出と、末尾の id の表記 (`id: …`。blocks と同じ。aratam 設計書 3-5 章) の 1 行。何も無ければ空。
+// 値のバッククォートは ' にする (末尾の id のコード表記を崩させない)。
 func detail(f schema.Finding) string {
 	keys, ok := keyFields[f.Check]
 	if !ok {
@@ -53,8 +54,17 @@ func detail(f schema.Finding) string {
 		}
 		parts = append(parts, k+" "+s)
 	}
-	parts = append(parts, fmt.Sprintf("id %s (初出 %s)", f.ID, f.FirstSeen))
-	return Escape(oneLine(strings.Join(parts, " · ")))
+	if f.FirstSeen != "" {
+		parts = append(parts, "初出 "+f.FirstSeen)
+	}
+	var out []string
+	if s := Escape(noTick(oneLine(strings.Join(parts, " · ")))); s != "" {
+		out = append(out, s)
+	}
+	if tag := idTag(f.ID); tag != "" {
+		out = append(out, tag)
+	}
+	return strings.Join(out, " · ")
 }
 
 // valueText は値を短い文字列にする。summary に既に入っている値なら false。
@@ -95,9 +105,17 @@ func valueText(v any, summary string) (string, bool) {
 	}
 }
 
-// findingLines は finding 1 件の 2 行 (重大度・概要・チェック名の行と、主要キーの行)。値は report.json のもの。
+// findingLines は finding 1 件の 2 行 (重大度・概要・チェック名の行と、主要キー・id の行)。値は report.json のもの。
 func findingLines(f schema.Finding) string {
-	return fmt.Sprintf("• *[%s]* %s `%s`\n    %s", Escape(f.Severity), Escape(oneLine(f.Summary)), Escape(f.Check), detail(f))
+	return withDetail(fmt.Sprintf("• *[%s]* %s `%s`", Escape(f.Severity), Escape(oneLine(f.Summary)), Escape(f.Check)), detail(f))
+}
+
+// withDetail は finding の行の下に、字下げした 2 行目を足す (空なら足さない)。
+func withDetail(line, detail string) string {
+	if detail == "" {
+		return line
+	}
+	return line + "\n    " + detail
 }
 
 // RunText は run の report.json から作る通知の本文 (件数が 0 の区分は出さない)。

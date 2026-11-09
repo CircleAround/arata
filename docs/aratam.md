@@ -65,7 +65,7 @@ aratam notify --in /var/lib/arata/out/daily
 - メッセージ: Slack の mrkdwn の本文だけで送る (8 章の未決は「まずは本文だけ」で進める)。
   → 決定 (ADR 0029): Block Kit にした (3-4 章)。ここから下のメッセージの決定は `slack.format: text` のときのもの。
 - メッセージ (`none` と LLM が使えなかったときの原文): run は report.md をそのまま送らず、report.json から短い形を作る。
-  finding 1 件は「重大度・概要・チェック名」の行と「チェックごとの主要キー · id (初出)」の行の 2 行にする
+  finding 1 件は「重大度・概要・チェック名」の行と「チェックごとの主要キー · 初出 · `id: …`」の行の 2 行にする (id の表記は 3-5 章)
   (report.md は data の全キーを列挙するので 1 件が 10 行を超え、Slack では読めない)。主要キーの対応表は `internal/notify/compact.go` の `keyFields`
   (例: unknown_assume_role = caller・count・ips・last_time、new_principal = kind・count・ips・external_account、login_bruteforce = ip・count・date・reason・threshold)。
   対応表に無いチェックは count と ips だけ。summary の文に既に入っている値は繰り返さない (文字列は部分一致、数値は「N 件」「N 回」の形で見る)。リストは 3 個まで。
@@ -232,11 +232,12 @@ LLM に求める出力:
   要約 1〜2 文                             (LLM。none は規則)
   ⚠️ 取れていないもの                       (取れなかったソース・解釈率の警告・スキップ。期間レポートは取れなかった run)
   ── まず対応                               (new / changed / recurred のうち urgent_severity 以上。1 件ずつ)
-  🚨 *<summary>* (再発)
+  🚨 *<summary>* (再発) `id: 7f16a4507445`   (id の表記は 3-5 章)
   → <何をするか>
   ── 確認推奨                           (それ未満。同じチェックは 1 項目)
   🟠 *MFA の無いコンソールユーザー* 5 人
   `alice` `bob` …
+  id: `0a1b2c3d4e5f` `1b2c3d4e5f6a` …       (主体と同じ順に 5 個まで)
   全文と対処手順: `arata review` ・ `arata help ai playbook <check>` | WAF の改善提案は別のメッセージ | <dir>/report.md   (context)
   ```
 
@@ -298,6 +299,33 @@ LLM に求める出力:
 - 静か (`on_quiet: short`): header `✅ arata <profile> — <name>` と 1 行。入力の問題: header `⚠️ arata の出力が無いか古い — <name>`、理由・code・入力のパス
 - `--dry-run`: `--format text` (既定) は人が読む簡易表示 (`[通知] <text>`、header は `# `、divider は `---`、context は `(小) `、fields は ` | ` でつなぐ)。
   `--format json` は Webhook に送る payload そのもの。`--format` は `--dry-run` のときだけ指定できる
+
+### 3-5. finding の ID の表示
+
+通知を見た人や別の仕組みが、指摘を triage (`arata ack / snooze / resolve <ID>`、`examples/github-actions/arata-triage.yml` の `finding_id`) や作業の記録に結びつけられるよう、
+finding を 1 件ずつ出す行に ID を出す。組み立ては `internal/notify/blocks.go` の `idTag` / `groupIDLine`。
+
+- 決定: 表記は `` `id: 7f16a4507445` `` (コード表記)。blocks と text で同じにし、行の末尾に置く (概要より目立たせない。Slack ではコード表記の中身をそのまま写せる)。
+  - blocks の 1 件ずつの項目 (「まず対応」と、「確認推奨」のまとめない項目): 見出しの行の末尾 (`🚨 *<summary>* (再発) `id: …``。「→」の行の前)
+  - text (provider: none・LLM の失敗時の原文・LLM の要約のどれも): 主要キーの行の末尾 (`count 1 · 初出 … · `id: …``)。
+    v0.5.x までは `id <ID> (初出 …)` と書いていたのを、blocks と同じ表記に揃えた。期間レポートの events (data を持たない) は `id: …` だけの行
+  - 却下: 独立した 1 行にする (件数の多い通知が縦に伸びる)、context ブロックにまとめる (どの指摘の ID か分からなくなる)
+- 決定 (まとめた項目): 「確認推奨」で同じチェックを 1 項目にまとめたものは、主体の行の下に「id: `a` `b` …」の 1 行を足す。主体と同じ順で **5 個まで** (`maxGroupIDs`)、
+  残りは「ほか N 件は `arata review`」。主体は 10 個まで並べるが、ID は 12 桁で主体より長く、全部並べると項目の半分が ID になるので少なくした。
+  却下: 主体ごとに `(id)` を添える (主体の一覧が読みにくくなる)、まとめた項目には出さない (まとめた指摘こそ ack することが多い)
+- 決定: 値は report.json の finding の `id` (期間レポートの events は `finding_id`) をそのまま使う。LLM には書かせず、LLM の出力からも取らない。
+  LLM の自由文に id の表記をまねた文字列 (`` `id: `` で始まるコード表記) があれば、その項目を捨てる (`rejectLLMText`。項目は規則の行に戻り、要約・見出しなら形の不正)。
+  通知に出る `id: …` は report.json の値だけ、という前提を、ログの文に誘導された LLM に崩させないため (違う指摘を ack / resolve させない)
+- 決定: report.json の値も信用しない。ID は 1 行にし、32 字で切り (`maxIDRunes`。arata の ID は 12 桁の 16 進)、バッククォートを `'` に置き換えてエスケープする。空なら表記を出さない
+- 決定 (切り詰めで壊さない):
+  - blocks: 項目の見出し・主体の行は 2,000 字で切り (`maxItemLineRunes`)、section の上限 (3,000 字) の切り詰めが ID の表記に届かないようにする。
+    概要 (と text の主要キー) のバッククォートは `'` に置き換える (ログ由来の値の 1 つだけのバッククォートが、後ろの ID のコード表記と組になって崩さないように)
+  - text: 切り詰め (約 3,800 字) は行の境目で行うので、残った ID の行は欠けない。ID の行が増える分は同じ上限の中で、後ろの行から省かれる
+  - 「ほか N 件は `arata review`」に縮めた項目の ID は出さない (`arata review` で引く)
+- 変えないもの: 件数だけの区分 (blocks の解消・未対応・報告済み・情報)、静かな通知、入力の問題の通知 (finding の行が無い)。WAF の改善提案 (finding ではなく、ID を持たない)。
+  期間レポートの text の原文 (provider: none・LLM の失敗時) は arata の report.md を整形して送るので、ID は report.md の書き方 (`id <ID>`) のまま
+- ファズ (`FuzzFindingID`。ADR 0041): ID と同じ行の値がどんな文字列でも、表記が 1 行で閉じている・上限を守る・1 件ずつの項目の ID が欠けない・まとめた項目は 5 個まで。
+  `FuzzParseSummary` / `FuzzParseBlockNotes`: LLM が何を書いても、通知の `id: …` は report.json にある ID だけ
 
 ## 4. 設定
 

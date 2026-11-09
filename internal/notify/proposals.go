@@ -128,6 +128,10 @@ var (
 	llmLink = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://|\bwww\.`)
 	// llmMention は全員への通知の文字列。
 	llmMention = regexp.MustCompile(`(?i)@(channel|here|everyone)\b`)
+	// llmIDTag は finding の id の表記 (`id: …`。blocks.go の idTag) をまねた文字列。
+	// 決定: 通知の id の表記は report.json の値だけにする。LLM の文 (ログの文に誘導され得る) が別の id を同じ表記で書くと、
+	// 読んだ人や仕組みが違う指摘を ack / resolve しかねないので、その項目を捨てる (aratam 設計書 3-5 章)。
+	llmIDTag = regexp.MustCompile("(?i)`\\s*id\\s*:")
 )
 
 // untrustedInputRule は system に足す規則。プロンプトは破られる前提で、守りは規則の検査に置く (ADR 0037)。
@@ -156,6 +160,9 @@ func rejectLLMText(s string) string {
 	}
 	if blockText.MatchString(oneLine(s)) {
 		return "recommends switching to BLOCK"
+	}
+	if llmIDTag.MatchString(oneLine(s)) {
+		return "imitates a finding id"
 	}
 	return ""
 }
