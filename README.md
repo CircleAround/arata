@@ -273,7 +273,7 @@ arata report --from 2026-10-01 --to 2026-12-31 --out /tmp/arata-q4
 
 ### S3 ストア (任意)
 
-GitHub Actions のように毎回消える環境で定期実行するときだけ使います。`dir://` のままなら準備は要りません。 ワークフローの見本と手順は [examples/github-actions](examples/github-actions/README.md) にあります。
+GitHub Actions のように毎回消える環境で定期実行するときだけ使います。`dir://` のままなら準備は要りません。 ワークフローの見本と手順は [examples/github-actions](examples/github-actions/README.md) にあります。OIDC プロバイダ・バケット・実行用ロールは [deploy/github-actions/runner.yaml](deploy/github-actions/runner.yaml) (素の CloudFormation) で置けます。
 
 ```yaml
 store: s3://example-arata-store/my-service

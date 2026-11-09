@@ -918,11 +918,32 @@ arata rebuild   [--from-scratch [--baseline]] [--format text|json]   # raw JSONL
 |---|---|---|
 | オンプレ cron | `cron → arata run → 終了コードと report.json で Slack 投稿 / claude -p で要約` | CircleAround が運用を預かる顧客。監視対象の外で動く |
 | Lambda | `EventBridge Scheduler → arata-lambda (S3 ストア) → SNS` | 顧客アカウント内で完結させたい顧客。**ストアと SNS は別の監査用アカウントか Object Lock バケット**に置き、侵害時に改ざんされにくくする |
-| GitHub Actions | `schedule → arata run (S3 ストア。5-5) → aratam notify` | サーバーを持たずに定期実行したい顧客。ストアのバケットは監査対象とは別のアカウントが望ましい。同時実行は `concurrency:` でも止める (衝突しても後のほうが失敗するだけ)。見本は [examples/github-actions](../examples/github-actions/README.md) |
+| GitHub Actions | `schedule → arata run (S3 ストア。5-5) → aratam notify` | サーバーを持たずに定期実行したい顧客。ストアのバケットは監査対象とは別のアカウントが望ましい。同時実行は `concurrency:` でも止める (衝突しても後のほうが失敗するだけ)。見本は [examples/github-actions](../examples/github-actions/README.md)、実行の仕組みは `deploy/github-actions/runner.yaml` |
 | AgentConsole タイマー | 一時的な追跡のみ | 恒常運用には使わない |
 
 決定 (GitHub Actions の見本): 認証は OIDC の実行用ロール 1 つから分ける。監査は `aws.profile` で読み取り専用ロールへ連鎖し、ストアは `store_profile` を書かず実行用ロールのまま書く (`credential_source` は `role_arn` なしでは使えない)。
 Actions のログには arata / aratam の `level`・`code`・`source` と終了コードだけを出す。`::add-mask::` で値を列挙する案は、監査の結果に何が出るかを列挙できないので採らない。
+
+決定 (GitHub Actions の実行の仕組み。ADR 0040): OIDC プロバイダ・ストアのバケット・実行用ロールは、素の CloudFormation (`deploy/github-actions/runner.yaml`) で 1 コマンドで置く。
+監査対象には `deploy/iam/readonly-role.yaml` を置き、`TrustedPrincipalArn` に実行用ロールを渡す (2 つの `aws cloudformation deploy`。同じアカウントでも別のアカウントでも同じ手順)。
+- 決定: 信頼は `StringEquals` だけで、`aud` = `sts.amazonaws.com` と `sub` = `repo:<リポジトリ>:ref:refs/heads/<ブランチ>` の完全一致。パラメータの `AllowedPattern` がワイルドカードとコロンを拒む。
+  リポジトリは `sub` の `repo:` の部分をそのまま受ける (2026-07-15 より後に作ったリポジトリは `owner@ID/repo@ID` の形になるため、両方の形を受け付ける)
+- 決定: `job_workflow_ref` の条件は任意のパラメータ (`GitHubWorkflowRef`) にし、既定では足さない。AWS は GitHub 固有の条件キーとしてこれを受け付けるが、
+  GitHub の文書は値を「再利用ワークフローへの参照」としか定めておらず、ふつうのワークフローでの値が保証されていない。既定で足すと、文書に無い挙動に定時の監査が依存する。
+  実際のトークンで値を確かめてから、既定にするかを決め直す
+- 決定: 監査ロールの ARN は一覧 (`AuditRoleArns`) で受ける。複数のアカウントを 1 つのリポジトリ・1 つの実行用ロールで監査できる。ワイルドカードは拒む
+- 決定: 権限はストアの `s3:GetObject`・`s3:PutObject` (`StorePrefix` の下。空ならバケット全体)・`s3:ListBucket` (バケット。`s3:prefix` で絞らない。5-5) と、監査ロールへの `sts:AssumeRole` だけ。
+  doctor の `store_actions` と一致することをテストで固定する。削除の権限と、doctor の推奨の確認に使うバケットの設定の読み取りは付けない (doctor は権限が無ければ飛ばす)
+- 決定 (aratam の `provider: bedrock`): 任意のパラメータ `BedrockInferenceProfileArn` を指定したときだけ、`bedrock:InvokeModel` を足す (aratam は Converse を 1 回ずつ呼ぶだけで、ストリーミングは使わない)。
+  対象は、その推論プロファイルと、`bedrock:InferenceProfileArn` がそのプロファイルに完全に一致する基盤モデルの呼び出し。振り分け先のリージョンの基盤モデルは列挙しない
+  (テンプレートから分からず、AWS が足すこともある)。基盤モデルを直接は呼べない。読み取り専用ロールには足さない (Bedrock を呼ぶのは aratam で、arata は読み取り専用のまま)
+- 決定: バケットとバケットポリシーは `Retain` (監査の状態と原本を失わない)。OIDC プロバイダはアカウントに 1 つなので、既存の ARN を渡せば作らず、作ったものも `Retain` (ほかのロールが後から使い始め得る)
+- 決定: バケットは古い版を既定 90 日で消す (SQLite は run のたびに置き換わり、版が増え続ける)。暗号化は SSE-S3 (鍵の管理と費用を足さない)
+- 決定: 説明に日本語を書けるのはパラメータの `Description` まで。IAM の `Description` と `ConstraintDescription` は ASCII にする (後者は日本語がエラーの表示で `?` に化ける。実機で確かめた)
+- 決定: テンプレートの守りは Go のテスト (`internal/engine/runner_template_test.go`) で固定する。cfn-lint は CI に足さない (Python の依存と待機期間の検査が増えるわりに、守りたい性質 (信頼の条件・権限の範囲) は見ない)
+- 決定 (複数のアカウント): 見本は `arata-audit-multi.yml`。アカウントごとに matrix のジョブ・`aws/<名前>/` の設定・ストアの prefix・`concurrency` の group を分ける。
+  監査ロールの ARN は 1 つの secret (名前から引く JSON) にまとめ、step の中で取り出して `::add-mask::` で隠す。`secrets[...]` で動的に選ぶ形は、ジョブにすべての secrets が渡るので採らない。
+  2 つの見本の step は、この取り出しのほかは同じであることをテストで固定する
 aratam は arata の失敗後も動かす (`if: always()`)。実行環境が毎回消えるので report.json が無く、`max_age` を待たずに緊急用に届く。`waf-proposals.md` は実行環境と一緒に消えるのでストアの `reports/` に置く。artifacts はリポジトリを読める人に見えるので使わない。
 
 LLM 要約は `arata help ai report` (バイナリに埋め込んだ手順) に従い、`report.json` を入力に「新規 / 変化 / 再発 / 解消 / 未対応 / 取れなかったもの」の順で書く。

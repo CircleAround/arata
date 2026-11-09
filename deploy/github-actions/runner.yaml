@@ -1,0 +1,242 @@
+# GitHub Actions で arata を動かす「実行の仕組み」(arata を動かす側のアカウントに置く)。
+#
+# 作るもの:
+#   - GitHub の OIDC プロバイダ (token.actions.githubusercontent.com)。アカウントに 1 つだけなので、既にあれば OIDCProviderArn に渡す (作らない)
+#   - ストアのバケット (バージョニング・既定の暗号化・パブリックアクセスブロック・TLS 必須)。スタックを消しても残す
+#   - 実行用ロール。信頼は 1 つのリポジトリの 1 つのブランチだけ (sub の完全一致)。
+#     権限はストアの読み書き (s3:GetObject / s3:PutObject / s3:ListBucket) と、監査対象の読み取り専用ロールの引き受けだけ
+#   - (任意) aratam の provider: bedrock 用に、指定した推論プロファイルを通した bedrock:InvokeModel
+#
+# - 監査対象と同じアカウントでも別のアカウントでも使える。監査対象には ../iam/readonly-role.yaml を置き、
+#   その TrustedPrincipalArn にこのスタックの出力 RunnerRoleArn を渡す (先にこのスタック、次に読み取り専用ロール)
+# - CDK を使わずに置けるよう素の CloudFormation にしている (cdk bootstrap が要らない。ADR 0040)
+# - 守り (信頼の条件・権限の範囲・Retain・公開ブロック) は internal/engine/runner_template_test.go が固定する
+# - 手順は examples/github-actions/README.md。例の値はすべて架空
+#
+# 例:
+#   aws cloudformation deploy --stack-name arata-runner --template-file runner.yaml \
+#     --capabilities CAPABILITY_NAMED_IAM \
+#     --parameter-overrides GitHubRepository=example-org/security-audit \
+#       AuditRoleArns=arn:aws:iam::123456789012:role/arata-readonly
+AWSTemplateFormatVersion: '2010-09-09'
+Description: arata runner for GitHub Actions (OIDC provider, store bucket, runner role)
+
+Parameters:
+  GitHubRepository:
+    Type: String
+    # ワイルドカードとコロンを受け付けない (sub を広げさせない)
+    AllowedPattern: '^[A-Za-z0-9-]+(@\d+)?/[A-Za-z0-9._-]+(@\d+)?$'
+    ConstraintDescription: must be owner/repo or owner@OWNER_ID/repo@REPO_ID (no wildcards)   # ASCII だけ (日本語はエラーの表示で ? に化ける)
+    Description: >-
+      実行を許すリポジトリ。OIDC トークンの sub の repo: の部分と同じ形で書く。
+      従来の形は example-org/security-audit。2026-07-15 より後に作った (または名前を変えた・移した) リポジトリは
+      ID 入りの example-org@1234567/security-audit@7654321
+  GitHubBranch:
+    Type: String
+    Default: main
+    AllowedPattern: '^[A-Za-z0-9._/-]+$'
+    ConstraintDescription: must be a single branch name (no wildcards)
+    Description: 実行を許すブランチ。定時実行は既定のブランチで動く
+  GitHubWorkflowRef:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^[A-Za-z0-9-]+/[A-Za-z0-9._-]+/\.github/workflows/[A-Za-z0-9._-]+\.ya?ml@refs/heads/[A-Za-z0-9._/-]+$'
+    ConstraintDescription: must be owner/repo/.github/workflows/FILE.yml@refs/heads/BRANCH (no wildcards)
+    Description: >-
+      (任意) 実行を許すワークフローのファイル。OIDC トークンの job_workflow_ref と完全に一致させる
+      (例 example-org/security-audit/.github/workflows/arata-audit.yml@refs/heads/main)。空なら条件を足さない
+  OIDCProviderArn:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^arn:aws[a-z-]*:iam::\d{12}:oidc-provider/token\.actions\.githubusercontent\.com$'
+    Description: 既にある GitHub の OIDC プロバイダの ARN。空ならこのスタックが作る (アカウントに 1 つしか作れない)
+  AuditRoleArns:
+    Type: CommaDelimitedList
+    # 一覧の各値に一致させる。ワイルドカードを受け付けない (引き受けられる先を広げさせない)
+    AllowedPattern: '^arn:aws[a-z-]*:iam::\d{12}:role/[\w+=.@/-]+$'
+    ConstraintDescription: must be a comma-separated list of IAM role ARNs (no wildcards)
+    Description: 監査対象の読み取り専用ロール (readonly-role.yaml) の ARN。複数のアカウントを監査するならカンマ区切り
+  StoreBucketName:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+    Description: ストアのバケットの名前。空なら CloudFormation が付ける
+  StorePrefix:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$'
+    Description: >-
+      実行用ロールが読み書きできる prefix (前後に / を付けない)。空ならバケット全体。
+      複数のアカウントを監査するなら空にして、arata.yaml の store でアカウントごとの prefix を使う
+  NoncurrentVersionDays:
+    Type: Number
+    Default: 90
+    MinValue: 1
+    Description: 古い版のオブジェクトを消すまでの日数 (SQLite は run のたびに置き換わり、版が増え続けるため)
+  BedrockInferenceProfileArn:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^arn:aws[a-z-]*:bedrock:[a-z0-9-]+:\d{12}:(application-)?inference-profile/[A-Za-z0-9._:-]+$'
+    ConstraintDescription: must be the ARN of a Bedrock inference profile or application inference profile (no wildcards)
+    Description: >-
+      (任意) aratam の llm.provider: bedrock で使う推論プロファイルの ARN
+      (例 arn:aws:bedrock:ap-northeast-1:123456789012:inference-profile/<推論プロファイル ID>)。
+      空なら Bedrock の権限を足さない (provider: none のとき)
+  RoleName:
+    Type: String
+    Default: arata-runner
+    AllowedPattern: '[\w+=,.@-]{1,64}'
+    Description: 作る実行用ロールの名前
+
+Conditions:
+  CreateOIDCProvider: !Equals [!Ref OIDCProviderArn, '']
+  HasWorkflowRef: !Not [!Equals [!Ref GitHubWorkflowRef, '']]
+  HasStoreBucketName: !Not [!Equals [!Ref StoreBucketName, '']]
+  HasStorePrefix: !Not [!Equals [!Ref StorePrefix, '']]
+  HasBedrockInferenceProfile: !Not [!Equals [!Ref BedrockInferenceProfileArn, '']]
+
+Resources:
+  # アカウントで共有されるので、スタックを消しても残す (ほかのロールが後から使い始めているかもしれない)。
+  # ThumbprintList は書かない (省略できる。IAM が証明書を確かめる)
+  GitHubOIDCProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateOIDCProvider
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+
+  # 監査の状態 (findings・承認・ack) と原本が入るので、スタックを消しても残す。arata 専用にする
+  StoreBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !If [HasStoreBucketName, !Ref StoreBucketName, !Ref AWS::NoValue]
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-noncurrent-versions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: !Ref NoncurrentVersionDays
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+
+  StoreBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Bucket: !Ref StoreBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource:
+              - !GetAtt StoreBucket.Arn
+              - !Sub ${StoreBucket.Arn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+
+  RunnerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref RoleName
+      Description: arata runner for GitHub Actions (store bucket read/write and AssumeRole to the read-only audit roles)
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If [CreateOIDCProvider, !Ref GitHubOIDCProvider, !Ref OIDCProviderArn]
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              # すべて完全一致 (StringLike を使わない)
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubRepository}:ref:refs/heads/${GitHubBranch}
+                token.actions.githubusercontent.com:job_workflow_ref: !If [HasWorkflowRef, !Ref GitHubWorkflowRef, !Ref AWS::NoValue]
+      Policies:
+        - PolicyName: arata-runner
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: AssumeAuditRoles
+                Effect: Allow
+                Action: sts:AssumeRole
+                Resource: !Ref AuditRoleArns
+              # 条件付きの書き込み (If-Match) にも s3:GetObject が要る。削除の権限は付けない
+              - Sid: StoreObjects
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !If
+                  - HasStorePrefix
+                  - !Sub ${StoreBucket.Arn}/${StorePrefix}/*
+                  - !Sub ${StoreBucket.Arn}/*
+              # s3:prefix で絞らない。ListBucket が無いと、無いキーが 404 ではなく 403 になり、arata が「まだ無い」と区別できない
+              - Sid: StoreList
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt StoreBucket.Arn
+              # aratam の provider: bedrock (Converse を 1 回ずつ呼ぶだけ。要るのは bedrock:InvokeModel だけで、ストリーミングは使わない)。
+              # 推論プロファイルを呼ぶには、プロファイル自身と、それが振り分ける先の各リージョンの基盤モデルの両方に権限が要る。
+              # 振り分け先はテンプレートから分からない (AWS が足すこともある) ので、基盤モデルは Resource で列挙せず、
+              # 「このプロファイルを通した呼び出し」(bedrock:InferenceProfileArn の完全一致) で絞る。基盤モデルを直接は呼べない。
+              # グローバルのプロファイルの基盤モデルはリージョンが空の ARN なので、リージョンは * (空にも一致する)
+              - !If
+                - HasBedrockInferenceProfile
+                - Sid: BedrockInferenceProfile
+                  Effect: Allow
+                  Action: bedrock:InvokeModel
+                  Resource: !Ref BedrockInferenceProfileArn
+                - !Ref AWS::NoValue
+              - !If
+                - HasBedrockInferenceProfile
+                - Sid: BedrockModelsThroughTheProfile
+                  Effect: Allow
+                  Action: bedrock:InvokeModel
+                  Resource: !Sub arn:${AWS::Partition}:bedrock:*::foundation-model/*
+                  Condition:
+                    StringEquals:
+                      bedrock:InferenceProfileArn: !Ref BedrockInferenceProfileArn
+                - !Ref AWS::NoValue
+
+Outputs:
+  RunnerRoleArn:
+    Description: ワークフローの secrets (ARATA_RUNNER_ROLE_ARN) と、readonly-role.yaml の TrustedPrincipalArn に使う
+    Value: !GetAtt RunnerRole.Arn
+  StoreBucketName:
+    Description: ストアのバケットの名前
+    Value: !Ref StoreBucket
+  StoreUrl:
+    Description: arata.yaml の store とワークフローの ARATA_STORE_URL に書く値 (StorePrefix が空なら、この下に prefix を足して使う)
+    Value: !If
+      - HasStorePrefix
+      - !Sub s3://${StoreBucket}/${StorePrefix}
+      - !Sub s3://${StoreBucket}
+  OIDCProviderArn:
+    Description: GitHub の OIDC プロバイダの ARN (このスタックが作ったか、渡されたもの)
+    Value: !If [CreateOIDCProvider, !Ref GitHubOIDCProvider, !Ref OIDCProviderArn]

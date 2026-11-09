@@ -39,7 +39,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: go run ./tools/actionsgate -days 7 -lock .github/workflows/actions.lock .github/workflows examples/github-actions
       - name: actionlint
-        run: go run "${ACTIONLINT/@//cmd/actionlint@}" .github/workflows/*.yml examples/github-actions/arata-audit.yml
+        run: go run "${ACTIONLINT/@//cmd/actionlint@}" .github/workflows/*.yml examples/github-actions/*.yml
       # ロックファイルが古い・壊れている・上流と合わないときに落ちる。無いときは読み飛ばす
       - name: workflow lockfile
         env:
@@ -70,7 +70,7 @@ jobs:
       - name: zizmor
         env:
           GH_TOKEN: ${{ github.token }}   # 固定した commit の偽装や既知の脆弱な action を調べるオンラインの検査に使う
-        run: '"$RUNNER_TEMP/zizmor" --config .github/zizmor.yml . examples/github-actions/arata-audit.yml'
+        run: '"$RUNNER_TEMP/zizmor" --config .github/zizmor.yml . examples/github-actions/arata-audit.yml examples/github-actions/arata-audit-multi.yml'
 
   # 依存の既知の脆弱性。Go は呼び出し経路まで見る govulncheck、deploy/sandbox の pnpm の依存は osv-scanner
   vulnerabilities:
