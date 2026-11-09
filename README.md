@@ -68,7 +68,7 @@ cron では arata の後につなぐ。同じ run は `.aratam-notified` で二�
 `SHA256SUMS` とバイナリごとの SBOM (`<バイナリ名>.spdx.json`、SPDX JSON) と共に [GitHub Releases](https://github.com/CircleAround/arata/releases) に添付する。
 
 ```sh
-VERSION=v0.2.0                      # 使う版
+VERSION=v0.5.0                      # 使う版
 ARCH=arm64                          # amd64 なら amd64
 BASE=https://github.com/CircleAround/arata/releases/download/${VERSION}
 curl -sSLO "${BASE}/arata-linux-${ARCH}" -O "${BASE}/SHA256SUMS"
@@ -78,7 +78,6 @@ arata --version
 # aratam も同じ手順 (aratam-linux-${ARCH})
 ```
 
-非公開リポジトリの間は `gh release download "${VERSION}" -R CircleAround/arata -p "arata-linux-${ARCH}" -p SHA256SUMS` で取得する。
 リリースの作り方: main で `git tag -a v0.2.0 -m "..." && git push origin v0.2.0` (タグ名がそのまま `arata --version` に入る)。
 
 ### 来歴の検証 (build provenance attestation)
@@ -91,7 +90,7 @@ gh attestation verify "arata-linux-${ARCH}" -R CircleAround/arata \
   --signer-workflow CircleAround/arata/.github/workflows/release.yml
 ```
 
-**非公開リポジトリの間は来歴証明は付かない** (attestation のステップはスキップされる)。その間は上の `SHA256SUMS` で照合する。
+**v0.5.0 までの版には来歴証明が付いていない** (リポジトリが非公開の間に作ったため、attestation のステップはスキップされた)。それらの版は上の `SHA256SUMS` で照合する。2026-11-09 の公開の後に作る版から付く。
 
 ## 開発
 

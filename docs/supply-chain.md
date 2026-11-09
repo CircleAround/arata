@@ -61,7 +61,7 @@ Dependabot は onboard 済みのワークフローの action を上げるとき�
 
 ## GitHub の画面で人が行う設定
 
-コードで担保できないもの。2026-11-09 に API (`gh api`) で 1〜5・8 を設定した (非公開のうち)。確かめるときは `gh api repos/CircleAround/arata/rulesets` などで読める。
+コードで担保できないもの。2026-11-09 に API (`gh api`) で 1〜5・8 を設定し、同日にリポジトリを公開した。公開の後に、fork の PR の承認 (5) と private vulnerability reporting (8) を有効にした。PR を作れるのは協力者 (書き込み権限のある人) だけにしている (`pull_request_creation_policy`)。確かめるときは `gh api repos/CircleAround/arata/rulesets` などで読める。
 
 1. **ブランチ保護 (main)**: ruleset「main を守る」。PR 必須、force push と削除の禁止、bypass なし (管理者にも適用)。
    決定: レビューの件数は 0。開発は 1 つのアカウントで PR を作りマージするので、自分の PR は承認できず、1 件以上にするとマージできなくなる。人の確認はリーダーのレビューと実データでの確認で担保し、メンバーが増えたら必須にする
@@ -74,10 +74,10 @@ Dependabot は onboard 済みのワークフローの action を上げるとき�
    - 「Require actions to be pinned to a full-length commit SHA」: 有効
    - 許可する action: GitHub 製 (`actions/*`・`github/*`) と `ossf/scorecard-action@*` だけ。action を足すときはここにも足す (足さないとワークフローが起動しない)
    - `GITHUB_TOKEN` の既定は read-only、「Actions が PR を作成・承認する」は無効
-   - (公開時) fork の PR の実行を「すべての外部の貢献者に承認を要求」にする
+   - fork の PR の実行は「すべての外部の貢献者に承認を要求」
 6. **Require lockfile ポリシー**: 未設定。Dependabot の最初の更新 PR で lock が正しく更新されるのを確かめてから Active にする。Evaluate モードは Enterprise Cloud のみ
 7. **CODEOWNERS**: 見送り。レビューの件数が 0 の間は強制力が無く、個人のハンドル名は書かない規則 (CLAUDE.md) なので、メンバーが増えて必須レビューにするときに arata 専用のチームを作って `.github/` と `actions.lock` などに書く
-8. **Dependabot alerts / security updates**: 有効。(公開時) private vulnerability reporting を有効にする (非公開のリポジトリでは API が 404 を返す)
+8. **Dependabot alerts / security updates**: 有効。private vulnerability reporting も有効 (非公開のリポジトリでは API が 404 を返すので、公開の後に設定した。窓口は `SECURITY.md`)
 9. **公開後の確認**: 最初のリリースで `gh attestation verify` が通ること、`scorecard` と CodeQL が動くこと
 
 ## 道具の版を上げる

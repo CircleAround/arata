@@ -110,7 +110,6 @@ slack:
 | `ARATA_AUDIT_ROLE_ARN` | 読み取り専用ロールの ARN |
 | `ARATAM_SLACK_WEBHOOK` | 通常用の Webhook |
 | `ARATAM_SLACK_URGENT_WEBHOOK` | 緊急用の Webhook |
-| `ARATA_RELEASE_TOKEN` | arata のリポジトリが非公開の間だけ。そのリポジトリの Contents: read だけの fine-grained token |
 
 ### 7. 初回の収集は手元で
 
