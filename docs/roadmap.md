@@ -32,6 +32,12 @@
    - 中心: バイナリに雛形とテンプレートを入れ、`arata scaffold github-actions` (名前は仮) で書き出す。バイナリの版と雛形の版が必ず揃い、`config init --diff` のように新しい版との差分も見せられる
    - 同じテンプレートを Release にも添付する (来歴証明と `SHA256SUMS` で本物か確かめられる)
    - 利用者が増えたら、取得と照合をまとめた action (`setup-arata` など) を足す。ワークフロー全体の共有 (reusable workflow) は OIDC の信頼の条件が arata 側のワークフローになり分かりにくいので採らない
+   - LLM のエージェント向けのスキルを書き出す: 例 `arata scaffold skill` で、Claude Code などのエージェントのスキル (SKILL.md) を利用者のリポジトリに書き出す。
+     `help ai` は、読めと言われないと読まれない。スキルなら、関係する作業で自動的に読み込まれる。
+     中身は薄くする: いつ使うか (description)、最初に `arata help ai` をその版のバイナリで読むこと、守る規則の数行
+     (LLM は approve・ack を実行しない、承認は allowlist の PR、監査対象に書き込まない、実行環境のチェックリスト `arata help ai runtime` への参照) だけ。
+     手順の本文は写さない (バイナリの版と食い違わないように。本文の正は `help ai`)。
+     書き出した版をスキルに記し、`config init --diff` と同じように版の違いを確かめられるようにする案
    - GitHub のテンプレートリポジトリは作らない (作った後の更新が利用者に届かず、書き出しと中身が二重になる)。作るなら書き出しを置いただけの薄いもの
 5. **v0.5.1**: 公開してから最初のリリース (来歴証明が初めて付く)。3 と 1 が入ったら
 
@@ -41,6 +47,9 @@
 |---|---|---|---|
 | 高 | GuardDuty High の hourly 化 | 週次の `guardduty_findings` とは別に、High 以上の新規 finding を hourly で拾う | 週次のスナップショットと二重に鳴らない設計が要る (ADR 0015) |
 | 高 | ConsoleLogin の失敗 | コンソールのサインイン失敗 (errorCode ではなく responseElements に出る) を主体・送信元ごとに数える | root のサインインは root_usage が扱う。access_denied とは別の仕組み |
+| 高 | `secret_access` の一括読み出し | 起動時に秘匿値をまとめて読む主体 (ECS の実行ロールなど) は、読まない日が 0 件と数えられて中央値が 0 のままになり、デプロイの日ごとに high になる。判定を改良する (読んだ日だけの中央値、allowlist で主体 × 秘匿値ごとの想定件数など) | 承認 (`secrets_access`) では止められず、ack だと以後の一括読み出しも隠れる。ADR 0027 の判定を変えるので ADR を足す |
+| 中 | 実行の仕組みのテンプレートを GitHub の environment に対応させる | `runner.yaml` に environment の名前のパラメータを足し、`sub` を `repo:...:environment:<名前>` の形でも受ける。secrets を environment に置き、デプロイできるブランチを main に限れるようにする | 見本の README「実行するリポジトリと環境を堅くする」の 5。environment の形ではブランチが `sub` から消えるので、`ref` の条件キーを足すか、`sub` の組み立ての変更 (リポジトリの OIDC の設定) で両方を入れられるかを実際のトークンで確かめる。ADR 0040 を新しい ADR で置き換える |
+| 中 | aratam の通知の末尾のパス | 通知の末尾に `--in` の report.md のパスを出しているが、GitHub Actions ではランナーの一時ディレクトリのパスで、読む人に意味がない。出し方を見直す (設定で表示する場所を渡す、ストアの `reports/` を案内する、出さない、など) | WAF の提案の全文 (`waf-proposals.md`) のパスも同じ |
 | 中 | allowlist の雛形共有 | 監査対象をまたいで共通になる承認 (開発会社の switch role、CDK の bootstrap ロール `cdk-hnb659fds-*` など) | 設計書 11 章の未決。CDK を使うアカウントでは deploy のたびに unknown_assume_role / iam_changes が出る |
 | 中 | ack / snooze / resolve の理由と操作した人の記録 | `--by` / `--reason` を足し、ストア (findings か finding_events) に残して report / review に出す | ADR 0042 で見送り。今は GitHub Actions の見本 (`arata-triage.yml`) が実行の Summary に残すだけで、保持期間で消える。スキーマの変更と移行、S3 ストアの互換が要る |
 | 中 | `allowlist_stale` | 承認済みの主体で長く観測が無いものを棚卸しとして報告 | weekly / info。承認の期限 (`expires`) との関係を整理 |
@@ -52,7 +61,6 @@
 | 低 | `openai-api` プロバイダ | Chat Completions を `net/http` で | `docs/aratam.md` 3-1 章 |
 | 低 | Lambda ハンドラ | `s3://` ストア (ADR 0034) の上に Lambda で動かす | 設計書 9 章。cron で回す運用なら後回し |
 | 低 | 国判定 | IP → 国。MaxMind 同梱か GuardDuty 頼みか | 設計書 11 章の未決 |
-| 低 | 入口スキル | LLM 実行環境に置く数行のスキル (「最初に `arata help ai` を読む」) | 配布先は利用者側のリポジトリ |
 
 ## 4. 未決の判断 (利用者側に確認する)
 

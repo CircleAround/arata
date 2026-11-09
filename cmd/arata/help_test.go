@@ -37,6 +37,8 @@ func TestHelpAI(t *testing.T) {
 		{[]string{"ai"}, ""},
 		{[]string{"help", "ai", "report"}, "report"},
 		{[]string{"ai", "approve"}, "approve"},
+		{[]string{"help", "ai", "runtime"}, "runtime"},
+		{[]string{"ai", "runtime"}, "runtime"},
 		{[]string{"help", "ai", "playbook"}, "playbook"},
 		{[]string{"ai", "playbook"}, "playbook"},
 		{[]string{"help", "ai", "playbook", "root_usage"}, "playbook root_usage"},

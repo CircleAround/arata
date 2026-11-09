@@ -27,16 +27,16 @@ const rootLong = `arata は AWS のログと設定を定期的に改め、前回
 新しい版との差分は arata config init --diff で確かめる。設定と allowlist.yaml の形だけなら arata config check (AWS に繋がない)。
 
 AI (LLM) から使う場合は ` + "`arata help ai`" + ` を最初に読んでください (report の読み方は ` + "`arata help ai report`" + `、承認判断は ` + "`arata help ai approve`" + `、
-チェックごとの対処手順は ` + "`arata help ai playbook <check>`" + `)。`
+チェックごとの対処手順は ` + "`arata help ai playbook <check>`" + `、GitHub Actions で動かす環境を作る・見直すときは ` + "`arata help ai runtime`" + `)。`
 
 // newAICmd は AI 向けの文書を出すトップレベルのコマンド。`arata help ai [topic]` も同じものを出す。
 // 決定: help の下に置くとコマンド一覧に出ないので、トップレベルの ai として一覧に見せる。
 func newAICmd(d *Deps) *subcmd.Command {
 	var format string
 	cmd := &subcmd.Command{
-		Use:   "ai [report|approve|playbook [check]]",
+		Use:   "ai [report|approve|runtime|playbook [check]]",
 		Short: "AI (LLM) 向けの使い方 (arata help ai と同じ。最初に読む)",
-		Long:  "AI (LLM) 向けの使い方を出す。トピック: (なし) 全体像 / report report.json の読み方と要約の手順 / approve 承認判断の基準 /\nplaybook チェックごとの対処手順の一覧 (playbook <check> で本文)。\n--format json で {topic, title, sections: [{title, body}]} を返す。",
+		Long:  "AI (LLM) 向けの使い方を出す。トピック: (なし) 全体像 / report report.json の読み方と要約の手順 / approve 承認判断の基準 /\nruntime GitHub Actions で動かす利用者の環境 (リポジトリの設定・OIDC の信頼・context_file の下書き) のチェックリスト /\nplaybook チェックごとの対処手順の一覧 (playbook <check> で本文)。\n--format json で {topic, title, sections: [{title, body}]} を返す。",
 		Args:  subcmd.MaximumNArgs(2),
 		Run: func(ctx context.Context, args []string) error {
 			return writeAIDoc(d.Stdout, strings.Join(args, " "), format)
@@ -73,7 +73,7 @@ func newHelpCmd(d *Deps, root *subcmd.Command) *subcmd.Command {
 		Run: func(ctx context.Context, args []string) error {
 			if len(args) > 0 && args[0] == "ai" {
 				if len(args) > 3 {
-					return errors.New("usage: arata help ai [report|approve|playbook [check]]")
+					return errors.New("usage: arata help ai [report|approve|runtime|playbook [check]]")
 				}
 				return writeAIDoc(d.Stdout, strings.Join(args[1:], " "), format)
 			}

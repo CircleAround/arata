@@ -46,6 +46,7 @@ LLM の役割は「危険の判定を代行する」ことではなく「人が�
 | `arata approve <id> --note ... [--expires] [--tag] [--commit]` | allowlist に追記し finding を解消 | **しない** (人に提案する) |
 | `arata ack / snooze --until / resolve <id>` | finding の状態を変える | 人の指示があれば |
 | `arata help ai playbook [<check>]` | チェックごとの対処手順 | よい (読み取りのみ) |
+| `arata help ai runtime` | GitHub Actions で動かす環境 (リポジトリの設定・OIDC の信頼・secrets) のチェックリストと、`context_file` の下書きの手順 | よい (読み取りのみ) |
 
 ## 終了コード
 
@@ -120,4 +121,6 @@ secrets_access:                   # 主体 × 読んでよい秘匿値 (名前�
 - `arata help ai report`: report.json の構造と要約の手順
 - `arata help ai approve`: 承認判断の基準
 - `arata help ai playbook <check>`: チェックごとの対処手順 (確かめる順番・判断の分かれ目・対処の選択肢)。一覧は `arata help ai playbook`
+- `arata help ai runtime`: 利用者の環境 (GitHub Actions で動かすリポジトリ) を作る・見直すときのチェックリスト。
+  環境を作るときは、aratam の `llm.context_file` (監査対象の前提) の下書きまで行う (手順は同じ文書。マージは人)
 - `--format json` を付けると `{topic, sections: [{title, body}]}` で受け取れる

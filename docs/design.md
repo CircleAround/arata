@@ -967,13 +967,22 @@ Actions のログには arata / aratam の `level`・`code`・`source` と終了
 - 決定 (複数のアカウント): 見本は `arata-audit-multi.yml`。アカウントごとに matrix のジョブ・`aws/<名前>/` の設定・ストアの prefix・`concurrency` の group を分ける。
   監査ロールの ARN は 1 つの secret (名前から引く JSON) にまとめ、step の中で取り出して `::add-mask::` で隠す。`secrets[...]` で動的に選ぶ形は、ジョブにすべての secrets が渡るので採らない。
   2 つの見本の step は、この取り出しのほかは同じであることをテストで固定する
+- 決定 (利用者のリポジトリの前提): 監査のリポジトリの守り (非公開・fork の禁止、fork の PR と `pull_request_target` を使わない、ID 入りの `sub`、main の保護、
+  書き込み権限の最小化、Actions の許可リストと SHA 固定) を、見本の README「実行するリポジトリと環境を堅くする」と `arata help ai runtime` (LLM が点検するときのチェックリスト) に書く。
+  `sub` を 1 つのブランチに絞っているので「main に入れられる人 = 実行用ロールを使える人」になり、main の保護が権限の境界になる。
+  確かめる `gh api` は読み取りだけを載せ、設定を変えるのは人とする (テストが書き込みの例を拒む)。
+  見本が前提を満たすこと (secrets か OIDC を使う見本は定時と手動だけ、action は 2 つだけ、environment を使わない) はテストで固定する
+- 決定 (secrets と environment): リポジトリの secrets は書き込み権限のある人なら別のブランチのワークフローで読み出せる。読み出されて困るのは Webhook で、
+  ロールの ARN は `sub` が合わないので引き受けられない。GitHub の environment に置いてデプロイできるブランチを main に限る案は、ジョブの `sub` が
+  `repo:...:environment:<名前>` に変わり (ブランチが `sub` から消える)、今の `runner.yaml` では引き受けられないので、いまは採らない (ADR 0040 のまま)。
+  テンプレートの対応はロードマップに残し、それまでは書き込み権限を持つ人を最小にすることで守る
 aratam は arata の失敗後も動かす (`if: always()`)。実行環境が毎回消えるので report.json が無く、`max_age` を待たずに緊急用に届く。`waf-proposals.md` は実行環境と一緒に消えるのでストアの `reports/` に置く。artifacts はリポジトリを読める人に見えるので使わない。
 
 LLM 要約は `arata help ai report` (バイナリに埋め込んだ手順) に従い、`report.json` を入力に「新規 / 変化 / 再発 / 解消 / 未対応 / 取れなかったもの」の順で書く。
 approve は人の判断を経て実行する。
 
 決定 (LLM 向けの使い方の配り方。ADR 0012): skill ファイル (`skills/aws-audit/SKILL.md`) を別に配る案は取りやめ、`docs/ai/*.md` を embed で
-バイナリに入れて `arata help ai` / `arata help ai report` / `arata help ai approve` で出す (`--format json` で `{topic, title, sections: [{title, body}]}`)。
+バイナリに入れて `arata help ai` / `arata help ai report` / `arata help ai approve` / `arata help ai runtime` (利用者の環境のチェックリスト) で出す (`--format json` で `{topic, title, sections: [{title, body}]}`)。
 組み込み側の LLM には「最初に `arata help ai` を読む」とだけ指示すればよく、手順とエンジンの版がずれない。
 引数なしの `arata` (ルートのヘルプ) は、人向けの手順 (config init → doctor → init → run。決定: Step 3 で config init を先頭に足した。ADR 0014) と `arata help ai` への案内を最初に出す。
 
