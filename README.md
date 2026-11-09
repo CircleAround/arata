@@ -26,6 +26,7 @@ AWS のログと設定を定期的に改め、**前回から新しく発生し�
 
 `arata help ai` を最初に読ませる (report の読み方は `arata help ai report`、承認判断は `arata help ai approve`、チェックごとの対処手順は `arata help ai playbook <check>`、`--format json` も可)。
 内容はバイナリに埋め込まれていて、エンジンの版と常に揃う。
+GitHub Actions で動かす利用者の環境 (リポジトリの設定・OIDC の信頼・secrets) を作る・見直すときは `arata help ai runtime` を読ませる (チェックリスト。設定を変えるのは人)。
 
 ## 通知 (aratam)
 
@@ -44,6 +45,17 @@ arata を呼ばず、AWS の監査ロールもストアも使わない (出力�
   Block Kit では提案 1 件を 4 行 (種類と数字・なぜ困るか・「→ 次の一手」(WebACL・ルール・パス・確認方法まで具体的に)・根拠) にし、全文と設定例は `--in` のディレクトリの `waf-proposals.md` に書き出す
 - `llm.context_file` にアプリの事情 (決済画面はリクエストが多い、監視の送信元など) を Markdown で書くと、LLM に「この監査対象の前提」として渡す。
   判定 (重大度・送り先) は変わらない。例は [examples/aratam-context.md](examples/aratam-context.md) (架空の値)。利用者の環境に置き、16 KiB まで
+
+はじめての手順 (arata の `init` と最初の `run` が済んでから):
+
+1. `aratam config init` で雛形を書き出し、Webhook の環境変数を用意して `aratam doctor` → `aratam test-notify`
+2. LLM を使うなら `llm.provider` を `none` 以外にする
+3. **最初の通知の前に、`llm.context_file` (この監査対象の前提) を書く**。無くても動くが、無いと LLM はアプリの事情を知らず、正規の動作にも一般的で慎重な助言しか書けない。
+   書くとよいのは、どのアプリが本番か、デプロイの流れ (どの主体が何を引き受けるか)、起動時に秘匿値をまとめて読むロール、正規の送信元、監査の仕組み自体を誰が置いたか。
+   AI (LLM) に下書きさせるなら `arata help ai runtime` を読ませ、読み取り専用ロールで読める構成から書かせて、人が事実を確かめる。事実が変わったら直す
+4. **最初の run は通知せずに中身を見る**。`init` は finding を出さないが、その後の最初の run は長く溜まっていた設定や主体が一度に出て、通知が多くなり得る。
+   手元で `arata run --out <dir>` → `aratam notify --in <dir> --dry-run` で見て、approve・ack・resolve で片付けてから定期実行につなぐ
+   (run はストアに確定するので、以後の定期実行は新しく起きたことだけを報せる。daily と weekly の両方で行う)
 
 ```sh
 aratam config init                          # ./aratam.yaml (全項目を明示した雛形。provider は none)

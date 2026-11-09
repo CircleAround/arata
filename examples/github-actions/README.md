@@ -21,6 +21,7 @@ arata の版は v0.5.1 以降を使います (S3 ストアは v0.4.0 から。v0
 ## 用意するもの
 
 設定ファイルを置くリポジトリは **非公開** にしてください。allowlist にはアカウント ID や ARN が入り、Actions のログもリポジトリを読める人に見えます。
+このリポジトリは、ストアへの書き込み・Slack の Webhook・監査対象の読み取りロールへの入口を持ちます。fork の禁止、main の保護、Actions の設定などの前提は、下の「実行するリポジトリと環境を堅くする」にまとめています。手順 1〜7 と合わせて設定してください。
 
 ### 1. 実行の仕組み (OIDC プロバイダ・ストアのバケット・実行用ロール)
 
@@ -62,11 +63,17 @@ aws cloudformation describe-stacks --stack-name arata-runner --query 'Stacks[0].
   gh api repos/example-org/security-audit --jq '"\(.owner.login)@\(.owner.id)/\(.name)@\(.id)"'
   ```
 
-  どちらの形か分からないときは ID なしで始め、ワークフローが OIDC で失敗したら ID 入りに変えます (スタックを同じコマンドで更新するだけです)
+  どちらの形かは次で分かります。`use_immutable_subject` が `true` なら ID 入りで、`sub_claim_prefix` の `repo:` より後ろが `GitHubRepository` に書く値です。
+  従来の形のリポジトリも ID 入りに切り替えられます (下の「実行するリポジトリと環境を堅くする」の 3)
+
+  ```sh
+  gh api repos/example-org/security-audit/actions/oidc/customization/sub
+  ```
 - **`GitHubWorkflowRef`**: 指定すると、トークンの `job_workflow_ref` が完全に一致するワークフローだけが引き受けられます
   (例 `example-org/security-audit/.github/workflows/arata-audit.yml@refs/heads/main`)。同じリポジトリの `main` にある別のワークフローからは使えなくなります。
   既定は空です (GitHub の文書は、再利用しないワークフローでのこの値を定めていないため。設計書 9 章)
 - **GitHub の environment は使いません**。ジョブに `environment:` を付けると `sub` の形が変わり (`repo:...:environment:<名前>`)、このロールを引き受けられなくなります
+  (secrets を environment に置く案との関係は、下の「実行するリポジトリと環境を堅くする」の 5)
 - **スタックを消しても、バケットと OIDC プロバイダは残ります** (監査の状態を失わないため・プロバイダはアカウントで共有されるため)。作り直すときは `OIDCProviderArn` に残ったプロバイダを渡します
 
 実行用ロールの権限は、ストアの `s3:GetObject`・`s3:PutObject`・`s3:ListBucket` と、`AuditRoleArns` への `sts:AssumeRole` だけです (削除の権限はありません)。
@@ -167,6 +174,20 @@ llm:
 | `ARATAM_SLACK_WEBHOOK` | 通常用の Webhook |
 | `ARATAM_SLACK_URGENT_WEBHOOK` | 緊急用の Webhook |
 
+**Slack の疎通を確かめる**: Webhook を secrets に入れたら、同じ URL で手元から試験メッセージを 1 通送ります。チャンネルと Webhook の対応 (通常用と緊急用の取り違え) は、送ってみないと分かりません。
+
+```sh
+read -rs ARATAM_SLACK_WEBHOOK && export ARATAM_SLACK_WEBHOOK                  # 貼り付けて Enter (シェルの履歴に残さない)
+read -rs ARATAM_SLACK_URGENT_WEBHOOK && export ARATAM_SLACK_URGENT_WEBHOOK
+aratam doctor -c arata/aratam.yaml                  # 送らない。Webhook の環境変数があるかと、LLM の疎通を見る
+aratam test-notify -c arata/aratam.yaml             # 実際に送る。通常用のチャンネルに 1 通
+aratam test-notify -c arata/aratam.yaml --urgent    # 実際に送る。緊急用のチャンネルに 1 通
+```
+
+- `doctor` は Slack に何も送りません (届くかは分かりません)。`test-notify` は本当に届くので、チャンネルの人に一言伝えてから実行します
+- secrets に入れた値そのものは、最初の `workflow_dispatch` の実行 (手順 5 の最後) で確かめられます。`on_quiet: short` なら、新規が無くても 1 行届きます。
+  決定: 見本のワークフローに test-notify 用の入力は足しません。手動の実行が同じことを確かめ、入力を増やすと監査のワークフローの分岐が増えるためです
+
 ### 5. 初回の収集は手元で
 
 `arata init` はワークフローの認証の期限 (1 時間) を超え得るので、手元で同じ `arata.yaml` を使って実行します。**定時のワークフローを main に入れるのは、この収集が終わってから**にしてください (理由は下)。
@@ -177,7 +198,7 @@ AWS_PROFILE=example-store-writer arata doctor -c arata/arata.yaml
 AWS_PROFILE=example-store-writer arata init -c arata/arata.yaml
 ```
 
-`store: s3://` のまま実行するので、結果はそのままバケットへ置かれ、次のワークフローの run が続きから動きます。実行できたら `workflow_dispatch` で 1 回動かして確かめます。
+`store: s3://` のまま実行するので、結果はそのままバケットへ置かれ、次のワークフローの run が続きから動きます。実行できたら `workflow_dispatch` で 1 回動かして確かめます (その前に手順 6 と、LLM を使うなら手順 7)。
 
 - **かかる時間**: 収集する期間 (`--window`。既定は 7 日、CloudTrail の履歴は最長 90 日) とリージョンの数、その間のイベントの量に比例し、数十分〜数時間です。
   CloudTrail の LookupEvents は毎秒 2 リクエストまでで、arata はこれを超えないように引くためです。進み具合は標準エラーのログで分かります (1 日分ずつ進みます)
@@ -193,6 +214,183 @@ AWS_PROFILE=example-store-writer arata init -c arata/arata.yaml
 - **実行中は Actions の定時の実行を止めておきます**: 収集の途中で定時の監査が同じストアに書くと、後から書こうとした側が `STORE_CONFLICT` で失敗します。
   ストアは壊れませんが、init が後になれば数時間の収集を失います (`concurrency` は Actions の中の排他で、手元の実行は止められません)。
   初めてなら、ワークフローを main に入れるのを init の後にします。既に動いているなら、Actions の画面でワークフローを無効 (Disable workflow) にし、init が終わったら有効に戻します
+
+### 6. 最初の run は通知せずに中身を見る
+
+`arata init` はベースラインを作るだけで、finding を出しません。その後の**最初の run** は、長く溜まっていた設定や主体 (古いアクセスキー、公開の設定、承認していない主体など) が一度に出て、通知が多くなり得ます。
+チャンネルの人を驚かせないよう、最初の run は手元で実行し、Slack に送らずに中身を見ます。手順 5 と同じ認証で、init の直後に行います (定時のワークフローを main に入れる前)。
+
+```sh
+out=$(mktemp -d)
+AWS_PROFILE=example-store-writer arata run -c arata/arata.yaml --profile daily --out "$out/daily"
+aratam notify -c arata/aratam.yaml --in "$out/daily" --dry-run --llm none    # 送らずに、通知になる内容を標準出力へ
+AWS_PROFILE=example-store-writer arata review -c arata/arata.yaml            # 未対応の一覧
+
+# weekly も同じ (アカウントの今の状態を見るチェックは weekly にあり、最初は多くなりやすい)
+AWS_PROFILE=example-store-writer arata run -c arata/arata.yaml --profile weekly --out "$out/weekly"
+aratam notify -c arata/aratam.yaml --in "$out/weekly" --dry-run --llm none
+```
+
+- **手元の run もストアに確定します** (`store: s3://` のまま実行するため)。ここで出た finding は報告済みになり、以後の定時の実行は「新規」としては報せません
+  (未対応の件数には残ります。重大度が上がれば再報告されます)。定時の実行が報せるのは、その後に新しく起きたことだけです
+- `--dry-run` は Slack に送らず、Webhook の環境変数も要りません。`--llm none` を外すと LLM の要約も確かめられます (手元の認証で LLM を呼びます)
+- 出た finding は、定時の実行に任せる前に片付けます。正当な主体は allowlist.yaml の PR で承認し (下の「approve は PR で allowlist.yaml を直す」)、
+  確認が済んだものは `arata ack`、直したものは `arata resolve`、後で直すものは `arata snooze --until` にします。直すべきものは、ここで担当を決めます
+- `$out` には ARN などが入っています。見終わったら消します
+- 通知の本文には上限があり、多いときは情報の行や理由文から削って収めます (全文はストアの `reports/`)。それでも最初の 1 通が長くなるのは変わらないので、この手順を踏みます
+- 決定: 見本のワークフローに「通知しない」入力は足しません。手順 5 で手元にストアを書ける認証が既にあり、同じ場所で続けて行えること、
+  Actions で動かすと中身を見る場所が無いこと (ログと Summary には finding の中身を出さない方針です) が理由です
+
+### 7. 監査対象の前提 (LLM を使うとき)
+
+`llm.provider` を `none` 以外にしたら、最初の通知の前 (定時のワークフローを main に入れる前) に、`llm.context_file` を書きます。
+aratam が LLM に「この監査対象の前提」として渡す Markdown です。**無くても動きます**。ただ、無いと LLM はアプリの事情を知らないので、正規の動作にも一般的で慎重な助言しか書けません。
+判定 (重大度・緊急用に送るか) は規則が決めるので、前提を書いても変わりません。
+
+```yaml
+# arata/aratam.yaml (抜粋)
+llm:
+  context_file: aratam-context.md   # 設定ファイルと同じディレクトリに置く (16 KiB まで)
+```
+
+書くとよいこと (形の例は [examples/aratam-context.md](../aratam-context.md)。値は架空):
+
+- どのアプリが本番か (アカウント、入口、ログインや決済のパス)
+- デプロイの流れ。どの主体が何を引き受けるか (例: CI の OIDC のロール `github-actions-deploy` が CloudFormation の実行ロールを引き受ける)
+- 起動時に秘匿値をまとめて読むロール (例: ECS の実行ロールが、タスクの起動のたびに `prod/app/*` を読む)
+- 正規の送信元 (外形監視、拠点、CI)
+- 監査の仕組み自体 (実行用ロール `arata-runner` と読み取り専用ロール `arata-readonly`) を誰が・何で置いたか
+- 秘密 (Webhook・キー)、氏名、メールアドレスは書きません
+
+同じレポートで前提の有無を比べると、前提ありの要約は「前提のどれに合うか・何だけ確かめればよいか」を書き、前提と食い違う点 (未承認の主体など) は隠さずに指摘しました。
+前提は承認の代わりにはなりません。「正規」と書いても allowlist には入らず、未承認の主体は報告され続けます。
+
+最初の収集と最初の run (手順 5・6) の後なら、AI (LLM) に下書きさせられます。`arata help ai runtime` を読ませ、`arata review` の結果と、読み取り専用ロールで読める構成から下書きを PR にさせて、
+**人が事実を確かめてマージします**。事実が変わったら (デプロイの方式、送信元、ロールの入れ替え) PR で直します。古い前提は、LLM に誤った安心を書かせます。
+`aratam config check` (下の「PR で設定を検査する」) が、ファイルが読めるかと大きさを確かめます。
+
+## 実行するリポジトリと環境を堅くする
+
+監査のリポジトリを使える人は、実行用ロール (ストアの読み書き・監査対象の読み取り) と Slack の Webhook を使えます。目指す状態は次の 2 つです。
+
+- **main にコミットを入れられる人だけが、実行用ロールを使える** (fork、ほかのブランチ、PR からは使えない)
+- **secrets を読める人が最小**
+
+下の `gh api` はすべて読み取りです (`example-org/security-audit` は自分のリポジトリに読み替えます)。組織の設定は、組織の所有者でないと読めないものがあります。
+AI (LLM) に点検させるときは `arata help ai runtime` (同じ項目のチェックリスト) を読ませます。設定を変えるのは人です。
+main の保護 (4) と environment (5) は、非公開のリポジトリでは GitHub の有料プラン (Team など) が要ります。
+
+### 1. リポジトリは非公開にし、fork を禁止する
+
+監査のリポジトリは fork される必要がありません。fork は、allowlist (アカウント ID・ARN) と履歴の写しを、元のリポジトリの管理の外に作ります。
+
+```sh
+gh api repos/example-org/security-audit --jq '{private, visibility, allow_forking, fork}'
+gh api orgs/example-org --jq '.members_can_fork_private_repositories'
+gh api repos/example-org/security-audit/forks --jq 'length'
+```
+
+- `private: true`、`allow_forking: false`、組織の `members_can_fork_private_repositories: false`、既にある fork が 0 件
+- 設定の場所: リポジトリの Settings → General → 「Allow forking」を外す。組織の Settings → Member privileges → 「Allow forking of private repositories」を外す
+
+### 2. fork の PR と、PR のワークフローに権限を渡さない
+
+```sh
+gh api repos/example-org/security-audit/actions/permissions/fork-pr-workflows-private-repos
+```
+
+- `run_workflows_from_fork_pull_requests: false` (`send_write_tokens_to_workflows`・`send_secrets_and_variables` も `false`)。
+  fork を禁止していれば fork の PR は来ませんが、禁止が外れたときの 2 段目として閉じておきます (Settings → Actions → General → 「Fork pull request workflows」。組織で無効なら、リポジトリでは有効にできません)
+- **`pull_request_target` を使いません** (`workflow_run` も)。PR の内容を、secrets を持つ文脈で動かす経路になります
+- `pull_request` で動かすのは [arata-check.yml](arata-check.yml) の形に留めます。権限は `contents: read` だけで、secrets も OIDC も使いません。
+  secrets か OIDC を使うワークフロー (監査、finding の片付け) は、定時と手動でだけ動かします
+
+### 3. OIDC の信頼は、ID 入りの `sub` で 1 つのブランチに絞る
+
+実行用ロールは、OIDC トークンの `sub` が次の 1 つの文字列に完全に一致するときだけ引き受けられます (手順 1 の `runner.yaml`。ワイルドカードは受け付けません)。
+
+```
+repo:OWNER@OWNER_ID/REPO@REPO_ID:ref:refs/heads/main
+```
+
+- **fork は引き受けられません**。fork は別のリポジトリなので、fork で動くワークフローの `sub` は fork 自身の名前と ID になります
+- **同じ名前で作り直したリポジトリも引き受けられません** (ID 入りの形のとき)。従来の形 (`repo:example-org/security-audit:...`) は名前だけで決まるので、
+  リポジトリや組織を消した後に同じ名前が別の人に取られると、同じ `sub` を作られます。ID は使い回されません
+- **ほかのブランチと PR からも引き受けられません**。ほかのブランチは `ref` が違い、PR のワークフローは `sub` が `...:pull_request` になります
+
+```sh
+gh api repos/example-org/security-audit/actions/oidc/customization/sub
+aws iam get-role --role-name arata-runner --query 'Role.AssumeRolePolicyDocument'
+```
+
+- 1 つ目が `use_default: true`・`use_immutable_subject: true` なら ID 入りです (2026-07-15 より後に作った・名前を変えた・移したリポジトリは、最初からこの形です)
+- `use_immutable_subject: false` (従来の形) なら、リポジトリか組織の Actions の OIDC の設定で ID 入りに切り替えます。
+  切り替えたら、`GitHubRepository` を `sub_claim_prefix` の `repo:` より後ろの値にしてスタックを更新します (揃うまでは引き受けに失敗します。定時の実行の合間に行います)
+- 2 つ目の信頼ポリシーが `StringEquals` だけで、`sub` が上の 1 つだけであること。手で直して `StringLike` や `*` を足さないでください
+
+### 4. main を保護し、書き込み権限を持つ人を最小にする
+
+`sub` を main に絞っているので、**main に入れられる人 = 実行用ロールを使える人**です。main の保護が、実行用ロールの権限の境界になります。
+
+```sh
+gh api repos/example-org/security-audit/rules/branches/main --jq '[.[].type]'
+gh api repos/example-org/security-audit/rulesets --jq '.[] | {id, name, enforcement}'
+gh api repos/example-org/security-audit/collaborators --jq '.[] | select(.permissions.push) | .login'
+gh api repos/example-org/security-audit/keys --jq '.[] | {title, read_only}'
+```
+
+- main の規則に `pull_request` (PR 必須)・`non_fast_forward` (強制 push の禁止)・`deletion` (削除の禁止) があること。
+  迂回できる主体 (`gh api repos/example-org/security-audit/rulesets/<id>` の `bypass_actors`) は置かないか、理由を説明できるものだけにします
+- 書き込み権限 (`push`) を持つ人を、監査の運用に要る人だけにします。組織の既定の権限 (base permissions) が write だと、組織の全員が持ちます
+- 書き込みのできるデプロイキーや、書き込み権限を持つ外部のアプリを置きません
+- `arata-check` を必須のチェックにすると、形の誤った設定は main に入りません (「PR で設定を検査する」)
+- PR のレビューを必須にすれば、1 人では main を変えられなくなります。人数が足りずに必須にできないときは、PR の差分を誰が見るかを決めておきます
+
+### 5. secrets は、書き込み権限のある人なら読み出せる
+
+リポジトリの secrets は、**どのブランチのワークフローからも読めます**。書き込み権限のある人は、ブランチにワークフローを足して push すれば、main の保護を通らずに読み出せます。
+
+- 読み出されて困るのは Slack の Webhook です (偽の通知を送れます)。ロールの ARN は読めても、3 の `sub` が合わないので引き受けられません (分かるのはアカウント ID です)
+- 今の守りは 4 の「書き込み権限を持つ人を最小に」です。漏れた疑いがあれば Webhook を作り直します。長期の AWS のアクセスキーは secrets に置きません
+- **案: GitHub の environment に置き、デプロイできるブランチを main に限る**。environment の secrets は、その environment を参照するジョブにしか渡らず、
+  デプロイできるブランチを限れば、ほかのブランチのジョブは environment を使えません
+- **ただし、今の `runner.yaml` とは組み合わせられません**。ジョブに `environment:` を付けると、`sub` が `repo:...:environment:<名前>` に変わり (ブランチは `sub` に入らなくなります)、
+  実行用ロールを引き受けられなくなります。見本のジョブは OIDC と Webhook を同じジョブで使うので、Webhook だけを environment に移すこともできません。
+  テンプレートを environment の `sub` に対応させるのは今後の課題です (arata の `docs/roadmap.md`)
+- それまでに environment を使うなら、手順 1 の「テンプレートを使わない場合」のとおり、`sub` を `repo:OWNER@OWNER_ID/REPO@REPO_ID:environment:<名前>` にしたロールを自分で作ります。
+  この形ではブランチの条件が `sub` から消えるので、**environment のデプロイできるブランチの制限が、実行用ロールの境界になります**。次で確かめます
+
+  ```sh
+  gh api repos/example-org/security-audit/environments --jq '[.environments[] | {name, deployment_branch_policy}]'
+  gh api repos/example-org/security-audit/environments/audit/deployment-branch-policies --jq '[.branch_policies[] | {name, type}]'
+  ```
+
+### 6. Actions の設定
+
+```sh
+gh api repos/example-org/security-audit/actions/permissions
+gh api repos/example-org/security-audit/actions/permissions/selected-actions
+gh api repos/example-org/security-audit/actions/permissions/workflow
+gh api repos/example-org/security-audit/actions/permissions/access
+```
+
+Settings → Actions → General で設定します。
+
+- 許可する action: `allowed_actions: selected` で、GitHub 製 (`github_owned_allowed: true`) と `aws-actions/configure-aws-credentials@*` (`patterns_allowed`) だけ。
+  見本が使う action は `actions/checkout` とこれの 2 つです。action を足すときは、ここにも足します (足さないとワークフローが起動しません)
+- 「Require actions to be pinned to a full-length commit SHA」を有効にします (`sha_pinning_required: true`)
+- `GITHUB_TOKEN` の既定は read (`default_workflow_permissions: read`)、「Actions が PR を作成・承認する」は無効 (`can_approve_pull_request_reviews: false`)
+- ほかのリポジトリからワークフローを使わせません (`access` の応答が `none`)
+- checkout は `persist-credentials: false` にします (見本のとおり)。トークンを作業ツリーに残しません
+
+### 7. 見本のワークフローが満たしていること
+
+見本をそのまま写せば、上の前提に合います (arata のリポジトリのテストが固定しています)。書き換えるときは崩さないでください。
+
+- ワークフローの先頭は `permissions: {}`。権限はジョブごとで、監査と片付けは `id-token: write` と `contents: read`、PR の検査は `contents: read` だけ
+- secrets か OIDC を使う見本は `schedule` と `workflow_dispatch` でだけ動き、`pull_request_target`・`workflow_run`・`environment:` を使わない
+- action は 2 つだけで、どちらも commit SHA で固定。checkout は `persist-credentials: false`
+- `run:` に式を埋め込まず、secrets は使う step にだけ渡す
 
 ## 複数のアカウントを 1 つのリポジトリで監査する
 

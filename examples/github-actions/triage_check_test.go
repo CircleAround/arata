@@ -61,6 +61,36 @@ func TestEveryWorkflowFollowsTheCommonRules(t *testing.T) {
 	}
 }
 
+// 利用者のリポジトリの前提 (README「実行するリポジトリと環境を堅くする」) を見本が満たすこと。
+// - secrets か OIDC を使う見本は、定時と手動でだけ動く (PR や push では動かさない)
+// - 使う action は、許可リストに書く 2 つ (GitHub 製の checkout と aws-actions/configure-aws-credentials) だけ
+// - GitHub の environment を使わない (sub の形が変わり、runner.yaml のロールを引き受けられなくなる)
+func TestEveryWorkflowFitsTheHardenedRepository(t *testing.T) {
+	for _, f := range allFiles {
+		t.Run(f, func(t *testing.T) {
+			w, text := load(t, f)
+			if strings.Contains(text, "secrets.") || strings.Contains(text, "id-token") {
+				for _, tr := range triggers(t, f) {
+					if tr != "schedule" && tr != "workflow_dispatch" {
+						t.Errorf("a workflow with secrets or OIDC must run only on schedule / workflow_dispatch: %s", tr)
+					}
+				}
+			}
+			for _, s := range steps(t, w) {
+				if s.Uses == "" {
+					continue
+				}
+				if !strings.HasPrefix(s.Uses, "actions/checkout@") && !strings.HasPrefix(s.Uses, "aws-actions/configure-aws-credentials@") {
+					t.Errorf("action outside the documented allowlist: %s", s.Uses)
+				}
+			}
+			if regexp.MustCompile(`(?m)^\s+environment:`).MatchString(text) {
+				t.Errorf("must not use a GitHub environment (the sub claim changes)")
+			}
+		})
+	}
+}
+
 // 新しい見本は、監査の見本と同じ step (取得の照合、実行用ロール) と同じ action をそのまま使う。
 func TestTriageAndCheckShareStepsWithAudit(t *testing.T) {
 	audit, auditText := load(t, multiFile)
