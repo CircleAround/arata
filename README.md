@@ -333,3 +333,7 @@ examples/               設定サンプル
 deploy/iam/              顧客に配る読み取り専用ロール (素の CloudFormation)
 deploy/sandbox/          試験環境 (sandbox。開発用アカウントに CDK で作る。deploy/sandbox/README.md、ADR 0020)
 ```
+
+## ライセンスと脆弱性の報告
+
+MIT License (`LICENSE`)。脆弱性は公開の Issue ではなく、非公開の報告で知らせてください (`SECURITY.md`)。
