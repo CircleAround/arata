@@ -1,0 +1,2 @@
+ng    <dir>/aratam.yaml: <dir>/aratam.yaml: on_quiet must be short or silent (got "loud")
+      slack.format must be blocks or text (got "fancy")

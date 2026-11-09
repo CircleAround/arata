@@ -386,11 +386,13 @@ func (d *doctor) checks() {
 		profiles = append(profiles, p)
 	}
 	sort.Strings(profiles)
+	for _, u := range UnknownChecks(d.cfg, d.deps.Registry) {
+		d.res.Rows = append(d.res.Rows, DoctorRow{Source: "-", Kind: "-", Item: "check", Status: DoctorNG, Code: CodeConfigInvalid, Detail: u})
+	}
 	for _, pname := range profiles {
 		for _, name := range d.cfg.Profiles[pname].ExpandChecks(d.deps.Registry.Defaults()) {
 			c, ok := d.deps.Registry.Get(name)
 			if !ok {
-				d.res.Rows = append(d.res.Rows, DoctorRow{Source: "-", Kind: "-", Item: "check", Status: DoctorNG, Code: CodeConfigInvalid, Detail: fmt.Sprintf("profile %s: unknown check %q", pname, name)})
 				continue
 			}
 			needs := c.Needs()
@@ -471,3 +473,22 @@ func (r *DoctorResult) WriteTable(w io.Writer) error {
 
 // ErrDoctorProblems は doctor が ng を見つけたことを表す (終了コード 2)。
 var ErrDoctorProblems = errors.New("doctor found problems")
+
+// UnknownChecks は profiles の checks に書かれた、この版に無いチェックの名前 (「profile hourly: unknown check "x"」。プロファイル名・チェック名の順)。
+// doctor と config check が同じ規則で使う (run は実行するプロファイルについて同じことを確かめて CONFIG_INVALID で止まる)。
+func UnknownChecks(cfg *config.Config, reg *checks.Registry) []string {
+	profiles := make([]string, 0, len(cfg.Profiles))
+	for p := range cfg.Profiles {
+		profiles = append(profiles, p)
+	}
+	sort.Strings(profiles)
+	var out []string
+	for _, pname := range profiles {
+		for _, name := range cfg.Profiles[pname].ExpandChecks(reg.Defaults()) {
+			if _, ok := reg.Get(name); !ok {
+				out = append(out, fmt.Sprintf("profile %s: unknown check %q", pname, name))
+			}
+		}
+	}
+	return out
+}

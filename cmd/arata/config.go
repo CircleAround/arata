@@ -8,20 +8,23 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
+	"github.com/CircleAround/arata/internal/allowlist"
 	"github.com/CircleAround/arata/internal/checks"
+	"github.com/CircleAround/arata/internal/config"
 	"github.com/CircleAround/arata/internal/engine"
 	"github.com/CircleAround/arata/internal/scaffold"
 	"github.com/CircleAround/arata/internal/subcmd"
 )
 
-// newConfigCmd は設定の雛形を扱う config コマンド (サブコマンド init)。
+// newConfigCmd は設定の雛形と検査を扱う config コマンド (サブコマンド init / check)。
 func newConfigCmd(d *Deps, g *globalFlags) *subcmd.Command {
 	cmd := &subcmd.Command{
 		Use:   "config",
-		Short: "設定の雛形を書き出す / 雛形と比べる (config init)",
+		Short: "設定の雛形を書き出す / 雛形と比べる (config init)、設定と allowlist をオフラインで検査する (config check)",
 	}
-	cmd.AddCommand(newConfigInitCmd(d, g))
+	cmd.AddCommand(newConfigInitCmd(d, g), newConfigCheckCmd(d, g))
 	return cmd
 }
 
@@ -96,6 +99,100 @@ func configDiff(d *Deps, g *globalFlags, reg *checks.Registry, format string) er
 		return writeJSON(d, items)
 	}
 	return configErr(d, fmt.Errorf("unknown format %q (text|json)", format))
+}
+
+func newConfigCheckCmd(d *Deps, g *globalFlags) *subcmd.Command {
+	return &subcmd.Command{
+		Use:   "check",
+		Short: "設定と allowlist.yaml の形をオフラインで検査する (AWS にもストアにも繋がない。問題があれば終了コード 2)",
+		Long: `設定 (-c、省略時は ARATA_CONFIG か ./arata.yaml) と、それが指す allowlist.yaml の形を検査する。
+AWS にもストアにも繋がず、認証も要らない。PR の CI で allowlist.yaml の書き間違いをマージの前に止めるのに使う。
+
+  - 設定      未知のキー、型、必須項目、値の範囲、profiles に書いたチェックの名前 (run / doctor が起動時にする検証と同じ規則)
+  - allowlist 未知のキー、主体の指定 (arn / account / arn_pattern のどれか 1 つ)、expires の日付、expected_denied の書式など
+              (run / doctor と同じ規則)。同じ主体の項目の重複は warn (run は受け付けるが、expires や tags は片方しか使われない)
+
+行ごとに ok / warn / ng / skip を出す。分かるときは「ファイル:行」を添える。ng が 1 つでもあれば終了コード 2 (warn だけなら 0)。
+権限・ロググループ・ログの形式は見ない (arata doctor)。雛形との差分は見ない (arata config init --diff)。`,
+		Args: subcmd.NoArgs,
+		Run: func(context.Context, []string) error {
+			path, err := configPath(d, g)
+			if err != nil {
+				return err
+			}
+			ng := false
+			row := func(status, where, msg string) {
+				// 複数行の文言 (YAML の型の誤りの一覧) は字下げして続ける
+				fmt.Fprintf(d.Stdout, "%-4s  %s: %s\n", status, where, strings.ReplaceAll(msg, "\n", "\n      "))
+				if status == "ng" {
+					ng = true
+					d.Engine.Logger.Error(msg, "code", engine.CodeConfigInvalid, "path", where)
+				}
+			}
+			fail := func() error {
+				return &engine.ExitError{Exit: engine.ExitConfig, Err: errors.New("config check found problems")}
+			}
+			abs, err := filepath.Abs(path)
+			if err != nil {
+				return err
+			}
+			abs = displayPath(abs)
+			cfg, err := config.Load(path)
+			if err != nil {
+				row("ng", abs, err.Error())
+				// 設定が読めなければ allowlist の場所 (allowlist:) が決まらない
+				fmt.Fprintln(d.Stdout, "skip  allowlist: 設定を読めないので検査していません (設定を直してからもう一度)")
+				return fail()
+			}
+			if unknown := engine.UnknownChecks(cfg, checks.NewRegistryFor(cfg.Checks)); len(unknown) > 0 {
+				for _, u := range unknown {
+					row("ng", abs, u)
+				}
+			} else {
+				row("ok", abs, fmt.Sprintf("name %s, sources %d, profiles %d", cfg.Name, len(cfg.Sources), len(cfg.Profiles)))
+			}
+			b, err := os.ReadFile(cfg.Allowlist)
+			alPath := displayPath(cfg.Allowlist)
+			switch {
+			case errors.Is(err, fs.ErrNotExist):
+				// run は allowlist が無ければ空として動く (init の直後を許す) ので、エラーにはしない
+				row("warn", alPath, "file not found (arata treats it as an empty allowlist)")
+			case err != nil:
+				row("ng", alPath, err.Error())
+			default:
+				l, problems := allowlist.Check(b)
+				for _, p := range problems {
+					where, status := alPath, "ng"
+					if p.Line > 0 {
+						where = fmt.Sprintf("%s:%d", where, p.Line)
+					}
+					if p.Warn {
+						status = "warn"
+					}
+					row(status, where, p.Msg)
+				}
+				if l != nil {
+					row("ok", alPath, fmt.Sprintf("principals %d, source_ips %d, admin_users %d, secrets_access %d", len(l.Principals), len(l.SourceIPs), len(l.AdminUsers), len(l.SecretsAccess)))
+				}
+			}
+			if ng {
+				return fail()
+			}
+			return nil
+		},
+	}
+}
+
+// displayPath は検査の出力に書くパス。カレントディレクトリの下なら相対にする (CI のログで「aws/prod/allowlist.yaml:12」と読める)。
+func displayPath(abs string) string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return abs
+	}
+	if rel, err := filepath.Rel(wd, abs); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return rel
+	}
+	return abs
 }
 
 func newProfilesCmd(d *Deps, g *globalFlags) *subcmd.Command {

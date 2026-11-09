@@ -334,6 +334,19 @@ profiles:
   プロファイルに書かれているがこの版に無いチェック (`unknown_check`)、雛形にあって設定に無いプロファイル (`missing_profile`)、
   `checks:` に書いた値がこの版の既定値と違うパラメータ (`param_changed`)、arata が知らないキー (`unknown_key`)。設定は Load せずに緩く読む (未知のキーで読めない設定にも使える)。
   `checks:` に書いていないパラメータは実行時にこの版の既定値が効くので差分にしない。overrides は意図した上書きなので比べない。
+- 決定 (ADR 0042): `arata config check` は、設定とそれが指す allowlist.yaml の形を **オフラインで** 検査する (AWS にもストアにも繋がず、認証も要らない)。
+  PR の CI で allowlist.yaml の書き間違いをマージの前に止めるためのもの。規則は run / doctor が起動時にする検証そのもの
+  (`config.Load`、`allowlist.Parse`、profiles のチェック名は `engine.UnknownChecks`) で、check のための規則は足さない。check が通した設定は run でも読め、逆も同じ。
+  - `config init --diff` との関係: 目的が違うので両方を残す。`--diff` は「この版の雛形との差」を見る道具で、読めない設定にも使えるよう緩く読み、
+    差があっても終了コードは 0 (差は誤りではない)。`check` は「この設定で run が起動するか」を見る門で、厳密に読み、誤りがあれば終了コード 2。
+    未知のキーと未知のチェック名は両方に出る (`--diff` では直し方を探す手がかり、`check` では止める理由)。
+    入っていないチェックや既定値との差は `check` では見ない (誤りではないので、PR を止めない)
+  - 出力は 1 行 1 件の `ok` / `warn` / `ng` / `skip` で、分かるときは「ファイル:行」を添える。allowlist の項目のエラーは項目の行、YAML の構文と型のエラーは yaml の示す行。
+    設定の値の検証 (必須項目など) は行を持たない。`ng` があれば終了コード 2 (設定エラーの慣例。標準エラーにも `CONFIG_INVALID`)、`warn` だけなら 0
+  - allowlist の同じ主体の重複は `warn`。run は重複を受け付ける (`expected_denied` は項目ごとに書けて和で判定する。6-1) のでエラーにすると規則が食い違う。
+    ただし `expires`・`tags`・`dynamic_source` は 1 つの項目のものしか使われないので、片方だけ直した誤りに気づけるよう知らせる
+  - allowlist.yaml が無いのも `warn` (run は空として動く。init の直後)。設定が読めないときは allowlist の場所が決まらないので `skip` と出す
+  - 権限・ロググループ・ログの形式は見ない (`doctor` の仕事で、AWS に問い合わせる)
 - `arata profiles [--format table|json]` は、プロファイルごとに実際に走るチェック (省略記法は展開済み、`via` に explicit / default-<cadence>) と、
   そのチェックのパラメータの値と由来 (`overrides` / `checks:` / 既定値) を出す。どのプロファイルにも入っていないチェックも示す。
 - どのプロファイルにも入っていないチェックがあれば、`run` / `evaluate` は標準エラーに WARN (`code: CHECK_UNUSED`、`checks` に名前) を出し、`doctor` は表に warn 行を出す。終了コードは変えない。
@@ -838,6 +851,7 @@ arata は LLM を使わず候補だけを作り、aratam の LLM は候補を文
 
 ```
 arata config init [--out FILE|-] [--force] | --diff   # 推奨設定の雛形を書き出す (既定 ./arata.yaml) / 雛形との差分 (3 章、ADR 0014)
+arata config check             # 設定と allowlist.yaml の形をオフラインで検査 (AWS・ストアに繋がない。問題があれば終了コード 2。3 章、ADR 0042)
 arata profiles  [--format table|json]   # プロファイルごとに実際に効いているチェックとパラメータ、その由来
 arata init      [--window 7d | --resume]   # ストア作成、設定検証、ベースライン収集 (findings は出さない)
 arata doctor                   # 権限・ロググループ・形式プロファイルの解釈率を検査

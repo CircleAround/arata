@@ -232,47 +232,47 @@ func Parse(b []byte) (*List, error) {
 			}
 		}
 		if n != 1 {
-			return nil, fmt.Errorf("principals[%d]: exactly one of arn, account, arn_pattern is required", i)
+			return nil, entryErr("principals", i, "exactly one of arn, account, arn_pattern is required")
 		}
 		if e.Account != "" && !accountRe.MatchString(e.Account) {
-			return nil, fmt.Errorf("principals[%d]: account %q: want a 12-digit account ID", i, e.Account)
+			return nil, entryErr("principals", i, "account %q: want a 12-digit account ID", e.Account)
 		}
 		if e.ARNPattern != "" {
 			if !strings.HasPrefix(e.ARNPattern, "arn:") {
-				return nil, fmt.Errorf("principals[%d]: arn_pattern %q must start with \"arn:\"", i, e.ARNPattern)
+				return nil, entryErr("principals", i, "arn_pattern %q must start with \"arn:\"", e.ARNPattern)
 			}
 			// 決定 (ADR 0037): アカウントの欄は固定する。`arn:*` のようなパターンは new_principal などを全部止めてしまう
 			if parts := strings.SplitN(e.ARNPattern, ":", 6); len(parts) < 6 || !accountRe.MatchString(parts[4]) {
-				return nil, fmt.Errorf("principals[%d]: arn_pattern %q must name a 12-digit account (arn:aws:iam::123456789012:role/ci-*)", i, e.ARNPattern)
+				return nil, entryErr("principals", i, "arn_pattern %q must name a 12-digit account (arn:aws:iam::123456789012:role/ci-*)", e.ARNPattern)
 			}
 			re, err := globToRegexp(e.ARNPattern)
 			if err != nil {
-				return nil, fmt.Errorf("principals[%d]: arn_pattern: %w", i, err)
+				return nil, entryErr("principals", i, "arn_pattern: %w", err)
 			}
 			e.pattern = re
 		}
 		if e.Expires != "" {
 			t, err := time.Parse("2006-01-02", e.Expires)
 			if err != nil {
-				return nil, fmt.Errorf("principals[%d]: expires %q: want YYYY-MM-DD", i, e.Expires)
+				return nil, entryErr("principals", i, "expires %q: want YYYY-MM-DD", e.Expires)
 			}
 			// 期限日の終わりまで有効
 			e.expires = t.Add(24 * time.Hour)
 		}
 		if e.ExpectedDenied != nil {
 			if len(e.ExpectedDenied) == 0 {
-				return nil, fmt.Errorf("principals[%d]: expected_denied is empty (remove it or list service:Action globs such as logs:StartQuery)", i)
+				return nil, entryErr("principals", i, "expected_denied is empty (remove it or list service:Action globs such as logs:StartQuery)")
 			}
 			if strings.TrimSpace(e.Note) == "" {
-				return nil, fmt.Errorf("principals[%d]: note is required with expected_denied (why these denials are expected)", i)
+				return nil, entryErr("principals", i, "note is required with expected_denied (why these denials are expected)")
 			}
 			for j, g := range e.ExpectedDenied {
 				if err := CheckDeniedGlob(g); err != nil {
-					return nil, fmt.Errorf("principals[%d]: expected_denied[%d] %w", i, j, err)
+					return nil, entryErr("principals", i, "expected_denied[%d] %w", j, err)
 				}
 				re, err := globToRegexp(g)
 				if err != nil {
-					return nil, fmt.Errorf("principals[%d]: expected_denied[%d]: %w", i, j, err)
+					return nil, entryErr("principals", i, "expected_denied[%d]: %w", j, err)
 				}
 				e.denied = append(e.denied, re)
 			}
@@ -286,15 +286,15 @@ func Parse(b []byte) (*List, error) {
 	for i := range l.SecretsAccess {
 		e := &l.SecretsAccess[i]
 		if e.Principal == "" || len(e.Secrets) == 0 {
-			return nil, fmt.Errorf("secrets_access[%d]: principal and secrets are required", i)
+			return nil, entryErr("secrets_access", i, "principal and secrets are required")
 		}
 		for j, g := range e.Secrets {
 			if strings.TrimSpace(g) == "" {
-				return nil, fmt.Errorf("secrets_access[%d]: secrets[%d] is empty", i, j)
+				return nil, entryErr("secrets_access", i, "secrets[%d] is empty", j)
 			}
 			re, err := globToRegexp(g)
 			if err != nil {
-				return nil, fmt.Errorf("secrets_access[%d]: secrets[%d]: %w", i, j, err)
+				return nil, entryErr("secrets_access", i, "secrets[%d]: %w", j, err)
 			}
 			e.secrets = append(e.secrets, re)
 		}
@@ -303,7 +303,7 @@ func Parse(b []byte) (*List, error) {
 		e := &l.SourceIPs[i]
 		_, n, err := net.ParseCIDR(e.CIDR)
 		if err != nil {
-			return nil, fmt.Errorf("source_ips[%d]: %w", i, err)
+			return nil, entryErr("source_ips", i, "%w", err)
 		}
 		e.net = n
 	}

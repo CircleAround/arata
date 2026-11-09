@@ -348,6 +348,7 @@ slack:
 
 ```
 aratam config init [--out aratam.yaml] [--force]
+aratam config check [-c aratam.yaml] # 設定の形をオフラインで検査 (Slack・LLM に繋がない。問題があれば終了コード 2)
 aratam notify  --in <dir> [-c aratam.yaml] [--dry-run [--format text|json]] [--force]
                # --dry-run は送らずに標準出力へ。LLM は呼ぶ (--llm none で呼ばない)。--format json は送る payload そのもの
 aratam doctor  [-c aratam.yaml]   # LLM に短い問い合わせを 1 回、Webhook の環境変数の有無を確認 (送信はしない)
@@ -357,6 +358,11 @@ aratam test-notify [-c aratam.yaml] # Slack に試験メッセージを 1 通送
 - 決定: 設定ファイルのパスには既定を持つ。`-c` > 環境変数 `ARATAM_CONFIG` > カレントディレクトリの `aratam.yaml` の順に探す。
   `config init` の書き出し先も既定は `./aratam.yaml` (既存ファイルは `--force` が無ければ上書きしない)。
   `--in` は既定を持たない (監査対象・プロファイルごとに違うデータの場所で、取り違えると別の report を送ってしまうため)。
+- 決定 (arata の ADR 0042): `config check` は notify / doctor が起動時にする検証 (`notify.LoadConfig`) だけを行い、Slack にも LLM にも繋がない。PR の CI で使う。
+  - Webhook の環境変数は見ない (警告も出さない)。PR の CI には秘密を渡さないのが正しい形で、そこで毎回「未設定」と出る警告は読まれなくなる。あるかどうかは `doctor` が見る
+  - `llm.context_file` は書いてあれば読めるかを見る。リポジトリの中のファイルなのでオフラインで確かめられる。読めない・16 KiB を超えるは `warn`
+    (notify が前提なしで続けるのと同じ扱い。ADR 0024)。`provider: none` では使わないので `skip`
+  - 出力と終了コードは arata の `config check` と同じ形 (`ok` / `warn` / `ng` / `skip`、`ng` があれば 2)
 - プロバイダ名は呼び方を表す (`claude-cli` / `openai-api`)。同じモデルを別の経路で呼ぶプロバイダを足しても名前が衝突しない。
 - 終了コード: 0 = 送った (または on_quiet=silent / 通知済みで送らなかった)、2 = 設定エラー、
   3 = LLM が使えず report.md で送った、4 = 入力が無い・古い (その旨は送った)、5 = 送信に失敗した。

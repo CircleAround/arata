@@ -24,7 +24,7 @@ const rootLong = `arata は AWS のログと設定を定期的に改め、前回
 
 設定ファイルは -c で指定する。省略時は環境変数 ARATA_CONFIG、無ければカレントディレクトリの ./arata.yaml を読む。
 実行されるのは設定の profiles に書いたチェックだけ (暗黙の既定は無い)。効いている中身は arata profiles、
-新しい版との差分は arata config init --diff で確かめる。
+新しい版との差分は arata config init --diff で確かめる。設定と allowlist.yaml の形だけなら arata config check (AWS に繋がない)。
 
 AI (LLM) から使う場合は ` + "`arata help ai`" + ` を最初に読んでください (report の読み方は ` + "`arata help ai report`" + `、承認判断は ` + "`arata help ai approve`" + `、
 チェックごとの対処手順は ` + "`arata help ai playbook <check>`" + `)。`

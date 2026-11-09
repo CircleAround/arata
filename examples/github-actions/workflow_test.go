@@ -16,13 +16,20 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// 見本は 2 つ。1 つのアカウントを監査する形と、複数のアカウントを matrix で監査する形。
+// 定時の監査の見本は 2 つ。1 つのアカウントを監査する形と、複数のアカウントを matrix で監査する形。
+// ほかに、finding を片付ける見本 (triage) と、PR で設定を検査する見本 (check) がある (triage_check_test.go)。
 const (
 	singleFile = "arata-audit.yml"
 	multiFile  = "arata-audit-multi.yml"
+	triageFile = "arata-triage.yml"
+	checkFile  = "arata-check.yml"
 )
 
-var workflowFiles = []string{singleFile, multiFile}
+// workflowFiles は定時の監査の見本。allFiles は見本のすべて。
+var (
+	workflowFiles = []string{singleFile, multiFile}
+	allFiles      = []string{singleFile, multiFile, triageFile, checkFile}
+)
 
 type step struct {
 	ID             string            `yaml:"id"`
@@ -49,8 +56,9 @@ type workflow struct {
 		} `yaml:"schedule"`
 		WorkflowDispatch struct {
 			Inputs map[string]struct {
-				Type    string   `yaml:"type"`
-				Options []string `yaml:"options"`
+				Type     string   `yaml:"type"`
+				Options  []string `yaml:"options"`
+				Required bool     `yaml:"required"`
 			} `yaml:"inputs"`
 		} `yaml:"workflow_dispatch"`
 	} `yaml:"on"`
@@ -93,7 +101,7 @@ func load(t *testing.T, file string) (*workflow, string) {
 	return w, string(b)
 }
 
-// forEachWorkflow は両方の見本に同じ検査をかける。
+// forEachWorkflow は定時の監査の 2 つの見本に同じ検査をかける。
 func forEachWorkflow(t *testing.T, fn func(t *testing.T, w *workflow, text string)) {
 	t.Helper()
 	for _, f := range workflowFiles {
@@ -345,15 +353,22 @@ func testRunScriptsParse(t *testing.T, w *workflow, text string) {
 // runStep は Actions と同じ bash の起動で step のスクリプトを動かす。PATH の先頭は偽の実行ファイルの置き場所。
 func runStep(t *testing.T, script, bin string, env ...string) (string, int, string) {
 	t.Helper()
+	return runStepIn(t, t.TempDir(), script, bin, env...)
+}
+
+// runStepIn は dir をカレントディレクトリ (checkout したリポジトリのつもり) にして step を動かす。
+func runStepIn(t *testing.T, dir, script, bin string, env ...string) (string, int, string) {
+	t.Helper()
 	tmp := t.TempDir()
 	path := filepath.Join(t.TempDir(), "step.sh")
 	if err := os.WriteFile(path, []byte(script), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command("bash", "--noprofile", "--norc", "-eo", "pipefail", path)
-	cmd.Dir = t.TempDir()
+	cmd.Dir = dir
 	cmd.Env = append([]string{"PATH=" + bin + ":" + os.Getenv("PATH"), "RUNNER_TEMP=" + tmp,
 		"GITHUB_PATH=" + filepath.Join(tmp, "github_path"), "GITHUB_ENV=" + filepath.Join(tmp, "github_env"),
+		"GITHUB_STEP_SUMMARY=" + filepath.Join(tmp, "summary"), "GITHUB_ACTOR=alice",
 		"PROFILE=daily", "ARATA_VERSION=v0.0.0", "ARATA_CONFIG_DIR=arata", "ARATA_STORE_URL=s3://example-arata-store/example"}, env...)
 	out, err := cmd.CombinedOutput()
 	code := 0

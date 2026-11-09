@@ -289,3 +289,26 @@ func TestAllowlistEditResolves(t *testing.T) {
 		t.Fatalf("resolved twice: %+v", rep.Findings.Resolved)
 	}
 }
+
+// GitHub Actions の見本 (examples/github-actions/arata-triage.yml) が渡す引数の並び (フラグが先、ID が最後) で動く。
+// 見本の側のテストは偽の arata で引数を確かめるだけなので、本物が同じ並びを受け付けることをここで確かめる。
+func TestTriageWorkflowArguments(t *testing.T) {
+	c := newCLI(t)
+	items := seedFindings(t, c)
+	root := items["root_usage|arn:aws:iam::"+acct+":root|198.51.100.8"]
+	np := items["new_principal|arn:aws:iam::"+acct+":user/mallory"]
+	ext := items["new_principal|arn:aws:iam::"+saas+":root"]
+	if code := c.run("ack", "-c", c.cfg, root.ID); code != 0 || !strings.Contains(c.stdout.String(), "acked") {
+		t.Fatalf("ack exit %d: %s%s", code, c.stdout, c.stderr)
+	}
+	if code := c.run("snooze", "-c", c.cfg, "--until", "2026-11-01", np.ID); code != 0 || !strings.Contains(c.stdout.String(), "snoozed") {
+		t.Fatalf("snooze exit %d: %s%s", code, c.stdout, c.stderr)
+	}
+	if code := c.run("resolve", "-c", c.cfg, ext.ID); code != 0 || !strings.Contains(c.stdout.String(), "resolved") {
+		t.Fatalf("resolve exit %d: %s%s", code, c.stdout, c.stderr)
+	}
+	// 無い ID は CONFIG_INVALID (見本の README の「失敗の見分け」)
+	if code := c.run("ack", "-c", c.cfg, "0123456789ab"); code != 2 || strings.Join(c.codes(), ",") != "CONFIG_INVALID" {
+		t.Fatalf("unknown id: exit %d %v", code, c.codes())
+	}
+}

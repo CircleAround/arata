@@ -38,7 +38,7 @@ defaults:
     shell: bash     # -eo pipefail で動く
 
 env:
-  ARATA_VERSION: v0.4.0        # S3 ストアを含む版が要る (v0.4.0 以降)。固定し、上げるときは PR で
+  ARATA_VERSION: v0.5.1        # v0.5.1 以降にする (それより前は、Bedrock の新しいモデルで要約が失敗する)。固定し、上げるときは PR で
   ARATA_CONFIG_DIR: arata
   ARATA_STORE_URL: s3://example-arata-store/example   # arata.yaml の store: と同じ値
   AWS_REGION: ap-northeast-1

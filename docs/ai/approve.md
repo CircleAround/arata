@@ -8,6 +8,29 @@
   `arata approve <id> --note "<理由>" [--expires YYYY-MM-DD] [--tag deploy|ai] [--by <承認者>]`
 - `--commit` を付けると allowlist.yaml だけを git commit する。push とレビューは人が行う
 
+## allowlist.yaml を PR で直す運用
+
+定期実行が GitHub Actions (ストアは S3) で、allowlist.yaml の変更は PR でレビューする運用では、`arata approve` を使わない。
+approve は追記と同時にストアの finding を resolved にするので、PR がマージされる前に finding が消えてしまう。代わりに allowlist.yaml を直す PR を作る。
+PR は提案で、承認するのは差分を見てマージする人 (上の原則と同じ)。LLM が PR を作ってよいのは、人に頼まれたときだけ。
+
+1. `principals` の末尾に項目を足す。ほかの行 (コメント・順序・空行) は変えない。1 つの PR には 1 つの判断だけを入れる
+
+   ```yaml
+     - arn: arn:aws:iam::123456789012:role/Deploy   # arn / account / arn_pattern のどれか 1 つ (下の各節の基準で選ぶ)
+       note: GitHub Actions のデプロイロール          # 承認の理由 (必須と考える)
+       approved_by: alice                            # 承認する人 (頼んだ人)。LLM 自身を書かない。分からなければ PR で尋ねる
+       approved_at: 2026-11-09                       # 今日 (UTC)
+       expires: 2027-03-31                           # 任意。期限付き承認の基準は下
+       tags: [deploy]                                # 任意。語彙は下
+   ```
+
+2. `arata config check -c <arata.yaml>` を実行し、`ng` と `warn` (同じ主体の重複) が無いことを確かめる (AWS にもストアにも繋がない)
+3. PR の本文に、finding の `id`・承認の対象・承認してよい理由 (下の目安に照らして) を書く。ARN やアカウント ID を、リポジトリの外 (公開の場所) に書かない
+4. 人が差分を見てマージする。次の run が、一致する finding を allowlisted として解消する (resolve は要らない)
+
+主体の承認ではないもの (下の「approve ではなく ack / snooze / resolve にするもの」) は PR では止まらない。ack / snooze / resolve を人に提案する。
+
 ## 承認してよい主体の目安
 
 - 誰が・何のために使うかを説明できる (社員の switch role、CI/CD のロール、運用委託先、SaaS 連携)

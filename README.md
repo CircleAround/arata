@@ -18,7 +18,7 @@ AWS のログと設定を定期的に改め、**前回から新しく発生し�
 - チェック: `root_usage`, `unknown_assume_role`, `new_principal`, `iam_changes`, `access_denied`, `defense_evasion`, `public_exposure`, `principal_new_source`, `secret_access`, `unused_region_activity`, `cost_anomaly`, `login_bruteforce`, `probe_paths`, `endpoint_abuse`, `waf_block_trend`, `ai_path_usage` (daily)、
   `credential_hygiene`, `guardduty_findings`, `posture`, `access_analyzer`, `waf_review` (weekly。WAF の修正提案の候補を report.json の `proposals` に)
 - ストア: `dir://` (JSONL 原本 + SQLite)、`s3://` (毎回消える実行環境向けのオプション。「S3 ストア」の節)
-- CLI: `config init` (推奨設定の雛形と `--diff`) / `profiles` (効いているチェックとパラメータ) / `init` (日単位の分割と `--resume`) / `doctor` / `run` / `collect` / `evaluate` / `report` (`--from --to` / `--month` で期間レポート) / `review` / `approve` / `ack` / `snooze` / `resolve` / `help ai`
+- CLI: `config init` (推奨設定の雛形と `--diff`) / `config check` (設定と allowlist のオフラインの検査) / `profiles` (効いているチェックとパラメータ) / `init` (日単位の分割と `--resume`) / `doctor` / `run` / `collect` / `evaluate` / `report` (`--from --to` / `--month` で期間レポート) / `review` / `approve` / `ack` / `snooze` / `resolve` / `help ai`
 - allowlist: `principals[]` の `arn` / `account` (アカウント単位) / `arn_pattern` (glob)、`tags` は `deploy` / `ai`、`expected_denied` (access_denied で数えない想定済みの拒否。ADR 0022)
 - ack / snooze 中の finding も、重大度が上がれば changed として再報告する (ADR 0022)
 
@@ -48,6 +48,7 @@ arata を呼ばず、AWS の監査ロールもストアも使わない (出力�
 ```sh
 aratam config init                          # ./aratam.yaml (全項目を明示した雛形。provider は none)
 export ARATAM_SLACK_WEBHOOK='https://hooks.slack.com/services/...'
+aratam config check                         # 設定の形だけを検査 (Slack・LLM に繋がない。PR の CI 向け)
 aratam doctor                               # Webhook の環境変数と LLM の疎通 (送信はしない)
 aratam test-notify                          # Slack に試験メッセージを 1 通 (--urgent で緊急用)
 aratam notify --in /var/lib/arata/out/daily --dry-run   # 送らずに標準出力へ (LLM は呼ぶ。--llm none で呼ばない)
@@ -154,6 +155,7 @@ arata run --profile daily --out /tmp/arata-out
 
 arata profiles                    # プロファイルごとに実際に走るチェックとパラメータ、その由来 (overrides / checks: / 既定値)
 arata config init --diff          # 版を上げたら: 入っていないチェック・既定値と違う値・未知のキー
+arata config check                # 設定と allowlist.yaml の形だけを検査 (AWS・ストアに繋がない。PR の CI 向け。問題があれば終了コード 2)
 ```
 
 設定ファイルは `-c` (`--config`) で指定する。省略時は環境変数 `ARATA_CONFIG`、それも無ければカレントディレクトリの `./arata.yaml` を読む
