@@ -35,6 +35,72 @@ const (
 	maxGroupNames        = 10
 )
 
+// finding の ID の表示 (aratam 設計書 3-5 章)。
+const (
+	// maxIDRunes は表示する id の上限。arata の id は 12 桁の 16 進だが、report.json の値も信用せず長さを規則で止める。
+	maxIDRunes = 32
+	// maxGroupIDs はまとめた項目に並べる id の数 (残りは件数と `arata review`)。
+	maxGroupIDs = 5
+	// maxItemLineRunes は項目の見出し・主体の行の上限。ログ由来の値がどれだけ長くても、section の上限 (3000 字) の切り詰めが id の表記に届かないようにする。
+	maxItemLineRunes = 2000
+)
+
+// idText は表示用の id (1 行にし、長さを止める)。値は report.json の finding の id で、LLM の出力からは取らない。
+func idText(id string) string { return clipRunes(oneLine(id), maxIDRunes) }
+
+// idTag は finding 1 件の行の末尾に添える `id: 7f16a4507445` (id が空なら何も出さない)。
+func idTag(id string) string {
+	s := idText(id)
+	if s == "" {
+		return ""
+	}
+	return code("id: " + s)
+}
+
+// withID は行の末尾に id の表記を添える。
+func withID(line, id string) string {
+	if tag := idTag(id); tag != "" {
+		return line + " " + tag
+	}
+	return line
+}
+
+// groupIDLine はまとめた項目の id の行 (主体と同じ順)。「id: `a` `b` … ほか N 件は `arata review`」。
+func groupIDLine(fs []findingRef) string {
+	var ids []string
+	for _, f := range fs {
+		if s := idText(f.id); s != "" {
+			ids = append(ids, code(s))
+		}
+	}
+	if len(ids) == 0 {
+		return ""
+	}
+	rest := ""
+	if len(ids) > maxGroupIDs {
+		rest = fmt.Sprintf(" ほか %d 件は `arata review`", len(ids)-maxGroupIDs)
+		ids = ids[:maxGroupIDs]
+	}
+	return "id: " + strings.Join(ids, " ") + rest
+}
+
+// noTick はバッククォートを ' に置き換える (ログ由来の値の 1 つだけのバッククォートが、後ろの id のコード表記と組になって崩さないように)。
+func noTick(s string) string { return strings.ReplaceAll(s, "`", "'") }
+
+// boldSummary は項目の見出しにする summary (1 行・エスケープ・太字。長さは maxItemLineRunes まで)。
+func boldSummary(s string) string {
+	return "*" + clipRunes(Escape(noTick(oneLine(s))), maxItemLineRunes) + "*"
+}
+
+// clipCode は `code` を含む行を maxItemLineRunes までにする。コード表記の途中で切れたら閉じる。
+func clipCode(s string) string {
+	s = clipRunes(s, maxItemLineRunes)
+	if strings.Count(s, "`")%2 == 1 {
+		s += "`"
+	}
+	return s
+}
+
 var severityEmoji = map[string]string{"critical": "🚨", "high": "🔴", "medium": "🟠", "low": "🟡", "info": "⚪"}
 
 var severityOrder = []string{"critical", "high", "medium", "low", "info"}
@@ -114,7 +180,7 @@ func abuseIPs(f findingRef, field string) string {
 				w = fmt.Sprintf("%d 分", int(d/time.Minute))
 			}
 		}
-		s += " / " + Escape(w)
+		s += " / " + Escape(oneLine(w)) // window もログ由来の値と同じく 1 行にする (FuzzFindingID で見つけた)
 	}
 	return s
 }
@@ -223,7 +289,7 @@ func splitUrgent(in *Input, urgent string) (top, rest []findingRef) {
 	return top, rest
 }
 
-// urgentItems は「まず対応」の項目 (1 件ずつ、「→」付き)。
+// urgentItems は「まず対応」の項目 (1 件ずつ、「→」付き。見出しの行の末尾に id)。
 func urgentItems(top []findingRef, notes *BlockNotes) []item {
 	var out []item
 	for i, f := range top {
@@ -240,12 +306,13 @@ func urgentItems(top []findingRef, notes *BlockNotes) []item {
 			action = Escape(action)
 		}
 		out = append(out, item{sev: f.severity, n: 1, first: i,
-			text: fmt.Sprintf("%s *%s*%s\n→ %s", sevEmoji(f.severity), Escape(oneLine(f.summary)), diffMark(f), action)})
+			text: withID(fmt.Sprintf("%s %s%s", sevEmoji(f.severity), boldSummary(f.summary), diffMark(f)), f.id) + "\n→ " + action})
 	}
 	return out
 }
 
 // groupItems は「確認推奨」の項目。対応表にあるチェックは 1 項目にまとめる。並びは重大度の高い順、同じなら最初の出現順。
+// 1 件ずつの項目は行の末尾に id、まとめた項目は主体の行の下に id の行 (groupIDLine)。
 func groupItems(rest []findingRef) []item {
 	type group struct {
 		key string
@@ -277,7 +344,7 @@ func groupItems(rest []findingRef) []item {
 		}
 		if r, ok := groupRules[g.key]; ok && r.single && len(g.fs) == 1 {
 			f := g.fs[0]
-			text := fmt.Sprintf("%s *%s* — %s%s", sevEmoji(sev), r.label, r.name(f), diffMark(f))
+			text := withID(clipCode(fmt.Sprintf("%s *%s* — %s%s", sevEmoji(sev), r.label, r.name(f), diffMark(f))), f.id)
 			if r.next != "" {
 				text += "\n→ " + r.next
 			}
@@ -286,7 +353,7 @@ func groupItems(rest []findingRef) []item {
 		}
 		if len(g.fs) == 1 {
 			f := g.fs[0]
-			out = append(out, item{sev: sev, n: 1, first: i, text: fmt.Sprintf("%s *%s*%s", sevEmoji(sev), Escape(oneLine(f.summary)), diffMark(f))})
+			out = append(out, item{sev: sev, n: 1, first: i, text: withID(fmt.Sprintf("%s %s%s", sevEmoji(sev), boldSummary(f.summary), diffMark(f)), f.id)})
 			continue
 		}
 		r := groupRules[g.key]
@@ -298,7 +365,10 @@ func groupItems(rest []findingRef) []item {
 			}
 			names = append(names, r.name(f)+diffMark(f))
 		}
-		text := fmt.Sprintf("%s *%s* %d %s\n%s", sevEmoji(sev), r.label, len(g.fs), r.unit, strings.Join(names, r.sep))
+		text := fmt.Sprintf("%s *%s* %d %s\n%s", sevEmoji(sev), r.label, len(g.fs), r.unit, clipCode(strings.Join(names, r.sep)))
+		if ids := groupIDLine(g.fs); ids != "" {
+			text += "\n" + ids
+		}
 		if r.next != "" {
 			text += "\n→ " + r.next
 		}

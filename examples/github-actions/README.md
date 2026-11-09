@@ -448,7 +448,7 @@ name: prod                                # 通知に出す名前。アカウン
 ストアが S3 にあると、手元にストアを書ける認証が無い人は `arata ack` を実行できません。[arata-triage.yml](arata-triage.yml) を `.github/workflows/` に置くと、Actions の画面から行えます。
 見本は複数のアカウントの形です。1 つのアカウントで使うときの直し方は、ファイルの先頭のコメントにあります。
 
-1. Slack の通知で finding の ID (`id 0123456789ab` の 12 桁) を確かめます
+1. Slack の通知で finding の ID (`id: 0123456789ab` の 12 桁) を確かめます
 2. GitHub の Actions → **arata-triage** → **Run workflow** を開き、ブランチは **main** のまま、次を入れて実行します
 
    | 入力 | 中身 |

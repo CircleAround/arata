@@ -38,6 +38,8 @@ arata を呼ばず、AWS の監査ロールもストアも使わない (出力�
   それ未満を「確認推奨」(同じチェックの指摘は規則で 1 項目にまとめ、主体を並べる) に分ける。`slack.format: text` で v0.3.0 までの mrkdwn の本文も選べる (v0.4.0 から `slack.format` は必須)
 - LLM が書くのは要約 1〜2 文と「まず対応」の「→」だけ (text のときは分類と説明)。重大度・件数・まとめ方は規則で、report.json の値を表示する。
   LLM が使えなければ規則だけで組み立てた通知を送る (text のときは原文)
+- 指摘の行の末尾に finding の ID を `` `id: 7f16a4507445` `` の形で出す (blocks・text とも。まとめた項目は主体と同じ順に 5 個まで)。
+  `arata ack / snooze / resolve <ID>` や作業の記録に、`arata review` を引かずに結びつけられる。値は report.json のもので、LLM には書かせない (docs/aratam.md 3-5 章)
 - LLM のプロバイダ: `bedrock` (Converse。`bedrock:InvokeModel` だけ要る) / `claude-cli` (`claude -p` をツール無し・ユーザー設定を読まず・空の一時ディレクトリで起動) / `none` (LLM を呼ばない)
 - Webhook の URL は設定ファイルに書かず、`slack.webhook_env` に書いた名前の環境変数で渡す。LLM に渡すデータは report.json (と下の提案の候補・前提) だけ
 - weekly の report.json に WAF の修正提案の候補 (`proposals`) があれば、「WAF の改善提案」を 2 通目として通常用に送る (ADR 0024)。

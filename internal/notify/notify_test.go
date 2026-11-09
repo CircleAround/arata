@@ -328,7 +328,7 @@ func TestReportValuesAreEscaped(t *testing.T) {
 	run(t, inputDir(t, marshal(t, r), ""), s, func(o *Options) { o.Rules.UrgentMention = "" })
 	text := s.got[0].text
 	if strings.Contains(text, "<!channel>") || strings.Contains(text, "<!here>") || strings.Contains(text, "<https://") ||
-		!strings.Contains(text, "• *[critical]* UA &lt;!channel&gt; &lt;https://evil.example|click&gt; &amp; more `root_usage`\n    count 1 · ips &lt;!here&gt; · id f-002") {
+		!strings.Contains(text, "• *[critical]* UA &lt;!channel&gt; &lt;https://evil.example|click&gt; &amp; more `root_usage`\n    count 1 · ips &lt;!here&gt; · 初出 2026-10-21T09:00:00Z · `id: f-002`") {
 		t.Fatalf("not escaped:\n%s", text)
 	}
 }
@@ -378,17 +378,17 @@ func TestDetailShowsKeyFieldsOnly(t *testing.T) {
 	}{
 		{schema.Finding{ID: "f-1", Check: "unknown_assume_role", Summary: "既知リストに無い arn:aws:iam::111111111111:user/ci が arn:aws:iam::111111111111:role/admin を 2 回引き受け", FirstSeen: "2026-10-20T08:00:00Z",
 			Data: map[string]any{"caller": "arn:aws:iam::111111111111:user/ci", "caller_kind": "IAMUser", "count": 2.0, "ips": []any{"203.0.113.5", "203.0.113.6", "203.0.113.7", "203.0.113.8"}, "last_time": "2026-10-21T01:00:00Z", "event_names": []any{"AssumeRole"}}},
-			"ips 203.0.113.5, 203.0.113.6, 203.0.113.7 他 1 · last_time 2026-10-21T01:00:00Z · id f-1 (初出 2026-10-20T08:00:00Z)"},
+			"ips 203.0.113.5, 203.0.113.6, 203.0.113.7 他 1 · last_time 2026-10-21T01:00:00Z · 初出 2026-10-20T08:00:00Z · `id: f-1`"},
 		{schema.Finding{ID: "f-2", Check: "login_bruteforce", Summary: "ログイン失敗が平常帯を超過: 198.51.100.7 から 52 件", FirstSeen: "2026-10-21T09:00:00Z",
 			Data: map[string]any{"ip": "198.51.100.7", "count": 52.0, "date": "2026-10-20", "reason": "above_baseline", "threshold": 20.0, "baseline_median": 3.0, "baseline_days_with_data": 14.0}},
-			"date 2026-10-20 (UTC) · reason above_baseline · threshold 20 · id f-2 (初出 2026-10-21T09:00:00Z)"},
+			"date 2026-10-20 (UTC) · reason above_baseline · threshold 20 · 初出 2026-10-21T09:00:00Z · `id: f-2`"},
 		{schema.Finding{ID: "f-4", Check: "access_denied", Summary: "拒否された API 呼び出し: arn:aws:iam::123456789012:role/example が 6 種類 (7 件) で拒否 (列挙の兆候)", FirstSeen: "2026-10-21T09:00:00Z",
 			Data: map[string]any{"principal": "arn:aws:iam::123456789012:role/example", "count": 7.0, "distinct_apis": 6.0, "allowlist_status": "approved", "threshold": "breadth",
 				"apis": []any{"iam:ListUsers × 2", "s3:ListBuckets × 1", "ec2:DescribeInstances × 1", "iam:CreateUser × 1"}, "ips": []any{"198.51.100.1"}, "error_codes": []any{"AccessDenied"}}},
-			"apis iam:ListUsers × 2, s3:ListBuckets × 1, ec2:DescribeInstances × 1 他 1 · ips 198.51.100.1 · allowlist_status approved · id f-4 (初出 2026-10-21T09:00:00Z)"},
+			"apis iam:ListUsers × 2, s3:ListBuckets × 1, ec2:DescribeInstances × 1 他 1 · ips 198.51.100.1 · allowlist_status approved · 初出 2026-10-21T09:00:00Z · `id: f-4`"},
 		{schema.Finding{ID: "f-3", Check: "some_future_check", Summary: "何か", FirstSeen: "2026-10-21T09:00:00Z",
 			Data: map[string]any{"count": 3.0, "ips": []any{"192.0.2.1"}, "other": "x"}},
-			"count 3 · ips 192.0.2.1 · id f-3 (初出 2026-10-21T09:00:00Z)"},
+			"count 3 · ips 192.0.2.1 · 初出 2026-10-21T09:00:00Z · `id: f-3`"},
 	}
 	for _, tc := range cases {
 		if got := detail(tc.f); got != tc.want {

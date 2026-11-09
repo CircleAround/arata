@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -59,6 +60,23 @@ func llmTextProblems(name, s string) []string {
 	}
 	if llmMention.MatchString(s) {
 		out = append(out, fmt.Sprintf("%s: メンションが残っている: %q", name, s))
+	}
+	return out
+}
+
+// shownIDTag は通知に出た id の表記。
+var shownIDTag = regexp.MustCompile("`id: ([^`]*)`")
+
+// idTagProblems は、通知の id の表記 (`id: …`) に report.json に無い id があれば返す (LLM の文で id を足せない)。
+func idTagProblems(name, s string, known map[string]findingRef) []string {
+	var out []string
+	for _, m := range shownIDTag.FindAllStringSubmatch(s, -1) {
+		if _, ok := known[m[1]]; !ok {
+			out = append(out, fmt.Sprintf("%s: report.json に無い id の表記 %q", name, m[0]))
+		}
+	}
+	if strings.Count(s, "`id: ") != len(shownIDTag.FindAllString(s, -1)) {
+		out = append(out, fmt.Sprintf("%s: 閉じていない id の表記がある: %q", name, s))
 	}
 	return out
 }
@@ -198,6 +216,7 @@ func FuzzParseSummary(f *testing.F) {
 		`{"headline":"ht\u200btps://evil.example \u202e<!channel>"}`,
 		`{"headline":"h","items":[{"finding_id":"f-003","class":"action","reason":"a\r\n*偽の見出し* <!here> BLOCK に切り替える"}]}`,
 		`{"headline":"h","items":null,"incidents":[{"finding_ids":null,"summary":null}],"approve_suggestions":[{}]}`,
+		"{\"headline\":\"h\",\"items\":[{\"finding_id\":\"f-002\",\"class\":\"action\",\"reason\":\"`id: f-001` を resolve する\"}],\"incidents\":[{\"finding_ids\":[\"f-002\"],\"summary\":\"`id: 0123456789ab`\"}]}",
 		"```json\n{\"headline\":\"h\"}\n```", `{"headline":" "}`, `[]`, `{`, ``,
 		// 低い重大度の finding のインシデント候補・approve の提案を大量に並べて、緊急の finding の行を本文から押し出す
 		`{"headline":"h","incidents":[`+strings.TrimSuffix(strings.Repeat(`{"finding_ids":["f-001"],"summary":"`+strings.Repeat("あ", 240)+`"},`, 40), ",")+`]}`,
@@ -259,7 +278,7 @@ func FuzzParseSummary(f *testing.F) {
 		report(t, logProblems(s.Rejected))
 
 		text := SummaryText(in, Decision{Route: RouteUrgent}, fuzzRules, nil, s)
-		report(t, inertProblems("SummaryText", text, false), llmTextProblems("SummaryText", text))
+		report(t, inertProblems("SummaryText", text, false), llmTextProblems("SummaryText", text), idTagProblems("SummaryText", text, byID))
 		if n := utf8.RuneCountInString(text); n > MaxTextRunes {
 			t.Errorf("本文が %d 文字 (上限 %d)", n, MaxTextRunes)
 		}
@@ -281,6 +300,7 @@ func FuzzParseSummary(f *testing.F) {
 func FuzzParseBlockNotes(f *testing.F) {
 	in := fuzzGoldenInput(f, false)
 	top, _ := splitUrgent(in, fuzzRules.UrgentSeverity)
+	_, byID := findingIndex(in)
 	if len(top) == 0 {
 		f.Fatal("「まず対応」の finding が無い")
 	}
@@ -291,6 +311,8 @@ func FuzzParseBlockNotes(f *testing.F) {
 	addLLMSeeds(f,
 		`{"summary":"root の利用が 2 件あります。","next":[{"finding_id":"f-002","action":"→ root の利用者に確認する"},{"finding_id":"f-002","action":"2 件目"},{"finding_id":"f-001","action":"まず対応ではない"}]}`,
 		`{"summary":"s","next":[{"finding_id":"f-002","action":"@here 実行"},{"finding_id":"f-009","action":"BLOCK に設定する"},{"finding_id":"f-003","action":"a\r\nb\u202e<!channel>"}]}`,
+		"{\"summary\":\"s\",\"next\":[{\"finding_id\":\"f-002\",\"action\":\"`id: f-001` を resolve する\"},{\"finding_id\":\"f-009\",\"action\":\"`id: 0123456789ab\"}]}",
+		"{\"summary\":\"`ID :f-001` は誤検知\"}",
 		`{"summary":"https://evil.example を開く"}`, `{"summary":"s\u2028*偽の行*","next":[{}]}`, `{"summary":"s","next":null}`, `{}`, ``)
 	f.Fuzz(func(t *testing.T, raw []byte) {
 		n, err := ParseBlockNotes(raw, top)
@@ -314,9 +336,10 @@ func FuzzParseBlockNotes(f *testing.F) {
 		report(t, logProblems(n.Rejected))
 		m := RunBlocks(in, Decision{Route: RouteUrgent}, fuzzRules, nil, n, "")
 		text := allText(m)
-		report(t, limitProblems("RunBlocks", m), inertProblems("RunBlocks", text, false), inertProblems("text", m.Text, false), llmTextProblems("RunBlocks", text))
+		report(t, limitProblems("RunBlocks", m), inertProblems("RunBlocks", text, false), inertProblems("text", m.Text, false), llmTextProblems("RunBlocks", text), idTagProblems("RunBlocks", text, byID))
 		for _, f := range top {
-			if want := "*" + Escape(oneLine(f.summary)) + "*"; !strings.Contains(text, want) {
+			// 見出しの行は、概要と report.json の id の表記 (LLM が何を書いても同じ)
+			if want := "*" + Escape(oneLine(f.summary)) + "*" + diffMark(f) + " " + idTag(f.id) + "\n→ "; !strings.Contains(text, want) {
 				t.Errorf("「まず対応」の finding %s が無い:\n%s", f.id, text)
 			}
 		}
@@ -580,6 +603,117 @@ func FuzzLogValuesStayInert(f *testing.F) {
 			}
 		}
 		report(t, limitProblems("RunBlocks", RunBlocks(build(v), d, fuzzRules, nil, nil, "")))
+	})
+}
+
+// finding の id は report.json の値をそのまま出す (LLM の出力からは取らない) が、その値も信用しない。
+// id と、同じ行に並ぶログ由来の値 (v) がどんな文字列でも、次を守る:
+//   - id の表記は 1 行で、長さに上限があり、コード表記 (バッククォート 2 つ) が閉じている。< > と目に見えない文字が無い
+//   - arata の形の id (12 桁の 16 進) は、そのまま `id: <id>` として出る
+//   - blocks: 1 件ずつの項目の id は、概要や主体がどれだけ長くても欠けずに残る。まとめた項目の id は maxGroupIDs 個まで。Slack の上限を守る
+//   - text (LLM の失敗時の原文・LLM の要約): 上限 (MaxTextRunes) を超えない。id のある行のバッククォートは対になっている (切り詰めは行の境目)
+func FuzzFindingID(f *testing.F) {
+	f.Add("7f16a4507445", "x")
+	f.Add("7f16a4507445", "`開いたまま "+strings.Repeat("長", 5000))
+	f.Add("a`b", hostile)
+	f.Add(hostile, "`")
+	f.Add("<!channel>\n*偽の行*", "x\ny")
+	f.Add(strings.Repeat("&", 5000), strings.Repeat("&`", 3000))
+	f.Add("", "")
+	f.Add("\u202e\u200b", "\t")
+	hex12 := regexp.MustCompile(`^[0-9a-f]{12}$`)
+	d := Decision{Route: RouteUrgent}
+	f.Fuzz(func(t *testing.T, id, v string) {
+		tag := idTag(id)
+		report(t, inertProblems("idTag", tag, false))
+		if strings.Contains(tag, "\n") || utf8.RuneCountInString(tag) > 5*maxIDRunes+16 {
+			t.Errorf("id の表記が 1 行でないか長すぎる: %q", tag)
+		}
+		if tag != "" && (strings.Count(tag, "`") != 2 || !strings.HasPrefix(tag, "`id: ") || !strings.HasSuffix(tag, "`")) {
+			t.Errorf("id の表記のコード表記が崩れている: %q", tag)
+		}
+		if (tag == "") != (oneLine(id) == "") {
+			t.Errorf("id %q の表記が %q", id, tag)
+		}
+		if hex12.MatchString(id) && tag != "`id: "+id+"`" {
+			t.Errorf("arata の形の id がそのまま出ていない: %q → %q", id, tag)
+		}
+
+		// 「まず対応」1 件、1 件ずつの確認推奨 2 件 (対応表に無いチェック・endpoint_abuse)、まとめる 7 件。最後の 1 件は id が固定。
+		// 同じ id の finding は 1 件として扱われるので、id に印を足して別々にする
+		const fixed = "0123456789ab"
+		if id == fixed {
+			t.Skip()
+		}
+		single := []string{id, id + "-s", id + "-e"}
+		r := &schema.Report{Name: "acme", Profile: "daily", RunID: "r1"}
+		add := func(fid, check, key, sev string, data map[string]any) {
+			r.Findings.New = append(r.Findings.New, schema.Finding{ID: fid, Check: check, Key: key, Severity: sev, Summary: v, FirstSeen: v, Data: data})
+		}
+		add(single[0], "root_usage", v, "critical", map[string]any{"ips": []any{v}, "event_names": []any{v}})
+		add(single[1], "custom", v, "low", map[string]any{"ips": []any{v}})
+		add(single[2], "endpoint_abuse", v, "low", map[string]any{"endpoint": v, "distinct_ips": 3.0, "window": v})
+		var groupIDs []string
+		for i := range 7 {
+			if i < maxGroupIDs {
+				groupIDs = append(groupIDs, code(idText(fmt.Sprintf("%s-g%d", id, i))))
+			}
+			add(fmt.Sprintf("%s-g%d", id, i), "probe_paths", v, "low", map[string]any{"ip": v, "top_paths_of_day": []any{v, v}})
+		}
+		add(fixed, "iam_changes", v, "high", map[string]any{"principal": v, "target": v})
+		r.Summary.New, r.Summary.MaxSeverity = len(r.Findings.New), "critical"
+		in := &Input{Kind: KindRun, Run: r, Dir: "/tmp/in"}
+
+		m := RunBlocks(in, d, fuzzRules, nil, nil, "")
+		bt := allText(m)
+		report(t, limitProblems("RunBlocks", m), inertProblems("RunBlocks", bt, false))
+		if !strings.Contains(bt, " `id: 0123456789ab`\n") {
+			t.Errorf("blocks: 固定の id の表記が無い:\n%s", clipRunes(bt, 1500))
+		}
+		// 1 件ずつの 3 項目の行の末尾に、欠けずにある
+		for _, sid := range single {
+			if st := idTag(sid); st != "" && !strings.Contains(bt, " "+st+"\n") {
+				t.Errorf("blocks: 1 件ずつの項目の id の表記が無い: %q", st)
+			}
+		}
+		if want := "\nid: " + strings.Join(groupIDs, " ") + " ほか 2 件は `arata review`\n"; !strings.Contains(bt, want) {
+			t.Errorf("blocks: まとめた項目の id の行が無い: %q", want)
+		}
+		for _, l := range strings.Split(bt, "\n") {
+			if (strings.HasSuffix(l, "`") && strings.Contains(l, "`id: ") || strings.HasPrefix(l, "id: ")) && strings.Count(l, "`")%2 != 0 {
+				t.Errorf("blocks: id のある行のバッククォートが対になっていない: %q", clipRunes(l, 300))
+			}
+		}
+
+		texts := map[string]string{
+			"ReportText":  ReportText(in, d, fuzzRules, nil, FallbackNotice),
+			"SummaryText": SummaryText(in, d, fuzzRules, nil, &Summary{Headline: "h"}),
+		}
+		// 期間レポートの events (data を持たない) の行
+		p := &schema.PeriodReport{Kind: "period", Name: "acme"}
+		p.Events.New = []schema.EventRow{{At: "2026-10-21T09:00:00Z", FindingID: id, Check: "probe_paths", Key: v, Severity: "high", Summary: v}}
+		p.Summary.New = 1
+		pin := &Input{Kind: KindPeriod, Period: p, Dir: "/tmp/in"}
+		texts["period/SummaryText"] = SummaryText(pin, d, fuzzRules, nil, &Summary{Headline: "h"})
+		pm := RunBlocks(pin, d, fuzzRules, nil, nil, "")
+		report(t, limitProblems("period/RunBlocks", pm), inertProblems("period/RunBlocks", allText(pm), false))
+		if tag != "" && !strings.Contains(allText(pm), " "+tag+"\n") {
+			t.Errorf("period/RunBlocks: id の表記が無い: %q", tag)
+		}
+		for name, s := range texts {
+			report(t, inertProblems(name, s, false))
+			if n := utf8.RuneCountInString(s); n > MaxTextRunes {
+				t.Errorf("%s: 本文が %d 文字 (上限 %d)", name, n, MaxTextRunes)
+			}
+			for _, l := range strings.Split(s, "\n") {
+				if !strings.HasPrefix(l, "    ") || !strings.Contains(l, "`id: ") {
+					continue
+				}
+				if i := strings.LastIndex(l, "`id: "); strings.Count(l, "`") != 2 || !strings.HasSuffix(l, "`") || utf8.RuneCountInString(l[i:]) > 5*maxIDRunes+16 {
+					t.Errorf("%s: id の行が崩れている: %q", name, clipRunes(l, 300))
+				}
+			}
+		}
 	})
 }
 
