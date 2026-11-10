@@ -265,3 +265,68 @@ func TestEventChecksIncludeLateEvents(t *testing.T) {
 		t.Fatalf("without rescan: %+v", obs)
 	}
 }
+
+// AWS のサービスが root の代わりに呼んだ記録 (送信元が IP でなく、data.invoked_by にサービス名) は、見出しに「どのサービス経由か」を出す。
+// 重大度と Key (`<root>|` + 空の IP) は変えない。invoked_by が形に合わない・無い (以前の版で集めた) ときは「IP の記録の無い送信元から」と書く。
+func TestRootUsageInvokedByService(t *testing.T) {
+	const root = "arn:aws:iam::123456789012:root"
+	for _, tc := range []struct {
+		name        string
+		invokedBy   []any
+		wantSummary string
+		wantData    string
+	}{
+		{"サービス経由", []any{"sso.amazonaws.com", "sso.amazonaws.com", "sso.amazonaws.com"},
+			"ルートアカウント " + root + " が AWS のサービス (sso.amazonaws.com) 経由で 3 件の操作", "sso.amazonaws.com"},
+		{"複数のサービス", []any{"sso.amazonaws.com", "AWS Internal", nil},
+			"ルートアカウント " + root + " が AWS のサービス (AWS Internal, sso.amazonaws.com) 経由で 3 件の操作", "AWS Internal,sso.amazonaws.com"},
+		{"記録なし", []any{nil, nil, nil}, "ルートアカウント " + root + " が IP の記録の無い送信元から 3 件の操作", ""},
+		{"形に合わない値は出さない", []any{"x) <!here> (.amazonaws.com", 7, "a\nb"}, "ルートアカウント " + root + " が IP の記録の無い送信元から 3 件の操作", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newStore(t)
+			ctx := context.Background()
+			for i, v := range tc.invokedBy {
+				d := map[string]any{}
+				if v != nil {
+					d["invoked_by"] = v
+				}
+				e := record.TrailEvent{EventID: fmt.Sprint("r", i), Time: now.Add(-time.Duration(i+1) * time.Minute), Source: "trail", Name: "CreateManagedApplicationInstance",
+					EventSource: "sso.amazonaws.com", PrincipalARN: root, PrincipalKind: record.PrincipalRoot, Data: d}
+				if err := st.InsertEvent(ctx, e); err != nil {
+					t.Fatal(err)
+				}
+			}
+			obs, err := RootUsage{}.Evaluate(ctx, st, collect.Window{From: now.Add(-time.Hour), To: now}, nil)
+			if err != nil || len(obs) != 1 {
+				t.Fatalf("%v %v", obs, err)
+			}
+			o := obs[0]
+			if o.Summary != tc.wantSummary || o.Severity != Critical || o.Key != root+"|" {
+				t.Fatalf("summary=%q sev=%s key=%q", o.Summary, o.Severity, o.Key)
+			}
+			got, _ := o.Data["invoked_by"].([]string)
+			if strings.Join(got, ",") != tc.wantData || (tc.wantData == "" && o.Data["invoked_by"] != nil) {
+				t.Fatalf("invoked_by: %v", o.Data["invoked_by"])
+			}
+			if _, ok := o.Data["ips"]; ok {
+				t.Fatalf("ips: %v", o.Data["ips"])
+			}
+		})
+	}
+}
+
+// IP からの操作の見出しは変えない (IP があるときは invoked_by を見出しに出さない)。
+func TestRootUsageSummaryWithIP(t *testing.T) {
+	st, al, w := fixture(t)
+	obs, err := RootUsage{}.Evaluate(context.Background(), st, w, al)
+	if err != nil || len(obs) != 1 {
+		t.Fatalf("%v %v", obs, err)
+	}
+	if want := "ルートアカウント arn:aws:iam::1:root が 203.0.113.1 から 2 件の操作"; obs[0].Summary != want {
+		t.Fatalf("summary: %q", obs[0].Summary)
+	}
+	if _, ok := obs[0].Data["invoked_by"]; ok {
+		t.Fatalf("invoked_by: %v", obs[0].Data)
+	}
+}

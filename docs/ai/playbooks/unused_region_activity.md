@@ -11,7 +11,10 @@
 - AWS のサービスの主体と `ignore_event_sources` (IAM・STS などのグローバルサービス。記録は us-east-1) は数えない
 - Key は `<リージョン>|<主体>`。同じリージョン・主体で操作の種類が増えるか重大度が上がれば changed
 - data: `region`、`principal`、`principal_kind`、`apis` (`<サービス>:<操作>`)、`compute_apis`、`failed` (失敗した件数)、`known_deploy_principal`、
+  `service_linked_role` / `service_linked_service` (主体がサービスリンクロールのとき。そのロールを使う AWS のサービス名)、
   `count`、`event_names`、`ips`、`first_time`、`last_time`
+- 主体がサービスリンクロール (`role/aws-service-role/<サービス>/…`。見出しに「サービスリンクロール」と出る) の書き込みは、利用者が機能を有効にした結果として
+  AWS のサービスが行うことが多い (人の操作に付随する)。重大度は下げない (有効にしたのが正規の人かは別に確かめる)
 
 ## まず確かめること
 
@@ -23,13 +26,17 @@
    (インスタンスの種類・台数・使った AMI・キーペア)
 3. 主体の他の活動: `arata review --format json` で同じ主体の principal_new_source (初めての送信元)・access_denied・iam_changes・new_principal を探す。
    同じ時間帯に初めての送信元から使われていれば、認証情報の漏洩の疑いが強い
-4. 費用: cost_anomaly の指摘、Cost Explorer の日ごとの費用 (リージョン別)
-5. 作業の記録 (検証・移行・DR の準備など) と、利用者の事情 (context_file) に説明があるか
+4. サービスリンクロール (`service_linked_role`) のとき: 同じ時間帯 (`first_time` の前後) に、人がその機能 (`service_linked_service` のサービス) を有効にしたかを確かめる。
+   ふだん使うリージョンの CloudTrail で、そのサービスの設定の操作 (有効化・作成) と `iam:CreateServiceLinkedRole` を探し、誰が・どこから行ったかを見る。
+   正規の人の作業なら付随する書き込みとして扱い、有効にした人が見つからない・既知外の主体なら、その主体の操作として下の「要対応」で判断する
+5. 費用: cost_anomaly の指摘、Cost Explorer の日ごとの費用 (リージョン別)
+6. 作業の記録 (検証・移行・DR の準備など) と、利用者の事情 (context_file) に説明があるか
 
 ## 判断の分かれ目
 
 - **正規の可能性が高い**: 既知のデプロイ主体 (StackSets・Control Tower などの全リージョンへの配布) で、対応する IaC の変更がある。
-  計画したリージョンの追加 (検証・DR) で作業の記録がある。この場合は `cloudtrail-lookup` の `regions` に足すのが本来の形
+  計画したリージョンの追加 (検証・DR) で作業の記録がある。この場合は `cloudtrail-lookup` の `regions` に足すのが本来の形。
+  サービスリンクロールの書き込みで、同じ時間帯に正規の人がその機能を有効にしている
 - **要対応**: 計算資源の作成 (特に GPU や大きなインスタンス、多数のスポット)、人の主体や既知外の主体、作業の記録が無い、
   同じ主体の初めての送信元・拒否の急増・IAM の変更と同じ時間帯、opt-in したばかりのリージョン
 
