@@ -21,6 +21,8 @@ import (
 //   - 成功した書き込みが 1 件でもあれば high、計算資源の作成 (compute_apis) なら critical。失敗 (拒否など) は計算資源の作成の試行だけを medium にし、
 //     他の失敗は報告しない (権限の列挙は access_denied の領分。使っていないリージョンの拒否はふだん 0 件だが、ノイズの元にしない)
 //   - allowlist の `tags: [deploy]` の承認済みの主体 (StackSets などで全リージョンに配る IaC) なら 1 段下げる (info にはしない)
+//   - 主体がサービスリンクロール (role/aws-service-role/<サービス>/…) なら、見出しと data (service_linked_role・service_linked_service) で分かるようにする。
+//     利用者が機能を有効にした結果として AWS が書き込むことが多いが、重大度は下げない (有効にしたのが正規の人かは、ここでは分からない)。Fingerprint にも入れない
 //   - Key は `<リージョン>|<主体 ARN>`。Fingerprint は重大度と操作の集合 (件数や時刻は入れない)
 type UnusedRegionActivity struct {
 	Config config.UnusedRegionActivity
@@ -107,6 +109,10 @@ func (c UnusedRegionActivity) Evaluate(ctx context.Context, q store.Query, w col
 			if deploy {
 				a.extra["known_deploy_principal"] = true
 			}
+			if svc, ok := record.ServiceLinkedRole(e.PrincipalARN); ok {
+				a.extra["service_linked_role"] = true
+				a.extra["service_linked_service"] = svc
+			}
 			aggs[k] = a
 		}
 		if sev.Rank() > a.sev.Rank() {
@@ -137,6 +143,9 @@ func (c UnusedRegionActivity) Evaluate(ctx context.Context, q store.Query, w col
 			summary += "。計算資源の作成を含む (" + strings.Join(compute, ", ") + ")"
 		case len(compute) > 0:
 			summary += "。計算資源の作成の試行 (失敗) を含む (" + strings.Join(compute, ", ") + ")"
+		}
+		if svc, ok := a.extra["service_linked_service"].(string); ok {
+			summary += "。主体は " + svc + " のサービスリンクロール (人の操作に付随することが多い)"
 		}
 		obs[k] = Observation{Check: c.Name(), Key: k, Severity: a.sev, Summary: summary, Data: a.data(),
 			Fingerprint: fingerprint(a.sev, nil, strings.Join(apis, ","))}

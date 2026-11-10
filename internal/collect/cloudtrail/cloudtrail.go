@@ -335,6 +335,16 @@ func (c *Collector) normalize(raw types.Event) (record.TrailEvent, bool) {
 	if !strings.HasSuffix(r.SourceIPAddress, ".amazonaws.com") && r.SourceIPAddress != "AWS Internal" {
 		e.IP = r.SourceIPAddress
 	}
+	// 決定: AWS のサービスが主体 (root・ロールなど) の代わりに呼んだ記録は送信元が IP でない。どのサービス経由かを invoked_by に残す
+	// (root_usage の見出しに使う。設計書 6 章)。invokedBy を優先し、形に合わなければ sourceIPAddress。決まった形 (record.ServiceName) でなければ残さない。
+	// サービスの主体の記録は主体がその名前なので足さない
+	if e.PrincipalKind != record.PrincipalService {
+		if name, ok := record.ServiceName(r.UserIdentity.InvokedBy); ok {
+			e.Data["invoked_by"] = name
+		} else if name, ok := record.ServiceName(r.SourceIPAddress); ok {
+			e.Data["invoked_by"] = name
+		}
+	}
 	if len(r.Resources) > 0 {
 		e.Resource = r.Resources[0].ARN
 	}

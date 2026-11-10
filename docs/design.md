@@ -566,6 +566,15 @@ secrets_access:
 - 決定: `userIdentity.type` も `arn` も無い記録は、`invokedBy` があればそのサービス、`sourceIPAddress` か `userAgent` が `AWS Internal` なら `eventSource` のサービスを主体 (kind=service) にする。
   監査対象アカウントの accountId だけが入った ECR の `PolicyExecutionEvent` などが、自アカウントの `:root` (unknown) として new_principal に出るのを避けるため。
   サービスの主体は principal_seen にも new_principal にも出ない。本物の root は `type=Root` で root_usage が扱う。`type=AWSAccount` の外部アカウントは従来どおり `外部アカウント NNN`。
+- 決定: AWS のサービスが主体 (root・ロールなど) の代わりに呼んだ記録 (`sourceIPAddress` がサービス名で IP が無い。`userIdentity.invokedBy` も同じ名前) は、
+  どのサービス経由かを events の `data.invoked_by` に残す (`invokedBy` を優先、形に合わなければ `sourceIPAddress`。サービスの主体の記録には足さない)。
+  root_usage は送信元の IP が無いとき、見出しを「… が AWS のサービス (`<名前>`) 経由で N 件の操作」とし、finding の data に `invoked_by` (一覧) を出す。
+  IP もサービス名も無ければ「IP の記録の無い送信元から」。以前は「… が  から N 件」と崩れ、読む人と aratam の LLM が送信元不明の操作と受け取った。
+  Key・重大度・Fingerprint は変えない (表示だけの変更。既存の finding は changed にならない)。IP があるときの見出しと data も変えない。
+  送信元を見出しに書く他のチェック (principal_new_source・login_bruteforce など) は、送信元が空なら句ごと出さないので崩れない (確認済み)。
+- 決定 (ADR 0037・0041): サービス名はログ由来の値なので、見出しと data に出すのは決まった形だけ (`record.ServiceName`)。`AWS Internal` か、
+  `<名前>.amazonaws.com` (小文字の英数字・`.`・`-`、64 文字まで)。形に合わない値は捨てる (記法や改行を含む値を見出しに出さない)。ファズ `FuzzServiceName` で固定する。
+  中国などのパーティションの `.amazonaws.com.cn` は対象外 (必要になったら足す)。
 - 決定 (ADR 0027): 主体の項目の `dynamic_source: true` は「送信元が毎回変わる主体」(CI のランナーなど)。principal_new_source の low (新しい送信元だけ) を出さない (medium 以上は出す)。
 - 決定 (ADR 0027): `secrets_access` は「主体 (ARN の完全一致) × 読んでよい秘匿値 (名前・パスの glob)」。secret_access は一致する秘匿値を初出に数えない (一括読み出しの数には数える)。シークレットの ARN はシークレット名の部分でも比べる。空の `secrets`・空の要素・`principal` の無い項目は読み込みエラー。
 - `tags` の語彙は `deploy` (ADR 0008) と `ai` (決定: Step 3。監査ロール・AI 用の主体。ai_path_usage が利用を毎回 info に出す)。approve は語彙外のタグを拒否する。
@@ -777,6 +786,10 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 | unused_region_activity | event | `<リージョン>\|<主体 ARN>` | 重大度 + 操作 (`<サービス>:<操作>`) の集合 | `cloudtrail-unused-regions` のソースのイベントのうち、サービスの主体と `ignore_event_sources` を除いた書き込み。成功すれば high、`compute_apis` (計算資源の作成) なら critical。計算資源の作成の失敗 (試行) は medium、他の失敗は報告しない。deploy タグの承認済み主体なら 1 段下げる |
 | cost_anomaly | event | 異常の ID | 重大度 | 直近 `lookback_days` (7) 日に終わった異常で、影響額が `min_impact_usd` (10 USD) 以上。予想に対する増加の割合 (TotalImpactPercentage、無ければ影響額 / 予想額) が `medium_impact_ratio` (0.5) 以上で medium、`high_impact_ratio` (1.0) 以上で high。予想額が無ければ medium。Feedback が NO / PLANNED_ACTIVITY のものは報告しない |
 
+- 決定: 主体がサービスリンクロール (`arn:aws:iam::<アカウント>:role/aws-service-role/<サービス名>/<ロール名>`。`record.ServiceLinkedRole`) のとき、
+  見出しの末尾に「主体は `<サービス名>` のサービスリンクロール (人の操作に付随することが多い)」と書き、data に `service_linked_role`・`service_linked_service` を出す。
+  利用者が機能を有効にした結果として AWS が書き込むことが多いが、重大度は下げない (有効にしたのが正規の人かはこのチェックでは分からない。確かめ方は対処手順に書く)。
+  Fingerprint にも入れない。ロールの ARN がセッションの ARN からの復元 (パスが落ちる) のときは見分けられない
 - 決定: ふだん使わないリージョンは毎回 `account:ListRegions` (ENABLED / ENABLED_BY_DEFAULT) から全 cloudtrail-lookup の `regions` を除いて決める (設定に active_regions を書かせない。opt-in したリージョンは次の run から対象)。
   cloudtrail-lookup のソースが無ければ設定の誤り。各リージョンで LookupEvents を `ReadOnly=false` で窓 (再走査を含む) の分だけ引く (使っていないリージョンはふつう 1 回。レート制限は共有)
 - 決定: 未使用リージョンのイベントは events に残すが、source 列 (`cloudtrail-unused-regions` のソースの ID) で分け、unused_region_activity だけが見る。

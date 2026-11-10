@@ -36,6 +36,8 @@ func FuzzNormalizeEvent(f *testing.F) {
 		`{"eventSource":"logs.amazonaws.com","eventName":"PutRetentionPolicy","requestParameters":{"logGroupName":"prod-nginx-access","retentionInDays":1}}`,
 		`{"eventSource":"secretsmanager.amazonaws.com","eventName":"BatchGetSecretValue","requestParameters":{"secretIdList":["prod/db",1,null],"filters":[{"key":"name","values":["prod/"]}]}}`,
 		`{"eventSource":"ssm.amazonaws.com","eventName":"GetParameters","requestParameters":{"names":["/example/prod/a"],"withDecryption":"yes"}}`,
+		`{"userIdentity":{"type":"Root","arn":"arn:aws:iam::123456789012:root","accountId":"123456789012","invokedBy":"sso.amazonaws.com"},"sourceIPAddress":"sso.amazonaws.com","eventSource":"sso.amazonaws.com"}`,
+		`{"userIdentity":{"type":"Root","accountId":"123456789012","invokedBy":"x) <!here> (.amazonaws.com"},"sourceIPAddress":"a\nb.amazonaws.com"}`,
 		`{"userIdentity":{"type":"FutureType","arn":"arn:aws:sts::123456789012:assumed-role/Admin/alice@example.com","accountId":"123456789012"}}`,
 		`{"userIdentity":{"arn":"arn:aws:sts::123456789012:assumed-role/Admin/alice@example.com"}}`,
 		`{"requestParameters":[],"responseElements":"x","additionalEventData":1,"resources":{}}`, `{"userIdentity":null,"resources":[null,{"ARN":1}]}`, `[]`, `null`, ``,
@@ -71,6 +73,13 @@ func FuzzNormalizeEvent(f *testing.F) {
 		}
 		if strings.HasSuffix(e.IP, ".amazonaws.com") || e.IP == "AWS Internal" {
 			t.Fatalf("サービス名を IP に入れた: %q", e.IP)
+		}
+		// invoked_by は決まった形のサービス名だけ (ログ由来の値を見出しに出さない)。サービスの主体の記録には足さない
+		if v, has := e.Data["invoked_by"]; has {
+			name, _ := v.(string)
+			if got, ok := record.ServiceName(name); !ok || got != name || e.PrincipalKind == record.PrincipalService || e.IP != "" && e.IP == name {
+				t.Fatalf("data.invoked_by が規則に合わない: %q (kind %s)", v, e.PrincipalKind)
+			}
 		}
 		if _, err := json.Marshal(e); err != nil {
 			t.Fatalf("イベントを JSON にできない: %v", err)

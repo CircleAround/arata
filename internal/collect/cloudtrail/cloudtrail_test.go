@@ -493,3 +493,36 @@ func TestCollectActivityMetrics(t *testing.T) {
 		t.Fatalf("metrics:\n got  %v\n want %v", got, want)
 	}
 }
+
+// AWS のサービスが主体の代わりに呼んだ記録は、sourceIPAddress がサービス名になる。IP には入れず、data.invoked_by に残す。
+// 決まった形 (record.ServiceName) でない値は残さない (ログ由来の値を見出しに出さない)。サービスの主体の記録は主体がその名前なので足さない。
+func TestNormalizeInvokedBy(t *testing.T) {
+	c := New("trail")
+	root := func(invokedBy, sourceIP string) string {
+		b, _ := json.Marshal(map[string]any{
+			"userIdentity": map[string]any{"type": "Root", "arn": "arn:aws:iam::123456789012:root", "accountId": "123456789012", "invokedBy": invokedBy},
+			"eventSource":  "sso.amazonaws.com", "eventName": "CreateManagedApplicationInstance", "sourceIPAddress": sourceIP,
+		})
+		return string(b)
+	}
+	for _, tc := range []struct {
+		name, body, wantIP string
+		want               any
+	}{
+		{"invokedBy と sourceIPAddress がサービス名", root("sso.amazonaws.com", "sso.amazonaws.com"), "", "sso.amazonaws.com"},
+		{"sourceIPAddress だけがサービス名", root("", "cloudformation.amazonaws.com"), "", "cloudformation.amazonaws.com"},
+		{"AWS Internal", root("AWS Internal", "AWS Internal"), "", "AWS Internal"},
+		{"invokedBy が形に合わなければ sourceIPAddress", root("x) <!here> (.amazonaws.com", "sso.amazonaws.com"), "", "sso.amazonaws.com"},
+		{"どちらも形に合わない", root("<!here>", "bad name.amazonaws.com"), "", nil},
+		{"IP からの操作", root("", "198.51.100.7"), "198.51.100.7", nil},
+		{"サービスの主体", serviceEvent, "", nil},
+	} {
+		e, ok := c.normalize(ev("e-1", fuzzEventTime, tc.body))
+		if !ok {
+			t.Fatalf("%s: normalize failed", tc.name)
+		}
+		if e.IP != tc.wantIP || e.Data["invoked_by"] != tc.want {
+			t.Errorf("%s: ip=%q invoked_by=%v (want %q, %v)", tc.name, e.IP, e.Data["invoked_by"], tc.wantIP, tc.want)
+		}
+	}
+}

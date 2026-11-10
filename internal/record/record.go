@@ -79,6 +79,41 @@ func PrincipalLabel(arn string, kind PrincipalKind) string {
 	return arn
 }
 
+// serviceDomain は AWS のサービス名の形 (`<名前>.amazonaws.com`。小文字の英数字・`.`・`-`)。長さは ServiceName が見る。
+const serviceDomain = `[a-z0-9][a-z0-9.-]*\.amazonaws\.com`
+
+var (
+	serviceNameRe       = regexp.MustCompile(`^` + serviceDomain + `$`)
+	serviceLinkedRoleRe = regexp.MustCompile(`^arn:aws[a-z-]*:iam::\d{12}:role/aws-service-role/(` + serviceDomain + `)/[\w+=,.@-]+$`)
+)
+
+// maxServiceName は見出しと data に出すサービス名の長さの上限。
+const maxServiceName = 64
+
+// ServiceInternal は CloudTrail が AWS の内部の呼び出しに書く名前 (sourceIPAddress・userAgent・invokedBy)。
+const ServiceInternal = "AWS Internal"
+
+// ServiceName は CloudTrail の sourceIPAddress・userIdentity.invokedBy の値が AWS のサービス名なら、その値を返す。
+// 決定 (ADR 0037・0041): ログ由来の値なので、見出しと data に出すのは決まった形だけにする。"AWS Internal" か、
+// `<名前>.amazonaws.com` (小文字の英数字・`.`・`-`、64 文字まで)。それ以外 (空白・改行・記法の文字を含む値、IP) は受け入れない。
+func ServiceName(s string) (string, bool) {
+	if s == ServiceInternal || (len(s) <= maxServiceName && serviceNameRe.MatchString(s)) {
+		return s, true
+	}
+	return "", false
+}
+
+// ServiceLinkedRole は主体の ARN がサービスリンクロール (`arn:aws:iam::NNN:role/aws-service-role/<サービス名>/<ロール名>`) なら、
+// そのサービス名 (ServiceName の形) を返す。`aws-service-role/` のパスは AWS だけが作れる (利用者は付けられない)。
+// ロールはそのサービスだけが引き受けられ、利用者が機能を有効にした結果としてサービスが書き込むときに使われる。
+func ServiceLinkedRole(arn string) (string, bool) {
+	m := serviceLinkedRoleRe.FindStringSubmatch(arn)
+	if m == nil || len(m[1]) > maxServiceName {
+		return "", false
+	}
+	return m[1], true
+}
+
 // Record は JSONL に書き出す 1 行。
 type Record interface {
 	RecordKind() Kind

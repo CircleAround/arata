@@ -97,3 +97,20 @@ func sortedObs(m map[string]Observation) []Observation {
 	}
 	return out
 }
+
+// maxInvokedBy は data.invoked_by に出すサービス名の数の上限。
+const maxInvokedBy = 10
+
+// sourcePhrase は見出しの「どこから」の句。送信元の IP があれば「<IP,…> から」、無くて AWS のサービス経由と分かれば
+// 「AWS のサービス (<名前, …>) 経由で」、どちらも無ければ「IP の記録の無い送信元から」。
+// 決定: 送信元が空のときに「 から」と書かない (見出しが崩れ、読む人と LLM が送信元不明の操作と受け取る)。
+// services は record.ServiceName を通した値だけを渡す (ログ由来の値をそのまま見出しに出さない)。
+func sourcePhrase(ips, services []string) string {
+	switch {
+	case len(ips) > 0:
+		return strings.Join(ips, ",") + " から"
+	case len(services) > 0:
+		return "AWS のサービス (" + strings.Join(services, ", ") + ") 経由で"
+	}
+	return "IP の記録の無い送信元から"
+}

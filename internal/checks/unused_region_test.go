@@ -2,6 +2,7 @@ package checks
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -127,5 +128,46 @@ func TestComputeAPIMatch(t *testing.T) {
 	}
 	if got := apiOf(record.TrailEvent{EventSource: "lambda.amazonaws.com", Name: "CreateFunction20150331"}); got != "lambda:CreateFunction" {
 		t.Fatalf("label: %q", got)
+	}
+}
+
+// サービスリンクロール (role/aws-service-role/<サービス>/<名前>) の書き込みは、利用者が機能を有効にした結果として AWS が行うことが多い。
+// 重大度は下げず、見出しと data で分かるようにする。Fingerprint は変えない。
+func TestUnusedRegionActivityServiceLinkedRole(t *testing.T) {
+	const slr = "arn:aws:iam::123456789012:role/aws-service-role/sso.amazonaws.com/AWSServiceRoleForSSO"
+	st := newStore(t)
+	ctx := context.Background()
+	for i, p := range []string{slr, secUser} {
+		te := record.TrailEvent{EventID: fmt.Sprint("e", i), Time: now.Add(-time.Duration(i+1) * time.Minute), Source: "unused", Name: "RunInstances", EventSource: "ec2.amazonaws.com",
+			Region: "eu-west-1", PrincipalARN: p, PrincipalKind: record.PrincipalAssumedRole, Data: map[string]any{}}
+		if err := st.InsertEvent(ctx, te); err != nil {
+			t.Fatal(err)
+		}
+	}
+	al, err := allowlist.Parse([]byte(secAllowlist))
+	if err != nil {
+		t.Fatal(err)
+	}
+	obs, err := unusedRegionCheck().Evaluate(ctx, st, collect.Window{From: now.Add(-24 * time.Hour), To: now}, al)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := byKeyObs(obs)
+	o, other := got["eu-west-1|"+slr], got["eu-west-1|"+secUser]
+	if o.Severity != Critical || other.Severity != Critical {
+		t.Fatalf("severity: %v", bySev(obs))
+	}
+	if o.Data["service_linked_role"] != true || o.Data["service_linked_service"] != "sso.amazonaws.com" {
+		t.Fatalf("data: %+v", o.Data)
+	}
+	if want := "ふだん使わないリージョン eu-west-1 での書き込み: " + slr + " (1 件: ec2:RunInstances)。計算資源の作成を含む (ec2:RunInstances)" +
+		"。主体は sso.amazonaws.com のサービスリンクロール (人の操作に付随することが多い)"; o.Summary != want {
+		t.Fatalf("summary: %q", o.Summary)
+	}
+	if _, ok := other.Data["service_linked_role"]; ok || strings.Contains(other.Summary, "サービスリンクロール") {
+		t.Fatalf("other: %q %+v", other.Summary, other.Data)
+	}
+	if o.Fingerprint != other.Fingerprint {
+		t.Fatalf("fingerprint: %q / %q", o.Fingerprint, other.Fingerprint)
 	}
 }
