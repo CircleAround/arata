@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -299,7 +300,9 @@ type rawEvent struct {
 	RequestParameters   map[string]any `json:"requestParameters"`
 	ResponseElements    map[string]any `json:"responseElements"`
 	AdditionalEventData map[string]any `json:"additionalEventData"`
-	Resources           []struct {
+	// 文字列でない値でも記録ごと捨てないように any で受ける (使うのは 12 桁の数字の文字列だけ)
+	RecipientAccountID any `json:"recipientAccountId"`
+	Resources          []struct {
 		ARN string `json:"ARN"`
 	} `json:"resources"`
 }
@@ -367,8 +370,22 @@ func (c *Collector) normalize(raw types.Event) (record.TrailEvent, bool) {
 	if r.UserIdentity.AccountID != "" {
 		e.Data["account_id"] = r.UserIdentity.AccountID
 	}
+	// 決定 (設計書 6 章): AssumeRole の向きと MFA の判定に使う値を残す。recipientAccountId (この記録を受け取ったアカウント = 証跡のアカウント) は
+	// 12 桁の数字のときだけ。requestParameters.serialNumber (呼び出しに MFA デバイスを指定した) は有無だけ
+	// (値には MFA デバイスの名前 = 利用者名が入るので残さない)。
+	if v, ok := r.RecipientAccountID.(string); ok && recipientAccountRe.MatchString(v) {
+		e.Data["recipient_account"] = v
+	}
+	if r.EventSource == "sts.amazonaws.com" && strings.HasPrefix(r.EventName, "AssumeRole") {
+		if v, ok := r.RequestParameters["serialNumber"].(string); ok && v != "" {
+			e.Data["mfa_serial"] = true
+		}
+	}
 	return e, true
 }
+
+// recipientAccountRe は AWS のアカウント ID の形 (12 桁の数字。`$` は末尾の改行にも合うので \z)。
+var recipientAccountRe = regexp.MustCompile(`^[0-9]{12}\z`)
 
 // principalOf は userIdentity を主体 ARN と種類に正規化する。
 // 決定: AssumedRole はセッション ARN ではなくロール ARN (sessionIssuer) に寄せる。セッション名に個人名やメールが入るため。
