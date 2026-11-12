@@ -114,7 +114,7 @@ gh attestation verify "arata-linux-${ARCH}" -R CircleAround/arata \
 公式 tarball を `$HOME/.local/go` に展開する。ホストが linux/arm64 の場合:
 
 ```sh
-GO_VERSION=1.27.3
+GO_VERSION=1.27.4
 curl -sSLo /tmp/go.tgz "https://go.dev/dl/go${GO_VERSION}.linux-arm64.tar.gz"
 mkdir -p "$HOME/.local" && rm -rf "$HOME/.local/go" && tar -C "$HOME/.local" -xzf /tmp/go.tgz
 export PATH="$HOME/.local/go/bin:$PATH"   # シェルの rc に追記する

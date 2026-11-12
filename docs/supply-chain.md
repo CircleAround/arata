@@ -93,5 +93,14 @@ gh release view <tag> -R <owner>/<repo> --json publishedAt,assets --jq '.publish
 
 ## 脆弱性で CI が落ちたとき
 
-依存を上げて直す。直った版が 7 日の待機の中にあるときは、ADR 0017 のとおり理由を書いて例外の PR を出す。
+依存 (または Go のツールチェーン) を上げて直す。直った版が 7 日の待機の中にあるときは、次の条件をすべて満たせば待たずに上げる (ADR 0043):
+
+1. 該当を道具で確かめた (govulncheck・osv-scanner・Dependabot alerts など)
+2. 直した版がその版だけ (7 日以上経った版に、直したものが無い)
+3. 公式の配布元から取れる
+4. チェックサムを確かめた (Go の配布物は https://go.dev/dl/ の SHA256、モジュールは go.sum、pnpm はロック、Actions は SHA)
+
+PR は脆弱性の修正だけにし、本文に脆弱性の ID・確かめた方法・直した版の公開日を書く。上げるのは直した版まで。
+待機の検査 (`tools/agegate` など) が PR を止めるときは迂回せず、その版に限った除外を同じ PR で見える形で入れる (`-days` を全体に下げない)。条件を満たさないものは 7 日を待つ。
+Go の版は `go.mod` の `go` の行と README「開発」の `GO_VERSION` を揃える (CI は `go-version-file: go.mod` で読む)。
 pnpm の依存で、使っていない箇所の脆弱性なら `deploy/sandbox/osv-scanner.toml` に理由と期限を書いて除外する (無期限にしない)。
