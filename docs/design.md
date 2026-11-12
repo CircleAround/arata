@@ -569,6 +569,30 @@ secrets_access:
 - 決定: AWS のサービスが主体 (root・ロールなど) の代わりに呼んだ記録 (`sourceIPAddress` がサービス名で IP が無い。`userIdentity.invokedBy` も同じ名前) は、
   どのサービス経由かを events の `data.invoked_by` に残す (`invokedBy` を優先、形に合わなければ `sourceIPAddress`。サービスの主体の記録には足さない)。
   root_usage は送信元の IP が無いとき、見出しを「… が AWS のサービス (`<名前>`) 経由で N 件の操作」とし、finding の data に `invoked_by` (一覧) を出す。
+- 決定 (unknown_assume_role の向き): 引き受けの向きを規則で決め、見出しと data (`direction`: outbound / inbound / internal、`caller_account`、`role_account`) に出す。
+  見出しは「既知リストに無い自アカウントの user/alice が外部アカウント 111122223333 のロール partner-admin を 1 回引き受け (外向き、MFA あり)」の形。
+  向きが無いと、読む人と LLM が「外部の主体が監査対象のロールを引き受けた」と逆に読むことがあったため。
+  - 監査対象のアカウントは、記録の `recipientAccountId` (その記録を受け取ったアカウント = 証跡のアカウント。CloudTrail の文書「record contents」) とする。
+    collector が 12 桁の数字のときだけ events の `data.recipient_account` に残す。設定には書かせない (暗黙の既定も足さない。記録ごとに決まる値で足りる)。
+    呼び出し元のアカウントは主体の ARN、ロールのアカウントは `requestParameters.roleArn` (無ければ `resources[0].ARN`) から読む。
+  - 外向き (outbound): 呼び出し元 = 監査対象、ロール = 別のアカウント。内向き (inbound): 呼び出し元 = 別のアカウント、ロール = 監査対象。内部 (internal): どちらも監査対象。
+  - `recipientAccountId` が無い記録 (以前の版で集めたイベントなど) は、AWS の文書 (IAM ユーザーガイド「Logging IAM and AWS STS API calls with AWS CloudTrail」) にある記録の形から決まるときだけ決める:
+    同じアカウントどうしは内部 (そのアカウントにしか記録されない)、呼び出し元が `type=AWSAccount` (アカウント ID と principalId だけ。ロール側の記録の形) なら内向き、
+    呼び出し元が IAM ユーザーの ARN (呼び出し側の記録の形) なら外向き。ロールからのクロスアカウントは決めない。
+  - 決めないとき (推測しない): ARN が決まった形 (12 桁のアカウント、IAM が許す名前の文字、128 文字まで) でない、`recipientAccountId` が呼び出し元とロールのどちらのアカウントでもない、
+    上の記録の形と食い違う、1 つの finding のイベントで `recipientAccountId` が揃わない。このとき見出しは従来の形 (ARN のまま) で、`direction` は出さない。
+    同じ文書の呼び出し側の記録の例は `recipientAccountId` がロール側のアカウントになっており、定義と合わない。この形の記録は「食い違い」として向きを書かない側に倒れる。
+  - 却下: 設定にアカウント ID を書かせる (記録にある値と二重になり、書き忘れ・書き間違いで向きが逆になる)。`sts:GetCallerIdentity` で引く (hourly の収集に API 呼び出しを足す。組織の証跡では実行アカウントと記録のアカウントが違いうる)。
+- 決定 (unknown_assume_role の MFA): data に `mfa` (true / false / unknown / mixed) を出し、見出しに「MFA あり / なし / 不明 / の有無が混在」を付ける。
+  - あり: 呼び出しに MFA デバイスを指定した (`requestParameters.serialNumber` がある。STS の AssumeRole は MFA を `SerialNumber` と `TokenCode` で渡し、CloudTrail の記録には呼び出し側・ロール側とも `serialNumber` が載る)、
+    または呼び出し元のセッションが MFA で認証済み (`userIdentity.sessionContext.attributes.mfaAuthenticated` が `true`。一時的な認証情報とコンソールのセッションに載る)。
+  - なし: `mfaAuthenticated` が `false` と記録にあり、`serialNumber` が無いときだけ。
+  - 不明: どちらの項目も無い (長期のアクセスキーでの呼び出し、ロール側の記録など)。項目が無いことを「なし」と書かない。
+  - mixed: 1 つの finding のイベントで判定が揃わない (1 件の「あり」で全体を「あり」と書かない)。
+  - `serialNumber` の値は残さない (MFA デバイスの ARN に利用者名が入る)。collector は AssumeRole* のときだけ、有無を `data.mfa_serial: true` に残す。
+- 決定 (unknown_assume_role の送信元): collector は `sourceIPAddress` が IP ならそのまま残し、チェックは finding の `ips` に出す (落としていない)。`ips` が無いのは、
+  記録の送信元が AWS のサービス名 (`AWS Internal` など) で IP が無いとき。このとき root_usage と同じく `invoked_by` (経由したサービスの一覧) を出し、IP が無い理由が分かるようにする。
+- 決定: unknown_assume_role の Key と Fingerprint は変えない。向きは Key (呼び出し元とロール) から決まる。MFA を Fingerprint に足すと、既存の finding が一斉に changed になる。
   IP もサービス名も無ければ「IP の記録の無い送信元から」。以前は「… が  から N 件」と崩れ、読む人と aratam の LLM が送信元不明の操作と受け取った。
   Key・重大度・Fingerprint は変えない (表示だけの変更。既存の finding は changed にならない)。IP があるときの見出しと data も変えない。
   送信元を見出しに書く他のチェック (principal_new_source・login_bruteforce など) は、送信元が空なら句ごと出さないので崩れない (確認済み)。
@@ -629,7 +653,7 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 |---|---|---|---|---|
 | root_usage | hourly | trail_event | Root の利用 | critical |
 | defense_evasion (決定: 当初の trail_tampering を置き換え。daily) | daily | trail_event | 監査・検知の仕組み (CloudTrail・GuardDuty・Access Analyzer・ログ・フローログ・Config・Security Hub・WAF のログ・証跡の宛先バケット) を止める・弱める操作の成功。決定: ADR 0026 | critical / high (deploy タグなら 1 段下げる) |
-| unknown_assume_role | hourly | trail_event | 呼び出し元 ARN が allowlist に無い AssumeRole。決定: AWS サービス主体 (EC2 / Lambda がインスタンスロールを引き受けるもの) は対象外 | high |
+| unknown_assume_role | hourly | trail_event | 呼び出し元 ARN が allowlist に無い AssumeRole。決定: AWS サービス主体 (EC2 / Lambda がインスタンスロールを引き受けるもの) は対象外。向き (外向き / 内向き / 内部) と MFA の有無を見出しと data に出す (6 章の決定) | high |
 | secret_access (決定: 当初の secret_access_unknown を置き換え。daily) | daily | trail_event | 秘匿値 (Secrets Manager・SSM SecureString) の「主体 × 秘匿値」の初出と一括読み出し。決定: ADR 0027 | low / medium / high |
 | guardduty_findings | hourly (High) / daily (他)。決定: Step 3 は weekly のみ (state) | guardduty | finding ID 初出、count 増加 | severity 準拠 |
 | iam_changes | daily | trail_event | CreateAccessKey / CreateUser / Attach*Policy / Put*Policy / UpdateAssumeRolePolicy / CreateLoginProfile | medium (既知デプロイ主体なら info。決定: 既知デプロイ主体 = allowlist の principals で `tags: [deploy]` を持つもの) |

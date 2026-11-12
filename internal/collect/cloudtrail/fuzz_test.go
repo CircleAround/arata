@@ -40,6 +40,8 @@ func FuzzNormalizeEvent(f *testing.F) {
 		`{"userIdentity":{"type":"Root","accountId":"123456789012","invokedBy":"x) <!here> (.amazonaws.com"},"sourceIPAddress":"a\nb.amazonaws.com"}`,
 		`{"userIdentity":{"type":"FutureType","arn":"arn:aws:sts::123456789012:assumed-role/Admin/alice@example.com","accountId":"123456789012"}}`,
 		`{"userIdentity":{"arn":"arn:aws:sts::123456789012:assumed-role/Admin/alice@example.com"}}`,
+		`{"userIdentity":{"type":"IAMUser","arn":"arn:aws:iam::123456789012:user/alice","accountId":"123456789012"},"eventSource":"sts.amazonaws.com","eventName":"AssumeRole","requestParameters":{"roleArn":"arn:aws:iam::111122223333:role/partner-admin","serialNumber":"arn:aws:iam::123456789012:mfa/alice"},"recipientAccountId":"123456789012"}`,
+		`{"eventSource":"sts.amazonaws.com","eventName":"AssumeRole","requestParameters":{"serialNumber":["x"]},"recipientAccountId":"123456789012\n<!here>"}`,
 		`{"requestParameters":[],"responseElements":"x","additionalEventData":1,"resources":{}}`, `{"userIdentity":null,"resources":[null,{"ARN":1}]}`, `[]`, `null`, ``,
 	} {
 		f.Add(s)
@@ -80,6 +82,15 @@ func FuzzNormalizeEvent(f *testing.F) {
 			if got, ok := record.ServiceName(name); !ok || got != name || e.PrincipalKind == record.PrincipalService || e.IP != "" && e.IP == name {
 				t.Fatalf("data.invoked_by が規則に合わない: %q (kind %s)", v, e.PrincipalKind)
 			}
+		}
+		// 受け取ったアカウントは 12 桁の数字だけ。serialNumber は有無 (true) だけで、AssumeRole* 以外には付けない
+		if v, has := e.Data["recipient_account"]; has {
+			if s, _ := v.(string); !recipientAccountRe.MatchString(s) || strings.ContainsAny(s, "\n\r ") {
+				t.Fatalf("data.recipient_account が 12 桁の数字でない: %q", v)
+			}
+		}
+		if v, has := e.Data["mfa_serial"]; has && (v != true || !strings.HasPrefix(e.Name, "AssumeRole")) {
+			t.Fatalf("data.mfa_serial が規則に合わない: %v (%s)", v, e.Name)
 		}
 		if _, err := json.Marshal(e); err != nil {
 			t.Fatalf("イベントを JSON にできない: %v", err)

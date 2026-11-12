@@ -51,7 +51,7 @@
 個々の finding を横断して読み、同じ主体・同じ IP・近い時刻のものをまとめる。
 
 - 新規主体 + 国外 IP + 秘匿値取得が同じ主体なら、1 件のインシデント候補として書く
-- unknown_assume_role の呼び出し元と new_principal が同じなら 1 つの話としてまとめる
+- unknown_assume_role の呼び出し元と new_principal が同じなら 1 つの話としてまとめる。向き (外向き / 内向き / 内部) と MFA は見出しの括弧と data の `direction`・`mfa` のとおりに書く。外向き (自アカウントの主体が外部アカウントのロールを引き受けた) を、外部からの侵入と逆に書かない。`mfa: unknown` を「なし」と書かない
 - login_bruteforce / probe_paths / waf_block_trend の IP が重なれば、同じ攻撃元の可能性として書く
 - access_denied (拒否された API 呼び出しの急増) は権限の列挙の兆候。同じ主体の new_principal・unknown_assume_role・iam_changes (拒否) と合わせて 1 つの話として書く。
   data の `apis` (拒否された API と件数)・`threshold` (`breadth` = 種類が多い、`volume` = 同じ API の件数が多い)・`allowlist_status` を根拠にする。

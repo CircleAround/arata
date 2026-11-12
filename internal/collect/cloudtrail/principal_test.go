@@ -50,3 +50,47 @@ func TestPrincipalOfInternalRecords(t *testing.T) {
 		}
 	}
 }
+
+// AssumeRole の向きと MFA の判定に使う値 (設計書 6 章)。recipientAccountId は 12 桁の数字だけ、
+// requestParameters.serialNumber は有無だけを残す (値には MFA デバイスの名前 = 利用者名が入る)。
+func TestNormalizeAssumeRoleDirectionFields(t *testing.T) {
+	body := func(extraParams, tail string) string {
+		return `{"userIdentity":{"type":"IAMUser","principalId":"AID","arn":"arn:aws:iam::123456789012:user/alice","accountId":"123456789012"},
+		  "eventSource":"sts.amazonaws.com","eventName":"AssumeRole","sourceIPAddress":"203.0.113.2",
+		  "requestParameters":{"roleArn":"arn:aws:iam::111122223333:role/partner-admin"` + extraParams + `}` + tail + `}`
+	}
+	cases := []struct {
+		name, json    string
+		wantRecipient any
+		wantSerial    any
+	}{
+		{"外向き・MFA あり", body(`,"serialNumber":"arn:aws:iam::123456789012:mfa/alice"`, `,"recipientAccountId":"123456789012"`), "123456789012", true},
+		{"どちらも無い", body(``, ``), nil, nil},
+		{"serialNumber が空", body(`,"serialNumber":""`, `,"recipientAccountId":""`), nil, nil},
+		{"serialNumber が文字列でない", body(`,"serialNumber":123`, `,"recipientAccountId":123456789012`), nil, nil},
+		{"recipientAccountId が 12 桁でない", body(``, `,"recipientAccountId":"1234 <!here>"`), nil, nil},
+		{"recipientAccountId に改行", body(``, `,"recipientAccountId":"123456789012\n"`), nil, nil},
+	}
+	c := New("trail")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e, ok := c.normalize(ev("e1", fuzzEventTime, tc.json))
+			if !ok {
+				t.Fatal("normalize failed")
+			}
+			if e.Data["recipient_account"] != tc.wantRecipient || e.Data["mfa_serial"] != tc.wantSerial {
+				t.Fatalf("recipient_account=%v mfa_serial=%v", e.Data["recipient_account"], e.Data["mfa_serial"])
+			}
+			for _, v := range e.Data {
+				if s, _ := v.(string); s == "arn:aws:iam::123456789012:mfa/alice" {
+					t.Fatal("serialNumber の値を残した")
+				}
+			}
+		})
+	}
+	// AssumeRole 以外の serialNumber は残さない
+	e, _ := c.normalize(ev("e2", fuzzEventTime, `{"eventSource":"iam.amazonaws.com","eventName":"DeactivateMFADevice","requestParameters":{"serialNumber":"x"}}`))
+	if _, has := e.Data["mfa_serial"]; has {
+		t.Fatal("AssumeRole 以外に mfa_serial を付けた")
+	}
+}
