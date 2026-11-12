@@ -773,3 +773,54 @@ func FuzzParseDuration(f *testing.F) {
 		}
 	})
 }
+
+// slack 節 (利用者のファイルの値)。守る規則:
+//   - 検証を通るのは、送り方が 1 つだけのとき (Webhook の項目と bot の項目が混ざらない)
+//   - 通った *_env は環境変数の名前、チャンネルはチャンネル ID の形
+//   - エラーの文に値を写さない (URL やトークンを貼った誤りで秘密を出さない)
+func FuzzSlackConfig(f *testing.F) {
+	f.Add("ARATAM_SLACK_WEBHOOK", "ARATAM_SLACK_URGENT_WEBHOOK", "", "", "")
+	f.Add("", "", "ARATAM_SLACK_BOT_TOKEN", "C0123456789", "C0123456780")
+	f.Add("", "", "ARATAM_SLACK_BOT_TOKEN", "C0123456789", "")
+	f.Add("ARATAM_SLACK_WEBHOOK", "", "ARATAM_SLACK_BOT_TOKEN", "C0123456789", "")
+	f.Add("", "ARATAM_SLACK_URGENT_WEBHOOK", "", "C0123456789", "")
+	f.Add("", "", "xoxb-fake-secret-token", "#general", "xoxb-fake-secret-token")
+	f.Add("https://hooks.slack.example/services/T000/B000/secret-token", "", "", "", "")
+	f.Add("", "", "", "", "")
+	f.Add("", "", "TOKEN", "C0123456789\n", "G0123ABCD")
+	env := regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	ch := regexp.MustCompile(`^[CGD][A-Z0-9]{8,20}$`)
+	validate := func(webhook, urgentWebhook, token, channel, urgentChannel string) error {
+		c := Config{Name: "acme", MaxAge: "26h", UrgentSeverity: "high", OnQuiet: "short", LLM: LLMConfig{Provider: ProviderNone},
+			Slack: SlackConfig{WebhookEnv: webhook, UrgentWebhookEnv: urgentWebhook, BotTokenEnv: token, Channel: channel, UrgentChannel: urgentChannel, Format: FormatText}}
+		return c.Validate()
+	}
+	// fixed は固定のエラー文 (値を含まない入力で出るもの) の全部。ここに元からある文字列 (例示の C0123456789 など) は、写したのかどうか見分けられない
+	fixed := ""
+	for _, in := range [][5]string{{"!", "!", "", "", ""}, {"", "", "!", "!", "!"}, {"A", "", "B", "", ""}, {"", "", "", "", ""}, {"", "", "", "!", ""}} {
+		fixed += fmt.Sprint(validate(in[0], in[1], in[2], in[3], in[4])) + "\n"
+	}
+	f.Fuzz(func(t *testing.T, webhook, urgentWebhook, token, channel, urgentChannel string) {
+		err := validate(webhook, urgentWebhook, token, channel, urgentChannel)
+		c := Config{Slack: SlackConfig{WebhookEnv: webhook, UrgentWebhookEnv: urgentWebhook, BotTokenEnv: token, Channel: channel, UrgentChannel: urgentChannel}}
+		if err != nil {
+			for _, v := range []string{webhook, urgentWebhook, token, channel, urgentChannel} {
+				if len(v) >= 4 && !strings.Contains(fixed, v) && strings.Contains(err.Error(), v) {
+					t.Fatalf("error echoes the value %q: %v", v, err)
+				}
+			}
+			return
+		}
+		hook := webhook != "" || urgentWebhook != ""
+		bot := token != "" || channel != "" || urgentChannel != ""
+		if hook == bot {
+			t.Fatalf("accepted with webhook=%v bot=%v: %+v", hook, bot, c.Slack)
+		}
+		if hook && (c.Slack.Method() != SlackWebhook || !env.MatchString(webhook) || (urgentWebhook != "" && !env.MatchString(urgentWebhook))) {
+			t.Fatalf("accepted webhook: %+v", c.Slack)
+		}
+		if bot && (c.Slack.Method() != SlackBot || !env.MatchString(token) || !ch.MatchString(channel) || (urgentChannel != "" && !ch.MatchString(urgentChannel))) {
+			t.Fatalf("accepted bot: %+v", c.Slack)
+		}
+	})
+}

@@ -28,6 +28,8 @@ type cli struct {
 	env            map[string]string
 	stdout, stderr *bytes.Buffer
 	hook           *hook
+	// api は Slack の Web API (chat.postMessage / auth.test) の偽物。bot トークンの方式のテストが使う (bot_test.go)。
+	api *slackAPI
 	// rec は偽の claude が引数・標準入力・環境変数を記録するディレクトリ。claudeOut は偽の claude が返す出力 (--output-format json の形)。
 	rec       string
 	claudeOut string
@@ -72,7 +74,7 @@ const (
 func newCLI(t *testing.T) *cli {
 	t.Helper()
 	dir := t.TempDir()
-	c := &cli{t: t, dir: dir, cfg: filepath.Join(dir, "aratam.yaml"), stdout: &bytes.Buffer{}, stderr: &bytes.Buffer{}, hook: newHook(t), rec: filepath.Join(dir, "rec")}
+	c := &cli{t: t, dir: dir, cfg: filepath.Join(dir, "aratam.yaml"), stdout: &bytes.Buffer{}, stderr: &bytes.Buffer{}, hook: newHook(t), api: newSlackAPI(t), rec: filepath.Join(dir, "rec")}
 	// 実際の claude を起動しないよう、PATH には偽の claude だけを置く
 	bin := filepath.Join(dir, "bin")
 	for _, d := range []string{bin, c.rec} {
@@ -107,6 +109,8 @@ func (c *cli) run(args ...string) int {
 		Getenv:     func(k string) string { return c.env[k] },
 		Now:        func() time.Time { return time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC) },
 		HTTPClient: c.hook.srv.Client(),
+		// 実際の slack.com に向かないよう、Web API の場所は必ず偽物にする
+		SlackAPIURL: c.api.srv.URL + "/api",
 		Environ: func() []string {
 			// aratam のプロセスの環境変数のつもり。Webhook の URL は子プロセスに渡らないことを確かめる
 			out, _ := os.Create(filepath.Join(c.rec, "response"))
@@ -117,7 +121,8 @@ func (c *cli) run(args ...string) int {
 			}
 			_ = os.WriteFile(filepath.Join(c.rec, "mode"), []byte(c.fakeMode), 0o600)
 			return []string{"PATH=/usr/bin:/bin", "HOME=" + c.dir, "AWS_SECRET_ACCESS_KEY=aws-secret-value", "GH_TOKEN=gh-secret-value",
-				"ARATAM_SLACK_WEBHOOK=" + c.env["ARATAM_SLACK_WEBHOOK"], "ARATAM_SLACK_URGENT_WEBHOOK=" + c.env["ARATAM_SLACK_URGENT_WEBHOOK"]}
+				"ARATAM_SLACK_WEBHOOK=" + c.env["ARATAM_SLACK_WEBHOOK"], "ARATAM_SLACK_URGENT_WEBHOOK=" + c.env["ARATAM_SLACK_URGENT_WEBHOOK"],
+				"ARATAM_SLACK_BOT_TOKEN=" + c.env["ARATAM_SLACK_BOT_TOKEN"]}
 		},
 		NewBedrock: func(_ context.Context, region, _, model string) (notify.Summarizer, error) {
 			if c.bedrock == nil {
@@ -132,8 +137,8 @@ func (c *cli) run(args ...string) int {
 		},
 	})
 	for _, out := range []string{c.stdout.String(), c.stderr.String()} {
-		if strings.Contains(out, "secret") || strings.Contains(out, c.hook.srv.URL) {
-			c.t.Fatalf("webhook URL leaked:\n%s", out)
+		if strings.Contains(out, "secret") || strings.Contains(out, c.hook.srv.URL) || strings.Contains(out, botToken) {
+			c.t.Fatalf("webhook URL or bot token leaked:\n%s", out)
 		}
 	}
 	return code

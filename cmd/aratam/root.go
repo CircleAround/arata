@@ -26,12 +26,15 @@ import (
 type Deps struct {
 	Stdout io.Writer
 	Stderr io.Writer
-	// Getenv は環境変数 (ARATAM_CONFIG と Webhook の URL) の読み取り。
+	// Getenv は環境変数 (ARATAM_CONFIG と、Webhook の URL か bot トークン) の読み取り。
 	Getenv func(string) string
 	Now    func() time.Time
 	// HTTPClient は Slack への送信に使う。nil なら slack.New の既定。
 	HTTPClient *http.Client
-	Logger     *slog.Logger
+	// SlackAPIURL は Slack の Web API の場所 (bot トークンの方式)。空なら slack.APIURL。テストは httptest に向ける。
+	// 設定や環境変数からは変えられない (トークンを別の場所へ送らせないため)。
+	SlackAPIURL string
+	Logger      *slog.Logger
 	// Environ は claude-cli の子プロセスに渡す環境変数の元 (Webhook の環境変数は除いてから渡す)。
 	Environ func() []string
 	// NewBedrock は bedrock プロバイダを作る。テストは httptest に向けたものに差し替える。
@@ -97,12 +100,13 @@ arata とは出力ディレクトリだけで連携する (arata を呼ばず、
 はじめに:
   1. aratam config init                    設定の雛形を ./aratam.yaml に書き出す (name・llm・slack を確認する)
      aratam config check                   設定の形だけを確かめる (Slack にも LLM にも繋がない。PR の CI 向け)
-  2. aratam doctor                         Webhook の環境変数と LLM の疎通を確かめる (送信はしない)
+  2. aratam doctor                         Slack の環境変数 (bot トークンなら auth.test も) と LLM の疎通を確かめる (送信はしない)
   3. aratam test-notify                    Slack に試験メッセージを 1 通送る
   4. aratam notify --in <dir> --dry-run    送らずに、送る内容を標準出力に出す
   5. cron で arata run --out <dir> の後に aratam notify --in <dir> をつなぐ
 
-Webhook の URL は設定ファイルに書かず、slack.webhook_env に書いた名前の環境変数で渡す。`
+Slack への送り方は Incoming Webhook (slack.webhook_env) か bot トークン (slack.bot_token_env と slack.channel) のどちらか 1 つ。
+Webhook の URL と bot トークンは設定ファイルに書かず、設定に書いた名前の環境変数で渡す (チャンネル ID は設定に書く)。`
 
 // NewRootCmd はルートコマンドを組み立てる。
 func NewRootCmd(d *Deps) *subcmd.Command {
@@ -213,7 +217,9 @@ func newConfigCheckCmd(d *Deps, g *globalFlags) *subcmd.Command {
 		Long: `設定 (-c、省略時は ARATAM_CONFIG か ./aratam.yaml) の形を検査する: 未知のキー、型、必須項目、値の選択肢
 (notify / doctor が起動時にする検証と同じ規則)。Slack にも LLM にも繋がず、秘密も要らない。PR の CI で使う。
 
-  - Webhook の環境変数 (slack.webhook_env の名前の環境変数) があるかは見ない。PR の CI には秘密を渡さないため (aratam doctor が見る)
+  - Webhook・bot トークンの環境変数 (slack.webhook_env / slack.bot_token_env の名前の環境変数) があるかは見ない。
+    PR の CI には秘密を渡さないため (aratam doctor が見る)
+  - Slack への送り方 (webhook か bot) は 1 つだけ。bot なら slack.channel / urgent_channel がチャンネル ID の形かを見る
   - llm.context_file は、書いてあれば読めるかを見る (読めない・16 KiB を超えるなら warn。notify は前提なしで続ける)
 
 行ごとに ok / warn / ng / skip を出す。ng が 1 つでもあれば終了コード 2 (warn だけなら 0)。`,
@@ -241,7 +247,7 @@ func newConfigCheckCmd(d *Deps, g *globalFlags) *subcmd.Command {
 				row("ng", abs, err.Error())
 				return configErr(d, err)
 			}
-			row("ok", abs, fmt.Sprintf("name %s, provider %s, format %s", cfg.Name, cfg.LLM.Provider, cfg.Slack.Format))
+			row("ok", abs, fmt.Sprintf("name %s, provider %s, format %s, slack %s", cfg.Name, cfg.LLM.Provider, cfg.Slack.Format, cfg.Slack.Method()))
 			if r, ok := contextRow(cfg); ok {
 				row(r.status, "llm.context_file", r.detail)
 			}
@@ -250,15 +256,29 @@ func newConfigCheckCmd(d *Deps, g *globalFlags) *subcmd.Command {
 	}
 }
 
-// webhooks は Webhook の URL を環境変数から読む。URL はログにも標準出力にも出さない。
-type webhooks struct {
+// targets は Slack の送り先。Webhook の方式なら normal / urgent は URL (秘密)、bot の方式ならチャンネル ID (秘密ではない) と token (秘密)。
+// URL とトークンはログにも標準出力にも出さない。
+type targets struct {
+	bot            bool
 	normal, urgent string
+	token          string
 }
 
-// readWebhooks は設定に書いた名前の環境変数から URL を読む。
+// readTargets は設定に書いた名前の環境変数から Webhook の URL か bot トークンを読む。require が false (--dry-run) なら無くてもよい。
 // 決定: urgent_webhook_env を書いたのに環境変数が空なら、通常用に送り urgent_mention を付ける (警告を出す)。緊急の通知を落とさないため。
-func readWebhooks(d *Deps, cfg *notify.Config, require bool) (webhooks, error) {
-	w := webhooks{normal: d.Getenv(cfg.Slack.WebhookEnv)}
+// 決定: bot トークンは前後の空白 (secret の末尾の改行など) を除いて使う。途中に空白や制御文字があれば設定エラー (値は出さない)。
+func readTargets(d *Deps, cfg *notify.Config, require bool) (targets, error) {
+	if cfg.Slack.Method() == notify.SlackBot {
+		t := targets{bot: true, normal: cfg.Slack.Channel, urgent: cfg.Slack.UrgentChannel, token: strings.TrimSpace(d.Getenv(cfg.Slack.BotTokenEnv))}
+		switch {
+		case t.token == "" && require:
+			return t, configErr(d, fmt.Errorf("environment variable %s (slack.bot_token_env) is not set", cfg.Slack.BotTokenEnv))
+		case t.token != "" && !slack.ValidToken(t.token):
+			return t, configErr(d, fmt.Errorf("environment variable %s (slack.bot_token_env) is not a token: it contains spaces or control characters", cfg.Slack.BotTokenEnv))
+		}
+		return t, nil
+	}
+	w := targets{normal: d.Getenv(cfg.Slack.WebhookEnv)}
 	if w.normal == "" && require {
 		return w, configErr(d, fmt.Errorf("environment variable %s (slack.webhook_env) is not set", cfg.Slack.WebhookEnv))
 	}
@@ -270,36 +290,61 @@ func readWebhooks(d *Deps, cfg *notify.Config, require bool) (webhooks, error) {
 	return w, nil
 }
 
-// slackSender は送り先ごとの Webhook に送る。緊急用が無ければ通常用に送る。
+// slackSender は送り先ごとの Webhook かチャンネルに送る。緊急用が無ければ通常用に送る。
+// 決定: 送る中身 (notify.Message) はどちらの方式でも同じ。bot の方式は channel を足して chat.postMessage に送るだけで、
+// 分割・長さ・LLM 失敗時の扱いは notify の規則のまま。
 type slackSender struct {
-	client *slack.Client
-	hooks  webhooks
+	t    targets
+	post func(ctx context.Context, dest string, payload any) error
+}
+
+func newSlackSender(d *Deps, t targets) *slackSender {
+	if t.bot {
+		return &slackSender{t: t, post: slack.NewBot(d.HTTPClient, t.token, d.SlackAPIURL).PostMessage}
+	}
+	return &slackSender{t: t, post: slack.New(d.HTTPClient).Post}
 }
 
 func (s *slackSender) Send(ctx context.Context, route notify.Route, m notify.Message) error {
-	url := s.hooks.normal
-	if route == notify.RouteUrgent && s.hooks.urgent != "" {
-		url = s.hooks.urgent
+	return s.post(ctx, s.t.dest(route), m)
+}
+
+// dest は route の送り先 (Webhook の URL かチャンネル ID)。緊急用が無ければ通常用。
+func (t targets) dest(route notify.Route) string {
+	if route == notify.RouteUrgent && t.urgent != "" {
+		return t.urgent
 	}
-	return s.client.Post(ctx, url, m)
+	return t.normal
+}
+
+// label は送り先の表示。Webhook は種類だけ (URL は秘密)、bot はチャンネル ID も出す (秘密ではない)。
+func (t targets) label(route notify.Route) string {
+	urgent := route == notify.RouteUrgent
+	switch {
+	case t.bot && urgent && t.urgent != "":
+		return "urgent channel " + t.urgent
+	case t.bot && urgent:
+		return "channel " + t.normal + " (no urgent channel)"
+	case t.bot:
+		return "channel " + t.normal
+	case urgent && t.urgent != "":
+		return "urgent webhook"
+	case urgent:
+		return "normal webhook (no urgent webhook)"
+	}
+	return "normal webhook"
 }
 
 // stdoutSender は --dry-run の送り先。送り先の種類を添えて標準出力に出す。
-// 決定 (ADR 0029): format が text なら人が読む簡易表示 (Block Kit は見出し・区切りを記号にしたもの)、json なら Webhook に送る payload そのもの。
+// 決定 (ADR 0029): format が text なら人が読む簡易表示 (Block Kit は見出し・区切りを記号にしたもの)、json なら Slack に送る payload そのもの
+// (bot の方式では、これに channel を足して送る)。
 type stdoutSender struct {
 	w      io.Writer
-	hooks  webhooks
+	t      targets
 	format string
 }
 
 func (s *stdoutSender) Send(_ context.Context, route notify.Route, m notify.Message) error {
-	to := "normal webhook"
-	if route == notify.RouteUrgent {
-		to = "normal webhook (no urgent webhook)"
-		if s.hooks.urgent != "" {
-			to = "urgent webhook"
-		}
-	}
 	body := notify.PlainText(m)
 	if s.format == dryRunJSON {
 		b, err := json.MarshalIndent(m, "", "  ")
@@ -308,7 +353,7 @@ func (s *stdoutSender) Send(_ context.Context, route notify.Route, m notify.Mess
 		}
 		body = string(b)
 	}
-	_, err := fmt.Fprintf(s.w, "--- route: %s → %s ---\n%s\n", route, to, body)
+	_, err := fmt.Fprintf(s.w, "--- route: %s → %s ---\n%s\n", route, s.t.label(route), body)
 	return err
 }
 
@@ -323,6 +368,7 @@ func newNotifyCmd(d *Deps, g *globalFlags) *subcmd.Command {
   - report.json が無い・読めない・max_age より古い → 「arata が実行されていない / 失敗した」と緊急用に送る (終了コード 4)
   - max_severity が urgent_severity 以上、または取れなかったソースがある → 緊急用。それ以外は通常用
   - 新規・変化・再発が無く、取れなかったソースも無い → on_quiet (short = 1 行 / silent = 送らない)
+  - 送り方は Incoming Webhook か bot トークン (chat.postMessage。要る scope は chat:write だけ)。bot は、送り先のチャンネルに招待しておく
   - 送ったら入力ディレクトリの .aratam-notified に run_id を書き、同じ run は二度送らない (--force で再送)
   - report.json に WAF の修正提案の候補 (proposals) があれば、「WAF の改善提案」を 2 通目として通常用に送る (on_quiet: silent でも送る)。
     slack.format: blocks では、提案の全文 (設定例を含む) を入力ディレクトリの waf-proposals.md に書く (--dry-run では書かない)
@@ -331,7 +377,7 @@ func newNotifyCmd(d *Deps, g *globalFlags) *subcmd.Command {
 4 = 入力が無い・古い (その旨は送った)、5 = 送信に失敗した。
 
 書式は slack.format (blocks = Block Kit / text = mrkdwn の本文)。--dry-run の出力は --format text (既定。人が読む簡易表示) か
---format json (Webhook に送る payload そのもの)。`,
+--format json (Slack に送る payload そのもの)。`,
 		Args: subcmd.NoArgs,
 		Run: func(ctx context.Context, _ []string) error {
 			if format != dryRunText && format != dryRunJSON {
@@ -350,7 +396,7 @@ func newNotifyCmd(d *Deps, g *globalFlags) *subcmd.Command {
 					return configErr(d, fmt.Errorf("--llm: %w", err))
 				}
 			}
-			hooks, err := readWebhooks(d, cfg, !dryRun)
+			hooks, err := readTargets(d, cfg, !dryRun)
 			if err != nil {
 				return err
 			}
@@ -368,9 +414,9 @@ func newNotifyCmd(d *Deps, g *globalFlags) *subcmd.Command {
 				}
 				contextText = text
 			}
-			var sender notify.Sender = &slackSender{client: slack.New(d.HTTPClient), hooks: hooks}
-			if dryRun {
-				sender = &stdoutSender{w: d.Stdout, hooks: hooks, format: format}
+			var sender notify.Sender = &stdoutSender{w: d.Stdout, t: hooks, format: format}
+			if !dryRun {
+				sender = newSlackSender(d, hooks)
 			}
 			res := notify.Run(ctx, notify.Options{
 				Dir: in, Now: d.Now(), Rules: cfg.Rules(hooks.urgent != ""),
@@ -396,8 +442,8 @@ func newNotifyCmd(d *Deps, g *globalFlags) *subcmd.Command {
 func newSummarizer(ctx context.Context, d *Deps, cfg *notify.Config) (notify.Summarizer, error) {
 	switch cfg.LLM.Provider {
 	case notify.ProviderClaudeCLI:
-		// 決定: 子プロセスには claude が動くのに要る環境変数だけを渡す。Webhook の URL は名前が何であっても渡さない (LLM に渡すのは report.json だけ)
-		env := llm.ClaudeEnv(d.Environ(), cfg.Slack.WebhookEnv, cfg.Slack.UrgentWebhookEnv)
+		// 決定: 子プロセスには claude が動くのに要る環境変数だけを渡す。Webhook の URL と bot トークンは名前が何であっても渡さない (LLM に渡すのは report.json だけ)
+		env := llm.ClaudeEnv(d.Environ(), cfg.Slack.WebhookEnv, cfg.Slack.UrgentWebhookEnv, cfg.Slack.BotTokenEnv)
 		return &llm.ClaudeCLI{Command: cfg.LLM.Command, Model: cfg.LLM.Model, Env: env}, nil
 	case notify.ProviderBedrock:
 		s, err := d.NewBedrock(ctx, cfg.LLM.Region, cfg.LLM.Profile, cfg.LLM.Model)

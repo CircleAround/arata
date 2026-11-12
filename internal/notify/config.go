@@ -44,13 +44,34 @@ type LLMConfig struct {
 	ContextFile string `yaml:"context_file"`
 }
 
-// SlackConfig は通知先。URL は秘密なので設定ファイルには環境変数の名前だけを書く。
+// SlackConfig は通知先。送り方は Incoming Webhook か bot トークン (chat.postMessage) のどちらか 1 つ (aratam 設計書 4-1 章)。
+// Webhook の URL と bot トークンは秘密なので、設定ファイルには環境変数の名前だけを書く。チャンネル ID は秘密ではないので値を書く。
 type SlackConfig struct {
 	WebhookEnv       string `yaml:"webhook_env"`
 	UrgentWebhookEnv string `yaml:"urgent_webhook_env"`
-	UrgentMention    string `yaml:"urgent_mention"`
+	// BotTokenEnv は bot トークン (xoxb-...) を入れる環境変数の名前。
+	BotTokenEnv string `yaml:"bot_token_env"`
+	// Channel / UrgentChannel は通常用・緊急用のチャンネル ID (名前ではない)。UrgentChannel が空なら Channel に送り、冒頭に UrgentMention を付ける。
+	Channel       string `yaml:"channel"`
+	UrgentChannel string `yaml:"urgent_channel"`
+	UrgentMention string `yaml:"urgent_mention"`
 	// Format は通知の書式。blocks = Block Kit / text = mrkdwn の本文だけ (v0.3.0 までの書式)。ADR 0029
 	Format string `yaml:"format"`
+}
+
+// Slack への送り方。
+const (
+	SlackWebhook = "webhook" // Incoming Webhook (webhook_env / urgent_webhook_env)
+	SlackBot     = "bot"     // bot トークンとチャンネル ID (bot_token_env / channel / urgent_channel)
+)
+
+// Method は設定に書かれた送り方を返す。bot の項目が 1 つでもあれば bot、無ければ webhook
+// (両方が書かれた設定は Validate がエラーにする)。
+func (s SlackConfig) Method() string {
+	if s.BotTokenEnv != "" || s.Channel != "" || s.UrgentChannel != "" {
+		return SlackBot
+	}
+	return SlackWebhook
 }
 
 // プロバイダ名 (呼び方を表す。aratam 設計書 5 章)。
@@ -65,6 +86,9 @@ const (
 var severityRank = map[string]int{"critical": 5, "high": 4, "medium": 3, "low": 2, "info": 1}
 
 var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// slackChannelID はチャンネル ID の形 (internal/slack の ValidChannelID と同じ。notify はネットワークの層を import しない)。
+var slackChannelID = regexp.MustCompile(`^[CGD][A-Z0-9]{8,20}$`)
 
 // LoadConfig は設定を読み、検証する。未知のキーは誤記とみなしてエラーにする。
 func LoadConfig(path string) (*Config, error) {
@@ -133,11 +157,14 @@ func (c *Config) LoadContext() (string, string, error) {
 // Validate は設定を検証する。llm の項目は provider に応じて要るものだけを見る (--llm none で上書きした後にも呼ぶ)。
 //
 // 決定:
-//   - 必須: name, max_age, urgent_severity, on_quiet, llm.provider, slack.webhook_env。
+//   - 必須: name, max_age, urgent_severity, on_quiet, llm.provider、Slack への送り方 (slack.webhook_env か、slack.bot_token_env と slack.channel)。
 //     provider が none 以外なら llm.timeout も必須、bedrock なら llm.model と llm.region も必須 (設計書 3-1 で「設定で明示する」)。
 //     claude-cli の model と command は省略可 (claude 側の既定のモデル、PATH の claude を使う)。
 //   - slack.urgent_webhook_env と slack.urgent_mention は省略可 (4 章)。
-//   - *_env は環境変数の名前でなければならない。URL を貼った誤りを弾き、そのときエラーに値を出さない (秘密を漏らさない)。
+//   - *_env は環境変数の名前でなければならない。URL やトークンを貼った誤りを弾き、そのときエラーに値を出さない (秘密を漏らさない)。
+//   - 送り方は 1 つだけ。Webhook の項目と bot の項目の両方があれば設定エラー (どちらに送るかを曖昧にしない。4-1 章)。
+//     新しい項目 (bot_token_env / channel / urgent_channel) は省略可で、無ければ Webhook の方式 (v0.5 までの設定は変更なしで動く)。
+//   - slack.channel / urgent_channel はチャンネル ID の形 (C0123456789) でなければならない。名前 (#general) は受け付けない。エラーに値を出さない (トークンを貼った誤りのため)。
 func (c *Config) Validate() error {
 	var errs []error
 	req := func(name, v string) {
@@ -170,7 +197,18 @@ func (c *Config) Validate() error {
 	default:
 		errs = append(errs, fmt.Errorf("llm.provider must be one of bedrock, claude-cli, none (got %q)", c.LLM.Provider))
 	}
-	req("slack.webhook_env", c.Slack.WebhookEnv)
+	webhookKeys := c.Slack.WebhookEnv != "" || c.Slack.UrgentWebhookEnv != ""
+	switch {
+	case webhookKeys && c.Slack.Method() == SlackBot:
+		errs = append(errs, errors.New("slack: both the webhook keys (webhook_env / urgent_webhook_env) and the bot token keys (bot_token_env / channel / urgent_channel) are set; choose one and leave the other empty"))
+	case c.Slack.Method() == SlackBot:
+		req("slack.bot_token_env", c.Slack.BotTokenEnv)
+		req("slack.channel", c.Slack.Channel)
+	case webhookKeys:
+		req("slack.webhook_env", c.Slack.WebhookEnv)
+	default:
+		errs = append(errs, errors.New("slack.webhook_env is required (Incoming Webhook), or slack.bot_token_env and slack.channel (bot token)"))
+	}
 	// 決定 (ADR 0029): slack.format は必須 (暗黙の既定を持たない。ADR 0014)。v0.3.0 の設定には無いので、更新の手順をエラーに書く
 	switch c.Slack.Format {
 	case FormatBlocks, FormatText:
@@ -179,19 +217,28 @@ func (c *Config) Validate() error {
 	default:
 		errs = append(errs, fmt.Errorf("slack.format must be blocks or text (got %q)", c.Slack.Format))
 	}
-	for _, f := range []struct{ name, v string }{{"slack.webhook_env", c.Slack.WebhookEnv}, {"slack.urgent_webhook_env", c.Slack.UrgentWebhookEnv}} {
+	for _, f := range []struct{ name, v, secret string }{
+		{"slack.webhook_env", c.Slack.WebhookEnv, "webhook URL"},
+		{"slack.urgent_webhook_env", c.Slack.UrgentWebhookEnv, "webhook URL"},
+		{"slack.bot_token_env", c.Slack.BotTokenEnv, "bot token"},
+	} {
 		if f.v != "" && !envName.MatchString(f.v) {
-			errs = append(errs, fmt.Errorf("%s must be the name of an environment variable (do not put the webhook URL in the config file)", f.name))
+			errs = append(errs, fmt.Errorf("%s must be the name of an environment variable (do not put the %s in the config file)", f.name, f.secret))
+		}
+	}
+	for _, f := range []struct{ name, v string }{{"slack.channel", c.Slack.Channel}, {"slack.urgent_channel", c.Slack.UrgentChannel}} {
+		if f.v != "" && !slackChannelID.MatchString(f.v) {
+			errs = append(errs, fmt.Errorf("%s must be a channel ID such as C0123456789 (not a channel name such as #general; open the channel details in Slack to copy the ID)", f.name))
 		}
 	}
 	return errors.Join(errs...)
 }
 
-// Rules は設定から規則の部分を取り出す。urgentMention は緊急用の Webhook が無く通常用へ送るときだけ付ける (4 章)。
-func (c *Config) Rules(urgentWebhookSet bool) Rules {
+// Rules は設定から規則の部分を取り出す。urgentMention は緊急用の送り先 (Webhook かチャンネル) が無く通常用へ送るときだけ付ける (4 章)。
+func (c *Config) Rules(urgentSet bool) Rules {
 	maxAge, _ := ParseDuration(c.MaxAge)
 	r := Rules{Name: c.Name, MaxAge: maxAge, UrgentSeverity: c.UrgentSeverity, OnQuiet: c.OnQuiet}
-	if !urgentWebhookSet {
+	if !urgentSet {
 		r.UrgentMention = c.Slack.UrgentMention
 	}
 	return r

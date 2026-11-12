@@ -51,11 +51,11 @@ type Rules struct {
 	MaxAge         time.Duration
 	UrgentSeverity string
 	OnQuiet        string // short | silent
-	// UrgentMention は緊急用を通常用の Webhook に送るときに冒頭へ付けるメンション (緊急用の Webhook があれば空)。
+	// UrgentMention は緊急用を通常用の送り先 (Webhook かチャンネル) に送るときに冒頭へ付けるメンション (緊急用の送り先があれば空)。
 	UrgentMention string
 }
 
-// Sender は送信先。aratam は Slack の Webhook、--dry-run は標準出力。
+// Sender は送信先。aratam は Slack (Webhook か bot トークンの chat.postMessage)、--dry-run は標準出力。
 type Sender interface {
 	Send(ctx context.Context, route Route, m Message) error
 }

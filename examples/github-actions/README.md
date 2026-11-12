@@ -144,6 +144,19 @@ slack:
   urgent_webhook_env: ARATAM_SLACK_URGENT_WEBHOOK
 ```
 
+bot トークンで送るなら (手順 4 の「bot トークンで送る」)、Webhook の 2 つを空にして、トークンの環境変数の名前とチャンネル ID を書きます。
+チャンネル ID は秘密ではないので、設定に書きます。
+
+```yaml
+# arata/aratam.yaml (抜粋。bot トークンの方式)
+slack:
+  webhook_env: ""
+  urgent_webhook_env: ""
+  bot_token_env: ARATAM_SLACK_BOT_TOKEN   # 環境変数の名前 (トークンは書かない)
+  channel: C0123456789                    # 通常用のチャンネル ID
+  urgent_channel: C0123456780             # 緊急用。空なら channel に送り、冒頭に urgent_mention を付ける
+```
+
 LLM で要約するなら `provider: bedrock` にします。実行用ロールに権限が要るので、手順 1 のコマンドに `BedrockInferenceProfileArn` を足してもう一度実行します
 (読み取り専用ロールには足しません。Bedrock を呼ぶのは aratam で、実行用ロールのまま呼びます)。
 
@@ -187,6 +200,41 @@ aratam test-notify -c arata/aratam.yaml --urgent    # 実際に送る。緊急�
 - `doctor` は Slack に何も送りません (届くかは分かりません)。`test-notify` は本当に届くので、チャンネルの人に一言伝えてから実行します
 - secrets に入れた値そのものは、最初の `workflow_dispatch` の実行 (手順 5 の最後) で確かめられます。`on_quiet: short` なら、新規が無くても 1 行届きます。
   決定: 見本のワークフローに test-notify 用の入力は足しません。手動の実行が同じことを確かめ、入力を増やすと監査のワークフローの分岐が増えるためです
+
+#### bot トークンで送る (secret は 1 つ)
+
+Webhook はチャンネルごとに URL (秘密) が要ります。bot トークンなら秘密は 1 つで、送り先はチャンネル ID を `aratam.yaml` に書くだけです。
+監査対象ごとにチャンネルを分けるとき (下の「複数のアカウント」) に向きます。Webhook の 2 つの secret の代わりに、次の 1 つを置きます。
+
+| 名前 | 中身 |
+|---|---|
+| `ARATAM_SLACK_BOT_TOKEN` | Slack アプリの Bot User OAuth Token (`xoxb-` で始まる) |
+
+Slack アプリは、利用する組織が manifest から自分で作ります (Slack のワークスペースごとに 1 つ)。arata は公開配布のアプリを持ちません。
+配布用のアプリにすると、インストールを受けるサーバーと各組織のトークンを開発側が預かることになるためです。トークンを持つのは、アプリを入れた組織だけです。
+
+1. <https://api.slack.com/apps> →「Create New App」→「From a manifest」→ ワークスペースを選び、arata のリポジトリの `deploy/slack/app-manifest.yaml` の中身を貼ります。
+   bot の scope は `chat:write` だけで、受け口 (Event Subscriptions など) を持たない、投稿だけのアプリです。scope は足しません
+2. 「Install to Workspace」で入れ、「OAuth & Permissions」の Bot User OAuth Token を secret `ARATAM_SLACK_BOT_TOKEN` に入れます
+3. 通知先のチャンネルで `/invite @arata` を実行します (緊急用のチャンネルを分けるなら、そちらでも)。招待していないチャンネルには送れません
+4. チャンネル ID (チャンネルの詳細の一番下。`C0123456789` の形) を `aratam.yaml` の `slack.channel` / `urgent_channel` に書きます (手順 3)
+5. ワークフローの notify の `env` を、Webhook の 2 行から `ARATAM_SLACK_BOT_TOKEN` の 1 行に替えます (見本にコメントで書いてあります)
+
+```sh
+read -rs ARATAM_SLACK_BOT_TOKEN && export ARATAM_SLACK_BOT_TOKEN   # 貼り付けて Enter (シェルの履歴に残さない)
+aratam doctor -c arata/aratam.yaml                  # 送らない。auth.test でトークンが有効かと、LLM の疎通を見る
+aratam test-notify -c arata/aratam.yaml             # 実際に送る。通常用のチャンネルに 1 通
+aratam test-notify -c arata/aratam.yaml --urgent    # 実際に送る。緊急用のチャンネルに 1 通
+```
+
+- `doctor` は投稿しないので、bot がチャンネルにいるかは分かりません (`chat:write` だけでは調べられません)。`test-notify` が `not_in_channel` で失敗したら、
+  そのチャンネルで `/invite @arata` を実行します。`channel_not_found` は、チャンネル ID の誤りか、招待していない非公開チャンネルです
+- 同じワークスペースの複数のチャンネルに送るなら、アプリもトークンも 1 つです。監査対象ごとに `aratam.yaml` のチャンネル ID を変えるだけです。
+  別の組織と Slack Connect で共有するチャンネルも、招待すれば同じアプリで送れます
+- トークンのローテーションは有効にしません (manifest は無効にしてあります)。有効にするとトークンが 12 時間で切れますが、aratam は更新の仕組みを持ちません
+- トークンは、bot を招待したすべてのチャンネルに投稿できます (Webhook は 1 つのチャンネルだけ)。招待するチャンネルを通知用だけにします。
+  漏れた疑いがあれば、Slack アプリの設定でトークンを取り消し、入れ直して新しい値を secret に入れます
+- トークンを AWS Secrets Manager に置き、main のワークフローだけが読めるようにする形は今後の課題です (arata の `docs/roadmap.md`、ADR 0044)
 
 ### 5. 初回の収集は手元で
 
@@ -271,7 +319,7 @@ llm:
 
 ## 実行するリポジトリと環境を堅くする
 
-監査のリポジトリを使える人は、実行用ロール (ストアの読み書き・監査対象の読み取り) と Slack の Webhook を使えます。目指す状態は次の 2 つです。
+監査のリポジトリを使える人は、実行用ロール (ストアの読み書き・監査対象の読み取り) と Slack の Webhook (bot トークンの方式ならトークン) を使えます。目指す状態は次の 2 つです。
 
 - **main にコミットを入れられる人だけが、実行用ロールを使える** (fork、ほかのブランチ、PR からは使えない)
 - **secrets を読める人が最小**
@@ -350,8 +398,8 @@ gh api repos/example-org/security-audit/keys --jq '.[] | {title, read_only}'
 
 リポジトリの secrets は、**どのブランチのワークフローからも読めます**。書き込み権限のある人は、ブランチにワークフローを足して push すれば、main の保護を通らずに読み出せます。
 
-- 読み出されて困るのは Slack の Webhook です (偽の通知を送れます)。ロールの ARN は読めても、3 の `sub` が合わないので引き受けられません (分かるのはアカウント ID です)
-- 今の守りは 4 の「書き込み権限を持つ人を最小に」です。漏れた疑いがあれば Webhook を作り直します。長期の AWS のアクセスキーは secrets に置きません
+- 読み出されて困るのは Slack の Webhook か bot トークンです (偽の通知を送れます。bot トークンは、bot を招待したすべてのチャンネルに送れます)。ロールの ARN は読めても、3 の `sub` が合わないので引き受けられません (分かるのはアカウント ID です)
+- 今の守りは 4 の「書き込み権限を持つ人を最小に」です。漏れた疑いがあれば Webhook を作り直します (bot トークンなら取り消して入れ直します)。長期の AWS のアクセスキーは secrets に置きません
 - **案: GitHub の environment に置き、デプロイできるブランチを main に限る**。environment の secrets は、その environment を参照するジョブにしか渡らず、
   デプロイできるブランチを限れば、ほかのブランチのジョブは environment を使えません
 - **ただし、今の `runner.yaml` とは組み合わせられません**。ジョブに `environment:` を付けると、`sub` が `repo:...:environment:<名前>` に変わり (ブランチは `sub` に入らなくなります)、
@@ -440,6 +488,16 @@ name: prod                                # 通知に出す名前。アカウン
 - **allowlist**: 実行用ロールの `principals` の行を、各アカウントの `allowlist.yaml` に書きます
 - **初回の収集**: アカウントごとに手元で `arata init -c aws/<名前>/arata.yaml` を実行します (ストアはアカウントごとなので、順番でも並べてもかまいません。時間と認証の期限の注意は「初回の収集は手元で」)
 - **Slack**: Webhook は全アカウントで共通です。宛先を分けたいときは、アカウントごとの `aratam.yaml` の `webhook_env` に別の名前を書き、ワークフローの notify の `env` に足します
+  (アカウントを足すたびに secret が増えます)。**bot トークンの方式なら secret は 1 つのまま**で、アカウントごとの `aratam.yaml` の `slack.channel` / `urgent_channel` に
+  チャンネル ID を書くだけです (手順 4 の「bot トークンで送る」)
+
+  ```yaml
+  # aws/prod/aratam.yaml (抜粋)                    # aws/staging/aratam.yaml (抜粋)
+  slack:                                           # slack:
+    bot_token_env: ARATAM_SLACK_BOT_TOKEN          #   bot_token_env: ARATAM_SLACK_BOT_TOKEN   (同じ secret)
+    channel: C0123456789                           #   channel: C0123456781                    (チャンネルだけ違う)
+    urgent_channel: C0123456780                    #   urgent_channel: C0123456780
+  ```
 
 実行用ロールは全アカウントの prefix を読み書きできます (分けるのは置き場所で、権限ではありません)。権限まで分けたいときは、アカウントごとにリポジトリと実行の仕組みを分けます。
 

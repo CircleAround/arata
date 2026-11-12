@@ -1,6 +1,6 @@
 # ファズテスト
 
-信用できない入力 (ログ由来の値・LLM の出力・利用者のファイル) を解釈する箇所を、Go 標準のファズテスト (`testing.F`) で確かめる。
+信用できない入力 (ログ由来の値・LLM の出力・利用者のファイル・外部の API の応答) を解釈する箇所を、Go 標準のファズテスト (`testing.F`) で確かめる。
 目的は、パニック・無限ループと、規則で固定した守り (ADR 0037) の破れが無いことを機械で確かめること。判断は ADR 0041。
 
 ## 動かし方
@@ -35,6 +35,10 @@ CI は `.github/workflows/fuzz.yml` が週 1 回と手動 (`workflow_dispatch`�
 | | `FuzzLogValuesStayInert` | ログ由来の値 (summary・key・data・path) | どの書式でも行を増やせない。目に見えない文字と `<` `>` が残らない (run と期間レポート) |
 | | `FuzzOneLineAndEscape` | 任意の文字列 | `oneLine` と `Escape` の性質 (冪等、元に戻せる)、切り詰めの上限 |
 | | `FuzzParseDuration` | 設定の長さ | 正の値。日数が桁あふれで別の長さにならない |
+| | `FuzzSlackConfig` | aratam.yaml の slack 節 | 送り方は 1 つだけ (Webhook と bot が混ざらない)。通った値は環境変数の名前・チャンネル ID の形。エラーに値を写さない |
+| `internal/slack` | `FuzzParseResponse` | Slack の Web API の応答の本文 | 成功は JSON のオブジェクトで `ok` が `true` のときだけ。error コードは `[a-z0-9_]` で 64 字まで、ID は `[A-Z0-9]`。エラーの文は固定 |
+| | `FuzzRetryAfter` `FuzzParseScopes` | `Retry-After`、`X-OAuth-Scopes` | 待ち時間は 0 以上 24 時間以下の秒。scope は決まった字だけ・100 個まで・重複なし |
+| | `FuzzPostMessageResponse` | 状態コード・本文・`Retry-After` (偽の API) | 成功は 2xx で `ok: true` のときだけ。エラーの文は 1 行で、トークンも本文も含まない。呼び出しは 3 回まで |
 | `internal/collect/cwlogs` | `FuzzNormalizePath` `FuzzMaskSample` | パス、ログの行 | クエリ・フラグメントとメールアドレスの形が残らない。冪等。サンプル行は伏せてから切り、制御文字を残さない |
 | | `FuzzQueryLiterals` | 設定の glob・接頭辞・正規表現 | Insights の `/.../` と `"..."` を抜け出さない。Go の regexp でも同じ意味 |
 | | `FuzzParseValues` | Insights の結果の値 | 時刻・日・件数 (有限で負でない)・IP の範囲 |
