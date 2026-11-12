@@ -14,7 +14,8 @@ arata 設計書 9-1 章 (「report.json から通知までの LLM の仕事」) 
 | 配置 | 同じリポジトリの `cmd/aratam`。リリースには arata と aratam のバイナリを並べる。report.json の形と `docs/ai` の版が arata とずれない |
 | 権限 | arata は AWS の読み取りロールだけ、aratam は LLM と通知の鍵だけを持つ。別の OS ユーザーで動かしてもよい |
 | LLM | `bedrock` と `claude-cli` (`claude -p`) に対応する。将来 `openai-api`。`none` (LLM を使わず report.md を整形して送る) も選べる |
-| 通知先 | Slack Incoming Webhook。通常用と緊急用の 2 本まで。SNS などは後続 |
+| 通知先 | Slack。送り方は Incoming Webhook か、bot トークンとチャンネル ID (`chat.postMessage`) のどちらか 1 つ (4-1 章)。通常用と緊急用の 2 つまで。SNS などは後続 |
+| 秘密 | 環境変数で受け取る。置き場所 (GitHub の secret、Secrets Manager など) と取り出し方は実行環境に任せる (4-2 章、ADR 0044) |
 | 書式 | Block Kit (`slack.format: blocks`。3-4 章、ADR 0029)。`text` で v0.3.0 までの mrkdwn の本文も選べる |
 | 依存 | 標準の `net/http` で書く。例外は Bedrock で、AWS SDK (`service/bedrockruntime`) を使ってよい (arata が AWS SDK の core を既に持つため増分が小さい) |
 | 状態 | 持たない。二重送信の防止だけ、入力ディレクトリに `.aratam-notified` (通知済みの run_id) を書く。ほかに書くのは WAF の提案の全文 `waf-proposals.md` だけ (3-4 章) |
@@ -60,7 +61,7 @@ aratam notify --in /var/lib/arata/out/daily
   識別子は run の `run_id`。期間レポートは run_id を持たないので `period:<from>/<to>@<generated_at>` にする (作り直したら別の報告として送る)。
   入力の問題 (終了コード 4) は記録しない (次の cron でもう一度知らせる)。`on_quiet: silent` で送らなかったときは記録する。
 - 二重送信の防止: `.aratam-notified` を書けなくても送信は済んでいるので終了コードは変えず、`MARK_FAILED` の警告だけ出す (次回は同じ報告を再送する)。
-- `--dry-run` は `.aratam-notified` を見る (通知済みなら送らない旨をログに出す。中身を見たいときは `--force`) が、書かない。Webhook の環境変数も要らない。
+- `--dry-run` は `.aratam-notified` を見る (通知済みなら送らない旨をログに出す。中身を見たいときは `--force`) が、書かない。Webhook・bot トークンの環境変数も要らない。
 - 期間レポートは件数が 0 でも「静か」とみなさず送る (月次などの定期の報告は、何も無かったことも伝える)。
 - メッセージ: Slack の mrkdwn の本文だけで送る (8 章の未決は「まずは本文だけ」で進める)。
   → 決定 (ADR 0029): Block Kit にした (3-4 章)。ここから下のメッセージの決定は `slack.format: text` のときのもの。
@@ -83,6 +84,7 @@ aratam notify --in /var/lib/arata/out/daily
   本文の通知は変えず (要約の入力の report.json には含まれる)、「WAF の改善提案」を 2 通目として送る (3-2 章、ADR 0024)
 - 送信: 再送はしない (Slack が受け取ったのに応答が届かなかった場合の二重送信を避ける。失敗は終了コード 5 で cron 側に任せる)。
   `net/http` のエラーは URL を含むので、中身だけを取り出してから返す (Webhook の URL をログに出さない)。
+  bot トークンの方式 (4-1 章) も同じ規則で送る。例外は Slack が `ratelimited` と返したときだけで、受け取られていないので `Retry-After` だけ待って送り直す。
 
 ## 3. LLM との契約
 
@@ -151,7 +153,7 @@ LLM に求める出力:
 - system: 出力の契約 (3 章)、「追加の照会はできない。report.json だけで判断する」、続けて `docs/ai/report.md`、その run のチェックの対処手順 (3-3 章)、利用者の前提を埋め込む。
 - `claude-cli`: `claude -p --output-format json --tools "" --strict-mcp-config --no-session-persistence --setting-sources project --system-prompt <system> [--model <model>]`。
   ツールも MCP サーバーも使わせず、セッションをディスクに残さない。作業ディレクトリは空の一時ディレクトリ (終わったら消す)。
-  子プロセスの環境変数は aratam のものから Webhook の環境変数 (`slack.webhook_env` / `urgent_webhook_env`) を除いて渡す。
+  子プロセスの環境変数は aratam のものから Webhook と bot トークンの環境変数 (`slack.webhook_env` / `urgent_webhook_env` / `bot_token_env`) を除いて渡す。
   `--output-format json` の `is_error` が真なら失敗。実行ファイルは `llm.command` (空なら PATH の `claude`。cron の PATH が狭い場合に絶対パスで書く)。
 - `bedrock`: SDK の自動再試行は切る (RetryMaxAttempts 1。再試行は共通部分で 1 回までと決めているため重ねない)。maxTokens 4096。
   決定: `temperature` は送らない (モデルの既定に任せる)。以前は 0 を送っていたが、新しいモデル (例: Claude Haiku 5.5) は Converse の `temperature` を「廃止」として ValidationException で拒否し、要約が毎回失敗して原文の送信になった (2026-11-09、実際の Bedrock で確認)。aratam は判定を LLM に任せず、出力は規則で検証するので、ばらつきは通知の振り分けに影響しない
@@ -161,7 +163,7 @@ LLM に求める出力:
 
 経緯は ADR 0024。
 
-- 送り方: 本文とは別の 2 通目として、**常に通常用の Webhook** に送る (proposals だけでは緊急にしない。本文が緊急用でも提案は通常用)。
+- 送り方: 本文とは別の 2 通目として、**常に通常用の Webhook (bot トークンの方式なら通常用のチャンネル)** に送る (proposals だけでは緊急にしない。本文が緊急用でも提案は通常用)。
   `on_quiet: short` なら静かな 1 行の後に、`silent` なら 2 通目だけを送る。proposals が無い (waf_review が走らない) run では送らない。
   2 通目の送信に失敗したら終了コード 5。1 通目を送れていれば `.aratam-notified` は書く (本文を二重に送らない)。2 通目だけの run で失敗したら書かない
 - 書式 (`internal/notify/proposals.go`):
@@ -298,7 +300,7 @@ LLM に求める出力:
     `challenge_impact` (observation) は「*Challenge / CAPTCHA*」の節に 1 ルール 1 行 (「`ルール` Challenge 900 件・解かれた 5%・GET 以外 40」。割合は解釈しない)
 - 静か (`on_quiet: short`): header `✅ arata <profile> — <name>` と 1 行。入力の問題: header `⚠️ arata の出力が無いか古い — <name>`、理由・code・入力のパス
 - `--dry-run`: `--format text` (既定) は人が読む簡易表示 (`[通知] <text>`、header は `# `、divider は `---`、context は `(小) `、fields は ` | ` でつなぐ)。
-  `--format json` は Webhook に送る payload そのもの。`--format` は `--dry-run` のときだけ指定できる
+  `--format json` は Slack に送る payload そのもの (bot トークンの方式では、これに `channel` を足して送る)。`--format` は `--dry-run` のときだけ指定できる
 
 ### 3-5. finding の ID の表示
 
@@ -347,16 +349,20 @@ llm:
   # context_file: aratam-context.md  # この監査対象の前提 (Markdown。ADR 0024)
 
 slack:
-  webhook_env: ARATAM_SLACK_WEBHOOK            # 通常用。URL は設定ファイルに書かず環境変数で渡す
+  # 送り方は 2 つのうち 1 つ (4-1 章)。使わないほうは "" にする
+  webhook_env: ARATAM_SLACK_WEBHOOK            # Incoming Webhook の通常用。URL は設定ファイルに書かず環境変数で渡す
   urgent_webhook_env: ARATAM_SLACK_URGENT_WEBHOOK   # 省略時は通常用に送り、冒頭にメンションを付ける
+  bot_token_env: ""               # bot トークン (xoxb-...) を入れる環境変数の名前。トークンは設定ファイルに書かない
+  channel: ""                     # bot トークンの通常用のチャンネル ID (C0123456789 の形。秘密ではない)
+  urgent_channel: ""              # bot トークンの緊急用のチャンネル ID。空なら channel に送り、冒頭にメンションを付ける
   urgent_mention: "<!channel>"
   format: blocks                  # blocks (Block Kit) | text (mrkdwn の本文。v0.3.0 までの書式)
 ```
 
-- Webhook の URL は秘密なので設定ファイルに書かせない (環境変数の名前だけを書く)。
+- Webhook の URL と bot トークンは秘密なので設定ファイルに書かせない (環境変数の名前だけを書く。4-2 章)。チャンネル ID は秘密ではないので値を書く。
 
 決定 (実装順 1):
-- 必須: `name`, `max_age`, `urgent_severity` (critical | high | medium | low), `on_quiet`, `llm.provider`, `slack.webhook_env`。
+- 必須: `name`, `max_age`, `urgent_severity` (critical | high | medium | low), `on_quiet`, `llm.provider`, `slack.webhook_env` (bot トークンの方式なら `slack.bot_token_env` と `slack.channel`。4-1 章)。
   `llm.timeout` は provider が `none` 以外なら必須、`bedrock` は `llm.model` と `llm.region` も必須。`claude-cli` の `model` は省略可 (claude 側の既定)。
   `slack.urgent_webhook_env` と `slack.urgent_mention` は省略可。未知のキーは誤記とみなして設定エラーにする (arata と同じ)。
 - `slack.format` (ADR 0029): `blocks` | `text`。必須 (暗黙の既定を持たない)。v0.3.0 の設定には無いので、エラー文に「v0.4.0 から必須。従来どおりなら `slack.format: text`」と書く。
@@ -375,6 +381,89 @@ slack:
 - 雛形 (`config init`) の `llm.provider` は `none` にする。LLM の鍵を用意する前でも notify が動き、まず規則だけの通知で流れを確かめられるように。
   `max_age` などの書式は arata の設定と同じ (`time.ParseDuration` と `d` = 日)。
 
+### 4-1. Slack への送り方 (Incoming Webhook と bot トークン)
+
+監査対象ごとに通知先のチャンネルを分けると、Incoming Webhook ではチャンネルごとに URL (秘密) が要り、対象が増えるたびに秘密が増える。
+bot トークンなら秘密は 1 つで、送り先はチャンネル ID (秘密ではない) を設定に書けばよい。
+
+```yaml
+slack:
+  webhook_env: ""
+  urgent_webhook_env: ""
+  bot_token_env: ARATAM_SLACK_BOT_TOKEN   # 環境変数の名前。値 (xoxb-...) は実行環境が入れる
+  channel: C0123456789                    # 通常用のチャンネル ID
+  urgent_channel: C0123456780             # 緊急用。空なら channel に送り、冒頭に urgent_mention を付ける
+  urgent_mention: "<!channel>"
+  format: blocks
+```
+
+- 決定 (両方を残す): Webhook の方式はそのまま残し、bot トークンの方式を並べて足す。既にある設定を変えずに動かし続けるため (後方互換)。
+  Webhook は 1 つのチャンネルにしか投稿できない鍵で、チャンネルが 1〜2 個の利用者には今も一番狭い権限になる。Slack アプリを作れない利用者もいる。
+  新しい項目 (`bot_token_env`・`channel`・`urgent_channel`) は省略可で、無ければ Webhook の方式。`slack.format` のときのように必須にはしない
+  (必須にすると、Webhook で動いている設定がすべて更新を要する)。雛形 (`config init`) は全項目を空の値で明示し、`config check` と `doctor` は使う方式を出す。
+  aratam の `config init` に `--diff` は無い (arata だけ)。要るなら別に足す
+- 決定 (どちらか 1 つ): Webhook の項目 (`webhook_env`・`urgent_webhook_env`) と bot の項目の両方が書かれていたら設定エラーにする。
+  片方を優先する規則にすると、移行の途中の設定で、意図しないチャンネルに送ったり緊急の通知が古い Webhook に流れたりする。通常用は bot・緊急用は Webhook という混在も受け付けない
+- 決定 (チャンネルは ID で書く): `C0123456789` の形 (`[CGD]` + 英大文字と数字 8〜20 字) だけを受け付け、名前 (`#general`) は設定エラーにする。
+  名前は変えられ、別のチャンネルに付け替えられる。ID は変わらず、秘密でもない。エラーには値を出さない (チャンネルの欄にトークンを貼った誤りのため)
+- 決定 (scope は `chat:write` だけ): `chat:write.public` に頼らない。bot がいないチャンネルへは送れない前提にし、`not_in_channel` は
+  「bot をチャンネルに招待する (`/invite`)」と分かるエラーにする。トークンが漏れたときに投稿できる範囲を、招待したチャンネルだけにするため。
+  チャンネルの一覧・参加の状況を読む scope (`channels:read` など) も使わない。そのため aratam は、bot がチャンネルにいるかを投稿せずには確かめられない
+  (`doctor` は確かめず、`test-notify` で確かめる)。`conversations.join` で自分から入ることもしない (`channels:join` が要る)
+- 決定 (送る中身は同じ): `chat.postMessage` に送る JSON は、Webhook に送るもの (`text`・`blocks`・`unfurl_links: false`・`unfurl_media: false`) に `channel` を足しただけ。
+  振り分け・長さの上限と切り詰め・2 通目 (WAF の提案)・LLM が使えないときの原文や規則だけの通知・二重送信の防止は、どちらの方式でも notify の同じ規則で決まる。
+  スレッドへの返信・メッセージの更新や削除はしない (`chat:write` で足りる範囲でも、状態を持たない方針のため)
+- 決定 (応答を信用しない。ADR 0037・0041): Slack の Web API は HTTP 200 でも `{"ok": false, "error": "..."}` を返すので、`ok` を必ず見る。
+  成功とみなすのは、HTTP 2xx で、本文が JSON のオブジェクトで、`ok` が真偽値の `true` のときだけ。
+  エラーの文とログに写すのは、`[a-z0-9_]` で 64 字までの `error` コードだけ (それ以外は `unknown_error`)。応答の本文もトークンも写さない。
+  `auth.test` の `team_id` は `[A-Z0-9]` で 32 字まで、`X-OAuth-Scopes` は `[a-z0-9:._-]` の名前だけを残す。本文は 64 KiB まで読む。
+  ファズは `internal/slack` の `FuzzParseResponse`・`FuzzRetryAfter`・`FuzzParseScopes`・`FuzzPostMessageResponse` と、`internal/notify` の `FuzzSlackConfig`
+- 決定 (`ratelimited`): HTTP 429 か `error: ratelimited` のときは、`Retry-After` の秒数だけ待って送り直す。**2 回まで**、1 回に待つのは **30 秒まで**。
+  `Retry-After` が 30 秒より長ければ、短く待って送り直すことはせずに失敗にする (終了コード 5。Slack の指示を破らない)。ヘッダーが無い・読めないときは 1 秒。
+  `ratelimited` は Slack が受け取っていないので、送り直しても二重にならない。接続の失敗・時間切れ・5xx では、Webhook と同じく送り直さない
+- 決定 (トークンの扱い): 環境変数の値の前後の空白 (secret の末尾の改行など) は除く。途中に空白や制御文字があれば設定エラー (ヘッダーに入れない。値は出さない)。
+  `xoxb-` で始まるかは見ない (Slack の側が `invalid_auth`・`not_allowed_token_type` で返す)。API の場所 (`https://slack.com/api`) は設定や環境変数から変えられない
+  (トークンを別の場所へ送らせないため。テストだけがコードの中で差し替える)。`claude-cli` の子プロセスにはトークンの環境変数を渡さない
+- 決定 (Slack アプリの manifest を配る): `deploy/slack/app-manifest.yaml` を、`deploy/iam/readonly-role.yaml` と同じ「貼るだけで作れる」配布物として置く。
+  手で作ると scope を足しすぎたり、要らない受け口を有効にしたりしやすい。中身は bot の `chat:write` だけで、Event Subscriptions・Interactivity・
+  slash commands・Socket Mode・OAuth のリダイレクトを持たない (投稿だけのアプリ)。テスト (`internal/slack/manifest_test.go`) がこの形を固定する
+- 決定 (トークンのローテーションは無効): manifest の `token_rotation_enabled` は `false`。有効にすると bot トークンが 12 時間で切れ、refresh token での更新が要る。
+  aratam は状態を持たず、渡された環境変数の値をそのまま使うので、更新の仕組みを持たない (ADR 0044)。一度有効にすると無効に戻せない。
+  トークンを替えるときは、アプリを入れ直すか、トークンを取り消して新しい値を実行環境の秘密に入れる
+- 決定 (公開配布のアプリを持たない): Slack アプリは、利用する組織が manifest から自分で作る (Slack のワークスペースごとに 1 つ)。
+  配布用のアプリにすると、インストールを受けるサーバー (OAuth) と各組織のトークンを開発側が預かることになる。トークンを持つのは、アプリを入れた組織だけにする。
+  同じワークスペースの複数のチャンネルに送るなら、アプリは 1 つで、監査対象ごとに設定のチャンネル ID を変えるだけでよい。
+  別の組織と Slack Connect で共有するチャンネルも、招待すれば同じアプリで送れる
+- 却下: Slack の SDK を使う (標準の `net/http` で足りる。`cmd/aratam/deps_test.go` の許可リストを広げない)。チャンネルを名前で書けるようにする
+  (名前から ID を引くには `channels:read` が要る)。1 つの設定に複数の送り先を並べる (監査対象ごとに設定ファイルを分ける今の形で足りる)
+
+エラーの文の例 (標準エラーの `SEND_FAILED` の `error`):
+
+```
+slack: chat.postMessage failed: not_in_channel (channel C0123456789): bot がこのチャンネルにいません。bot をチャンネルに招待してください (チャンネルで /invite @<bot の名前>)。aratam は chat:write.public を使いません
+slack: chat.postMessage failed: channel_not_found (channel C0123456789): チャンネル ID が違うか、bot を招待していない非公開チャンネルです。slack.channel / slack.urgent_channel のチャンネル ID を確かめ、bot をチャンネルに招待してください
+slack: chat.postMessage failed: invalid_auth (channel C0123456789): トークンが無効です。slack.bot_token_env の環境変数の値 (xoxb- で始まる bot トークン) を確かめてください
+slack: chat.postMessage failed: ratelimited (Retry-After 60 秒) (channel C0123456789): Slack の送信の制限に達しました。時間を置いて実行し直してください
+```
+
+### 4-2. 秘密の受け渡し
+
+経緯と却下した案は ADR 0044。
+
+- 決定: **aratam と秘密の境界は環境変数にする**。aratam が知るのは「どの環境変数を読むか」(`webhook_env`・`urgent_webhook_env`・`bot_token_env`) だけで、
+  秘密の置き場所 (GitHub の secret、Secrets Manager、SSM、`.env` など) を知らない。実行環境ごとの分岐を aratam に持たない
+- 決定: 秘密を環境変数に入れるのは実行環境の役目。
+  - GitHub Actions: secret を、使う step の `env:` にだけ渡す
+  - ECS / Fargate: タスク定義の `secrets` で、Secrets Manager / SSM から入れる (aratam のコードは要らない)
+  - Lambda: 環境変数か、起動時に Secrets Manager から読む
+  - 手元: `.env` や、パスワード管理のツールの CLI
+- 決定: 実行環境ごとの部分は `deploy/` (テンプレート) と `examples/` (ワークフローなど) に置く。環境変数に入れる仕組みが無い実行環境 (cron の EC2 など) の
+  取り出しの手順も、aratam ではなく `examples/` の側に置く
+- 理由: (1) 通知のコマンドに、AWS の SDK や秘密を読む権限を持ち込まない (Bedrock は LLM の呼び出しで、秘密の取得とは別)。
+  (2) 秘密を読む権限は実行環境の仕組み (OIDC のロール、タスクの実行ロール) が持ち、aratam が侵されても読めるのは渡された値だけ。
+  (3) テストは環境変数の差し替えで済む
+- 却下: aratam が Secrets Manager などを直接読む (`secret_source` のような設定)。依存と権限が増え、実行環境ごとの分岐が入る
+
 ## 5. CLI
 
 ```
@@ -382,7 +471,7 @@ aratam config init [--out aratam.yaml] [--force]
 aratam config check [-c aratam.yaml] # 設定の形をオフラインで検査 (Slack・LLM に繋がない。問題があれば終了コード 2)
 aratam notify  --in <dir> [-c aratam.yaml] [--dry-run [--format text|json]] [--force]
                # --dry-run は送らずに標準出力へ。LLM は呼ぶ (--llm none で呼ばない)。--format json は送る payload そのもの
-aratam doctor  [-c aratam.yaml]   # LLM に短い問い合わせを 1 回、Webhook の環境変数の有無を確認 (送信はしない)
+aratam doctor  [-c aratam.yaml]   # LLM に短い問い合わせを 1 回、Webhook の環境変数の有無 (bot トークンなら auth.test) を確認 (送信はしない)
 aratam test-notify [-c aratam.yaml] # Slack に試験メッセージを 1 通送る
 ```
 
@@ -390,7 +479,7 @@ aratam test-notify [-c aratam.yaml] # Slack に試験メッセージを 1 通送
   `config init` の書き出し先も既定は `./aratam.yaml` (既存ファイルは `--force` が無ければ上書きしない)。
   `--in` は既定を持たない (監査対象・プロファイルごとに違うデータの場所で、取り違えると別の report を送ってしまうため)。
 - 決定 (arata の ADR 0042): `config check` は notify / doctor が起動時にする検証 (`notify.LoadConfig`) だけを行い、Slack にも LLM にも繋がない。PR の CI で使う。
-  - Webhook の環境変数は見ない (警告も出さない)。PR の CI には秘密を渡さないのが正しい形で、そこで毎回「未設定」と出る警告は読まれなくなる。あるかどうかは `doctor` が見る
+  - Webhook・bot トークンの環境変数は見ない (警告も出さない)。Slack への送り方が 1 つだけか、チャンネル ID の形かは見て、ok の行に使う方式 (`slack webhook` / `slack bot`) を出す。PR の CI には秘密を渡さないのが正しい形で、そこで毎回「未設定」と出る警告は読まれなくなる。あるかどうかは `doctor` が見る
   - `llm.context_file` は書いてあれば読めるかを見る。リポジトリの中のファイルなのでオフラインで確かめられる。読めない・16 KiB を超えるは `warn`
     (notify が前提なしで続けるのと同じ扱い。ADR 0024)。`provider: none` では使わないので `skip`
   - 出力と終了コードは arata の `config check` と同じ形 (`ok` / `warn` / `ng` / `skip`、`ng` があれば 2)
@@ -407,7 +496,12 @@ aratam test-notify [-c aratam.yaml] # Slack に試験メッセージを 1 通送
   LLM は「疎通確認です。ok とだけ返してください。」を 1 回送り (report のデータは渡さない。再試行しない)、失敗や claude の実行ファイルが無ければ ng (`LLM_UNAVAILABLE`)。
   `llm.context_file` を書いたときは context の行を足す (読めなければ warn。provider: none なら skip)。
   ng が 1 つでもあれば終了コード 2、ng / warn の行は標準エラーにも code 付きで出す。
+- 決定 (`doctor`、bot トークンの方式): webhook の行の代わりに slack の行を出す。トークンの環境変数が無ければ ng (`BOT_TOKEN_UNSET`)。
+  あれば `auth.test` を 1 回呼び (scope は要らない)、トークンが有効かだけを確かめる。失敗は ng (`SLACK_AUTH_FAILED`)。**投稿はしない** (`chat.postMessage` を呼ばない)。
+  応答の `X-OAuth-Scopes` に `chat:write` が無いと分かったら warn (`SLACK_SCOPE_MISSING`。ヘッダーが無ければ判断しない)。
+  bot がチャンネルにいるかは確かめられないので (4-1 章)、チャンネル ID を出して `test-notify` を案内する
 - 決定 (`test-notify`): 既定は通常用、`--urgent` で緊急用に送る (緊急用が無ければ notify と同じく通常用にメンション付き)。送信に失敗したら終了コード 5。
+  bot トークンの方式では、届くこと (bot がチャンネルにいること) を確かめる唯一の手段になる。
 
 ## 6. パッケージ構成
 
@@ -415,7 +509,7 @@ aratam test-notify [-c aratam.yaml] # Slack に試験メッセージを 1 通送
 cmd/aratam/          # CLI
 internal/notify/     # 設定、入力の検査、振り分け、組み立て、検証 (LLM とネットワークに依存しない。テストの中心)
 internal/llm/        # Summarizer と各プロバイダ (bedrock / claudecli)
-internal/slack/      # Incoming Webhook の送信 (net/http)
+internal/slack/      # Incoming Webhook と bot トークン (chat.postMessage / auth.test) の送信 (net/http)
 internal/subcmd/     # arata と共有する、標準 flag の上のコマンド層
 internal/report/schema/  # arata と共有する report.json の型 (標準ライブラリだけに依存)
 docs/ai/             # arata と共有。aratam は report.md を system として埋め込む

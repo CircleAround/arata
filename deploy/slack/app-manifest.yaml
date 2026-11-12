@@ -1,0 +1,42 @@
+# aratam が通知を投稿するための Slack アプリの manifest (bot トークンの方式。docs/aratam.md 4-1 章)。
+#
+# 使い方:
+#   1. https://api.slack.com/apps →「Create New App」→「From a manifest」→ 入れるワークスペースを選ぶ
+#   2. このファイルの中身を YAML のタブに貼って作る
+#   3.「Install to Workspace」で入れ、「OAuth & Permissions」の Bot User OAuth Token (xoxb- で始まる) を、
+#      aratam を動かす環境の秘密に入れる (aratam.yaml の slack.bot_token_env に書いた名前の環境変数で渡す)
+#   4. 通知先のチャンネルで /invite @arata を実行する (緊急用のチャンネルを分けるなら、そちらでも)
+#   5. チャンネル ID (チャンネルの詳細の一番下。C0123456789 の形) を aratam.yaml の slack.channel / urgent_channel に書く
+#
+# アプリは、利用する組織が自分で作る (ワークスペースごとに 1 つ)。arata は公開配布のアプリを持たない。
+# トークンを持つのを、アプリを入れた組織だけにするため。
+# 同じワークスペースの複数のチャンネルに送るなら、アプリは 1 つで、設定のチャンネル ID を変えるだけでよい。
+
+display_information:
+  name: arata
+  description: arata / aratam の監査の通知
+
+features:
+  bot_user:
+    display_name: arata
+    always_online: false
+
+oauth_config:
+  scopes:
+    # scope は chat:write だけ。足さない。
+    #   chat:write.public (招待されていない公開チャンネルにも投稿できる) は付けない。
+    #     トークンが漏れたときに投稿できる範囲を、bot を招待したチャンネルだけにするため。
+    #     招待していないチャンネルへの送信は not_in_channel で失敗し、aratam が「bot を招待する」と案内する
+    #   channels:read・groups:read など (チャンネルの一覧や参加の状況を読む) も付けない。
+    #     aratam は投稿しかしない。送り先は設定のチャンネル ID で決まり、読む必要が無い
+    bot:
+      - chat:write
+
+# 投稿だけのアプリなので、受け口 (Event Subscriptions・Interactivity・slash commands・OAuth のリダイレクト) を持たない。
+settings:
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  is_hosted: false
+  # トークンのローテーションは無効のままにする。有効にすると bot トークンが 12 時間で切れ、refresh token での更新が要る。
+  # aratam は更新の仕組みを持たない (渡された環境変数のトークンをそのまま使う)。一度有効にすると無効に戻せない。
+  token_rotation_enabled: false

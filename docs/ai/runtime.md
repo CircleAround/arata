@@ -3,10 +3,10 @@
 ## 使い方
 
 arata / aratam を GitHub Actions で動かすリポジトリ (以下「監査のリポジトリ」) を作るとき・見直すときに、上から順に確かめる。
-監査のリポジトリは、ストアへの書き込み・Slack の Webhook・監査対象の読み取りロールへの入口を持つ。守るのは次の 2 つ。
+監査のリポジトリは、ストアへの書き込み・Slack の Webhook (bot トークンの方式ならトークン)・監査対象の読み取りロールへの入口を持つ。守るのは次の 2 つ。
 
 - **main に入れられる人 = 実行用ロールを使える人**。それ以外の経路 (fork、ほかのブランチ、PR) からは使えない
-- secrets (Webhook) を読める人を最小にする
+- secrets (Webhook・bot トークン) を読める人を最小にする
 
 LLM が行ってよいのは**読み取りだけ** (`gh api` の GET、ファイルを読む)。設定の変更・ワークフローの追加・secrets の操作は、**人が**判断して行う (LLM は差分や手順を提案する)。
 `OWNER` / `REPO` は監査のリポジトリに読み替える。API が 403 / 404 を返す項目は、権限が足りないだけのことが多い。「確かめられなかった」と報告し、問題なしにしない。
@@ -92,9 +92,9 @@ gh api repos/OWNER/REPO/actions/secrets --jq '[.secrets[].name]'
 gh api repos/OWNER/REPO/environments --jq '[.environments[] | {name, deployment_branch_policy}]'
 ```
 
-- 置いてあるのが、見本の 4 つ (実行用ロールと監査ロールの ARN、Slack の Webhook 2 つ。複数のアカウントなら ARN は JSON の 1 つ) だけ。長期の AWS のアクセスキーが無い
-- 読み出されて困るのは Webhook (偽の通知を送れる)。ロールの ARN は読めても、`sub` が合わないので引き受けられない (分かるのはアカウント ID)
-- 守りは「書き込み権限を持つ人を最小に」。漏れた疑いがあれば、人が Webhook を作り直す
+- 置いてあるのが、見本の 4 つ (実行用ロールと監査ロールの ARN、Slack の Webhook 2 つ。複数のアカウントなら ARN は JSON の 1 つ。bot トークンの方式なら Webhook 2 つの代わりに `ARATAM_SLACK_BOT_TOKEN` 1 つ) だけ。長期の AWS のアクセスキーが無い
+- 読み出されて困るのは Webhook と bot トークン (偽の通知を送れる。bot トークンは bot を招待したすべてのチャンネルに送れるので、招待が通知用のチャンネルだけか、Slack アプリの scope が `chat:write` だけかを人に確かめてもらう)。ロールの ARN は読めても、`sub` が合わないので引き受けられない (分かるのはアカウント ID)
+- 守りは「書き込み権限を持つ人を最小に」。漏れた疑いがあれば、人が Webhook を作り直す (bot トークンなら取り消して入れ直す)
 - GitHub の environment に Webhook を置き、`deployment_branch_policy` で main だけに限れば、ほかのブランチのジョブからは読めなくなる。
   ただし今の `runner.yaml` は environment の `sub` を受け付けないので、OIDC を使うジョブには `environment:` を付けられない (テンプレートの対応は予定。arata の `docs/roadmap.md`)。
   environment を勧めるときは、この制約と、非公開のリポジトリでは GitHub の有料プランが要ることを添える

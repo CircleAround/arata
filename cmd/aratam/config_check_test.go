@@ -54,6 +54,9 @@ func (c *cli) offline() {
 		if len(c.hook.got) != 0 {
 			c.t.Fatal("config check must not send to Slack")
 		}
+		if n := len(c.api.all()); n != 0 {
+			c.t.Fatalf("config check must not call the Slack API: %d calls", n)
+		}
 		if ents, _ := os.ReadDir(c.rec); len(ents) != 0 {
 			c.t.Fatalf("config check must not start claude: %v", ents)
 		}

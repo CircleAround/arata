@@ -282,7 +282,7 @@ func testSecretsReachOnlyTheStepsThatNeedThem(t *testing.T, w *workflow, text st
 			if !strings.Contains(v, "secrets.") {
 				continue
 			}
-			want := map[string]string{"GH_TOKEN": "install", "AUDIT_ROLE_ARN": "aws-config", "AUDIT_ROLE_ARNS": "aws-config", "ARATAM_SLACK_WEBHOOK": "notify", "ARATAM_SLACK_URGENT_WEBHOOK": "notify"}[k]
+			want := map[string]string{"GH_TOKEN": "install", "AUDIT_ROLE_ARN": "aws-config", "AUDIT_ROLE_ARNS": "aws-config", "ARATAM_SLACK_WEBHOOK": "notify", "ARATAM_SLACK_URGENT_WEBHOOK": "notify", "ARATAM_SLACK_BOT_TOKEN": "notify"}[k]
 			if want != s.ID {
 				t.Errorf("secret %s must not be given to step %q", k, s.ID)
 			}

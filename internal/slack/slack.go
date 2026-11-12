@@ -1,4 +1,4 @@
-// Package slack は Slack Incoming Webhook への送信 (標準の net/http だけで書く。ADR 0018)。
+// Package slack は Slack への送信 (Incoming Webhook と、bot トークンの chat.postMessage。標準の net/http だけで書く。ADR 0018)。
 package slack
 
 import (

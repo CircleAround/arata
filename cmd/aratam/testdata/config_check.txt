@@ -1,2 +1,2 @@
-ok    <dir>/aratam.yaml: name acme, provider claude-cli, format text
+ok    <dir>/aratam.yaml: name acme, provider claude-cli, format text, slack webhook
 ok    llm.context_file: <dir>/context.md (43 バイト)

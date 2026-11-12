@@ -4,7 +4,7 @@
 #
 # 利用者のリポジトリに置くもの:
 #   arata/arata.yaml         store: s3://... と aws.profile: arata-audit を書く
-#   arata/aratam.yaml        slack.webhook_env などを書く
+#   arata/aratam.yaml        slack.webhook_env (bot トークンの方式なら slack.bot_token_env と slack.channel) などを書く
 #   arata/allowlist.yaml
 #   arata/aratam-context.md  (任意。llm.context_file)
 name: arata-audit
@@ -138,6 +138,9 @@ jobs:
         env:
           ARATAM_SLACK_WEBHOOK: ${{ secrets.ARATAM_SLACK_WEBHOOK }}
           ARATAM_SLACK_URGENT_WEBHOOK: ${{ secrets.ARATAM_SLACK_URGENT_WEBHOOK }}
+          # bot トークンの方式 (aratam.yaml の slack.bot_token_env と slack.channel。README の「bot トークンで送る」) なら、
+          # 上の 2 行の代わりに次の 1 行にする。secret は 1 つで、チャンネル ID は aratam.yaml に書く (秘密ではない)。
+          # ARATAM_SLACK_BOT_TOKEN: ${{ secrets.ARATAM_SLACK_BOT_TOKEN }}
         run: |
           log="$RUNNER_TEMP/aratam.log"
           status=0

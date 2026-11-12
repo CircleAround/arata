@@ -67,3 +67,4 @@
 | [0041](0041-fuzz-untrusted-input.md) | 信用できない入力を解釈する箇所を、Go 標準のファズテストで確かめる | 採用 |
 | [0042](0042-offline-config-check-and-triage-workflow.md) | 設定と allowlist の形はオフラインの `config check` で PR の時点に確かめ、finding の片付けは Actions の手動実行で行う | 採用 |
 | [0043](0043-vulnerability-fix-exempt-from-cooldown.md) | 脆弱性の修正版は、条件を満たせば 7 日の待機の対象外にする | 採用 |
+| [0044](0044-aratam-secrets-via-environment.md) | aratam は秘密を環境変数で受け取り、置き場所と取り出し方は実行環境に任せる | 採用 |

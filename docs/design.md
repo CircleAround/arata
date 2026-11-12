@@ -1009,7 +1009,7 @@ Actions のログには arata / aratam の `level`・`code`・`source` と終了
   `sub` を 1 つのブランチに絞っているので「main に入れられる人 = 実行用ロールを使える人」になり、main の保護が権限の境界になる。
   確かめる `gh api` は読み取りだけを載せ、設定を変えるのは人とする (テストが書き込みの例を拒む)。
   見本が前提を満たすこと (secrets か OIDC を使う見本は定時と手動だけ、action は 2 つだけ、environment を使わない) はテストで固定する
-- 決定 (secrets と environment): リポジトリの secrets は書き込み権限のある人なら別のブランチのワークフローで読み出せる。読み出されて困るのは Webhook で、
+- 決定 (secrets と environment): リポジトリの secrets は書き込み権限のある人なら別のブランチのワークフローで読み出せる。読み出されて困るのは Webhook (bot トークンの方式ならトークン。`docs/aratam.md` 4-1 章) で、
   ロールの ARN は `sub` が合わないので引き受けられない。GitHub の environment に置いてデプロイできるブランチを main に限る案は、ジョブの `sub` が
   `repo:...:environment:<名前>` に変わり (ブランチが `sub` から消える)、今の `runner.yaml` では引き受けられないので、いまは採らない (ADR 0040 のまま)。
   テンプレートの対応はロードマップに残し、それまでは書き込み権限を持つ人を最小にすることで守る
