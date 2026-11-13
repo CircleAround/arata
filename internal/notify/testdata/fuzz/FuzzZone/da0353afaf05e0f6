@@ -1,0 +1,4 @@
+go test fuzz v1
+string("Asia/Katmandu")
+string("0000-10-01T0:00:00Z")
+string("0")

@@ -270,6 +270,10 @@ func FuzzZone(f *testing.F) {
 	}
 	f.Add("Asia/Tokyo", "9999-12-31T23:59:59Z", "0000-01-01T00:00:00+14:00")
 	f.Add("Pacific/Kiritimati", "2026-10-21T09:00:00.123456789-07:00", "<!channel>\n`x`")
+	// 秒の端数を持つオフセットの時代 (RFC 3339 で書けないオフセット)
+	f.Add("Asia/Katmandu", "0000-10-01T0:00:00Z", "0")
+	f.Add("Africa/Monrovia", "1970-06-01T12:00:00Z", "1972-01-07T00:44:29.999999999Z")
+	f.Add("Europe/Amsterdam", "1930-01-01T00:00:00.5+00:19", "1937-06-30T23:40:28Z")
 	f.Fuzz(func(t *testing.T, name, a, b string) {
 		z, err := ParseZone(name)
 		if err != nil {
@@ -298,6 +302,12 @@ func FuzzZone(f *testing.F) {
 			if strings.Trim(got, "0123456789T:-+.Z") != "" {
 				t.Fatalf("Stamp(%q) = %q has unexpected characters", s, got)
 			}
+			// オフセットを丸めない: 直したなら、書いたオフセットはそのゾーンのその瞬間の本当のオフセットか、UTC (秒の端数があって書けないとき) だけ。
+			// 直さずに返した値 (直すと年が 4 桁に収まらない) は元のまま
+			_, wrote := back.Zone()
+			if _, real := orig.In(z.location()).Zone(); got != s && wrote != real && !(real%60 != 0 && wrote == 0 && strings.HasSuffix(got, "Z")) {
+				t.Fatalf("Stamp(%q) = %q wrote the offset %ds, the zone's offset is %ds", s, got, wrote, real)
+			}
 		}
 		// span は解釈できた側だけを書き換える。解釈できない値はそのまま含む
 		span := z.span(a, b)
@@ -322,4 +332,48 @@ func FuzzZone(f *testing.F) {
 		}
 		_ = z.promptRule(time.Unix(int64(len(a)), 0))
 	})
+}
+
+// 秒の端数を持つオフセット (標準時が決まる前の地方平均時など。Africa/Monrovia は 1972 年まで -00:44:30) は RFC 3339 で書けない。
+// オフセットを分に丸めると別の瞬間になるので、その時刻は UTC で書く (ファズで見つけた。ADR 0041)。
+func TestZoneSecondsOffsetFallsBackToUTC(t *testing.T) {
+	for _, c := range []struct{ zone, in, want string }{
+		{"Africa/Monrovia", "1970-06-01T12:00:00Z", "1970-06-01T12:00:00Z"},
+		{"Africa/Monrovia", "1970-06-01T12:00:00.5+09:00", "1970-06-01T03:00:00.5Z"},
+		{"Asia/Kathmandu", "0000-10-01T00:00:00Z", "0000-10-01T00:00:00Z"},
+		{"Europe/Amsterdam", "1930-01-01T00:00:00Z", "1930-01-01T00:00:00Z"},
+		// 分単位のオフセットになってからは、これまでどおりそのゾーンで書く
+		{"Africa/Monrovia", "1980-06-01T12:00:00Z", "1980-06-01T12:00:00Z"},
+		{"Asia/Kathmandu", "2026-10-21T09:00:00Z", "2026-10-21T14:45:00+05:45"},
+		{"Europe/Amsterdam", "2026-01-01T00:00:00Z", "2026-01-01T01:00:00+01:00"},
+	} {
+		z := mustZone(t, c.zone)
+		got := z.Stamp(c.in)
+		if got != c.want {
+			t.Errorf("%s Stamp(%q) = %q, want %q", c.zone, c.in, got, c.want)
+		}
+		orig, _ := time.Parse(time.RFC3339, c.in)
+		if back, err := time.Parse(time.RFC3339, got); err != nil || !back.Equal(orig) {
+			t.Errorf("%s Stamp(%q) = %q does not denote the same instant (%v)", c.zone, c.in, got, err)
+		}
+	}
+	z := mustZone(t, "Africa/Monrovia")
+	// 期間の表示も同じ扱い: 秒の端数のある側は UTC の時刻と (UTC) のラベル
+	if got, want := z.span("1970-06-01T12:00:00Z", "1970-06-02T12:00:00Z"), "06/01 12:00 〜 06/02 12:00 (UTC)"; got != want {
+		t.Errorf("span = %q, want %q", got, want)
+	}
+	if got, want := z.span("1970-06-01T12:00:00Z", "1980-06-01T12:00:00Z"), "06/01 12:00 (UTC) 〜 06/01 12:00 (GMT)"; got != want {
+		t.Errorf("span = %q, want %q", got, want)
+	}
+	// 文中の時刻も同じ瞬間のまま
+	if got, want := z.stampInText("at 1970-06-01T12:00:00+09:00."), "at 1970-06-01T03:00:00Z."; got != want {
+		t.Errorf("stampInText = %q, want %q", got, want)
+	}
+	// LLM への時刻の書き方の節も、その時点では足さない (規則が書く時刻と同じく UTC のまま書かせる)
+	if rule := z.promptRule(time.Date(1970, 6, 1, 12, 0, 0, 0, time.UTC)); rule != "" {
+		t.Errorf("promptRule must be empty while the offset has seconds:\n%s", rule)
+	}
+	if rule := z.promptRule(time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)); !strings.Contains(rule, "UTC+00:00)") {
+		t.Errorf("promptRule:\n%s", rule)
+	}
 }
