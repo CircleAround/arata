@@ -18,6 +18,7 @@ import (
 
 // 定時の監査の見本は 2 つ。1 つのアカウントを監査する形と、複数のアカウントを matrix で監査する形。
 // ほかに、finding を片付ける見本 (triage) と、PR で設定を検査する見本 (check) がある (triage_check_test.go)。
+// Slack への送信だけを確かめる見本 (notify-test) は notifytest_test.go。
 const (
 	singleFile = "arata-audit.yml"
 	multiFile  = "arata-audit-multi.yml"
@@ -28,7 +29,7 @@ const (
 // workflowFiles は定時の監査の見本。allFiles は見本のすべて。
 var (
 	workflowFiles = []string{singleFile, multiFile}
-	allFiles      = []string{singleFile, multiFile, triageFile, checkFile}
+	allFiles      = []string{singleFile, multiFile, triageFile, checkFile, notifyTestFile}
 )
 
 type step struct {

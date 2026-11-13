@@ -105,6 +105,9 @@ aratam test-notify                          # 実際に 1 通送る。not_in_cha
 aratam test-notify --urgent
 ```
 
+GitHub Actions で動かしているなら、同じ確認を Actions の画面から行える (見本の [arata-notify-test.yml](examples/github-actions/arata-notify-test.yml)。監査は回さない)。
+通知先のチャンネルを足したとき、トークンを入れ替えたときに使う。
+
 - 同じワークスペースの複数のチャンネルに送るなら、アプリもトークンも 1 つでよい。監査対象ごとの `aratam.yaml` でチャンネル ID を変える。
   別の組織と Slack Connect で共有するチャンネルも、招待すれば同じアプリで送れる
 - トークンのローテーションは有効にしない (manifest は無効)。有効にするとトークンが 12 時間で切れるが、aratam は更新の仕組みを持たない

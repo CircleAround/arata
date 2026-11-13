@@ -1148,6 +1148,13 @@ Actions のログには arata / aratam の `level`・`code`・`source` と終了
   見本のワークフローに「通知しない」入力や test-notify の入力は足さない: 初回の収集で手元にストアを書ける認証が既にあり、Actions では中身を見る場所が無い
   (ログと Summary に finding の中身を出さない方針)。入力を増やすと、定時の監査と同じワークフローに分岐とテストが増える。
   Slack の疎通は手元の `aratam test-notify` (実際に送る。`doctor` は送らない) と、最初の `workflow_dispatch` (`on_quiet: short` の 1 行) で確かめる
+- 決定 (送信だけを確かめる見本): 監査のワークフローには入力を足さないまま、別の見本 `arata-notify-test.yml` (`workflow_dispatch` だけ) を足す。
+  通知先を足したとき・トークンを入れ替えたときに、Actions の secrets とリポジトリの `aratam.yaml` の組み合わせで届くかを、監査を回さずに確かめるため
+  (bot トークンを手元に持たない人は、手元の `test-notify` では確かめられない。監査の `workflow_dispatch` は収集に時間がかかり、finding を報告済みとして確定する)。
+  `test-notify` は設定を読んで Slack に送るだけで、AWS にも LLM にも繋がない。そのため OIDC を使わず、権限は `contents: read` だけにする。ストアに触れないので排他も置かない。
+  secrets の渡し方・バイナリの取得と照合・版は監査の見本と同じにし、テストで固定する。
+  ログは監査と同じ方針 (`level`・`code`・`source` だけ) に、bot トークンの方式の Slack の error コード (`not_in_channel` など) だけを足す。
+  このコードは aratam が形を確かめた値 (`[a-z0-9_]` で 64 字まで。`docs/aratam.md` 4-1 章) で、何を直せばよいかがこれで決まる。エラーの文・チャンネル ID・Webhook の応答の本文は出さない
 aratam は arata の失敗後も動かす (`if: always()`)。実行環境が毎回消えるので report.json が無く、`max_age` を待たずに緊急用に届く。`waf-proposals.md` は実行環境と一緒に消えるのでストアの `reports/` に置く。artifacts はリポジトリを読める人に見えるので使わない。
 
 LLM 要約は `arata help ai report` (バイナリに埋め込んだ手順) に従い、`report.json` を入力に「新規 / 変化 / 再発 / 解消 / 未対応 / 取れなかったもの」の順で書く。
