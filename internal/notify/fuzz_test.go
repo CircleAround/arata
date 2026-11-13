@@ -500,14 +500,21 @@ func FuzzRunWithReport(f *testing.F) {
 			t.Fatal(err)
 		}
 		os.Remove(filepath.Join(dir, ReportMD))
-		for _, format := range []string{FormatText, FormatBlocks} {
+		// timezone を設定した経路 (時刻を直す) でも同じ性質を守る。夏時間があり略称が変わるゾーンで確かめる
+		zoned := fuzzRules
+		zoned.Zone = mustZone(t, "America/New_York")
+		for _, c := range []struct {
+			format string
+			rules  Rules
+		}{{FormatText, fuzzRules}, {FormatBlocks, fuzzRules}, {FormatText, zoned}, {FormatBlocks, zoned}} {
+			format := c.format
 			s := &fuzzSender{}
-			res := Run(context.Background(), Options{Dir: dir, Now: now, Rules: fuzzRules, Sender: s, Format: format, Force: true, DryRun: true})
+			res := Run(context.Background(), Options{Dir: dir, Now: now, Rules: c.rules, Sender: s, Format: format, Force: true, DryRun: true})
 			if res.Sent != (len(s.got) > 0) {
 				t.Errorf("%s: Sent=%v なのに %d 通", format, res.Sent, len(s.got))
 			}
 			for i, m := range s.got {
-				name := fmt.Sprintf("%s[%d]", format, i)
+				name := fmt.Sprintf("%s %s[%d]", c.rules.Zone.Name(), format, i)
 				if format == FormatBlocks {
 					report(t, limitProblems(name, m))
 				} else if n := utf8.RuneCountInString(m.Text); n == 0 || n > MaxTextRunes {

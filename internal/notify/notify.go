@@ -53,6 +53,8 @@ type Rules struct {
 	OnQuiet        string // short | silent
 	// UrgentMention は緊急用を通常用の送り先 (Webhook かチャンネル) に送るときに冒頭へ付けるメンション (緊急用の送り先があれば空)。
 	UrgentMention string
+	// Zone は通知に出す時刻のタイムゾーン (設定の timezone。ゼロ値は UTC)。表示だけに使い、振り分けには使わない。
+	Zone Zone
 }
 
 // Sender は送信先。aratam は Slack (Webhook か bot トークンの chat.postMessage)、--dry-run は標準出力。
@@ -139,6 +141,7 @@ func Run(ctx context.Context, o Options) Result {
 		return Result{Exit: ExitInput, Route: RouteUrgent, Sent: true}
 	}
 
+	in.Zone = o.Rules.Zone
 	key := in.Key()
 	if !o.Force && Notified(o.Dir, key) {
 		log.Info("通知済みのため送りません (再送は --force)", "code", CodeAlreadyNotified, "run_id", key)
@@ -247,7 +250,7 @@ func writeUp(ctx context.Context, o Options, log *slog.Logger, in *Input) (map[s
 		return nil, nil // observation だけなら LLM に渡すものが無い (observation は規則の書式で載せる)
 	}
 	var got map[string]Writeup
-	err := callLLM(ctx, o, log, ProposalsSystemPrompt(o.Context, playbooksPrompt([]string{"waf_review"}, log)), proposalsInput(props), func(raw []byte) error {
+	err := callLLM(ctx, o, log, ProposalsSystemPrompt(o.Context, playbooksPrompt([]string{"waf_review"}, log))+in.Zone.promptRule(in.GeneratedAt), proposalsInput(props), func(raw []byte) error {
 		w, rejected, err := ParseWriteups(raw, props)
 		if err != nil {
 			return err
@@ -265,7 +268,7 @@ func writeUp(ctx context.Context, o Options, log *slog.Logger, in *Input) (map[s
 // 決定: 形が合わない出力も再試行の対象にする (同じ入力でも 2 回目は契約どおりに返すことが多いため)。
 func summarize(ctx context.Context, o Options, log *slog.Logger, in *Input) (*Summary, error) {
 	var s *Summary
-	system := SystemPrompt(in.Kind, o.Context, playbooksPrompt(orderedChecks(in), log))
+	system := SystemPrompt(in.Kind, o.Context, playbooksPrompt(orderedChecks(in), log)) + in.Zone.promptRule(in.GeneratedAt)
 	err := callLLM(ctx, o, log, system, in.JSON, func(raw []byte) error {
 		var err error
 		s, err = ParseSummary(raw, in, o.Rules.UrgentSeverity)
@@ -281,7 +284,7 @@ func summarize(ctx context.Context, o Options, log *slog.Logger, in *Input) (*Su
 func summarizeBlocks(ctx context.Context, o Options, log *slog.Logger, in *Input) (*BlockNotes, error) {
 	top, _ := splitUrgent(in, o.Rules.UrgentSeverity)
 	var n *BlockNotes
-	system := BlocksSystemPrompt(in.Kind, o.Context, playbooksPrompt(orderedChecks(in), log), top)
+	system := BlocksSystemPrompt(in.Kind, o.Context, playbooksPrompt(orderedChecks(in), log), top) + in.Zone.promptRule(in.GeneratedAt)
 	err := callLLM(ctx, o, log, system, in.JSON, func(raw []byte) error {
 		var err error
 		n, err = ParseBlockNotes(raw, in, top)

@@ -247,7 +247,7 @@ func newConfigCheckCmd(d *Deps, g *globalFlags) *subcmd.Command {
 				row("ng", abs, err.Error())
 				return configErr(d, err)
 			}
-			row("ok", abs, fmt.Sprintf("name %s, provider %s, format %s, slack %s", cfg.Name, cfg.LLM.Provider, cfg.Slack.Format, cfg.Slack.Method()))
+			row("ok", abs, fmt.Sprintf("name %s, provider %s, format %s, slack %s, timezone %s", cfg.Name, cfg.LLM.Provider, cfg.Slack.Format, cfg.Slack.Method(), cfg.Rules(false).Zone.Name()))
 			if r, ok := contextRow(cfg); ok {
 				row(r.status, "llm.context_file", r.detail)
 			}

@@ -328,7 +328,7 @@ func TestConfigCheckBot(t *testing.T) {
 	if code := c.run("config", "check", "-c", c.cfg); code != 0 || len(c.codes()) != 0 {
 		t.Fatalf("exit %d %v\n%s%s", code, c.codes(), c.stdout, c.stderr)
 	}
-	if got := string(c.checkOut()); got != "ok    <dir>/aratam.yaml: name acme, provider none, format text, slack bot\n" {
+	if got := string(c.checkOut()); got != "ok    <dir>/aratam.yaml: name acme, provider none, format text, slack bot, timezone UTC\n" {
 		t.Fatalf("%q", got)
 	}
 	for _, tc := range []struct{ from, to, want string }{

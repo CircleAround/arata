@@ -85,7 +85,7 @@ func head(route Route, r Rules, notice string, warnings []string) []string {
 func QuietText(in *Input, d Decision, r Rules, warnings []string) string {
 	lines := head(d.Route, r, "", warnings)
 	lines = append(lines, fmt.Sprintf("*%s* %s 〜 %s: 新規なし (変化・再発なし、取得の失敗なし。未対応 %d 件)",
-		Escape(title(in)), Escape(in.Run.Window.From), Escape(in.Run.Window.To), in.Run.Summary.StillOpen))
+		Escape(title(in)), Escape(in.Zone.Stamp(in.Run.Window.From)), Escape(in.Zone.Stamp(in.Run.Window.To)), in.Run.Summary.StillOpen))
 	return clipLines(strings.Join(lines, "\n"), MaxTextRunes)
 }
 
@@ -96,9 +96,9 @@ func ReportText(in *Input, d Decision, r Rules, warnings []string, notice string
 	lines := head(d.Route, r, notice, warnings)
 	var body string
 	if in.Run != nil {
-		body = RunText(in.Run)
+		body = RunText(in.Run, in.Zone)
 	} else {
-		body = Mrkdwn(dropEmptySections(in.Markdown))
+		body = Mrkdwn(in.Zone.stampInText(dropEmptySections(in.Markdown)))
 	}
 	full := Escape(filepath.Join(in.Dir, ReportMD))
 	return fit(strings.Join(lines, "\n"), body, "全文: "+full, "…(長いため省略)")
@@ -113,7 +113,7 @@ func InputProblemText(dir string, e *InputError, r Rules) string {
 	lines := head(RouteUrgent, r, "", nil)
 	lines = append(lines,
 		fmt.Sprintf("*arata の出力が無いか古いため、監査結果を通知できません (%s)*", Escape(r.Name)),
-		"- 理由: "+Escape(clipRunes(oneLine(e.Reason), maxProblemRunes))+" (`"+e.Code+"`)",
+		"- 理由: "+Escape(clipRunes(oneLine(e.reasonIn(r.Zone)), maxProblemRunes))+" (`"+e.Code+"`)",
 		"- 入力: "+Escape(dir),
 		"arata が実行されていないか、失敗しています。cron と arata のログを確認してください。")
 	return clipLines(strings.Join(lines, "\n"), MaxTextRunes)

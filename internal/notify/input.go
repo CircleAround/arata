@@ -36,12 +36,24 @@ type Input struct {
 	JSON        []byte               // report.json の原文 (LLM に渡すのはこれだけ)
 	Markdown    string               // report.md。無ければ report.json から作る
 	GeneratedAt time.Time
+	// Zone は通知に出す時刻のタイムゾーン (Run が設定から入れる。ゼロ値は UTC)。JSON (LLM に渡す原文) には使わない。
+	Zone Zone
 }
 
 // InputError は「arata が実行されていない / 失敗した」とみなす入力の問題 (終了コード 4)。
 type InputError struct {
 	Code   string // INPUT_MISSING / INPUT_INVALID / INPUT_STALE
 	Reason string
+	// GeneratedAt は INPUT_STALE のときの report.json の generated_at (Reason の中にある値)。通知では設定のゾーンに直す。
+	GeneratedAt string
+}
+
+// reasonIn は通知に出す理由。古い報告の generated_at を設定のゾーンに直す (ログの Reason は report.json の値のまま)。
+func (e *InputError) reasonIn(z Zone) string {
+	if e.GeneratedAt == "" {
+		return e.Reason
+	}
+	return strings.Replace(e.Reason, e.GeneratedAt, z.Stamp(e.GeneratedAt), 1)
 }
 
 func (e *InputError) Error() string { return e.Code + ": " + e.Reason }
@@ -99,7 +111,7 @@ func ReadInput(dir string, now time.Time, maxAge time.Duration) (*Input, error) 
 		return nil, &InputError{Code: CodeInputInvalid, Reason: fmt.Sprintf("%s の generated_at %q を解釈できません", path, head.GeneratedAt)}
 	}
 	if age := now.Sub(in.GeneratedAt); age > maxAge {
-		return nil, &InputError{Code: CodeInputStale, Reason: fmt.Sprintf("%s の generated_at %s は max_age %s より古い", path, head.GeneratedAt, maxAge)}
+		return nil, &InputError{Code: CodeInputStale, Reason: fmt.Sprintf("%s の generated_at %s は max_age %s より古い", path, head.GeneratedAt, maxAge), GeneratedAt: head.GeneratedAt}
 	}
 	if md, err := readLimited(filepath.Join(dir, ReportMD)); err == nil {
 		in.Markdown = string(md)

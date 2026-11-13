@@ -243,7 +243,7 @@ LLM に求める出力:
   ```
   [メンション・注記・警告]                 (section。緊急用を通常用に送るとき・NAME_MISMATCH・LLM の失敗)
   🚨 arata daily — acme                    (header。絵文字は最大重大度: critical 🚨 / high 🔴 / medium 🟠 / low 🟡 / info ⚪)
-  *期間* … | *新規* 🚨 critical 1 ・ 🟠 medium 2 | 変化 1 件 ・ 再発 1 件 | 解消 1 件 ・ 未対応 0 件 | 本日報告済み N 件 | 情報 N 件 (件数のみ)
+  *期間* 10/20 18:00 〜 10/21 18:00 (JST) | *新規* 🚨 critical 1 ・ 🟠 medium 2 | 変化 1 件 ・ 再発 1 件 | 解消 1 件 ・ 未対応 0 件 | 本日報告済み N 件 | 情報 N 件 (件数のみ)
                                            (fields。1 つの欄に 1 行で書き、ラベルと値を 2 段に分けない。0 件の変化・再発、報告済み、情報は出さない)
   要約 1〜2 文                             (LLM。none は規則)
   ⚠️ 取れていないもの                       (取れなかったソース・解釈率の警告・スキップ。期間レポートは取れなかった run)
@@ -352,6 +352,7 @@ name: example                     # 通知に出す監査対象の名前 (report
 max_age: 26h                      # report.json がこれより古ければ「実行されていない」と通知する
 urgent_severity: high             # この重大度以上は緊急用に送る
 on_quiet: short                   # short | silent
+timezone: UTC                     # 通知に出す時刻のタイムゾーン (IANA 名。例 Asia/Tokyo。4-3 章)
 
 llm:
   provider: bedrock               # bedrock | claude-cli | none (後続で openai-api)
@@ -379,6 +380,7 @@ slack:
 - 必須: `name`, `max_age`, `urgent_severity` (critical | high | medium | low), `on_quiet`, `llm.provider`, `slack.webhook_env` (bot トークンの方式なら `slack.bot_token_env` と `slack.channel`。4-1 章)。
   `llm.timeout` は provider が `none` 以外なら必須、`bedrock` は `llm.model` と `llm.region` も必須。`claude-cli` の `model` は省略可 (claude 側の既定)。
   `slack.urgent_webhook_env` と `slack.urgent_mention` は省略可。未知のキーは誤記とみなして設定エラーにする (arata と同じ)。
+- `timezone` は省略可で、無ければ UTC (これまでの表示のまま)。雛形には `timezone: UTC` と明示する (4-3 章)。
 - `slack.format` (ADR 0029): `blocks` | `text`。必須 (暗黙の既定を持たない)。v0.3.0 の設定には無いので、エラー文に「v0.4.0 から必須。従来どおりなら `slack.format: text`」と書く。
 - `*_env` は環境変数の名前 (`[A-Za-z_][A-Za-z0-9_]*`) でなければ設定エラー。URL を貼った誤りを弾き、エラーには値を出さない。
 - `urgent_webhook_env` を書いたのに環境変数が空なら、通常用に送り `urgent_mention` を付ける (`URGENT_WEBHOOK_UNSET` の警告を出す)。緊急の通知を落とさないため。
@@ -477,6 +479,42 @@ slack: chat.postMessage failed: ratelimited (Retry-After 60 秒) (channel C01234
   (2) 秘密を読む権限は実行環境の仕組み (OIDC のロール、タスクの実行ロール) が持ち、aratam が侵されても読めるのは渡された値だけ。
   (3) テストは環境変数の差し替えで済む
 - 却下: aratam が Secrets Manager などを直接読む (`secret_source` のような設定)。依存と権限が増え、実行環境ごとの分岐が入る
+
+### 4-3. 時刻の表示 (timezone)
+
+通知の時刻は UTC 固定だった。読む人の時刻で出したいという要望があり、設定に書いたタイムゾーンで表示できるようにした。実装は `internal/notify/zone.go`。
+
+```yaml
+timezone: Asia/Tokyo    # IANA 名。書かなければ UTC
+```
+
+- 決定: **変えるのは表示だけ**。arata の窓・日次集計の日の区切り・report.json・report.md は UTC のまま (arata は timezone を知らない)。
+  送り先の判定や `max_age` の判定にも使わない。
+- 決定: 時刻 (RFC 3339) は設定のゾーンに直す。対象は規則が書く時刻の全部: 期間 (run の窓)、初出、主要キーのうち時刻のもの (`last_time`・`last_used`・`last_seen`)、
+  取れた期間、取れなかった run、入力が古いときの `generated_at`、期間レポートの本文 (text の書式。arata の report.md を整形して送るので、文中の RFC 3339 の時刻を直す)。
+  - blocks の期間は `10/20 18:00 〜 10/21 18:00 (JST)`。ラベルはその時刻でのゾーンの略称で、略称の無いゾーンは `(+04:00)` の形。
+    夏時間の切り替わりをまたぐ窓は `10/31 08:00 (EDT) 〜 11/01 07:00 (EST)` のように、それぞれに付ける。
+  - それ以外は RFC 3339 のまま、オフセットを付けて書く (`2026-10-21T18:00:00+09:00`)。ラベルが無くても一意に読める。UTC なら今までと同じ `...Z`。
+- 決定: **日付だけの値は直さない**。日次集計の日 (`data.date`)、期間レポートの期間 (`from` / `to`)、日次推移の日は、arata が UTC の日として決めた値。
+  時刻が無いので別のゾーンの日には直せず、直せば意味がずれる。ゾーンを設定しても `(UTC)` と書く (JST とは書かない)。
+  このため blocks の期間レポートの期間にも `(UTC)` を付けた (これまでは text にだけ付いていた)。
+- 決定: `timezone` は省略可で、無ければ UTC。これまでの設定がそのまま動き、表示も変わらない。雛形 (`config init`) には `timezone: UTC` と明示し、
+  `aratam doctor` と `aratam config check` は使うゾーンを表示する (書いていない設定で UTC になることが見える。ADR 0014)。
+  却下: 必須にする (`slack.format` のように)。表示の好みの項目で、既存の利用者の通知を止めるほどではない。
+- 決定: 値は IANA 名だけ (`Asia/Tokyo`、`UTC`)。不正な名前は読み込みで設定エラー (notify・doctor・config check)。
+  - `Local` は受け付けない。実行環境の TZ で表示が変わり、設定に書いた値にならない。
+  - 略称 (`JST`) とオフセット (`+09:00`) は受け付けない。略称は一意でなく (IST など)、オフセットは夏時間を表せない。
+- 決定: タイムゾーンのデータは標準ライブラリの `time/tzdata` でバイナリに埋め込む (約 0.4 MB 増える)。aratam は単一の静的バイナリで、
+  最小構成のコンテナには tzdata が無い。無ければ timezone を書いた設定がその環境でだけ設定エラーになる。外部の依存は増えない
+  (`cmd/aratam` のテストが埋め込みを固定する)。実行環境に tzdata があればそちらが優先される (Go の標準の順)。arata には埋め込まない。
+- 決定: **LLM には report.json を原文 (UTC) のまま渡す**。timezone が UTC 以外のときだけ、system の末尾に「時刻の書き方」の節を足す
+  (文中に時刻を書くなら設定のゾーンに直して略称を付ける。日付だけの値は直さず `(UTC)` と書く。オフセットは数値で渡す)。UTC なら system は今までと同じ。
+  - LLM の文の中の時刻は LLM が直すので、規則では検証しない。文中の時刻は補足で、判定にも表示の値 (期間・初出・主要キー) にも使わないため。
+    確実に直るのは規則が書く時刻。
+  - 却下: report.json の時刻を書き換えてから LLM に渡す。「LLM に渡すのは report.json だけ」の契約が崩れ、日付だけの値 (UTC) と直した時刻が混ざる。
+- 直さないもの: `--in` のディレクトリのファイル (arata の `report.md`・`report.json`) は UTC のまま。ログ (標準エラーの JSON) も report.json の値のまま。
+- ログ由来の値を解釈するので、ファズ (`FuzzZone`) で確かめる: 時刻でない値は 1 文字も変えない、直した値は同じ瞬間を指す RFC 3339 で数字と `T : - + . Z` だけ、
+  `Local` にならない。通知の流れ全体のファズ (`FuzzRunWithReport`) は UTC と夏時間のあるゾーンの両方で回す。
 
 ## 5. CLI
 

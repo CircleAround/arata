@@ -151,15 +151,15 @@ func TestBlocksPeriodFindingID(t *testing.T) {
 func TestTextFindingID(t *testing.T) {
 	f := schema.Finding{ID: "7f16a4507445", Check: "root_usage", Severity: "critical", Summary: "s", FirstSeen: "2026-10-21T09:00:00Z",
 		Data: map[string]any{"count": 2.0, "ips": []any{"`203.0.113.1"}}}
-	if got, want := findingLines(f), "• *[critical]* s `root_usage`\n    count 2 · ips '203.0.113.1 · 初出 2026-10-21T09:00:00Z · `id: 7f16a4507445`"; got != want {
+	if got, want := findingLines(f, Zone{}), "• *[critical]* s `root_usage`\n    count 2 · ips '203.0.113.1 · 初出 2026-10-21T09:00:00Z · `id: 7f16a4507445`"; got != want {
 		t.Errorf("got  %q\nwant %q", got, want)
 	}
 	// 初出や id が無い値でも、空の表記を残さない
-	if got, want := findingLines(schema.Finding{Check: "c", Severity: "low", Summary: "s"}), "• *[low]* s `c`"; got != want {
+	if got, want := findingLines(schema.Finding{Check: "c", Severity: "low", Summary: "s"}, Zone{}), "• *[low]* s `c`"; got != want {
 		t.Errorf("got  %q\nwant %q", got, want)
 	}
 	// 期間レポートの events (data を持たない)
-	if got, want := (findingRef{id: "7f16a4507445", check: "c", severity: "low", summary: "s", diff: "新規"}).line(), "• *[low]* s `c` (新規)\n    `id: 7f16a4507445`"; got != want {
+	if got, want := (findingRef{id: "7f16a4507445", check: "c", severity: "low", summary: "s", diff: "新規"}).line(Zone{}), "• *[low]* s `c` (新規)\n    `id: 7f16a4507445`"; got != want {
 		t.Errorf("got  %q\nwant %q", got, want)
 	}
 }
