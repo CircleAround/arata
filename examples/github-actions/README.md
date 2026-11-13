@@ -161,6 +161,7 @@ aws:
 # arata/aratam.yaml (抜粋)
 max_age: 26h
 on_quiet: short            # 死活監視を兼ねるので silent にしない
+timezone: Asia/Tokyo       # 通知に出す時刻のゾーン (表示だけ。書かなければ UTC)
 llm:
   provider: none           # claude-cli は実行環境に入っていない。bedrock は下
 slack:

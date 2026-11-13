@@ -29,12 +29,15 @@ var keyFields = map[string][]string{
 
 var defaultKeyFields = []string{"count", "ips"}
 
+// timeKeys は主要キーのうち値が時刻 (RFC 3339) のもの。設定のゾーンに直して出す (時刻でない値はそのまま)。
+var timeKeys = map[string]bool{"last_time": true, "last_used": true, "last_seen": true}
+
 // maxListItems はリストの値を何個まで出すか (残りは「他 N」)。
 const maxListItems = 3
 
 // detail は finding の主要キー・初出と、末尾の id の表記 (`id: …`。blocks と同じ。aratam 設計書 3-5 章) の 1 行。何も無ければ空。
 // 値のバッククォートは ' にする (末尾の id のコード表記を崩させない)。
-func detail(f schema.Finding) string {
+func detail(f schema.Finding, z Zone) string {
 	keys, ok := keyFields[f.Check]
 	if !ok {
 		keys = defaultKeyFields
@@ -53,13 +56,16 @@ func detail(f schema.Finding) string {
 		if !ok {
 			continue
 		}
-		if k == "date" {
-			s += " (UTC)"
+		switch {
+		case k == "date":
+			s += " (UTC)" // 日次集計の日は arata が UTC の日として決めた値。ゾーンを設定しても直さない
+		case timeKeys[k]:
+			s = z.Stamp(s)
 		}
 		parts = append(parts, k+" "+s)
 	}
 	if f.FirstSeen != "" {
-		parts = append(parts, "初出 "+f.FirstSeen)
+		parts = append(parts, "初出 "+z.Stamp(f.FirstSeen))
 	}
 	var out []string
 	if s := Escape(noTick(oneLine(strings.Join(parts, " · ")))); s != "" {
@@ -110,8 +116,8 @@ func valueText(v any, summary string) (string, bool) {
 }
 
 // findingLines は finding 1 件の 2 行 (重大度・概要・チェック名の行と、主要キー・id の行)。値は report.json のもの。
-func findingLines(f schema.Finding) string {
-	return withDetail(fmt.Sprintf("• *[%s]* %s `%s`", Escape(f.Severity), Escape(oneLine(f.Summary)), Escape(f.Check)), detail(f))
+func findingLines(f schema.Finding, z Zone) string {
+	return withDetail(fmt.Sprintf("• *[%s]* %s `%s`", Escape(f.Severity), Escape(oneLine(f.Summary)), Escape(f.Check)), detail(f, z))
 }
 
 // withDetail は finding の行の下に、字下げした 2 行目を足す (空なら足さない)。
@@ -123,8 +129,8 @@ func withDetail(line, detail string) string {
 }
 
 // RunText は run の report.json から作る通知の本文 (件数が 0 の区分は出さない)。
-func RunText(r *schema.Report) string {
-	lines := []string{"*" + Escape(fmt.Sprintf("arata %s (%s)", r.Profile, r.Name)) + "* " + Escape(r.Window.From+" 〜 "+r.Window.To), runCounts(r)}
+func RunText(r *schema.Report, z Zone) string {
+	lines := []string{"*" + Escape(fmt.Sprintf("arata %s (%s)", r.Profile, r.Name)) + "* " + Escape(z.Stamp(r.Window.From)+" 〜 "+z.Stamp(r.Window.To)), runCounts(r)}
 	for _, s := range []struct {
 		title string
 		l     []schema.Finding
@@ -137,10 +143,10 @@ func RunText(r *schema.Report) string {
 		}
 		lines = append(lines, "", fmt.Sprintf("*%s (%d)*", s.title, len(s.l)))
 		for _, f := range s.l {
-			lines = append(lines, findingLines(f))
+			lines = append(lines, findingLines(f, z))
 		}
 	}
-	lines = append(lines, runCoverageLines(r)...)
+	lines = append(lines, runCoverageLines(r, z)...)
 	return strings.Join(lines, "\n")
 }
 
@@ -154,7 +160,7 @@ func runCounts(r *schema.Report) string {
 }
 
 // runCoverageLines は取れていなかったもの (取得に失敗したソース、解釈率の警告、スキップしたチェック)。問題が無ければ何も出さない。
-func runCoverageLines(r *schema.Report) []string {
+func runCoverageLines(r *schema.Report, z Zone) []string {
 	var out []string
 	if len(r.Coverage.SourcesFailed) > 0 {
 		out = append(out, "", "*取れなかったソース*")
@@ -167,7 +173,7 @@ func runCoverageLines(r *schema.Report) []string {
 			case f.Partial:
 				l += " 一部の項目だけ取れず"
 			case f.CoveredFrom != "":
-				l += fmt.Sprintf(" 取れた期間 %s 〜 %s", Escape(f.CoveredFrom), Escape(f.CoveredUntil))
+				l += fmt.Sprintf(" 取れた期間 %s 〜 %s", Escape(z.Stamp(f.CoveredFrom)), Escape(z.Stamp(f.CoveredUntil)))
 			default:
 				l += " 取れた期間なし"
 			}

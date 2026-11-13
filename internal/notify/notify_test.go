@@ -391,7 +391,7 @@ func TestDetailShowsKeyFieldsOnly(t *testing.T) {
 			"count 3 · ips 192.0.2.1 · 初出 2026-10-21T09:00:00Z · `id: f-3`"},
 	}
 	for _, tc := range cases {
-		if got := detail(tc.f); got != tc.want {
+		if got := detail(tc.f, Zone{}); got != tc.want {
 			t.Errorf("%s:\n got %s\nwant %s", tc.f.Check, got, tc.want)
 		}
 	}

@@ -20,12 +20,14 @@ import (
 
 // Config は aratam.yaml (aratam 設計書 4 章)。arata と同じく暗黙の既定を持たず、`aratam config init` の雛形で全項目を明示する。
 type Config struct {
-	Name           string      `yaml:"name"`
-	MaxAge         string      `yaml:"max_age"`
-	UrgentSeverity string      `yaml:"urgent_severity"`
-	OnQuiet        string      `yaml:"on_quiet"`
-	LLM            LLMConfig   `yaml:"llm"`
-	Slack          SlackConfig `yaml:"slack"`
+	Name           string `yaml:"name"`
+	MaxAge         string `yaml:"max_age"`
+	UrgentSeverity string `yaml:"urgent_severity"`
+	OnQuiet        string `yaml:"on_quiet"`
+	// Timezone は通知に出す時刻のタイムゾーン (IANA 名。例 Asia/Tokyo)。空なら UTC (aratam 設計書 4-3 章)。
+	Timezone string      `yaml:"timezone"`
+	LLM      LLMConfig   `yaml:"llm"`
+	Slack    SlackConfig `yaml:"slack"`
 
 	path string // 読んだ設定ファイルのパス (context_file の相対パスの基準)
 }
@@ -161,6 +163,7 @@ func (c *Config) LoadContext() (string, string, error) {
 //     provider が none 以外なら llm.timeout も必須、bedrock なら llm.model と llm.region も必須 (設計書 3-1 で「設定で明示する」)。
 //     claude-cli の model と command は省略可 (claude 側の既定のモデル、PATH の claude を使う)。
 //   - slack.urgent_webhook_env と slack.urgent_mention は省略可 (4 章)。
+//   - timezone は省略可で、無ければ UTC (これまでの表示のまま。4-3 章)。書くなら IANA 名 (Asia/Tokyo)。雛形には明示する。
 //   - *_env は環境変数の名前でなければならない。URL やトークンを貼った誤りを弾き、そのときエラーに値を出さない (秘密を漏らさない)。
 //   - 送り方は 1 つだけ。Webhook の項目と bot の項目の両方があれば設定エラー (どちらに送るかを曖昧にしない。4-1 章)。
 //     新しい項目 (bot_token_env / channel / urgent_channel) は省略可で、無ければ Webhook の方式 (v0.5 までの設定は変更なしで動く)。
@@ -181,6 +184,9 @@ func (c *Config) Validate() error {
 	}
 	if c.OnQuiet != "short" && c.OnQuiet != "silent" {
 		errs = append(errs, fmt.Errorf("on_quiet must be short or silent (got %q)", c.OnQuiet))
+	}
+	if _, err := ParseZone(c.Timezone); err != nil {
+		errs = append(errs, err)
 	}
 	switch c.LLM.Provider {
 	case ProviderNone:
@@ -237,7 +243,8 @@ func (c *Config) Validate() error {
 // Rules は設定から規則の部分を取り出す。urgentMention は緊急用の送り先 (Webhook かチャンネル) が無く通常用へ送るときだけ付ける (4 章)。
 func (c *Config) Rules(urgentSet bool) Rules {
 	maxAge, _ := ParseDuration(c.MaxAge)
-	r := Rules{Name: c.Name, MaxAge: maxAge, UrgentSeverity: c.UrgentSeverity, OnQuiet: c.OnQuiet}
+	zone, _ := ParseZone(c.Timezone) // Validate で確かめてある
+	r := Rules{Name: c.Name, MaxAge: maxAge, UrgentSeverity: c.UrgentSeverity, OnQuiet: c.OnQuiet, Zone: zone}
 	if !urgentSet {
 		r.UrgentMention = c.Slack.UrgentMention
 	}

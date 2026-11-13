@@ -36,7 +36,7 @@ func newDoctorCmd(d *Deps, g *globalFlags) *subcmd.Command {
 		Short: "Slack の環境変数 (bot トークンなら auth.test も) と LLM の疎通を確かめる (送信はしない。問題があれば終了コード 2)",
 		Long: `設定を読み、次を確かめて表で出す。Slack には送らない (送って確かめるのは aratam test-notify)。
 
-  - config   設定ファイルを読めて、検証を通るか
+  - config   設定ファイルを読めて、検証を通るか。通知に出す時刻のタイムゾーン (timezone。書いていなければ UTC) も表示する
   - webhook  (Webhook の方式) slack.webhook_env / urgent_webhook_env の環境変数があるか (URL は表示しない)
   - slack    (bot トークンの方式) slack.bot_token_env の環境変数があり、auth.test でトークンが有効か (トークンは表示しない)。
              投稿はしないので、bot がチャンネルにいるかは分からない (chat:write だけでは調べられない。aratam test-notify で確かめる)
@@ -54,7 +54,7 @@ ng が 1 つでもあれば終了コード 2。ng の行は標準エラーにも
 			if err != nil {
 				return err
 			}
-			rows := []doctorRow{{status: "ok", item: "config", detail: fmt.Sprintf("%s (name %s、provider %s)", path, cfg.Name, cfg.LLM.Provider)}}
+			rows := []doctorRow{{status: "ok", item: "config", detail: fmt.Sprintf("%s (name %s、provider %s、timezone %s)", path, cfg.Name, cfg.LLM.Provider, cfg.Rules(false).Zone.Name())}}
 			if cfg.Slack.Method() == notify.SlackBot {
 				rows = append(rows, botRows(ctx, d, cfg)...)
 			} else {

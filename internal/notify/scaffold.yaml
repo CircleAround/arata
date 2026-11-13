@@ -5,6 +5,7 @@ name: example                     # 通知に出す監査対象の名前 (report
 max_age: 26h                      # report.json がこれより古ければ「実行されていない」と緊急用に通知する
 urgent_severity: high             # この重大度以上 (critical | high | medium | low) の新規・変化・再発は緊急用に送る
 on_quiet: short                   # 新規・変化・再発が無く、取れなかったソースも無いとき。short = 1 行だけ送る | silent = 送らない
+timezone: UTC                     # 通知に出す時刻のタイムゾーン (IANA 名。例 Asia/Tokyo)。表示だけを変える。日付だけの値 (日次集計の日、期間レポートの期間) は UTC の日のまま
 
 llm:
   provider: none                  # bedrock | claude-cli | none (後続で openai-api)。none は LLM を呼ばず report.md を整形して送る

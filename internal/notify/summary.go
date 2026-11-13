@@ -249,10 +249,10 @@ func (s *Summary) Missing(in *Input) []findingRef {
 }
 
 // line は finding 1 件の行。重大度・概要・チェック名・主要キー・id は report.json の値を使う (LLM に重大度を変えさせない。id も LLM の出力から取らない)。
-func (f findingRef) line() string {
+func (f findingRef) line(z Zone) string {
 	l := fmt.Sprintf("• *[%s]* %s `%s` (%s)", Escape(f.severity), Escape(oneLine(f.summary)), Escape(f.check), f.diff)
 	if f.finding != nil {
-		return withDetail(l, detail(*f.finding))
+		return withDetail(l, detail(*f.finding, z))
 	}
 	return withDetail(l, idTag(f.id)) // 期間レポートの events は data を持たない
 }
@@ -313,7 +313,7 @@ func SummaryText(in *Input, d Decision, r Rules, warnings []string, s *Summary) 
 		}
 		out := []string{"", "*要約に含まれていなかった指摘* (規則で追加)"}
 		for _, f := range fs {
-			out = append(out, f.line())
+			out = append(out, f.line(in.Zone))
 		}
 		return strings.Join(out, "\n")
 	}
@@ -323,7 +323,7 @@ func SummaryText(in *Input, d Decision, r Rules, warnings []string, s *Summary) 
 
 	var body string
 	for level := trimNone; level <= trimConfirmText; level++ {
-		body = classBody(s, byID, level)
+		body = classBody(s, byID, level, in.Zone)
 		if text := joinNonEmpty(headText, body, tailText); utf8.RuneCountInString(text) <= MaxTextRunes {
 			return text
 		}
@@ -339,7 +339,7 @@ func SummaryText(in *Input, d Decision, r Rules, warnings []string, s *Summary) 
 	sort.SliceStable(missUrgent, func(i, j int) bool {
 		return severityRank[missUrgent[i].severity] > severityRank[missUrgent[j].severity]
 	})
-	body = classBody(promoteUrgent(s, byID, r.UrgentSeverity), byID, trimConfirmText)
+	body = classBody(promoteUrgent(s, byID, r.UrgentSeverity), byID, trimConfirmText, in.Zone)
 	// インシデント候補と approve の提案は、短ければ (maxKeptLLMRunes まで) 必ず残す。長ければ最後に回して切る
 	keep, last := joinNonEmpty(llmText, footer), ""
 	if utf8.RuneCountInString(llmText) > maxKeptLLMRunes {
@@ -368,7 +368,7 @@ func promoteUrgent(s *Summary, byID map[string]findingRef, urgent string) *Summa
 }
 
 // classBody は分類ごとの行。level に応じて理由文や情報の行を削る。
-func classBody(s *Summary, byID map[string]findingRef, level int) string {
+func classBody(s *Summary, byID map[string]findingRef, level int, z Zone) string {
 	var body []string
 	for _, c := range classes {
 		var ls []string
@@ -376,7 +376,7 @@ func classBody(s *Summary, byID map[string]findingRef, level int) string {
 			if it.Class != c.key {
 				continue
 			}
-			l := byID[it.FindingID].line()
+			l := byID[it.FindingID].line(z)
 			withReason := !(c.key == "info" && level >= trimInfoReason) && !(c.key == "confirm" && level >= trimConfirmText)
 			if withReason && it.Reason != "" {
 				l += "\n    理由: " + Escape(clipRunes(oneLine(it.Reason), maxReasonRunes))
@@ -414,11 +414,12 @@ func clipRunes(s string, n int) string {
 	return s
 }
 
+// period は text の書式の期間。run の窓は設定のゾーンの RFC 3339、期間レポートの期間は UTC の日。
 func period(in *Input) string {
 	if in.Run != nil {
-		return in.Run.Window.From + " 〜 " + in.Run.Window.To
+		return in.Zone.Stamp(in.Run.Window.From) + " 〜 " + in.Zone.Stamp(in.Run.Window.To)
 	}
-	return in.Period.Period.From + " 〜 " + in.Period.Period.To + " (UTC)"
+	return dateSpan(in.Period.Period.From, in.Period.Period.To)
 }
 
 // counts は件数の行 (report.json の値)。
@@ -433,16 +434,16 @@ func counts(in *Input) string {
 // coverageLines は取れなかったもの (run は compact.go と同じ、期間レポートは runs_missing)。LLM を通さず規則で書く。
 func coverageLines(in *Input) []string {
 	if in.Run != nil {
-		return runCoverageLines(in.Run)
+		return runCoverageLines(in.Run, in.Zone)
 	}
 	if len(in.Period.RunsMissing) == 0 {
 		return nil
 	}
 	out := []string{"", "*取れなかった run*"}
 	for _, m := range in.Period.RunsMissing {
-		l := fmt.Sprintf("• %s `%s` %s", Escape(m.Profile), Escape(m.Kind), Escape(m.At))
+		l := fmt.Sprintf("• %s `%s` %s", Escape(m.Profile), Escape(m.Kind), Escape(in.Zone.Stamp(m.At)))
 		if m.Until != "" {
-			l += " 〜 " + Escape(m.Until)
+			l += " 〜 " + Escape(in.Zone.Stamp(m.Until))
 		}
 		out = append(out, l)
 	}

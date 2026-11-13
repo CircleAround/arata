@@ -31,10 +31,11 @@ CI は `.github/workflows/fuzz.yml` が週 1 回と手動 (`workflow_dispatch`�
 | `internal/notify` | `FuzzParseSummary` | LLM の出力 (text の要約) | 検査を通った文だけが残る。重大度の床・approve の提案の制限。欠落の補完。本文は 3,800 字以内で、緊急の finding の行と LLM の注記が残る。URL・メンション・`<` `>`・目に見えない文字が無い |
 | | `FuzzParseBlockNotes` | LLM の出力 (blocks の要約と「→」) | 「まず対応」の id だけ・1 行・上限以内。Block Kit の上限。「まず対応」の finding が全部載る |
 | | `FuzzParseWriteups` | LLM の出力 (WAF の提案の書き起こし) | BLOCK に強める記述・Block の action・コードフェンスが残らない (目に見えない文字を挟んでも)。規則の行が残る。waf-proposals.md の見出しを増やせない |
-| | `FuzzRunWithReport` | report.json | 通知の流れ全体 (provider: none、text と blocks) がパニックしない。Slack の上限。`<` `>` のエスケープ |
+| | `FuzzRunWithReport` | report.json | 通知の流れ全体 (provider: none、text と blocks、timezone は UTC と夏時間のあるゾーン) がパニックしない。Slack の上限。`<` `>` のエスケープ |
 | | `FuzzLogValuesStayInert` | ログ由来の値 (summary・key・data・path) | どの書式でも行を増やせない。目に見えない文字と `<` `>` が残らない (run と期間レポート) |
 | | `FuzzOneLineAndEscape` | 任意の文字列 | `oneLine` と `Escape` の性質 (冪等、元に戻せる)、切り詰めの上限 |
 | | `FuzzParseDuration` | 設定の長さ | 正の値。日数が桁あふれで別の長さにならない |
+| | `FuzzZone` | 設定の timezone、ログ由来の時刻 | `Local` (実行環境のゾーン) にならない。時刻でない値は 1 文字も変えない。直した時刻は同じ瞬間を指す RFC 3339 で、数字と `T : - + . Z` だけ。文中の時刻の置き換えは時刻の形の外に触れない |
 | | `FuzzSlackConfig` | aratam.yaml の slack 節 | 送り方は 1 つだけ (Webhook と bot が混ざらない)。通った値は環境変数の名前・チャンネル ID の形。エラーに値を写さない |
 | `internal/slack` | `FuzzParseResponse` | Slack の Web API の応答の本文 | 成功は JSON のオブジェクトで `ok` が `true` のときだけ。error コードは `[a-z0-9_]` で 64 字まで、ID は `[A-Z0-9]`。エラーの文は固定 |
 | | `FuzzRetryAfter` `FuzzParseScopes` | `Retry-After`、`X-OAuth-Scopes` | 待ち時間は 0 以上 24 時間以下の秒。scope は決まった字だけ・100 個まで・重複なし |

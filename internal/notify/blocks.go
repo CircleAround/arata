@@ -420,18 +420,13 @@ func ruleAction(check string) string {
 	return ""
 }
 
-// windowText は期間の表示 (RFC 3339 なら UTC の MM/DD HH:MM、日付だけならそのまま)。
+// windowText は blocks の期間の表示。run の窓 (RFC 3339) は設定のゾーンの MM/DD HH:MM とその略称、
+// 期間レポートの期間は日付だけ (arata が UTC の日として決めた値) なので、そのまま UTC と書く。
 func windowText(in *Input) string {
-	f := func(s string) string {
-		if t, err := time.Parse(time.RFC3339, s); err == nil {
-			return t.UTC().Format("01/02 15:04")
-		}
-		return s
-	}
 	if in.Run != nil {
-		return f(in.Run.Window.From) + " 〜 " + f(in.Run.Window.To) + " (UTC)"
+		return in.Zone.span(in.Run.Window.From, in.Run.Window.To)
 	}
-	return in.Period.Period.From + " 〜 " + in.Period.Period.To
+	return dateSpan(in.Period.Period.From, in.Period.Period.To)
 }
 
 // bySeverity は「🔴 high 1 ・ 🟠 medium 10」(0 件なら「0 件」)。
@@ -635,7 +630,7 @@ func InputProblemBlocks(dir string, e *InputError, r Rules) Message {
 	blocks := topSection(RouteUrgent, r, "", nil)
 	blocks = append(blocks,
 		headerBlock("⚠️ arata の出力が無いか古い — "+r.Name),
-		sectionBlock("*監査結果を通知できません*\n• 理由: "+Escape(clipRunes(oneLine(e.Reason), maxProblemRunes))+" (`"+e.Code+"`)\n• 入力: "+Escape(dir)),
+		sectionBlock("*監査結果を通知できません*\n• 理由: "+Escape(clipRunes(oneLine(e.reasonIn(r.Zone)), maxProblemRunes))+" (`"+e.Code+"`)\n• 入力: "+Escape(dir)),
 		contextBlock("arata が実行されていないか、失敗しています。cron と arata のログを確認してください。"))
 	return Message{Text: clipRunes(Escape(fmt.Sprintf("arata の出力が無いか古いため、監査結果を通知できません (%s)", r.Name)), maxNotifyRunes), Blocks: blocks}
 }

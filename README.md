@@ -41,6 +41,8 @@ arata を呼ばず、AWS の監査ロールもストアも使わない (出力�
   LLM が使えなければ規則だけで組み立てた通知を送る (text のときは原文)
 - 指摘の行の末尾に finding の ID を `` `id: 7f16a4507445` `` の形で出す (blocks・text とも。まとめた項目は主体と同じ順に 5 個まで)。
   `arata ack / snooze / resolve <ID>` や作業の記録に、`arata review` を引かずに結びつけられる。値は report.json のもので、LLM には書かせない (docs/aratam.md 3-5 章)
+- 通知の時刻は `timezone` (IANA 名。例 `timezone: Asia/Tokyo`) に書いたゾーンで出す。書かなければ UTC。変わるのは表示だけで、arata の集計は UTC のまま。
+  日付だけの値 (日次集計の日、期間レポートの期間) は UTC の日なので直さず、`(UTC)` と書く。タイムゾーンのデータはバイナリに埋め込んである (docs/aratam.md 4-3 章)
 - LLM のプロバイダ: `bedrock` (Converse。`bedrock:InvokeModel` だけ要る) / `claude-cli` (`claude -p` をツール無し・ユーザー設定を読まず・空の一時ディレクトリで起動) / `none` (LLM を呼ばない)
 - Slack への送り方は 2 つのうち 1 つ (両方を書くと設定エラー。docs/aratam.md 4-1 章)。
   - Incoming Webhook (`slack.webhook_env`): チャンネルごとに URL (秘密) が要る

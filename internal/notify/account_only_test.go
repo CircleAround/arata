@@ -174,13 +174,13 @@ func TestSystemPromptsAccountOnlyRule(t *testing.T) {
 func TestRuleLinesShowAccountOnly(t *testing.T) {
 	in := aoInput(false)
 	_, byID := findingIndex(in)
-	if l := byID["f0"].line(); strings.Contains(l, ":root") || strings.Contains(l, "caller ") {
+	if l := byID["f0"].line(Zone{}); strings.Contains(l, ":root") || strings.Contains(l, "caller ") {
 		t.Errorf("line: %s", l)
 	}
 	// 以前の版の見出し (注記が無い) でも、caller は置き換えた表記で出す
 	old := in.Run.Findings.New[0]
 	old.Summary = "既知リストに無い外部アカウント 111122223333 が自アカウントのロール Admin を 3 回引き受け (内向き、MFA 不明)"
-	if d := detail(old); !strings.Contains(d, "caller 外部アカウント 111122223333 (呼び出した主体は記録に無い)") || strings.Contains(d, ":root") {
+	if d := detail(old, Zone{}); !strings.Contains(d, "caller 外部アカウント 111122223333 (呼び出した主体は記録に無い)") || strings.Contains(d, ":root") {
 		t.Errorf("detail: %s", d)
 	}
 	f := findingRef{check: "new_principal", key: aoRoot, finding: &schema.Finding{Data: map[string]any{"external_account": "111122223333"}}}
