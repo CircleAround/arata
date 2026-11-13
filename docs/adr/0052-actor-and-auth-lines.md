@@ -36,24 +36,32 @@ Rails の既定の複数行のログで、request_id のタグの中に出す (�
 ```
 actor kind=user id=42
 actor kind=user id=42 by=staff:5
-auth result=success kind=user id=42
+auth result=success kind=user id=42 via=password
 auth result=failure kind=user id=42 reason=invalid
 auth result=failure kind=user id=none reason=not_found_in_database
+auth result=impersonate kind=user id=42 by=staff:5
 ```
 
-- **actor**: そのリクエストを、誰としてログインした状態で処理したか。ログインしているリクエストにだけ出す (1 リクエストに 1 行)
+- **actor**: **そのリクエストが認可に使った、ログインした身元の 1 人だけ**。ログインしているリクエストにだけ出す (1 リクエストに 1 行)。
+  複数の種類でログインできる作り (ある種類の利用者の画面を、スタッフも操作できるなど) では、その画面の認可に使った身元を出す (スタッフとして通したなら `kind=staff`)。
+  **パスの中の ID は出さない** (まだ権限を確かめていない値で、対象はパスから分かる。対象 ID は 0051 の「対象 ID の位置」の定義で読む)
   - `kind`: 利用者の種類 (`user`・`staff` など。認証の単位の名前。同じ番号の別の種類を区別する)。小文字と `_` の 32 文字まで
   - `id`: 内部の番号か不透明な ID。`[A-Za-z0-9_-]` の 64 文字まで (0051 の 3 節)
   - `by=<kind>:<id>`: 代わりにログインした操作のときだけ付ける。**`by` が実際に操作した人**で、`kind` / `id` はその人が成り代わっている利用者。形は `kind` と `id` を `:` でつないだもの
-- **auth**: ログインの試みの結果。資格情報を送ったリクエストにだけ出す (1 回の試みに 1 行)
-  - `result`: `success` か `failure`
-  - `kind`: 試みた認証の単位
-  - `id`: 成功ならその利用者。失敗では、**送られた識別子から利用者を引けたときだけ**その ID (パスワードの誤り・ロック・未確認など)、引けなければ `none`
-  - `reason`: 失敗の理由。認証ライブラリが失敗に付ける記号をそのまま出す (Devise なら failure の message の記号。`invalid`・`not_found_in_database`・`unconfirmed`・`locked` など)。
-    小文字と `_` の 64 文字まで。成功では付けない
+- **auth**: ログインの結果 (1 回に 1 行)。項目の順は `result` → `kind` → `id` → `via` → `by` → `reason` で固定する
+  - `result`: `success` (ログインの成功)・`failure` (失敗)・`impersonate` (代わりのログインを始めた時点)
+  - `kind`: 認証の単位
+  - `id`: 成功と代わりのログインではその利用者。失敗では、**送られた識別子から利用者を引けたときだけ**その ID (パスワードの誤り・ロック・未確認など)、引けなければ `none`。
+    セッションの期限切れ (`reason=timeout`) も `none`
+  - `via`: 成功の手段。`password` (資格情報を送った) か `remember` (ログインの保持で戻った)。`success` にだけ付ける
+  - `by=<kind>:<id>`: `impersonate` にだけ付ける。代わりのログインを始めた人 (actor の `by` と同じ意味)
+  - `reason`: 失敗の理由。認証ライブラリが失敗に付ける記号をそのまま出す (Devise なら failure の message の記号。`invalid`・`not_found_in_database`・`unconfirmed`・`locked`・`timeout` など)。
+    小文字と `_`。形に合わない値は、アプリの側で `other` にして出す。`failure` にだけ付ける
+  - **`success` は、アプリの側で strategy (パスワード・ログインの保持) で認証したときだけ出す**。新規登録・パスワードの再設定の直後に自動で行うログインと、
+    代わりのログイン (`impersonate` だけを出す) では出さない。`success` の数を「資格情報か保持の仕組みで本人がログインした数」に保つ
 - **出さないもの**: メールアドレス・氏名・ログイン名・送られた識別子 (失敗したログインの入力はパスワードの打ち間違いを含み得る)・セッションの ID・トークン。
   メールアドレスを ID に使うアプリは、別の内部の ID を出す (0051 の 3 節のまま)
-- 行は固定の語 (`actor ` / `auth `) で始め、項目の順を変えない。項目を足すときは末尾に足し、この ADR を置き換える
+- 行は固定の語 (`actor ` / `auth `) で始め、項目の順を変えない。項目を足すときは、この ADR を置き換える
 - JSON の行ログ (lograge など) のアプリは、同じ項目を JSON の項目として足す (この ADR の正規表現は使わない)
 
 ### 2. 出す時点は around_action の ensure。読むときに副作用を起こさない
@@ -82,7 +90,7 @@ end
 - 認証の単位 (scope) が複数あるアプリは、単位ごとに読み、ログインしている単位の行を出す。代わりにログインしている間は `by=` を付ける (アプリが持っている「誰が成り代わっているか」の記録から)
 - この行のための処理が例外を出しても、元の応答・元の例外を変えない (`rescue` で包む)
 - auth の行は、認証ライブラリの成功・失敗のフックから出す (Devise なら Warden の認証の後のフックと、失敗の前のフック)。フックの中でも利用者を読み直さず、フックに渡された値だけを使う。
-  未ログインのまま保護された画面を開いただけのリクエスト・セッションの期限切れは、ログインの試みではないので出さないことを勧める
+  未ログインのまま保護された画面を開いただけのリクエストは、ログインの試みではないので出さないことを勧める
   (出しても arata は理由ごとに数えるだけで、壊れはしない)
 
 ### 3. `by=` の付いたリクエストは、利用者本人の行動として数えない
@@ -108,13 +116,17 @@ sources:
         from: app_line                    # none (既定。書かないのと同じ) | app_line | debug_sql
         regex: ' -- : \[[A-Za-z0-9_@-]{1,255}\] actor kind=(?P<user_kind>[a-z_]{1,32}) id=(?P<user_id>[A-Za-z0-9_-]{1,64})(?: by=(?P<by_kind>[a-z_]{1,32}):(?P<by_id>[A-Za-z0-9_-]{1,64}))?$'
       auth:
-        regex: ' -- : \[[A-Za-z0-9_@-]{1,255}\] auth result=(?P<auth_result>success|failure) kind=(?P<auth_kind>[a-z_]{1,32}) id=(?P<auth_id>[A-Za-z0-9_-]{1,64})(?: reason=(?P<auth_reason>[a-z_]{1,64}))?$'
+        regex: ' -- : \[[A-Za-z0-9_@-]{1,255}\] auth result=(?P<auth_result>success|failure|impersonate) kind=(?P<auth_kind>[a-z_]{1,32}) id=(?P<auth_id>[A-Za-z0-9_-]{1,64})(?: via=(?P<auth_via>password|remember))?(?: by=(?P<auth_by_kind>[a-z_]{1,32}):(?P<auth_by_id>[A-Za-z0-9_-]{1,64}))?(?: reason=(?P<auth_reason>[a-z_]{1,64}))?$'
 ```
 
 - 置き場所は `request:` の下 (0051 の例は字下げが曖昧だった。まとめ方の一部なので `request.user_id` に確定する)。`request_lines` 以外の形式には書けない
 - **`user_id`**: `from` と `regex`。名前付きキャプチャは `user_kind` と `user_id` が必須、`by_kind` と `by_id` が任意 (2 つとも書くか、書かないか)。ほかの名前は `CONFIG_INVALID`。
   `from: none` に `regex` は書けず、`app_line` / `debug_sql` には `regex` が要る。`debug_sql` は同じ仕組みで読み、消えうる取り方としての注意 (0051 の 4 節) を doctor が warn で出し続ける
-- **`auth`**: `regex` だけ。名前付きキャプチャは `auth_result` が必須、`auth_reason`・`auth_kind`・`auth_id` が任意。`user_id` が無くても書ける (ログインの成否の数は ID が無くても数えられる)
+- **`auth`**: `regex` だけ。名前付きキャプチャは `auth_result` が必須、`auth_kind`・`auth_id`・`auth_via`・`auth_by_kind`・`auth_by_id` (2 つとも書くか、書かないか)・`auth_reason` が任意。
+  `user_id` が無くても書ける (ログインの成否の数は ID が無くても数えられる)。
+  **キャプチャの名前は actor と分ける** (`auth_` を付ける)。Insights は同じ名前の一時フィールドを 2 度定義できず (0051 の「確かめた結果」)、
+  2 つの正規表現が同じ名前 (`user_kind` など) を持つクエリは拒否される。意味も違う (auth の ID は「ログインしようとした相手」で、そのリクエストの身元ではない)
+- 正規表現は利用者が書くので、アプリの ID が数字だけなら `[0-9]{1,20}` のように狭く書いてよい。arata が受ける ID の形は下の表 (0051 の 3 節) のまま
 - **正規表現は `$` で終える** (`config check` が確かめる。終わっていなければ `CONFIG_INVALID`)。行の途中に同じ並びを置いても当たらない
   (`Parameters: {"q"=>"actor kind=user id=1"}` は `}` で終わる)
 - **前の区切りから書く** (勧める形。道具では確かめられないので、見本と `arata help ai` はこの形だけを載せる)。既定の formatter では、Logger の前置きの終わり (` -- : `) とタグを含める。
@@ -124,9 +136,10 @@ sources:
 
   | 項目 | 形 |
   |---|---|
-  | `user_kind`・`by_kind`・`auth_kind` | `[a-z_]{1,32}` |
-  | `user_id`・`by_id`・`auth_id` | `[A-Za-z0-9_-]{1,64}`。`auth_id` の `none` は「引けなかった」として ID なしに読む |
-  | `auth_result` | `success` か `failure` |
+  | `user_kind`・`by_kind`・`auth_kind`・`auth_by_kind` | `[a-z_]{1,32}` |
+  | `user_id`・`by_id`・`auth_id`・`auth_by_id` | `[A-Za-z0-9_-]{1,64}`。`auth_id` の `none` は「引けなかった」として ID なしに読む |
+  | `auth_result` | `success`・`failure`・`impersonate` |
+  | `auth_via` | `password`・`remember` |
   | `auth_reason` | `[a-z_]{1,64}` |
 
   合わない値 (`@` を含む ID、長すぎる値など) は**捨てて数だけ残す** (`user_id_invalid`・`auth_invalid`。coverage と doctor に出す)。捨てた値そのものは、結果にもログにも出さない。
@@ -156,9 +169,9 @@ sources:
   | `day`・`ip`・`method`・`path`・`status` | 段 0 のまま (最初の行の時刻の日、最初の行の値、最後のステータス) |
   | `user_kind`・`user_id` | 形に合った値 (最後の actor の行)。無ければ空 |
   | `by_kind`・`by_id` | 同じ。`by` の無いリクエストは空 |
-  | `auth_result`・`auth_reason`・`auth_kind`・`auth_id` | 形に合った値 (最後の auth の行)。無ければ空 |
+  | `auth_result`・`auth_kind`・`auth_id`・`auth_via`・`auth_by_kind`・`auth_by_id`・`auth_reason` | 形に合った値 (最後の auth の行)。無ければ空 |
 
-- **割合の測り方**: 解釈率のクエリ (段 0 で流している 1 本) の 2 段目の軸に、ユーザー ID の有無・種類・`by` の有無・auth の結果と理由を足して数える。
+- **割合の測り方**: 解釈率のクエリ (段 0 で流している 1 本) の 2 段目の軸に、ユーザー ID の有無・種類・`by` の有無・auth の結果・手段・理由を足して数える。
   **クエリの本数は増やさない** (Insights の費用は本数に比例する。ADR 0031)。分母は段 0 と同じ「最初の行の数」
 - **保存** (日次の metric。後の値で置き換える。`From` は `http_user`):
 
@@ -167,22 +180,26 @@ sources:
   | `user_requests` | `<user_kind>` | 形に合ったユーザー ID の付いたリクエストの数 |
   | `user_requests_by` | なし | そのうち `by` の付いた数 |
   | `user_id_invalid` | なし | actor の行はあるが、値が形に合わず捨てたリクエストの数 |
-  | `auth_success` | なし | auth が `success` のリクエストの数 |
+  | `auth_success` | `<auth_via>` (無ければ空) | auth が `success` のリクエストの数 |
   | `auth_failures` | `<auth_reason>` (無ければ空) | auth が `failure` のリクエストの数 |
+  | `auth_impersonate` | なし | auth が `impersonate` のリクエストの数 (代わりのログインを始めた数) |
   | `auth_invalid` | なし | auth の行はあるが、結果の値が形に合わず捨てたリクエストの数 |
 
   ユーザー ID を key に置く集計は、この PR では作らない (段 1 のチェックが、0051 の 3 節の「下限を超えた key の上位 N 件と分布」として足す)。
   そのとき主体は `<kind>:<id>` の形 (`user:42`) で 1 つの軸にする。値の規則から `:` と `|` は kind にも id にも入らないので、key は一意に分けられる
-- **coverage と doctor**: `coverage.formats[].requests` と doctor の `requests` の行に、ID の付いたリクエストの数と割合・種類ごとの数・`by` の数・捨てた数・auth の成功と失敗 (理由ごと) を出す。
+- **coverage と doctor**: `coverage.formats[].requests` と doctor の `requests` の行に、ID の付いたリクエストの数と割合・種類ごとの数・`by` の数・捨てた数・auth の成功 (手段ごと)・失敗 (理由ごと)・代わりのログインの数を出す。
   doctor は `from: debug_sql` の間は warn、`user_id` を書いているのに 0 件でも warn (段 1 のチェックが skip されることを書く)
 - **この PR に入れないもの**: 段 1 のチェック本体、ID の付いた割合が直近の平均から落ちたときの警告 (0051 の 4 節。割合は run の stats に残すので、後から足せる)、
   1 行のログ (`json` の `fields.user_id`) から `http_user` を出すこと
 
+## 確かめた事実 (本物の Logs Insights。Rails の既定の複数行のログ)
+
+- `parse` は**任意の名前付きキャプチャ**を受ける。`(?:(?<w>…) )?` の形で、合った行では値が入り、合わない行ではパースは成功してその項目だけが空になる (`count(<項目>)` に入らない)。
+  `by`・`via`・`reason` を 1 つの正規表現の任意の部分として書ける
+- `$` は `@message` の終わりに当たる (行末まで固定した正規表現が、最後の行にすべて合った)
+
 ## 確かめが要る点 (実データで)
 
-- Insights の `parse` が、**任意の名前付きキャプチャ** (`(?: by=(?<by_kind>…):(?<by_id>…))?`) を受け、当たらなかったキャプチャを「値なし」にすること。
-  受けない・行ごと外れるなら、`by` と `reason` を別の正規表現に分ける形に変える (新しい ADR で置き換える)
-- `$` が `@message` の終わりに当たること (行末に改行や空白が残るログでは当たらない。そのときは見本を `\s*$` にする)
 - 取り出した一時フィールドを、もう一度 `parse` で形と突き合わせる書き方 (探索パスの印で使っている形と同じ) が、この値でも動くこと
 - 2 段目の軸を増やしても、解釈率のクエリの結果が行数の上限 (10000) に遠いこと
 
@@ -200,6 +217,11 @@ sources:
 - **代わりにログインした操作を `id` に担当者を書いて表す** (`actor kind=staff id=5`): 行の形が 1 つで済む。どの利用者として操作したかが消え、利用者の側から調べられない。
   逆に `by` を書かなければ、担当者の操作が利用者本人の行動に混ざる。却下 (3 節)
 - **auth の行を `request.lines` の行の種類の 1 つにする**: 設定の入口が 1 つで済む。規則の違う項目が同じ一覧に並び、行の種類の上限も使う。却下 (5 節)
+- **actor にパスの中の ID (操作の対象) も出す**: 誰の何を触ったかが 1 行で分かる。権限を確かめる前の値で、利用者が自由に選べる。主体と対象が混ざり、
+  「その ID としてログインした」と読み違える。対象はパスから読める (0051 の「対象 ID の位置」)。却下
+- **代わりのログインの開始を `success` として出す**: 行の種類が増えない。`success` の数が「本人のログイン」でなくなり、失敗の後の成功を見る集計に担当者の操作が混ざる。
+  却下。`impersonate` を分ける。新規登録・再設定の直後の自動のログインも同じ理由で `success` にしない
+- **auth の正規表現でも `user_kind` / `user_id` の名前を使う**: 行の形と名前が揃う。Insights が同じ名前の一時フィールドを 2 度定義できず、意味も違う。却下 (4 節)
 - **ログインの失敗に、送られた識別子 (ログイン名) を出す**: どの名前が狙われたか分かる。個人を特定できる値で、パスワードを名前の欄に打った入力も残る。却下。引けたときの内部の ID だけを出す
 - **値の形を Go の側だけで確かめる**: クエリが短い。形に合わない値を軸にした結果が手元まで来てしまい、行数の上限にも当たりやすい。クエリの中で捨て、Go でもう一度確かめる
 - **ユーザー ID の割合のために専用のクエリを足す**: 解釈率のクエリを変えずに済む。1 本ごとに範囲のログ全体を読むので、費用が 1 本分増える。却下 (6 節)
@@ -215,5 +237,4 @@ sources:
   - アプリが利用者の入力を、前置きの付いた 1 行のメッセージの全体としてそのまま出していれば、actor / auth と同じ行を作れる。arata が守れるのは値の形までで、
     それより先はアプリの側 (入力をそのままログに出さない) に頼る。文書に書く
   - 解釈率のクエリの 2 段目の軸が増える (結果の行が増える。本数とスキャン量は増えない)
-  - 任意の名前付きキャプチャの動きは未確認 (上の「確かめが要る点」)。違っていたら設定の形を変える
   - auth の `reason` は認証ライブラリの記号に頼る。ライブラリの版で名前が変わると、理由ごとの数の並びが変わる (数は減らない)
