@@ -131,8 +131,8 @@ CloudTrail は記録まで最大 15 分ほど遅れるので、最初の run に
 
 既定値や推測で書くと、1 件も数えない設定や、行を取り違えた集計が、静かに動き続ける。値は、実際の記録を見て決める。
 
-- **`login_bruteforce` の `failure_statuses`**: ログインの失敗を 1 回起こし、その request_id の行を Logs Insights で全部見る。Rails / Devise では、ログの `Completed 401` は HTTP の 401 ではない。
-  失敗として数えるのは最後の値の 200 (`error_status` が `:unprocessable_entity` なら 422)。読み方は `arata help ai request_lines` (ステータスの行が複数あるリクエスト) と `arata help ai logs` (よく詰まる点)
+- **`login_bruteforce` の `failure_statuses`**: ログインの失敗を 1 回起こし、その request_id の行を Logs Insights で全部見て、ブラウザや ALB のログに出る実際のステータスと見比べる。
+  Rails / Devise では、ログの `Completed 401` と実際の応答が違うことがあり、書く値は場合によって変わる。場合分けは `arata help ai request_lines` (ステータスの行が複数あるリクエスト) と `arata help ai logs` (よく詰まる点)
 - **`request_lines` の `request.id` の正規表現**: `arata doctor` の `requests` の行 (鍵の取り違えの検査) を必ず見る。ng のまま先へ進まない
 - **`log_hygiene` の `param_fields`**: アプリの `filter_parameters` の設定と見比べ、隠しているはずの送信項目の名前を書く
 - ログの行の意味が分からないときは、アプリのコードを読んで確かめる (使っているライブラリの版も含む。版によって既定の動きが違う)
