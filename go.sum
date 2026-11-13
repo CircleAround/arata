@@ -26,6 +26,8 @@ github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs v1.89.3 h1:Ko7t4Gcbo6KG3EHz+
 github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs v1.89.3/go.mod h1:EPgYb5ANskWf9TqjokpS+1yEMgClBO15HdGU29JiiSM=
 github.com/aws/aws-sdk-go-v2/service/costexplorer v1.74.1 h1:TK+Hfn2ayR5g1ZrOHHFVg033F0brKyiKk16VDXn9ZIw=
 github.com/aws/aws-sdk-go-v2/service/costexplorer v1.74.1/go.mod h1:KwwGgz0pLqX+tuHBZzvQMh8rHgm2m/SYRIdYyufDmb8=
+github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2 v1.63.4 h1:qa8fXvHzJOsDTGq0qbOlPUOlAlfKZhO6HqP9Be1Uhxg=
+github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2 v1.63.4/go.mod h1:/RWcczQydYEz7bgdeC3BoNAL3KZdQFT5NTk574Gz8uI=
 github.com/aws/aws-sdk-go-v2/service/guardduty v1.99.1 h1:d2tyBBUAd5B5I4LU8mXWJhfNmT/yJNsEsE8XU/WCTkk=
 github.com/aws/aws-sdk-go-v2/service/guardduty v1.99.1/go.mod h1:l3W5Wgp0RS0VEP77x9Pp90oYoAh4p41rmZVu/6ynwbo=
 github.com/aws/aws-sdk-go-v2/service/iam v1.64.4 h1:28xB3Sghdz+BOBpar3ksuZ6vdoGRxmcgowF/TRxvgsI=

@@ -205,6 +205,8 @@ WAF の修正提案 (arata が WAF のログと設定から候補を作り、ara
   申請と承認は CDK では行わない。aratam の `doctor` で応答が返ることを確かめる
 - **GuardDuty が既に有効なアカウント**: detector を作れないので `guardDuty.enabled: false` にする (既存の detector で `04-guardduty-sample-findings.sh` は動く)
 - **posture の項目** (CloudTrail の証跡、パスワードポリシー、S3 Public Access Block、ルート MFA): アカウント全体の設定なので sandbox では変えない。開発用アカウントの設定どおりに出る
+- **posture の ALB の WAF** (`alb_waf|<region>|<ALB>`): sandbox の ALB はインターネット向けなので、`waf.enabled: false` なら medium で出て、`true` にして deploy し直すと次の weekly で解消になる。
+  読み取り専用ロールは `deploy/iam/readonly-role.yaml` をそのまま取り込むので、追加の action (ADR 0048) も入る
 - **ルートユーザーの利用** (`root_usage`): スクリプトにしない (scenarios/README.md)
 
 ## 開発

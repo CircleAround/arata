@@ -2,6 +2,8 @@ package checks
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -189,6 +191,70 @@ func TestPostureCheck(t *testing.T) {
 	}
 }
 
+// インターネット向けの ALB に WebACL が無い (alb_waf|<region>|<ALB>。medium。ADR 0048)。
+func TestPostureALBWAF(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	c := Posture{Config: config.Posture{MinPasswordLength: 14}}
+	alb := func(region, name string) any {
+		return map[string]any{"name": name, "arn": "arn:aws:elasticloadbalancing:" + region + ":123456789012:loadbalancer/app/" + name + "/50dc6c495c0c9188"}
+	}
+	snapshot(t, st, record.KindPostureItem,
+		snap(record.KindPostureItem, "alb_waf|ap-northeast-1", "region", "ap-northeast-1", "internet_facing", 3, "without_waf", []any{alb("ap-northeast-1", "prod-web"), alb("ap-northeast-1", "prod-api")}),
+		snap(record.KindPostureItem, "alb_waf|us-east-1", "region", "us-east-1", "internet_facing", 1, "without_waf", []any{alb("us-east-1", "prod-web")}),
+		snap(record.KindPostureItem, "alb_waf|eu-west-1", "region", "eu-west-1", "internet_facing", 1, "without_waf", []any{}),
+	)
+	obs, err := c.Evaluate(ctx, st, weekly(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if keys(obs) != "alb_waf|ap-northeast-1|prod-web;alb_waf|ap-northeast-1|prod-api;alb_waf|us-east-1|prod-web" {
+		t.Fatalf("keys: %s", keys(obs))
+	}
+	o := byKeyObs(obs)["alb_waf|ap-northeast-1|prod-api"]
+	if o.Severity != Medium || o.Summary != "インターネット向けの ALB に WAF (WAFv2 の WebACL) が付いていない: prod-api (ap-northeast-1)" ||
+		o.Data["name"] != "prod-api" || o.Data["region"] != "ap-northeast-1" || o.Data["arn"] != "arn:aws:elasticloadbalancing:ap-northeast-1:123456789012:loadbalancer/app/prod-api/50dc6c495c0c9188" || len(o.Data) != 3 {
+		t.Fatalf("%+v", o)
+	}
+	first, err := Diff(ctx, st, DiffParams{Check: "posture", Mode: ModeState, Window: weekly(), Now: now, NewID: seqID()}, obs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reported []string
+	for _, r := range first {
+		reported = append(reported, r.Finding.ID)
+	}
+	if err := st.MarkReported(ctx, reported, now); err != nil {
+		t.Fatal(err)
+	}
+	// 翌週: 東京は prod-api に WebACL を付けた (解消)。us-east-1 は権限が無く取れない → そのリージョンの前回の finding を維持
+	snapshot(t, st, record.KindPostureItem,
+		snap(record.KindPostureItem, "alb_waf|ap-northeast-1", "region", "ap-northeast-1", "internet_facing", 3, "without_waf", []any{alb("ap-northeast-1", "prod-web")}),
+		snap(record.KindPostureItem, "alb_waf|us-east-1", "unknown", true, "action", account.ActionGetWebACLForResource),
+	)
+	obs, _ = c.Evaluate(ctx, st, weekly(), nil)
+	res, err := Diff(ctx, st, DiffParams{Check: "posture", Mode: ModeState, Window: weekly(), Now: now.Add(7 * 24 * time.Hour), NewID: seqID()}, obs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]Class{}
+	for _, r := range res {
+		got[r.Finding.Key] = r.Class
+	}
+	want := map[string]Class{"alb_waf|ap-northeast-1|prod-api": ClassResolved, "alb_waf|ap-northeast-1|prod-web": ClassStillOpen, "alb_waf|us-east-1|prod-web": ClassStillOpen}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s: got %s want %s", k, got[k], v)
+		}
+	}
+	// 壊れた項目 (名前が無い・形が違う) は finding にしない
+	snapshot(t, st, record.KindPostureItem,
+		snap(record.KindPostureItem, "alb_waf|ap-northeast-1", "region", "ap-northeast-1", "without_waf", []any{map[string]any{"arn": "x"}, "prod-web", map[string]any{"name": "a|b"}}))
+	if obs, _ = c.Evaluate(ctx, st, weekly(), nil); len(obs) != 0 {
+		t.Fatalf("%+v", obs)
+	}
+}
+
 func TestAIPathUsage(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()
@@ -213,4 +279,23 @@ func TestAIPathUsage(t *testing.T) {
 	if keys(obs) != "arn:aws:iam::1:role/arata-audit|198.51.100.66;arn:aws:iam::1:role/arata-audit|203.0.113.10" || obs[0].Severity != Info || obs[0].Data["count_total"] != 2 {
 		t.Fatalf("%+v", obs)
 	}
+}
+
+// ファズテスト (ADR 0041)。posture_item の without_waf はストアから戻した JSON で、ALB の名前は利用者 (と侵入者) が決められる。
+// どんな形でもパニックせず、返す名前は空でなく、finding の key の区切り (|) を含まない (key の `alb_waf|<region>|<ALB>` を壊さない)。
+func FuzzALBsWithoutWAF(f *testing.F) {
+	f.Add(`[{"name":"prod-web","arn":"arn:aws:elasticloadbalancing:ap-northeast-1:123456789012:loadbalancer/app/prod-web/50dc6c495c0c9188"}]`)
+	f.Add(`[{"name":"a|b"},{"arn":"x"},"prod-web",null,{"name":7}]`)
+	f.Add(`{"name":"prod-web"}`)
+	f.Fuzz(func(t *testing.T, in string) {
+		var v any
+		if json.Unmarshal([]byte(in), &v) != nil {
+			return
+		}
+		for _, a := range albsWithoutWAF(v) {
+			if a.name == "" || strings.Contains(a.name, "|") {
+				t.Fatalf("name %q", a.name)
+			}
+		}
+	})
 }
