@@ -74,7 +74,7 @@ func TestLogHygiene(t *testing.T) {
 	if web.Summary != "ロググループ prod-nginx-access のログに、署名付き URL が 7 行 (直近 7 日。保持期間は 30 日)" || web.Data["retention"] != "set" || web.Data["retention_days"] != 30 {
 		t.Fatalf("web: %s %+v", web.Summary, web.Data)
 	}
-	if s := m["app_prod|secret_aws_access_key"].Summary; s != "ロググループ prod-app のログに、AWS の長期のアクセスキーの ID の形 が 2 行 (直近 7 日。保持期間は無期限)" {
+	if s := m["app_prod|secret_aws_access_key"].Summary; s != "ロググループ prod-app のログに、AWS の長期のアクセスキーの ID の形が 2 行 (直近 7 日。保持期間は無期限)" {
 		t.Fatalf("summary: %s", s)
 	}
 	if _, ok := m["app_prod|debug_sql"].Data["fields"]; ok {
@@ -90,9 +90,19 @@ func TestLogHygiene(t *testing.T) {
 	if m2["app_prod|unfiltered_param"].Fingerprint != up.Fingerprint || m2["app_prod|debug_sql"].Fingerprint != m["app_prod|debug_sql"].Fingerprint {
 		t.Fatalf("fingerprint must not depend on counts / retention: %q vs %q", m2["app_prod|unfiltered_param"].Fingerprint, up.Fingerprint)
 	}
-	if s := m2["app_prod|debug_sql"].Summary; s != "ロググループ prod-app のログに、debug の SQL の出力 が 1 行 (直近 7 日。保持期間は不明)" {
+	if s := m2["app_prod|debug_sql"].Summary; s != "ロググループ prod-app のログに、debug の SQL の出力が 1 行 (直近 7 日。保持期間は不明)" {
 		t.Fatalf("summary: %s", s)
 	}
+	// 行数は 3 桁区切り。種類の呼び名が日本語で終わるときは「が」の前に空白を置かない
+	hygieneSnapshot(t, st, "web", hygieneItem(config.HygieneDebugSQL, 403003), hygieneItem(config.HygieneSecretPrivateKey, 1234567))
+	big := byKeyObs(mustEval(t, c, st))
+	if s := big["web|debug_sql"].Summary; s != "ロググループ prod-app のログに、debug の SQL の出力が 403,003 行 (直近 7 日。保持期間は無期限)" || big["web|debug_sql"].Data["count"] != int64(403003) {
+		t.Fatalf("summary: %s", s)
+	}
+	if s := big["web|secret_private_key"].Summary; s != "ロググループ prod-app のログに、秘密鍵 (PEM) の先頭の行が 1,234,567 行 (直近 7 日。保持期間は無期限)" {
+		t.Fatalf("summary: %s", s)
+	}
+	hygieneSnapshot(t, st, "web", hygieneItem(config.HygienePresignedURL, 7, "log_group", "prod-nginx-access", "retention", "set", "retention_days", 30))
 	if s := m2["app_prod|unfiltered_param"].Summary; !strings.Contains(s, "(直近 200 時間。保持期間は 90 日)") {
 		t.Fatalf("summary: %s", s)
 	}
@@ -187,9 +197,9 @@ func FuzzLogHygieneSnapshot(f *testing.F) {
 			default:
 				t.Fatalf("retention: %+v", o)
 			}
-			if fs, ok := o.Data["fields"].(map[string]int64); ok {
+			if fs, ok := o.Data["fields"].(map[string]any); ok {
 				for name, v := range fs {
-					if !contains(c.Config.ParamFields, name) || v < 1 || k != config.HygieneUnfilteredParam {
+					if n, isInt := v.(int64); !isInt || !contains(c.Config.ParamFields, name) || n < 1 || k != config.HygieneUnfilteredParam {
 						t.Fatalf("fields: %+v", o)
 					}
 				}
@@ -221,4 +231,13 @@ type snapshotQuery struct {
 
 func (q snapshotQuery) Snapshot(context.Context, record.Kind) ([]record.SnapshotItem, error) {
 	return q.items, nil
+}
+
+func mustEval(t *testing.T, c LogHygiene, q store.Query) []Observation {
+	t.Helper()
+	obs, err := c.Evaluate(context.Background(), q, weekly(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return obs
 }

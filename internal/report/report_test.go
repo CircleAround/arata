@@ -97,6 +97,34 @@ func TestGolden(t *testing.T) {
 	compareGolden(t, "report.md", []byte(r.Markdown()))
 }
 
+// TestGoldenLogHygiene は log_hygiene の finding の report.md を固定する。入れ子の data (fields: 項目名 → 行数) は
+// Go の map の書式 (`map[address:137 …]`) ではなく、「名前 数」を名前順に並べて書く。
+// 決定: 共有のゴールデン (report.json。aratam のテストも読む) には足さず、別のファイルにする (通知側のゴールデンと件数の期待値を巻き込まない)。
+func TestGoldenLogHygiene(t *testing.T) {
+	now := time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC)
+	finding := func(id, key, sev, summary string, data map[string]any) checks.Result {
+		return checks.Result{Class: checks.ClassNew, Finding: store.Finding{ID: id, Check: "log_hygiene", Key: key, Severity: sev, Summary: summary, Status: "open",
+			FirstSeen: now, LastSeen: now, LastChanged: now, Data: data}}
+	}
+	r := Build(Input{Profile: "weekly", Name: "acme", RunID: "run-1", Window: collect.Window{From: now.Add(-7 * 24 * time.Hour), To: now}, Now: now,
+		SourcesOK: []string{"app_prod"}, ChecksRun: []string{"log_hygiene"},
+		Results: []checks.Result{
+			// ストアから戻した形 (数は float64、fields は map[string]any)
+			finding("f-001", "app_prod|unfiltered_param", "medium", "ロググループ prod-app のログに、隠されていない送信項目 (address, name, zipcode) が 446 行 (直近 7 日。保持期間は無期限)",
+				map[string]any{"kind": "unfiltered_param", "count": 446.0, "log_group": "prod-app", "retention": "never", "window_hours": 168.0,
+					"fields": map[string]any{"zipcode": 134.0, "address": 137.0, "name": 175.0}}),
+			// チェックが出したままの形 (数は int64)
+			finding("f-002", "app_prod|debug_sql", "low", "ロググループ prod-app のログに、debug の SQL の出力が 403,003 行 (直近 7 日。保持期間は 30 日)",
+				map[string]any{"kind": "debug_sql", "count": int64(403003), "log_group": "prod-app", "retention": "set", "retention_days": 30, "window_hours": int64(168)}),
+			finding("f-003", "web|unfiltered_param", "medium", "summary", map[string]any{"kind": "unfiltered_param", "count": int64(1), "fields": map[string]any{"tel": int64(1)}}),
+		}})
+	md := r.Markdown()
+	if strings.Contains(md, "map[") {
+		t.Fatalf("report.md must not print a Go map:\n%s", md)
+	}
+	compareGolden(t, "log_hygiene.md", []byte(md))
+}
+
 func compareGolden(t *testing.T, name string, got []byte) {
 	t.Helper()
 	p := filepath.Join("testdata", name)

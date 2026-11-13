@@ -6,6 +6,7 @@ import (
 	"math"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/CircleAround/arata/internal/allowlist"
@@ -121,7 +122,7 @@ func (c LogHygiene) Evaluate(ctx context.Context, q store.Query, _ collect.Windo
 			what := hygieneLabel[kind]
 			var names []string
 			if kind == config.HygieneUnfilteredParam {
-				fields := map[string]int64{}
+				fields := map[string]any{} // 値は int64 (JSON から戻した finding と同じ map[string]any の形にする)
 				raw, _ := it.Data["fields"].(map[string]any)
 				for _, name := range c.Config.ParamFields {
 					if n, ok := wholeNumber(raw[name]); ok && n >= 1 {
@@ -151,12 +152,29 @@ func (c LogHygiene) Evaluate(ctx context.Context, q store.Query, _ collect.Windo
 				}
 			}
 			obs = append(obs, Observation{Check: c.Name(), Key: src + "|" + kind, Severity: sev,
-				Summary:     fmt.Sprintf("%s のログに、%s が %d 行 (%s。保持期間は%s)", where, what, count, span, retentionText(retention)),
+				Summary:     fmt.Sprintf("%s のログに、%s%s 行 (%s。保持期間は%s)", where, subject(what), groupDigits(count), span, retentionText(retention)),
 				Fingerprint: fingerprint(sev, nil, kind, strings.Join(names, ",")),
 				Data:        data})
 		}
 	}
 	return obs, nil
+}
+
+// subject は「<呼び名>が 」。呼び名が ASCII の字 (`)` や英字) で終わるときだけ、「が」の前に空白を置く (「… (name, tel) が」「署名付き URL が」「…の出力が」)。
+func subject(what string) string {
+	if what != "" && what[len(what)-1] < 0x80 {
+		return what + " が "
+	}
+	return what + "が "
+}
+
+// groupDigits は行数を 3 桁区切りで書く (403003 → 403,003)。
+func groupDigits(n int64) string {
+	s := strconv.FormatInt(n, 10)
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	return s
 }
 
 // retentionText は「保持期間は」の後ろに続ける語 (数字で始まるときだけ空白を挟む)。
