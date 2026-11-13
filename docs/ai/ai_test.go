@@ -13,10 +13,11 @@ func TestSections(t *testing.T) {
 		"ai report": {"report.json の構造", "読む順序", "要約の手順", "相関付け", "分類の基準", "書いてはいけないこと", "追加の裏取り (任意)", "WAF の修正提案の候補 (proposals)", "期間レポート (report --month / --from --to)", "approve について"},
 		"ai approve": {"原則", "allowlist.yaml を PR で直す運用", "承認してよい主体の目安", "SaaS 連携は account で承認する", "行き先を既知にする (assume_destinations)", "監査する側のアカウント (audit_account)", "外部アカウント root の見方", "arn_pattern の使いどころ",
 			"期限付き承認の使いどころ", "tags の語彙", "access_denied が鳴ったとき", "principal_new_source・secret_access が鳴ったとき", "approve ではなく ack / snooze / resolve にするもの"},
-		"ai runtime":    {"使い方", "リポジトリと fork", "ワークフローのトリガー", "OIDC の信頼", "main の保護と書き込み権限", "secrets", "Actions の設定", "ワークフローの形", "監査対象の前提 (context_file) の下書き", "報告の書き方"},
-		"ai onboarding": {"流れ", "最初の run で出るもの", "1 件ずつ片付ける", "ack・snooze・resolve の使い分け", "導入作業の記録を拾う", "定時の通知を始める"},
-		"ai logs":       {"使い方", "チェックと記録の対応", "記録ごとの集め方", "保存期間と費用", "設定の書き方", "確かめ方", "よく詰まる点", "外部の拠り所"},
-		"ai playbook":   {"使い方", "一覧"},
+		"ai runtime":       {"使い方", "リポジトリと fork", "ワークフローのトリガー", "OIDC の信頼", "main の保護と書き込み権限", "secrets", "Actions の設定", "ワークフローの形", "監査対象の前提 (context_file) の下書き", "報告の書き方"},
+		"ai onboarding":    {"流れ", "最初の run で出るもの", "1 件ずつ片付ける", "ack・snooze・resolve の使い分け", "導入作業の記録を拾う", "定時の通知を始める"},
+		"ai logs":          {"使い方", "チェックと記録の対応", "記録ごとの集め方", "保存期間と費用", "設定の書き方", "確かめ方", "よく詰まる点", "外部の拠り所"},
+		"ai request_lines": {"使い方", "見本 (Rails の既定のログ)", "書き方の決まり", "鍵 (request.id) の書き方", "確かめ方", "送る側が選べる値", "数え方"},
+		"ai playbook":      {"使い方", "一覧"},
 	}
 	for _, tp := range Topics {
 		d := tp.Parse()
@@ -40,7 +41,7 @@ func TestSections(t *testing.T) {
 }
 
 func TestLookup(t *testing.T) {
-	for _, sub := range []string{"", "report", "approve", "runtime", "onboarding", "logs", "playbook", "playbook root_usage"} {
+	for _, sub := range []string{"", "report", "approve", "runtime", "onboarding", "logs", "request_lines", "playbook", "playbook root_usage"} {
 		if _, err := Lookup(sub); err != nil {
 			t.Fatal(err)
 		}

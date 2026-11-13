@@ -157,6 +157,27 @@ type FormatCoverage struct {
 	Code          string   `json:"code,omitempty"`
 	// Truncated は結果が行の上限 (10000) に当たった集計の名前 (件数は少なめ)。
 	Truncated []string `json:"truncated,omitempty"`
+	// Requests は request_lines 形式のソースの、リクエスト単位にまとめた結果 (ADR 0051)。それ以外の形式では出さない。
+	Requests *RequestCoverage `json:"requests,omitempty"`
+}
+
+// RequestCoverage は request_lines 形式のソースが行を request_id でまとめた結果。
+// complete_rate (complete / total。まとめられた割合) が expected 未満、または total が starts の半分未満 (鍵の取り違え) なら、
+// そのソースは FORMAT_MISMATCH (FormatCoverage.Code)。
+type RequestCoverage struct {
+	// Total は request_id の異なりの数。Complete はそのうち最初の行 (送信元とパス) のある数。
+	Total        int64    `json:"total"`
+	Complete     int64    `json:"complete"`
+	CompleteRate *float64 `json:"complete_rate"`
+	Expected     float64  `json:"expected"`
+	// WithStatus はステータスの取れた数。
+	WithStatus int64 `json:"with_status"`
+	// Starts は最初の行の数 (集計が数えるリクエストの数)。
+	Starts int64 `json:"starts"`
+	// Reused は最初の行が 2 つ以上ある request_id の数 (同じ ID の使い回し。項目が混ざる)。
+	Reused int64 `json:"request_id_reused"`
+	// StartsUntagged は request_id の付かない最初の行の数 (リクエストにまとめられず、どの集計にも入らない)。
+	StartsUntagged int64 `json:"starts_untagged"`
 }
 
 // SkippedCheck は走らなかったチェックと理由。

@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -30,6 +31,7 @@ const logsGuideSources = `
   - { id: waf, kind: cloudwatch-logs, log_group: aws-waf-logs-prod, format: wafv2 }
   - { id: app, kind: cloudwatch-logs, log_group: prod-app, format: json, fields: { ip: remote_ip, path: path } }
   - { id: app_re, kind: cloudwatch-logs, log_group: prod-app, format: regex, regex: '(?P<ip>\S+) (?P<path>\S+)' }
+  - { id: app_lines, kind: cloudwatch-logs, log_group: prod-app, format: request_lines, request: { id: '\[(?P<request_id>\S+)\] ', lines: [{ name: started, regex: '(?P<ip>\S+) (?P<path>\S+)' }] } }
   - { id: app_text, kind: cloudwatch-logs, log_group: prod-app, format: text }
 `
 
@@ -227,5 +229,52 @@ func TestDoctorLogsGuideHints(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("no match_rate row for the source without lines")
+	}
+}
+
+// TestRequestLinesGuide は arata help ai request_lines の見本が、そのまま読める設定で、見本の行をリクエストの鍵でまとめられることを確かめる。
+func TestRequestLinesGuide(t *testing.T) {
+	tp, err := ai.Lookup("request_lines")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := tp.Markdown()
+	_, rest, ok := strings.Cut(body, "```yaml\nsources:\n")
+	if !ok {
+		t.Fatal("見本の設定 (```yaml) が無い")
+	}
+	yml, _, _ := strings.Cut(rest, "```")
+	h := newHarnessWith(t, yml, "")
+	src := h.cfg.Sources[len(h.cfg.Sources)-1]
+	if src.Format != config.FormatRequestLines || src.Request == nil || len(src.Request.Lines) != 3 {
+		t.Fatalf("見本の設定: %+v", src)
+	}
+	// 雛形 (config init) とテストの見本と同じ鍵
+	if !strings.Contains(requestLinesSource, "id: '"+src.Request.ID+"'") {
+		t.Fatalf("見本の鍵がテストの設定と違う: %s", src.Request.ID)
+	}
+	_, rest, _ = strings.Cut(body, "```\n")
+	sample, _, _ := strings.Cut(rest, "```")
+	id := regexp.MustCompile(src.Request.ID)
+	lines := strings.Split(strings.TrimSpace(sample), "\n")
+	if len(lines) < 3 {
+		t.Fatalf("見本の行: %q", sample)
+	}
+	for _, l := range append(lines, "[5b0c1d2e-7a3f-4c1b-9e2d-0a1b2c3d4e5f] ActionController::RoutingError (No route matches [GET] \"/x\"):") {
+		if m := id.FindStringSubmatch(l); m == nil || m[1] != "5b0c1d2e-7a3f-4c1b-9e2d-0a1b2c3d4e5f" {
+			t.Errorf("見本の鍵が見本の行に当たらない: %q → %v", l, m)
+		}
+	}
+	if m := regexp.MustCompile(src.Request.Lines[0].Regex).FindStringSubmatch(lines[0]); m == nil {
+		t.Errorf("最初の行の正規表現が見本の行に当たらない: %q", lines[0])
+	}
+	// 顧客の情報を書かない: アカウント ID は架空の値だけ、メールアドレスは書かない
+	for _, n := range regexp.MustCompile(`\b\d{12}\b`).FindAllString(body, -1) {
+		if n != "123456789012" && n != "111122223333" {
+			t.Errorf("account id %s", n)
+		}
+	}
+	if m := regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`).FindString(body); m != "" {
+		t.Errorf("email address %q", m)
 	}
 }

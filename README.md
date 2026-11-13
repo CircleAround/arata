@@ -12,7 +12,7 @@ AWS のログと設定を定期的に改め、**前回から新しく発生し�
 
 ## 現在の実装範囲 (設計書 10 章の Step 1〜3)
 
-- ソース: `cloudtrail-lookup` (CloudTrail LookupEvents)、`cloudwatch-logs` (Logs Insights の集計クエリ。形式プロファイル `nginx_access` / `alb_access` / `wafv2` / `json` / `regex`、行を解釈しない `text`)、
+- ソース: `cloudtrail-lookup` (CloudTrail LookupEvents)、`cloudwatch-logs` (Logs Insights の集計クエリ。形式プロファイル `nginx_access` / `alb_access` / `wafv2` / `json` / `regex` / `request_lines`、行を解釈しない `text`)、
   アカウント単位の状態 `iam-credential-report` / `guardduty` / `access-analyzer` / `posture` / `waf-config` (WAFv2 の WebACL の設定)、
   `cloudtrail-unused-regions` (ふだん使わないリージョンの書き込み)、`cost-anomaly` (AWS Cost Anomaly Detection の異常)
 - チェック: `root_usage`, `unknown_assume_role`, `new_principal`, `iam_changes`, `access_denied`, `defense_evasion`, `public_exposure`, `principal_new_source`, `secret_access`, `unused_region_activity`, `cost_anomaly`, `login_bruteforce`, `probe_paths`, `endpoint_abuse`, `waf_block_trend`, `ai_path_usage` (daily)、

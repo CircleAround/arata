@@ -130,6 +130,34 @@ type FormatStats struct {
 	OutOfRange string
 	// Truncated は結果が行の上限 (10000) に当たった集計の名前 (件数は少なめ。run の stats に残す)。
 	Truncated []string
+	// Requests は request_lines 形式のリクエスト単位の集計 (ADR 0051)。それ以外の形式では nil。
+	Requests *RequestStats
+}
+
+// RequestStats は request_lines 形式のソースが、行を request_id でまとめた結果 (設計書 2-2)。
+type RequestStats struct {
+	// Total は request_id の異なりの数。
+	Total int64
+	// Complete は最初の行 (ip と path を取り出す行) のある request_id の数。Complete / Total が「まとめられた割合」。
+	Complete int64
+	// WithStatus はステータスの取れた request_id の数。
+	WithStatus int64
+	// Starts は最初の行の数 (集計が数えるリクエストの数。同じ request_id の使い回しで減らない)。
+	Starts int64
+	// Reused は最初の行が 2 つ以上ある request_id の数 (項目が混ざる)。
+	Reused int64
+	// StartsUntagged は request_id の付かない最初の行の数 (リクエストにまとめられず、どの集計にも入らない)。
+	StartsUntagged int64
+	// Expected は expected_complete_rate。
+	Expected float64
+}
+
+// CompleteRate は Complete / Total。Total が 0 なら ok=false。
+func (s RequestStats) CompleteRate() (rate float64, ok bool) {
+	if s.Total <= 0 {
+		return 0, false
+	}
+	return float64(s.Complete) / float64(s.Total), true
 }
 
 // AddTruncated は行の上限に当たった集計の名前を足す (同じ名前は 1 回)。

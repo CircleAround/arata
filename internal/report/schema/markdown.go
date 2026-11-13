@@ -76,6 +76,10 @@ func (r *Report) Markdown() string {
 				fmt.Fprintf(&b, "、行の上限に当たった集計 (件数は少なめ): %s", strings.Join(f.Truncated, ", "))
 			}
 			b.WriteString("\n")
+			if q := f.Requests; q != nil && q.CompleteRate != nil {
+				fmt.Fprintf(&b, "    - リクエスト単位: まとめられた割合 %.2f (%d/%d)、閾値 %.2f、ステータスあり %d、request_id の使い回し %d、タグの無い最初の行 %d\n",
+					*q.CompleteRate, q.Complete, q.Total, q.Expected, q.WithStatus, q.Reused, q.StartsUntagged)
+			}
 		}
 	}
 	fmt.Fprintf(&b, "- 実行したチェック: %s\n", orNone(r.Coverage.ChecksRun))

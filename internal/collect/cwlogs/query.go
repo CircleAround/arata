@@ -27,6 +27,9 @@ type MergedQuery struct {
 	Name    string
 	Query   string
 	Metrics []string // この結果から作る metric の名前 (truncated に残す名前)
+	// Bin は結果の行の「最初の行の時刻の区切り」の列 (request_lines だけ。空なら無い)。
+	// 区切りが範囲の終わり以降の行は、余白の中で始まったリクエストなので捨てる (request.go)。
+	Bin string
 }
 
 // http_access のまとめた集計の名前 (保存しない。クエリの列名)。
@@ -44,17 +47,31 @@ const (
 // HTTPLinesQuery は解釈率と probe_paths のクエリ。結果の列は day / status / probe_path / lines_total / lines_matched。
 func HTTPLinesQuery(p Profile, c config.Checks) string {
 	var b strings.Builder
-	b.WriteString(p.Prelude)
-	group := "day"
+	var marks []mark
+	group := ""
 	if pp := c.ProbePaths; len(pp.Paths) > 0 {
 		alts := make([]string, len(pp.Paths))
 		for i, s := range pp.Paths {
 			alts[i] = regexLiteral(s) + ".*"
 		}
-		b.WriteString("\n| parse path /^(?<probe_path>" + strings.Join(alts, "|") + ")/")
-		group += ", status, probe_path"
+		marks = append(marks, mark{"probe_path", func(name string) string { return "^(?<" + name + ">" + strings.Join(alts, "|") + ")" }})
+		group = ", status, probe_path"
 	}
-	b.WriteString("\n| stats count(*) as " + MetricLinesTotal + ", count(" + p.MatchField + ") as " + MetricLinesMatched + " by bin(1d) as " + group)
+	b.WriteString(p.head("1d", "day", "", marks, true, false))
+	if p.req != nil {
+		// request_lines: 1 段目の結果 (request_id ごとの 1 行) を、日・status・探索パス・最初の行の数で数える。
+		// 行数は 1 段目で数えた行数の和。行の種類ごとの当たった数も返す (doctor 用)
+		aggs := []string{"sum(" + rlLines + ") as " + MetricLinesTotal, "sum(" + rlTagged + ") as " + MetricLinesMatched, "count(*) as " + rlRequests}
+		for i := range p.req.kinds {
+			aggs = append(aggs, "sum("+kindCount(i)+") as "+kindTotal(i))
+		}
+		if group == "" && p.Has("status") {
+			group = ", status"
+		}
+		b.WriteString("\n| stats " + strings.Join(aggs, ", ") + " by day" + group + ", " + rlStarts)
+	} else {
+		b.WriteString("\n| stats count(*) as " + MetricLinesTotal + ", count(" + p.MatchField + ") as " + MetricLinesMatched + " by bin(1d) as day" + group)
+	}
 	b.WriteString("\n| sort " + MetricLinesTotal + " desc")
 	b.WriteString("\n| limit " + strconv.Itoa(MaxRows))
 	return b.String()
@@ -76,24 +93,26 @@ func HTTPHitsQuery(p Profile, c config.Checks) string {
 		probe = and(probe, "path not like /^("+prefixAlternation(pp.ExcludePaths)+")/")
 	}
 	var b strings.Builder
-	b.WriteString(p.Prelude)
+	cond := ""
 	if signIn != "" && probe != "" {
-		b.WriteString("\n| filter (" + signIn + ") or (" + probe + ")")
+		cond = "(" + signIn + ") or (" + probe + ")"
 	}
-	group := "day, ip, method, status"
+	var marks []mark
+	group := ", ip, method, status"
 	if len(lb.Paths) > 0 {
-		b.WriteString("\n| parse path /^(?<sign_in>" + prefixAlternation(lb.Paths) + ")$/")
+		marks = append(marks, mark{"sign_in", func(name string) string { return "^(?<" + name + ">" + prefixAlternation(lb.Paths) + ")$" }})
 		group += ", sign_in"
 	}
 	if len(pp.Paths) > 0 {
-		b.WriteString("\n| parse path /^(?<probe>" + prefixAlternation(pp.Paths) + ")/")
+		marks = append(marks, mark{"probe", func(name string) string { return "^(?<" + name + ">" + prefixAlternation(pp.Paths) + ")" }})
 		group += ", probe"
 	}
 	if len(pp.ExcludePaths) > 0 {
-		b.WriteString("\n| parse path /^(?<probe_ex>" + prefixAlternation(pp.ExcludePaths) + ")/")
+		marks = append(marks, mark{"probe_ex", func(name string) string { return "^(?<" + name + ">" + prefixAlternation(pp.ExcludePaths) + ")" }})
 		group += ", probe_ex"
 	}
-	b.WriteString("\n| stats count(*) as " + httpHits + " by bin(1d) as " + group)
+	b.WriteString(p.head("1d", "day", cond, marks, false, false))
+	b.WriteString("\n| stats " + p.count() + " as " + httpHits + " by " + p.binBy("1d", "day") + group)
 	b.WriteString("\n| sort " + httpHits + " desc")
 	b.WriteString("\n| limit " + strconv.Itoa(MaxRows))
 	return b.String()
