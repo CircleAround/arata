@@ -71,3 +71,4 @@
 | [0045](0045-init-requires-audit-account.md) | `config init` は監査する側のアカウントを必ず選ばせ、選んだ結果を設定と既知リストに残す | 採用 |
 | [0046](0046-alb-access-logs.md) | ALB のアクセスログは CloudWatch Logs への配信 (plain) を既存の `alb_access` で読み、S3 を直接読む案は次の段にする (Athena・S3 Select との比較) | 提案 |
 | [0047](0047-known-assume-destinations.md) | 外向きの引き受けは、行き先として既知のアカウントへの MFA ありのものだけ報告しない (`assume_destinations`) | 採用 |
+| [0048](0048-posture-alb-waf.md) | posture は、インターネット向けの ALB に WAFv2 の WebACL が付いていないことを報告する (読み取りの権限を 2 つ足す) | 採用 |

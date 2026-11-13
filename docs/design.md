@@ -110,7 +110,7 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
   - id: access_analyzer
     kind: access-analyzer         # ACTIVE なアナライザーの ACTIVE な findings → access_analyzer
   - id: posture
-    kind: posture                 # CloudTrail 証跡・GuardDuty 有効・ルート MFA・S3 Public Access Block・パスワードポリシー → posture_item
+    kind: posture                 # CloudTrail 証跡・GuardDuty 有効・ルート MFA・S3 Public Access Block・パスワードポリシー・インターネット向けの ALB の WebACL → posture_item
 ```
 
 - 取ったものは `record.SnapshotItem` として `snapshot_items` に保存し、**収集が成功したときだけ (kind, source) 単位で丸ごと置き換える** (5-2)。
@@ -118,6 +118,10 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
 - GuardDuty が無効 (detector が無い / 停止中)、アナライザーが無いときは、収集は成功として「その種類は取れない」理由を返し、チェックを skip して
   `coverage.checks_skipped` に理由を出す。GuardDuty が無効であることは posture が finding として報告する。
 - posture は一部の API だけ拒否されても他の項目を取る。取れなかった項目は `unknown` で保存し、`coverage.sources_failed` に `partial: true` と `action`、終了コード 3。
+- 決定 (ADR 0048): posture は、ソースの `regions` の各リージョンで、インターネット向け (Scheme = internet-facing) の Application Load Balancer に
+  WAFv2 の WebACL が付いているかを見る (`elasticloadbalancing:DescribeLoadBalancers` と、ALB ごとの `wafv2:GetWebACLForResource`。どちらも読み取り)。
+  項目はリージョンごとに 1 つ (`alb_waf|<region>`。WebACL の無い ALB の名前と ARN だけを持つ)。internal の ALB、NLB・GWLB、CloudFront、API Gateway は見ない。
+  一覧か WebACL の確認が失敗したリージョンは取れなかったことにし、そのリージョンの前回の finding を維持する。
 - `iam:GenerateCredentialReport` は書き込み系 (レポートの生成のみ)。拒否されても 4 時間以内に生成済みのレポートがあれば使い、生成時刻を Data に残す。
 - `regions` の既定は aws.region だけ。`ingest_delay` は使わない (窓に依らないため)。
 
@@ -797,7 +801,7 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 | ai_path_usage | daily | principal_seen (決定: trail_event ではなく主体 × IP の観測を使う) | allowlist の `tags: [ai]` を持つ主体の利用を主体 × IP で常に 1 行 (info) | info |
 | credential_hygiene | weekly | iam_credential_report | 未使用キー 90 日超、MFA 無し、ルートのアクセスキー の増減 (決定: 古いパスワードは後続) | medium (ルートのキーは high) |
 | access_analyzer | weekly | access_analyzer | ACTIVE な finding の増減 | medium (公開は high) |
-| posture (決定: posture_* ではなく 1 チェックで項目ごとに finding) | weekly | posture_item | CloudTrail 有効・検証 ON、GuardDuty 有効、ルート MFA、S3 Public Access Block、パスワードポリシー | high (検証とパスワードポリシーは medium) |
+| posture (決定: posture_* ではなく 1 チェックで項目ごとに finding) | weekly | posture_item | CloudTrail 有効・検証 ON、GuardDuty 有効、ルート MFA、S3 Public Access Block、パスワードポリシー、インターネット向けの ALB の WebACL | high (検証・パスワードポリシー・ALB の WebACL は medium) |
 | waf_review | weekly | waf_config (+ 保存済みの waf_action の日次集計) | WAF の修正提案の候補を report.json の `proposals` に (finding ではない)。決定: ADR 0023 | 正規の画面での多数の IP の BLOCK だけ low |
 | allowlist_stale | quarterly (report) | principals | 90 日未観測の approved 主体 | info |
 
@@ -955,7 +959,7 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 |---|---|---|---|---|
 | credential_hygiene | state | `unused_key\|<user>\|<n>` / `no_mfa\|<user>` / `root_access_key\|<n>` | 重大度 + ユーザー (+ キー番号) | 有効なアクセスキーの最終使用 (使われていなければ作成・ローテーション) から `checks.credential_hygiene.unused_days` (既定 90) 日超 / パスワード有効で MFA 無し / ルートに有効なキー。経過日数は Data |
 | guardduty_findings | state | finding ID | 重大度 + count | アーカイブされていない finding。GuardDuty の重大度 7 以上 → high、4 以上 → medium、他は low。count の増加は changed |
-| posture | state | `cloudtrail_logging` / `cloudtrail_log_validation` / `guardduty_enabled\|<region>` / `root_mfa` / `s3_public_access_block` / `password_policy` | 重大度 + 問題の中身 (無効な項目・最小文字数など) | 記録中のマルチリージョン証跡が無い (high)、ログファイル検証が無効な証跡 (medium)、GuardDuty 無効 (high)、ルート MFA 無し (high)、PAB 未設定 / 無効な項目 (high)、パスワードポリシー未設定 / 最小文字数 < `checks.posture.min_password_length` (既定 14) (medium)。取れなかった項目は前回の finding を維持 |
+| posture | state | `cloudtrail_logging` / `cloudtrail_log_validation` / `guardduty_enabled\|<region>` / `root_mfa` / `s3_public_access_block` / `password_policy` / `alb_waf\|<region>\|<ALB の名前>` | 重大度 + 問題の中身 (無効な項目・最小文字数など) | 記録中のマルチリージョン証跡が無い (high)、ログファイル検証が無効な証跡 (medium)、GuardDuty 無効 (high)、ルート MFA 無し (high)、PAB 未設定 / 無効な項目 (high)、パスワードポリシー未設定 / 最小文字数 < `checks.posture.min_password_length` (既定 14) (medium)、インターネット向けの ALB に WAFv2 の WebACL が付いていない (medium。ALB ごと。Data は region・name・arn。決定 (ADR 0048): 最低限の防御として推奨するが、無くても直ちに侵害の兆候ではないので medium)。取れなかった項目は前回の finding を維持 (ALB はリージョン単位) |
 | access_analyzer | state | finding ID | 重大度 + リソース + 許可先 + action | ACTIVE な外部アクセスのアナライザーの ACTIVE な finding。公開は high、他は medium |
 | ai_path_usage | event | `<ARN>\|<ip>` | info + IP | allowlist の `tags: [ai]` を持つ承認済みの主体で、principal_ips.last_seen が窓内の組を毎回 info に 1 行 (件数は累計) |
 
@@ -1050,7 +1054,8 @@ arata rebuild   [--from-scratch [--baseline]] [--format text|json]   # raw JSONL
 - 決定 (Step 3): アカウント単位のソースは、collector の読み取り API を 1 回ずつ試して action ごとに permission 行を出す (拒否は ng / ACCESS_DENIED)。
   必要な action: iam-credential-report = `iam:GenerateCredentialReport` (書き込み系。doctor では試さない)・`iam:GetCredentialReport`、
   guardduty = `guardduty:ListDetectors`・`ListFindings`・`GetFindings`、access-analyzer = `access-analyzer:ListAnalyzers`・`ListFindings`、
-  posture = `cloudtrail:DescribeTrails`・`GetTrailStatus`、`guardduty:ListDetectors`・`GetDetector`、`iam:GetAccountSummary`・`GetAccountPasswordPolicy`、`s3:GetAccountPublicAccessBlock`、
+  posture = `cloudtrail:DescribeTrails`・`GetTrailStatus`、`guardduty:ListDetectors`・`GetDetector`、`iam:GetAccountSummary`・`GetAccountPasswordPolicy`、`s3:GetAccountPublicAccessBlock`、`elasticloadbalancing:DescribeLoadBalancers`・`wafv2:GetWebACLForResource`
+  (ADR 0048。インターネット向けの ALB が無ければ GetWebACLForResource は試せないので「未確認」と出す)、
   waf-config = `wafv2:ListWebACLs`・`GetWebACL`・`GetLoggingConfiguration`・`ListResourcesForWebACL` (決定: ADR 0023。WebACL があれば最初の 1 つで残りを試す)、
   cloudtrail-unused-regions = `account:ListRegions`・`cloudtrail:LookupEvents` (有効なリージョンの数と対象のリージョンを出し、対象の各リージョンで 1 件だけ引く。`cost` の行は「無料」)、
   cost-anomaly = `ce:GetAnomalyMonitors`・`ce:GetAnomalies` (モニターが無ければ warn。`cost` の行に Cost Explorer の API の 1 日・30 日の見込み。ADR 0032)。

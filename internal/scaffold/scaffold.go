@@ -38,7 +38,7 @@ var Descriptions = map[string]string{ // #nosec G101 -- 設定の説明文の表
 	"ai_path_usage":          "allowlist で tags: [ai] の主体の利用を主体 × 送信元 IP で毎回 1 行 (info。自己監査)",
 	"credential_hygiene":     "未使用のアクセスキー・MFA 無しのコンソールユーザー・ルートのアクセスキー (medium / high)",
 	"guardduty_findings":     "GuardDuty の findings。新規と件数の増加 (重大度は GuardDuty 準拠)",
-	"posture":                "CloudTrail 証跡と検証・GuardDuty 有効・ルート MFA・S3 Public Access Block・パスワードポリシー (high / medium)",
+	"posture":                "CloudTrail 証跡と検証・GuardDuty 有効・ルート MFA・S3 Public Access Block・パスワードポリシー・インターネット向けの ALB の WAF (high / medium)",
 	"access_analyzer":        "IAM Access Analyzer の外部アクセス findings (公開は high、他は medium)",
 	"waf_review":             "WAF の修正提案の候補を report.json の proposals に (正規の画面での大量 BLOCK は low の finding にも)",
 }
@@ -210,7 +210,7 @@ func Generate(reg *checks.Registry, auditAccount string) []byte {
 	w("  - id: access_analyzer\n")
 	cm("    kind: "+config.KindAccessAnalyzer, "→ access_analyzer。アナライザーが無ければ skip")
 	w("  - id: posture\n")
-	cm("    kind: "+config.KindPosture, "→ posture (CloudTrail・GuardDuty・ルート MFA・S3・パスワードポリシー)")
+	cm("    kind: "+config.KindPosture, "→ posture (CloudTrail・GuardDuty・ルート MFA・S3・パスワードポリシー・ALB の WAF)")
 	w("  # - id: waf_config\n")
 	cm("  #   kind: "+config.KindWAFConfig, "WebACL の設定 → waf_review (下の wafv2 のソースも要る)。REGIONAL は regions、CLOUDFRONT は us-east-1")
 	w(`

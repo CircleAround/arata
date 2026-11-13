@@ -8,6 +8,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	cttypes "github.com/aws/aws-sdk-go-v2/service/cloudtrail/types"
+	elbtypes "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2/types"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3control/types"
 
@@ -157,7 +158,7 @@ func TestPosture(t *testing.T) {
 		t.Fatalf("%v %v", err, c.Problems())
 	}
 	m := s.byKey()
-	if len(m) != 6 {
+	if len(m) != 8 { // + alb_waf をリージョンごとに
 		t.Fatalf("items: %v", m)
 	}
 	if ct := m[account.PostureCloudTrail]; !ct.Bool("multi_region_logging") || len(ct.Data["without_validation"].([]string)) != 1 {
@@ -185,6 +186,90 @@ func TestPosture(t *testing.T) {
 	}
 	if strings.Join(actions, ",") != "ACCESS_DENIED:guardduty:GetDetector,ACCESS_DENIED:guardduty:GetDetector,ACCESS_DENIED:s3:GetAccountPublicAccessBlock" {
 		t.Fatalf("problems: %v", actions)
+	}
+}
+
+// インターネット向けの ALB に WebACL が付いているか (ADR 0048)。internal と NLB は見ない。
+func TestPostureALBWAF(t *testing.T) {
+	const tokyo, virginia = "ap-northeast-1", "us-east-1"
+	web, api, admin := accounttest.ALB(tokyo, "prod-web", elbtypes.LoadBalancerSchemeEnumInternetFacing), accounttest.ALB(tokyo, "prod-api", elbtypes.LoadBalancerSchemeEnumInternetFacing),
+		accounttest.ALB(tokyo, "prod-admin", elbtypes.LoadBalancerSchemeEnumInternal)
+	nlb := accounttest.ALB(tokyo, "prod-tcp", elbtypes.LoadBalancerSchemeEnumInternetFacing)
+	nlb.Type = elbtypes.LoadBalancerTypeEnumNetwork
+	f := &accounttest.Fake{AccountSummary: map[string]int32{},
+		LoadBalancers: map[string][]elbtypes.LoadBalancer{tokyo: {web, admin, nlb, api}},
+		ALBWebACLs:    map[string]string{aws.ToString(web.LoadBalancerArn): "arn:aws:wafv2:ap-northeast-1:123456789012:regional/webacl/prod/a1"}}
+	c := account.NewPosture("posture", f.Clients(tokyo), f.Clients(virginia))
+	s, err := collectWith(t, c)
+	if err != nil || len(c.Problems()) != 0 {
+		t.Fatalf("%v %v", err, c.Problems())
+	}
+	m := s.byKey()
+	it := m["alb_waf|"+tokyo]
+	bare := it.Data["without_waf"].([]any)
+	if it.Number("internet_facing") != 2 || len(bare) != 1 || bare[0].(map[string]any)["name"] != "prod-api" ||
+		bare[0].(map[string]any)["arn"] != aws.ToString(api.LoadBalancerArn) || it.String("region") != tokyo {
+		t.Fatalf("tokyo: %+v", it)
+	}
+	if v := m["alb_waf|"+virginia]; account.IsUnknown(v) || v.Number("internet_facing") != 0 || len(v.Data["without_waf"].([]any)) != 0 {
+		t.Fatalf("virginia: %+v", v)
+	}
+	// internal と NLB には GetWebACLForResource を呼ばない
+	if n := f.Called(account.ActionGetWebACLForResource); n != 2 {
+		t.Fatalf("GetWebACLForResource: %d 回 (%v)", n, f.Calls)
+	}
+	// 一覧と WebACL の確認の間に ALB が消えた (WAFNonexistentItemException) → その ALB は数えない (取れなかった扱いにしない)
+	f.Errs = map[string]error{account.ActionGetWebACLForResource: accounttest.APIError{Code: "WAFNonexistentItemException"}}
+	s, _ = collectWith(t, c)
+	if it := s.byKey()["alb_waf|"+tokyo]; account.IsUnknown(it) || it.Number("internet_facing") != 0 || len(c.Problems()) != 0 {
+		t.Fatalf("gone: %+v %v", it, c.Problems())
+	}
+	// 権限が無い → そのリージョンは unknown (ALB が無いリージョンは GetWebACLForResource を呼ばないので取れる)。他の項目は取る
+	for _, action := range []string{account.ActionDescribeLoadBalancers, account.ActionGetWebACLForResource} {
+		f.Errs = map[string]error{action: accounttest.Denied}
+		s, err = collectWith(t, c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m = s.byKey()
+		if it := m["alb_waf|"+tokyo]; !account.IsUnknown(it) || it.String("action") != action || account.IsUnknown(m[account.PostureRootMFA]) {
+			t.Fatalf("%s: %+v", action, m)
+		}
+		if len(c.Problems()) == 0 || c.Problems()[0].Action != action || c.Problems()[0].Code != collect.CodeAccessDenied {
+			t.Fatalf("%s: problems %v", action, c.Problems())
+		}
+	}
+}
+
+func TestProbeALBWAF(t *testing.T) {
+	detail := func(f *accounttest.Fake) map[string]string {
+		got := map[string]string{}
+		for _, r := range account.NewPosture("posture", f.Clients("ap-northeast-1")).Probe(context.Background()) {
+			v := "ok"
+			if r.Err != nil {
+				v = collect.Classify("", "", r.Err).Code
+			}
+			got[r.Action] = v + " " + r.Detail
+		}
+		return got
+	}
+	// インターネット向けの ALB が無いと GetWebACLForResource は試せない (未確認と出す)
+	got := detail(&accounttest.Fake{AccountSummary: map[string]int32{}})
+	if got[account.ActionDescribeLoadBalancers] != "ok " || got[account.ActionGetWebACLForResource] != "ok インターネット向けの ALB が無いため未確認" {
+		t.Fatalf("%v", got)
+	}
+	f := &accounttest.Fake{AccountSummary: map[string]int32{}, LoadBalancers: map[string][]elbtypes.LoadBalancer{
+		"ap-northeast-1": {accounttest.ALB("ap-northeast-1", "prod-web", elbtypes.LoadBalancerSchemeEnumInternetFacing)}}}
+	if got := detail(f); got[account.ActionGetWebACLForResource] != "ok " {
+		t.Fatalf("%v", got)
+	}
+	f.Errs = map[string]error{account.ActionGetWebACLForResource: accounttest.Denied}
+	if got := detail(f); got[account.ActionGetWebACLForResource] != "ACCESS_DENIED " {
+		t.Fatalf("%v", got)
+	}
+	f.Errs = map[string]error{account.ActionDescribeLoadBalancers: accounttest.Denied}
+	if got := detail(f); got[account.ActionDescribeLoadBalancers] != "ACCESS_DENIED " || got[account.ActionGetWebACLForResource] != "ok elasticloadbalancing:DescribeLoadBalancers が拒否されたため未確認" {
+		t.Fatalf("%v", got)
 	}
 }
 

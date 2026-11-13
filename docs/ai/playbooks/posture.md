@@ -12,6 +12,7 @@
 | `guardduty_enabled\|<region>` | そのリージョンで GuardDuty が有効でない | high |
 | `root_mfa` | ルートユーザーに MFA が無い | high |
 | `s3_public_access_block` | アカウント単位の S3 Public Access Block が未設定か、4 項目のどれかが無効 | high |
+| `alb_waf\|<region>\|<ALB>` | インターネット向けの ALB に WAF (WAFv2 の WebACL) が付いていない (ALB ごと。internal は対象外) | medium |
 | `password_policy` | IAM のパスワードポリシーが未設定か、最小文字数が `min_password_length` (既定 14) 未満 | medium |
 
 ## まず確かめること
@@ -25,6 +26,8 @@
    - ルートの MFA: `aws iam get-account-summary` の `AccountMFAEnabled`
    - S3: `aws s3control get-public-access-block --account-id 123456789012`
    - パスワードポリシー: `aws iam get-account-password-policy` (未設定なら NoSuchEntity)
+   - ALB の WAF: `aws wafv2 get-web-acl-for-resource --resource-arn <data.arn> --region <region>` (WebACL が無ければ `WebACL` が返らない)。
+     前は付いていたなら CloudTrail で `DisassociateWebACL`・`DeleteWebACL` を探す。Scheme と用途は `aws elbv2 describe-load-balancers --names <ALB>`
 3. `coverage.sources_failed` に `partial: true` があれば、どの項目が取れていないか (`action` の権限) を確かめる。取れていない項目は今の状態が分からない
 4. `arata review --format json` で、同じ時期の root_usage・iam_changes・access_denied を探す (守りを外した主体の手がかり)
 5. S3 の Public Access Block を有効にする前に、意図して公開しているバケットが無いかを確かめる (静的サイトは CloudFront の OAC で非公開のまま配信できる)
@@ -32,6 +35,8 @@
 ## 判断の分かれ目
 
 - **前からある欠け**: 設定の不備。計画して直す (緊急ではないことが多い)
+- **ALB の WAF**: WAF は最低限の防御として勧めるが、無いこと自体は侵害の兆候ではない (medium)。前から無いなら計画して付ける。
+  送信元をセキュリティグループで固定の相手に絞っている、前段の CloudFront に WebACL がある (ALB は CloudFront からだけ受ける) なら、理由を記録して ack
 - **要対応**: 急に悪くなった項目 (特に CloudTrail の停止・GuardDuty の無効化)。侵入者が最初に行う「監査の無効化」の疑いとして扱い、同じ時期の他の finding を探す
 
 ## 対処の選択肢
@@ -44,10 +49,13 @@
 4. **ack / snooze**: 直す予定の日が決まっていれば snooze。意図して外している (例: 使わないリージョンを SCP で止めていて GuardDuty を入れない) なら理由を記録して ack
 5. **設定の修正**: マルチリージョンの証跡を作る (`--is-multi-region-trail`)、ログファイルの検証を有効にする (`--enable-log-file-validation`)、
    GuardDuty を有効にする、ルートに MFA を付ける、S3 の Public Access Block の 4 項目を有効にする、パスワードポリシーを設定する
-   (`aws iam update-account-password-policy --minimum-password-length 14` など)。可能なら IaC で
+   (`aws iam update-account-password-policy --minimum-password-length 14` など)。可能なら IaC で。
+   ALB の WAF は、REGIONAL の WebACL を作って ALB に関連付ける (`aws wafv2 associate-web-acl`)。**マネージドルールはまず COUNT で入れ**、
+   WAF のログで誤検知が無いことを確かめてから BLOCK に変える。ログを CloudWatch Logs に出せば waf_block_trend・waf_review でも見られる
 
 ## やってはいけないこと
 
 - 取れなかった項目 (`partial`) を「問題なし」と書かない
 - 公開しているバケットを確かめずに Public Access Block の有効化を勧めない (配信が止まる)
+- WebACL をいきなり BLOCK で付けることを勧めない (正規のリクエストが止まる)。前段の守りを確かめずに「無防備」と断定しない
 - LLM が設定を変更しない

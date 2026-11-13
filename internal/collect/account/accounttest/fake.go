@@ -17,6 +17,8 @@ import (
 	cttypes "github.com/aws/aws-sdk-go-v2/service/cloudtrail/types"
 	ce "github.com/aws/aws-sdk-go-v2/service/costexplorer"
 	cetypes "github.com/aws/aws-sdk-go-v2/service/costexplorer/types"
+	elbv2 "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2"
+	elbtypes "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2/types"
 	gd "github.com/aws/aws-sdk-go-v2/service/guardduty"
 	gdtypes "github.com/aws/aws-sdk-go-v2/service/guardduty/types"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
@@ -86,6 +88,10 @@ type Fake struct {
 	// WAF は WAFv2 の WebACL (nil なら WebACL が無い)。
 	WAF *WAF
 
+	// LoadBalancers はリージョン → ロードバランサー、ALBWebACLs は ALB の ARN → 付いている WebACL の ARN (無ければ WebACL 無し)。
+	LoadBalancers map[string][]elbtypes.LoadBalancer
+	ALBWebACLs    map[string]string
+
 	// Regions はアカウントのリージョンと opt-in の状態 (account:ListRegions)。
 	Regions map[string]acctypes.RegionOptStatus
 
@@ -98,7 +104,7 @@ type Fake struct {
 // Clients は region のクライアントの束を返す (全部このフェイク)。
 func (f *Fake) Clients(region string) account.Clients {
 	return account.Clients{Region: region, IAM: f, GuardDuty: gdFake{f}, AccessAnalyzer: aaFake{f}, CloudTrail: f, S3Control: f, STS: f, WAFV2: wafFake{f, region},
-		Account: f, CostExplorer: f}
+		ELBV2: elbFake{f, region}, Account: f, CostExplorer: f}
 }
 
 // --- Account Management ---
@@ -480,6 +486,50 @@ func (f wafFake) ListResourcesForWebACL(_ context.Context, in *wafv2.ListResourc
 		return nil, err
 	}
 	return &wafv2.ListResourcesForWebACLOutput{ResourceArns: f.WAF.Resources[aws.ToString(in.WebACLArn)][in.ResourceType]}, nil
+}
+
+func (f wafFake) GetWebACLForResource(_ context.Context, in *wafv2.GetWebACLForResourceInput, _ ...func(*wafv2.Options)) (*wafv2.GetWebACLForResourceOutput, error) {
+	if err := f.call(account.ActionGetWebACLForResource); err != nil {
+		return nil, err
+	}
+	arn, ok := f.ALBWebACLs[aws.ToString(in.ResourceArn)]
+	if !ok {
+		return &wafv2.GetWebACLForResourceOutput{}, nil // WebACL が無ければ WebACL は nil (エラーではない)
+	}
+	return &wafv2.GetWebACLForResourceOutput{WebACL: &waftypes.WebACL{ARN: aws.String(arn)}}, nil
+}
+
+// --- Elastic Load Balancing v2 ---
+
+type elbFake struct {
+	*Fake
+	region string
+}
+
+// DescribeLoadBalancers は 1 ページ 1 件にしてページ送りを確かめる。
+func (f elbFake) DescribeLoadBalancers(_ context.Context, in *elbv2.DescribeLoadBalancersInput, _ ...func(*elbv2.Options)) (*elbv2.DescribeLoadBalancersOutput, error) {
+	if err := f.call(account.ActionDescribeLoadBalancers); err != nil {
+		return nil, err
+	}
+	lbs := f.LoadBalancers[f.region]
+	start := 0
+	if in.Marker != nil {
+		fmt.Sscan(*in.Marker, &start)
+	}
+	out := &elbv2.DescribeLoadBalancersOutput{}
+	if start < len(lbs) {
+		out.LoadBalancers = lbs[start : start+1]
+	}
+	if start+1 < len(lbs) {
+		out.NextMarker = aws.String(fmt.Sprint(start + 1))
+	}
+	return out, nil
+}
+
+// ALB は Application Load Balancer のフェイク。ARN は region と名前から作る。
+func ALB(region, name string, scheme elbtypes.LoadBalancerSchemeEnum) elbtypes.LoadBalancer {
+	return elbtypes.LoadBalancer{LoadBalancerName: aws.String(name), Scheme: scheme, Type: elbtypes.LoadBalancerTypeEnumApplication,
+		LoadBalancerArn: aws.String("arn:aws:elasticloadbalancing:" + region + ":123456789012:loadbalancer/app/" + name + "/50dc6c495c0c9188")}
 }
 
 // WebACL は WebACL のフェイク。ARN は region と scope から作る。

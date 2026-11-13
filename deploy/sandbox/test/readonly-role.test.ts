@@ -17,6 +17,7 @@ const EXPECTED_ACTIONS = [
   'cloudtrail:DescribeTrails',
   'cloudtrail:GetTrailStatus',
   'cloudtrail:LookupEvents',
+  'elasticloadbalancing:DescribeLoadBalancers',
   'guardduty:GetDetector',
   'guardduty:GetFindings',
   'guardduty:ListDetectors',
@@ -32,6 +33,7 @@ const EXPECTED_ACTIONS = [
   's3:GetAccountPublicAccessBlock',
   'wafv2:GetLoggingConfiguration',
   'wafv2:GetWebACL',
+  'wafv2:GetWebACLForResource',
   'wafv2:ListResourcesForWebACL',
   'wafv2:ListWebACLs',
 ];
