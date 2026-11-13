@@ -95,6 +95,11 @@ type Source struct {
 	Resources []string `yaml:"resources"`
 	// MaxScanGB は 1 回の収集でこのソースが Insights でスキャンしてよい量 (GB)。0 なら無制限。超えたら QUERY_LIMIT。
 	MaxScanGB float64 `yaml:"max_scan_gb"`
+	// Request は request_lines 形式のまとめ方 (request.go、ADR 0051)。request_lines のときだけ。
+	Request *Request `yaml:"request"`
+	// ExpectedCompleteRate は request_lines の「まとめられた割合」(最初の行のあるリクエスト / request_id の数) の閾値 (既定 0.8)。下回ると FORMAT_MISMATCH。
+	ExpectedCompleteRate    float64  `yaml:"-"`
+	ExpectedCompleteRateRaw *float64 `yaml:"expected_complete_rate"`
 	// IngestDelay はイベントが起きてから取得できるようになるまでの遅延の見込み。収集は [From - IngestDelay, To) を引き、
 	// 前回の窓の末尾に起きて遅れて記録されたイベントを拾う (設計書 3 章、ADR 0013)。既定は kind ごと (DefaultIngestDelay)。0 で再走査しない。
 	IngestDelay    time.Duration `yaml:"-"`
@@ -238,6 +243,9 @@ func (c *Config) applyDefaults() error {
 		s.Regions = dedup(s.Regions)
 		if s.Kind == KindCloudWatchLogs {
 			s.applyLogsDefaults()
+			if err := s.applyRequestDefaults(); err != nil {
+				return fmt.Errorf("config: source %s: %w", s.ID, err)
+			}
 		}
 		s.IngestDelay = DefaultIngestDelay[s.Kind]
 		if s.IngestDelayRaw != "" {

@@ -29,6 +29,8 @@ var formatYields = map[string][]string{
 	FormatWAFv2:       {YieldsWAFAction},
 	FormatJSON:        {YieldsHTTPAccess},
 	FormatRegex:       {YieldsHTTPAccess},
+	// request_lines は request.go (ADR 0051)
+	FormatRequestLines: {YieldsHTTPAccess},
 }
 
 // RequiredFields は正規化レコードごとの必須フィールド。json の fields と regex の名前付きキャプチャはこれを含む必要がある。
@@ -97,6 +99,9 @@ func (s *Source) validateLogs() error {
 	}
 	if s.Format != FormatJSON && len(s.Fields) > 0 {
 		return fmt.Errorf("fields is only for format json")
+	}
+	if err := s.validateRequest(); err != nil {
+		return err
 	}
 	if s.StripPathPrefix != "" {
 		if s.Format != FormatWAFv2 {
