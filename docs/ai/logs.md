@@ -36,8 +36,8 @@ arata のチェックは、設定の `sources` に書いた記録からしか動
 - **CloudTrail**: `cloudtrail-lookup` は LookupEvents (イベント履歴) を読むので、証跡も CloudWatch Logs への配信も**無くても動く**。
   ただし遡れるのは 90 日の管理イベントだけで、消せない原本にはならない。証跡 (全リージョン・ログファイルの検証) は別に作る (無ければ posture が `cloudtrail_logging` を指摘する)
 - **ALB**: アプリにもサーバーにも触れずに `http_access` が取れる。ALB の **Integrations タブ**から、アクセスログを CloudWatch Logs へ配信する
-  (従来のアクセスログの設定 = Attributes タブの S3 への出力とは別の仕組み)。**形式は plain、項目は既定 (全部)、区切りは空白**にし、`format: alb_access` で読む。
-  項目を選ぶ・区切りを変える・json にすると合わない。plain の行の細部は環境で確かめ切れていないので、必ず doctor の解釈率で確かめる。
+  (従来のアクセスログの設定 = Attributes タブの S3 への出力とは別の仕組み)。**形式は plain、項目は既定 (全部)** にし、`format: alb_access` で読む。
+  これが動作を確かめた形 (実環境で解釈率は約 0.96)。ほかの形 (json、項目の変更、区切りの変更) は未確認なので、変えるなら doctor の解釈率で確かめる。
   ALB の前に CloudFront などのプロキシがあると送信元がプロキシの IP になり、IP ごとの判定はできない
 - **WAF (WAFv2)**: WebACL のログの宛先を CloudWatch Logs にする。ロググループ名は **`aws-waf-logs-` で始める** (AWS の決まり。それ以外は宛先に選べない)。`format: wafv2`。
   量が多いので `max_scan_gb` を**必ず**書く (下の「保存期間と費用」)

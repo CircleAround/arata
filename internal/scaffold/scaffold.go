@@ -47,7 +47,7 @@ var Descriptions = map[string]string{ // #nosec G101 -- 設定の説明文の表
 var paramComments = map[string]string{ // #nosec G101 -- 設定の説明文の表で、秘密の値は含まない
 	"login_bruteforce.paths":                      "sign-in の送信先。前方一致ではなく完全一致 (クエリ文字列は除いて比べる)。Devise のスコープ付きパス (/admin/users/sign_in など) は実際のパスに合わせる。集計条件なので overrides では変えられない",
 	"login_bruteforce.methods":                    "sign-in 試行とみなす HTTP メソッド",
-	"login_bruteforce.failure_statuses":           "失敗とみなすステータス (Devise の再表示は 401 / 422、成功は 302 / 303)",
+	"login_bruteforce.failure_statuses":           "失敗とみなすステータス (Devise の再表示は、生成された initializer の既定なら 422、古い initializer のままなら 200。arata help ai logs の「よく詰まる点」。成功は 302 / 303)",
 	"login_bruteforce.baseline_days":              "平常帯 = その IP 自身の直近 baseline_days 日の中央値 × factor",
 	"login_bruteforce.factor":                     "平常帯の倍率",
 	"login_bruteforce.min_count":                  "平常帯の下限 (中央値 0 の IP もこの件数までは鳴らさない)",
