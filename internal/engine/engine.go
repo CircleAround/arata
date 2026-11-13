@@ -506,12 +506,27 @@ func (e *Engine) Collect(ctx context.Context, w collect.Window, o CollectOptions
 		if len(want) > 0 && !want[src.ID] {
 			continue
 		}
-		if len(o.Needs) > 0 && !anyNeeded(kindsOf(src), o.Needs) {
+		if len(o.Needs) > 0 && !anyNeeded(kindsOf(e.cfg, src), o.Needs) {
+			continue
+		}
+		if len(o.Needs) == 0 && len(formatKinds(src)) == 0 && src.Kind == config.KindCloudWatchLogs {
+			// 決定 (ADR 0050): 種類を絞らない収集 (collect・init) は log_hygiene を流さない。format: text のソースには他に引くものが無い
+			e.log.Debug("source is read only by log_hygiene in a run of a profile that has it; skipping", "source", src.ID)
 			continue
 		}
 		res.attempted[src.ID] = true
 		c, err := e.collector(ctx, src)
 		if err == nil {
+			if lc, ok := c.(*cwlogs.Collector); ok {
+				if len(o.Needs) > 0 {
+					lc.Select(o.Needs)
+				}
+				// log_hygiene の範囲は run の窓。失敗したソースの追いつき (ADR 0038) の分は足さない (cwlogs.Collector.HygieneFrom)
+				lc.HygieneFrom = w.From
+				if !o.BaseFrom.IsZero() {
+					lc.HygieneFrom = o.BaseFrom
+				}
+			}
 			res.yielded[src.ID] = c.Yields()
 			n := 0
 			snapshots := map[record.Kind][]record.SnapshotItem{}
@@ -792,6 +807,11 @@ func (e *Engine) Evaluate(ctx context.Context, profileName string, w collect.Win
 		if !ok {
 			return EvalResult{}, e.configErr(fmt.Errorf("profile %q: unknown check %q", profileName, name))
 		}
+		// 設定が空で何も見ないチェック (log_hygiene。ADR 0050) は、何を書けば動くかを理由にして skip する
+		if d, ok := c.(checks.Disabler); ok && d.Disabled() != "" {
+			res.ChecksSkipped = append(res.ChecksSkipped, report.SkippedCheck{Check: name, Reason: d.Disabled()})
+			continue
+		}
 		if reason := skipReason(c, available, failedKinds, unavailableOf(cr)); reason != "" {
 			res.ChecksSkipped = append(res.ChecksSkipped, report.SkippedCheck{Check: name, Reason: reason})
 			continue
@@ -919,7 +939,7 @@ func (e *Engine) availableKinds(cr *CollectResult) (map[record.Kind]bool, map[re
 			kinds = cr.yielded[src.ID]
 		}
 		if kinds == nil {
-			kinds = kindsOf(src)
+			kinds = kindsOf(e.cfg, src)
 		}
 		ok := cr == nil || contains(cr.SourcesOK, src.ID)
 		for _, k := range kinds {
@@ -933,11 +953,23 @@ func (e *Engine) availableKinds(cr *CollectResult) (map[record.Kind]bool, map[re
 	return available, failed
 }
 
-func kindsOf(src config.Source) []record.Kind {
+// kindsOf はソースが出し得るレコード種類。cloudwatch-logs は形式の種類に加えて、checks.log_hygiene.sources にあれば log_hygiene も出す (ADR 0050)。
+func kindsOf(cfg *config.Config, src config.Source) []record.Kind {
+	if src.Kind == config.KindCloudWatchLogs && cfg.Checks.LogHygiene.Covers(src.ID) {
+		return append(formatKinds(src), record.KindLogHygiene)
+	}
+	return formatKinds(src)
+}
+
+// formatKinds は log_hygiene を除いた、ソースの種類と形式で決まるレコード種類 (format: text の cloudwatch-logs は何も出さない)。
+func formatKinds(src config.Source) []record.Kind {
 	switch src.Kind {
 	case config.KindCloudTrailLookup:
 		return []record.Kind{record.KindTrailEvent, record.KindPrincipalSeen}
 	case config.KindCloudWatchLogs:
+		if src.Yields == "" {
+			return nil
+		}
 		return []record.Kind{record.Kind(src.Yields)}
 	case config.KindCredentialReport:
 		return []record.Kind{record.KindCredentialReport}
@@ -1011,7 +1043,7 @@ func (e *Engine) storedSkipReason(c checks.Check) string {
 	}
 	configured := map[record.Kind]bool{}
 	for _, src := range e.cfg.Sources {
-		for _, k := range kindsOf(src) {
+		for _, k := range kindsOf(e.cfg, src) {
 			configured[k] = true
 		}
 	}

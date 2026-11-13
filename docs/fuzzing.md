@@ -47,6 +47,8 @@ CI は `.github/workflows/fuzz.yml` が週 1 回と手動 (`workflow_dispatch`�
 | | `FuzzPrefixCaptures` | 設定の `request.id`・`request.lines` の正規表現 (`request_lines`。ADR 0051) | キャプチャを `rl_` の名前に付け替えても RE2 で読め、数と順番が同じで、同じ文字列の同じ位置に一致する (エスケープ・文字クラスの中を書き換えない)。`/` が残らない |
 | | `FuzzRequestRows` `FuzzCollectRequestRows` | `request_lines` の Insights の結果の行 | 件数は有限で負でない。最初の行のある数 ≤ request_id の数、使い回しの数 ≤ 最初の行のある数。数えるリクエストの数は最初の行のあるリクエストの数より減らない。鍵の数が最初の行の数の半分未満なら必ず止める。`FORMAT_MISMATCH` なら record を出さない |
 | | `FuzzRequestCollect` | ログの行 (リクエストごとの request_id の割り当て。偽の Insights が 2 段の `stats` を解釈する) | 同じ request_id を何度使っても、数えた件数は request_id の付いた最初の行の数とちょうど同じ。通らないときは `FORMAT_MISMATCH` で record を 1 つも出さない。最初の角括弧を鍵にする設定は必ず止まる |
+| | `FuzzHygieneQuery` `FuzzNotPrecededBy` | 設定の項目名・`stream_prefix` (log_hygiene。ADR 0050) | どんな値でもクエリの段の数と並び (`fields` と `stats`) が変わらない。`/.../` を抜け出さない。一時フィールドの名前は全部異なり決まった字だけ。正規表現は Go の regexp でも読め、`=>` と `:`・空白の有無の 4 つの書き方に一致し、`[FILTERED]`・空の値・別の鍵に一致しない。検査を通らない項目名はクエリに入らない。「直前が〜でない」の表現が素直な判定と同じ意味 |
+| | `FuzzHygieneRows` | Insights の結果の行 (偽の API。log_hygiene) | 受け取るのは有限で負でない整数だけ (別の方法で読んだ値と一致)。それ以外は収集の失敗で、0 件にしない・何も出さない。record とエラーの文に結果の文字列が残らない |
 | `internal/collect/cloudtrail` | `FuzzNormalizeEvent` `FuzzRoleARNFromSession` | イベントの本文 (JSON)、ARN | 取り出す値の型と上限。セッション名を主体に残さない |
 | | `FuzzPublicStatements` | バケットポリシー、CIDR | 公開の判定が見逃す側に倒れない (条件を外す・公開のステートメントを足す・広い CIDR・否定の演算子) |
 | `internal/record` `internal/report` | `FuzzMask` `FuzzFindingMasksIdentity` | 任意の文字列の間に置いたメールアドレス・セッション名 | レポートに元の形で残らない。冪等 |
@@ -56,6 +58,8 @@ CI は `.github/workflows/fuzz.yml` が週 1 回と手動 (`workflow_dispatch`�
 | | `FuzzCheck` | allowlist.yaml (`config check`) | エラーの有無が `Parse` と一致する (check が通したものは run でも読める)。エラーは 1 件まで、警告は重複した主体・重なる行き先・期限切れの行き先の数と一致。行番号がファイルの行数を超えない |
 | `internal/checks` | `FuzzKnownDestination` | 呼び出し元・ロールの ARN、受け取ったアカウント、MFA の値 (ログ由来) | 行き先が既知になるのは、外向きで、ロールの ARN のアカウントが既知リストに書いた 12 桁と文字どおり同じときだけ。finding の data からの判定は、それに加えて `mfa` が文字どおり `true` のときだけ |
 | | `FuzzALBsWithoutWAF` | posture_item の `without_waf` (ストアから戻した JSON。ALB の名前は利用者が決める) | 返す名前は空でなく、finding の key の区切り (`\|`) を含まない |
+| | `FuzzLogHygieneSnapshot` | log_hygiene のスナップショットの項目 (ストアから戻した値) | key は設定のソース id と種類、重大度は種類で決まる。行数は 1 以上の整数、`retention` は決まった 3 つ、`fields` は設定の項目名だけ。項目の中の文字列が finding に残らない |
+| `internal/config` | `FuzzLogHygieneParamField` | `checks.log_hygiene.param_fields` の項目名 | 検査を通った名前は 1〜64 字の英数字・`_`・`-` だけ |
 | `internal/config` | `FuzzParseDuration` `FuzzParseStore` `FuzzLoad` | 設定の値、arata.yaml | 受け入れた値は書いたとおりの意味。source の id と profile 名にパスの区切りが無い |
 | | `FuzzRequestValidate` | 設定の `request:` (`request_lines`。LLM が書く) | 受け付けた設定は、鍵のキャプチャが `request_id` だけ、行のキャプチャが決まった名前だけで、どれも RE2 で読め、ip と path が同じ行にあり、同じ項目を 2 つの行が取り出さず、`set` は 100〜599 の status だけ |
 | `internal/collect/account` | `FuzzParseCredentialReport` | 認証情報レポートの CSV | 行の形 (日時は RFC 3339 の UTC か空、キーは 2 本まで) |

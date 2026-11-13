@@ -30,6 +30,8 @@ type Checks struct {
 	// 以下は週次チェック (Step 3)。
 	CredentialHygiene CredentialHygiene `yaml:"credential_hygiene"`
 	Posture           Posture           `yaml:"posture"`
+	// LogHygiene はアプリのログに残った「載せるべきでない値」を種類ごとの行数で見る weekly のチェック (ADR 0050。loghygiene.go)。
+	LogHygiene LogHygiene `yaml:"log_hygiene"`
 }
 
 // CredentialHygiene は credential_hygiene の設定。
@@ -604,6 +606,9 @@ func (c *Checks) validate() error {
 	}
 	if c.Posture.MinPasswordLength < 1 || c.Posture.MinPasswordLength > 128 {
 		return fmt.Errorf("posture: 1 <= min_password_length <= 128")
+	}
+	if err := c.LogHygiene.validate(); err != nil {
+		return fmt.Errorf("log_hygiene: %w", err)
 	}
 	for _, p := range append(append([]string{}, c.LoginBruteforce.Paths...), append(c.ProbePaths.Paths, c.ProbePaths.ExcludePaths...)...) {
 		if len(p) == 0 || p[0] != '/' {

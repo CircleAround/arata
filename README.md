@@ -12,11 +12,12 @@ AWS のログと設定を定期的に改め、**前回から新しく発生し�
 
 ## 現在の実装範囲 (設計書 10 章の Step 1〜3)
 
-- ソース: `cloudtrail-lookup` (CloudTrail LookupEvents)、`cloudwatch-logs` (Logs Insights の集計クエリ。形式プロファイル `nginx_access` / `alb_access` / `wafv2` / `json` / `regex` / `request_lines`)、
+- ソース: `cloudtrail-lookup` (CloudTrail LookupEvents)、`cloudwatch-logs` (Logs Insights の集計クエリ。形式プロファイル `nginx_access` / `alb_access` / `wafv2` / `json` / `regex` / `request_lines`、行を解釈しない `text`)、
   アカウント単位の状態 `iam-credential-report` / `guardduty` / `access-analyzer` / `posture` / `waf-config` (WAFv2 の WebACL の設定)、
   `cloudtrail-unused-regions` (ふだん使わないリージョンの書き込み)、`cost-anomaly` (AWS Cost Anomaly Detection の異常)
 - チェック: `root_usage`, `unknown_assume_role`, `new_principal`, `iam_changes`, `access_denied`, `defense_evasion`, `public_exposure`, `principal_new_source`, `secret_access`, `unused_region_activity`, `cost_anomaly`, `login_bruteforce`, `probe_paths`, `endpoint_abuse`, `waf_block_trend`, `ai_path_usage` (daily)、
-  `credential_hygiene`, `guardduty_findings`, `posture`, `access_analyzer`, `waf_review` (weekly。WAF の修正提案の候補を report.json の `proposals` に)
+  `credential_hygiene`, `guardduty_findings`, `posture`, `access_analyzer`, `waf_review` (weekly。WAF の修正提案の候補を report.json の `proposals` に)、
+  `log_hygiene` (weekly。アプリのログに残った秘密の値・署名付き URL・隠されていない送信項目・本番の debug を、種類ごとの行数だけで報告する。値は取り出さない。設定を書くまで何も読まない)
 - ストア: `dir://` (JSONL 原本 + SQLite)、`s3://` (毎回消える実行環境向けのオプション。「S3 ストア」の節)
 - CLI: `config init` (推奨設定の雛形と `--diff`) / `config check` (設定と allowlist のオフラインの検査) / `profiles` (効いているチェックとパラメータ) / `init` (日単位の分割と `--resume`) / `doctor` / `run` / `collect` / `evaluate` / `report` (`--from --to` / `--month` で期間レポート) / `review` / `approve` / `ack` / `snooze` / `resolve` / `help ai`
 - allowlist: `principals[]` の `arn` / `account` (アカウント単位) / `arn_pattern` (glob)、`tags` は `deploy` / `ai`、`expected_denied` (access_denied で数えない想定済みの拒否。ADR 0022)、

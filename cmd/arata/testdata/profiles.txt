@@ -82,6 +82,7 @@ profile weekly (window 7d, max_catchup 7d)
   access_analyzer     weekly   state  default-weekly
   credential_hygiene  weekly   state  default-weekly
   guardduty_findings  weekly   state  default-weekly
+  log_hygiene         weekly   state  default-weekly
   posture             weekly   state  default-weekly
   waf_review          weekly   state  default-weekly
   PARAM                                  ORIGIN  VALUE
@@ -104,3 +105,6 @@ profile weekly (window 7d, max_catchup 7d)
   waf_review.challenge_top_rules         既定値  10
   credential_hygiene.unused_days         既定値  90
   posture.min_password_length            既定値  14
+  log_hygiene.sources                    既定値  []
+  log_hygiene.kinds                      既定値  []
+  log_hygiene.param_fields               既定値  []

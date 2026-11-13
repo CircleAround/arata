@@ -167,11 +167,30 @@ func section(b *strings.Builder, title string, l []Finding, empty string) {
 				fmt.Fprintf(b, "  - %s: %s (UTC)\n", k, inline(fmt.Sprint(f.Data[k])))
 				continue
 			}
-			fmt.Fprintf(b, "  - %s: %s\n", k, inline(fmt.Sprint(f.Data[k])))
+			fmt.Fprintf(b, "  - %s: %s\n", k, inline(dataText(f.Data[k])))
 		}
 		fmt.Fprintf(b, "  - id: %s (初出 %s)\n", f.ID, f.FirstSeen)
 	}
 	b.WriteString("\n")
+}
+
+// dataText は data の値の表記。入れ子の対応表 (log_hygiene の fields: 項目名 → 行数 など) は、Go の map の書式 (`map[a:1 b:2]`) ではなく
+// 「名前 値」を名前順に `, ` で並べる (空なら「なし」)。それ以外は今までどおり。
+func dataText(v any) string {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return fmt.Sprint(v)
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, k+" "+fmt.Sprint(m[k]))
+	}
+	return orNone(parts)
 }
 
 // inline はログ由来の値の改行を空白にする (値の改行で偽の見出しや行を作らせない。ADR 0037)。

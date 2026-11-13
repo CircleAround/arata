@@ -25,11 +25,14 @@ arata のチェックは、設定の `sources` に書いた記録からしか動
 | posture | posture_item | posture (weekly) |
 | access-analyzer | access_analyzer | access_analyzer (weekly) |
 | waf-config + cloudwatch-logs (wafv2) | waf_config, waf_action | waf_review (weekly) |
+| cloudwatch-logs (text) | log_hygiene | log_hygiene (weekly) |
 
 - `cloudtrail-lookup` だけで 10 個のチェックが動く。最初はこれとアカウント単位のソース (追加の準備が要らない) から始め、アプリ層 (`cloudwatch-logs`) を足していく
 - `http_access` は、送信元 IP・パス・ステータスが**同じ 1 行**にあるアクセスログ。ALB・nginx・アプリの JSON 行ログのどれか 1 つあればよい (同じリクエストを二重に数えないよう、1 つの入口につき 1 つ)。
   1 リクエストが複数行に分かれるアプリのログしか無いときは、`format: request_lines` でリクエスト単位にまとめて読む (書き方は `arata help ai request_lines`)
 - `waf_review` は weekly に WebACL の設定を読み、daily が貯めた wafv2 の日次集計と突き合わせる (両方のソースが要る)
+- `log_hygiene` は、設定の `checks.log_hygiene.sources` に書いたソースだけを読む (既定は空で、書くまで何も読まない)。アプリのログ (アクセスログでないもの) は
+  `format: text` (行を解釈しない) で登録する。表の他の形式のソースも `sources` に書ける (アクセスログのクエリ文字列に署名付き URL が残ることがある)
 - `guardduty`・`access-analyzer`・`cost-anomaly` は AWS 側でその機能を有効にしていることが前提 (無効なら posture が指摘するか、そのチェックが skip)
 
 ## 記録ごとの集め方
@@ -50,6 +53,9 @@ arata のチェックは、設定の `sources` に書いた記録からしか動
     アプリを変えないなら、標準のログのまま `format: request_lines` で読む (書き方は `arata help ai request_lines`)
   - Go の slog (`slog.NewJSONHandler`)、Node の pino なども同じ。リクエストごとに 1 行、IP・メソッド・パス・ステータスを項目にする
   - 行の全体が JSON であること (時刻やタグを JSON の前に付けると、Logs Insights が項目として読めない)。パスにクエリ文字列を入れない。個人を特定できる値 (メールアドレス、氏名) を項目に入れない
+- **アプリのログの中身 (log_hygiene)**: 形を問わない。ロググループを `format: text` のソースにして、`checks.log_hygiene` に `sources`・`kinds`・`param_fields` を書く
+  (`arata help ai playbook log_hygiene`)。weekly の run ごとに Insights のクエリを 1 本流し、種類ごとの**行数だけ**を受け取る (値もサンプルの行も引かない)。
+  `max_scan_gb` を書く (1 回に読むのは窓 = 7 日分)
 - **ECS / Fargate**: タスク定義の `logConfiguration` を awslogs ドライバにして標準出力を送る。コンテナごとにストリームの接頭辞 (`awslogs-stream-prefix`) を分けておくと、
   1 つのロググループに混ざっていても `stream_prefix` で絞れる
 

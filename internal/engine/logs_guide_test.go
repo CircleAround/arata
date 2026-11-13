@@ -32,13 +32,19 @@ const logsGuideSources = `
   - { id: app, kind: cloudwatch-logs, log_group: prod-app, format: json, fields: { ip: remote_ip, path: path } }
   - { id: app_re, kind: cloudwatch-logs, log_group: prod-app, format: regex, regex: '(?P<ip>\S+) (?P<path>\S+)' }
   - { id: app_lines, kind: cloudwatch-logs, log_group: prod-app, format: request_lines, request: { id: '\[(?P<request_id>\S+)\] ', lines: [{ name: started, regex: '(?P<ip>\S+) (?P<path>\S+)' }] } }
+  - { id: app_text, kind: cloudwatch-logs, log_group: prod-app, format: text }
+`
+
+// logsGuideChecks は log_hygiene が読むソース (設定に書いたものだけが log_hygiene の記録を出す。ADR 0050)。
+const logsGuideChecks = `checks:
+  log_hygiene: { sources: [app_text], kinds: [debug_sql] }
 `
 
 // logsGuideTable は「チェックと記録の対応」の表を、Registry (チェックの Needs / StoredNeeds) とソースの種類 (kindsOf) から作る。
 // 行は「要るソースの組」ごと。並びは Registry の登録順で最初に出た順。
 func logsGuideTable(t *testing.T) string {
 	t.Helper()
-	h := newHarnessWith(t, logsGuideSources, "")
+	h := newHarnessWith(t, logsGuideSources, logsGuideChecks)
 	// 形式を全部書いているか (形式を足したのに上の設定に足していなければ落とす)
 	formats := map[string]bool{}
 	for _, src := range h.cfg.Sources {
@@ -55,7 +61,7 @@ func logsGuideTable(t *testing.T) string {
 	labels := map[record.Kind][]string{}
 	logFormats := map[record.Kind][]string{}
 	for _, src := range h.cfg.Sources {
-		for _, k := range kindsOf(src) {
+		for _, k := range kindsOf(h.cfg, src) {
 			if src.Kind == config.KindCloudWatchLogs {
 				if !contains(logFormats[k], src.Format) {
 					logFormats[k] = append(logFormats[k], src.Format)

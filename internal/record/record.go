@@ -35,13 +35,15 @@ const (
 	KindUnusedRegionEvent Kind = "unused_region_event"
 	// KindCostAnomaly は AWS Cost Anomaly Detection の異常 1 件 (ADR 0032)。
 	KindCostAnomaly Kind = "cost_anomaly"
+	// KindLogHygiene はアプリのログに残った「載せるべきでない値」の、種類ごとの行数 (ロググループ × 種類で 1 件。値は持たない。ADR 0050)。
+	KindLogHygiene Kind = "log_hygiene"
 	// KindSnapshotReplaced はスナップショットを (kind, source) 単位で置き換えた印 (raw にだけ書く。ADR 0033)。
 	// チェックが読むレコードではない。rebuild が「どの収集で置き換えたか」(0 件の置き換えを含む) を知るために使う。
 	KindSnapshotReplaced Kind = "snapshot_replaced"
 )
 
 // SnapshotKinds は「窓に依らない今の状態」を表すレコード種類。collector が取るたびに丸ごと置き換えて保存する (ADR 0015)。
-var SnapshotKinds = map[Kind]bool{KindCredentialReport: true, KindGuardDuty: true, KindAccessAnalyzer: true, KindPostureItem: true, KindWAFConfig: true, KindCostAnomaly: true}
+var SnapshotKinds = map[Kind]bool{KindCredentialReport: true, KindGuardDuty: true, KindAccessAnalyzer: true, KindPostureItem: true, KindWAFConfig: true, KindCostAnomaly: true, KindLogHygiene: true}
 
 // PrincipalKind は主体の種類。principals.kind に対応する。
 type PrincipalKind string

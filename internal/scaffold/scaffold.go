@@ -38,6 +38,7 @@ var Descriptions = map[string]string{ // #nosec G101 -- 設定の説明文の表
 	"ai_path_usage":          "allowlist で tags: [ai] の主体の利用を主体 × 送信元 IP で毎回 1 行 (info。自己監査)",
 	"credential_hygiene":     "未使用のアクセスキー・MFA 無しのコンソールユーザー・ルートのアクセスキー (medium / high)",
 	"guardduty_findings":     "GuardDuty の findings。新規と件数の増加 (重大度は GuardDuty 準拠)",
+	"log_hygiene":            "アプリのログに残った秘密の値・署名付き URL・隠されていない送信項目・本番の debug の、種類ごとの行数 (値は取り出さない)。sources と kinds が空なら何も読まない (high / medium / low)",
 	"posture":                "CloudTrail 証跡と検証・GuardDuty 有効・ルート MFA・S3 Public Access Block・パスワードポリシー・インターネット向けの ALB の WAF (high / medium)",
 	"access_analyzer":        "IAM Access Analyzer の外部アクセス findings (公開は high、他は medium)",
 	"waf_review":             "WAF の修正提案の候補を report.json の proposals に (正規の画面での大量 BLOCK は low の finding にも)",
@@ -101,6 +102,9 @@ var paramComments = map[string]string{ // #nosec G101 -- 設定の説明文の�
 	"secret_access.min_distinct":                  "1 日に読んだ異なる秘匿値の数がこれを超えたら一括読み出し (high)。GetParametersByPath はパス単位で 1 と数える",
 	"credential_hygiene.unused_days":              "アクセスキーを未使用とみなす日数 (最終使用、使われていなければ作成・ローテーションから)",
 	"posture.min_password_length":                 "IAM パスワードポリシーの最小文字数の下限",
+	"log_hygiene.sources":                         "見る cloudwatch-logs のソースの id (例 [app_prod])。空なら何も読まない。weekly の run ごとに 1 本、種類ごとの行数だけを数える。集計条件",
+	"log_hygiene.kinds":                           "数える種類: " + strings.Join(config.LogHygieneKinds(), " / ") + "。集計条件",
+	"log_hygiene.param_fields":                    "unfiltered_param が見る送信項目の名前 (例 [name, address, tel]。1〜64 字の英数字・_・-、32 個まで)。集計条件",
 	"waf_review.top_paths":                        "wafv2 の BLOCK / 許可された探索のパスを日ごとに残す数 (件数の多い順)。集計条件なので overrides では変えられない",
 	"waf_review.rate_path_groups":                 "1 IP あたりの件数を分けて測るパスの接頭辞 (どれにも当たらなければ「その他」)。集計条件",
 	"waf_review.trusted_cidrs":                    "監視・開発会社などの正規の送信元 (例 [203.0.113.0/24])。wafv2 の新しい集計と候補から外す。集計条件",
@@ -243,6 +247,12 @@ func Generate(reg *checks.Registry, auditAccount string) []byte {
 	w(`  #       - { name: completed, regex: 'Completed (?P<status>\d{3}) ' }` + "\n")
 	w(`  #       - { name: no_route, regex: 'ActionController::RoutingError', set: { status: 404 } }` + "\n")
 	cm(fmt.Sprintf("  #   # expected_complete_rate: %.1f", config.DefaultExpectedCompleteRate), "まとめられた割合 (最初の行のあるリクエスト / request_id の数) の閾値")
+	w("  # アプリのログの中身 → log_hygiene (下の checks.log_hygiene に sources・kinds を書くまで読まれない)\n")
+	w("  # - id: app_prod\n")
+	w("  #   kind: %s\n", config.KindCloudWatchLogs)
+	w("  #   log_group: /my-app/rails\n")
+	cm("  #   format: "+config.FormatText, "行を解釈しない。log_hygiene だけが読む (他の形式のソースも log_hygiene.sources に書ける)")
+	cm("  #   max_scan_gb: 5", "weekly の run ごとに窓 (7 日) 分を 1 回読む")
 	w("  # - id: waf\n")
 	w("  #   kind: %s\n", config.KindCloudWatchLogs)
 	w("  #   log_group: aws-waf-logs-my-app\n")

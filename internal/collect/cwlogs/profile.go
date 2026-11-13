@@ -57,6 +57,10 @@ func ProfileFor(src config.Source) (Profile, error) {
 	p := Profile{Format: src.Format, Yields: record.Kind(src.Yields), StripPrefix: src.StripPathPrefix}
 	var body string
 	p.fields = map[string]bool{}
+	if src.Format == config.FormatText {
+		// 行を解釈しない (前処理も判定フィールドも無い)。log_hygiene だけが読む (ADR 0050)
+		return p, nil
+	}
 	switch src.Format {
 	case config.FormatNginxAccess:
 		body, p.MatchField = nginxParse, "path"

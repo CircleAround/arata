@@ -18,7 +18,7 @@ LLM の役割は「危険の判定を代行する」ことではなく「人が�
   導入時点で侵入済みの主体も紛れるので、init 後に人が一度眺める
 - **イベント型 (event)**: 窓内の出来事を報告する (root_usage, iam_changes, access_denied, unknown_assume_role, login_bruteforce など)。
   窓に現れなくても「解消」にはしない。途切れた後に再び現れたら **recurred (再発)**
-- **状態型 (state)**: 今の状態を報告する (new_principal と週次の credential_hygiene / guardduty_findings / posture / access_analyzer / waf_review)。観測されなくなったら **resolved (解消)**
+- **状態型 (state)**: 今の状態を報告する (new_principal と週次の credential_hygiene / guardduty_findings / posture / access_analyzer / waf_review / log_hygiene)。観測されなくなったら **resolved (解消)**
 - **週次チェックとスナップショット**: 週次はアカウントの「今の状態」(認証情報レポート・GuardDuty・Access Analyzer・姿勢) を取って前回と比べる。
   取れなかったソースのチェックは skip され、前回の finding は解消にならない (権限が外れたことを「直った」と誤認しない)。
   posture は一部の項目だけ取れなければ取れた項目で評価し、`coverage.sources_failed` に `partial: true` と `action` が出る
