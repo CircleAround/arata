@@ -26,6 +26,7 @@ LLM はこの手順に沿って、根拠 (finding の `data`) と利用者の事
 | endpoint_abuse | 画面への分散した集中と連鎖 | `arata help ai playbook endpoint_abuse` |
 | guardduty_findings | GuardDuty の検出 | `arata help ai playbook guardduty_findings` |
 | iam_changes | IAM の権限変更 | `arata help ai playbook iam_changes` |
+| log_hygiene | アプリのログに残った「載せるべきでない値」 | `arata help ai playbook log_hygiene` |
 | login_bruteforce | sign-in 失敗の急増 | `arata help ai playbook login_bruteforce` |
 | new_principal | 新規の主体 | `arata help ai playbook new_principal` |
 | posture | アカウントの姿勢 | `arata help ai playbook posture` |

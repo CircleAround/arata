@@ -36,6 +36,7 @@ LLM がこの流れを手伝うときも、run と review を読んで材料を�
 | 監査の仕組みや社員によるロールの引き受け | unknown_assume_role / new_principal | 説明できる主体は approve。受託先などへのスイッチロールは行き先を `assume_destinations` に |
 | 設定していない守り (証跡・GuardDuty・パスワードポリシー・ALB の WAF など) | posture | 直す日を決めて snooze。意図して外しているなら理由を残して ack |
 | 古いアクセスキー・MFA の無いユーザー | credential_hygiene | 直す日を決めて snooze |
+| アプリのログに残った秘密の値の形・署名付き URL・隠されていない送信項目 (設定に書いたロググループだけ) | log_hygiene | 秘密の値は先に無効化。出力元を直すと次の次の週に解消する。誤検知は確かめて ack (`arata help ai playbook log_hygiene`) |
 | 監査の主体や調査用のロールの、想定内の拒否 | access_denied | 設定で直す (`expected_denied`) |
 
 secret_access の一括読み出しの注: 閾値は `max(min_distinct, その主体の日ごとの数の中央値 × factor)`。中央値は過去 `baseline_days` (既定 14) 日で取り、記録の無い日は 0 と数える。

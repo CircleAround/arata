@@ -75,6 +75,7 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
 取れる項目 (ユーザー ID など) ごとに動かせるチェックの整理は ADR 0051。採用を決めたら、この章と 7 章に仕様として書く。
 
 決定 (cloudwatch-logs ソース。Step 2 の実装。クエリテンプレートの構造は ADR 0009):
+- 決定 (ADR 0050): 行を解釈しない形式 `text` を足す (正規化レコードを出さない。7 章の log_hygiene だけが読む)。下の決定は `text` 以外の形式のもの。
 - 実装したプロファイルは `nginx_access` (combined 形式) / `alb_access` / `wafv2` / `json` / `regex`。`cloudtrail` (CloudWatch Logs 配信版) は未実装 (`cloudtrail-lookup` で足りるため後回し)。
 - `region` は 1 つ (既定 `aws.region`)。ロググループはリージョンに属するため、`cloudtrail-lookup` のような us-east-1 の自動追加はしない。
 - `yields` の既定は形式ごとに決まる (`nginx_access` / `alb_access` / `json` / `regex` → `http_access`、`wafv2` → `waf_action`)。
@@ -822,6 +823,7 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 | access_analyzer | weekly | access_analyzer | ACTIVE な finding の増減 | medium (公開は high) |
 | posture (決定: posture_* ではなく 1 チェックで項目ごとに finding) | weekly | posture_item | CloudTrail 有効・検証 ON、GuardDuty 有効、ルート MFA、S3 Public Access Block、パスワードポリシー、インターネット向けの ALB の WebACL | high (検証・パスワードポリシー・ALB の WebACL は medium) |
 | waf_review | weekly | waf_config (+ 保存済みの waf_action の日次集計) | WAF の修正提案の候補を report.json の `proposals` に (finding ではない)。決定: ADR 0023 | 正規の画面での多数の IP の BLOCK だけ low |
+| log_hygiene | weekly | log_hygiene (設定に書いた cloudwatch-logs のソース) | ログに残った秘密の値・署名付き URL・隠されていない送信項目・本番の debug の、種類ごとの行数 (値は取り出さない)。決定: ADR 0050 | 秘密の値は high、署名付き URL と送信項目は medium、debug は low |
 | allowlist_stale | quarterly (report) | principals | 90 日未観測の approved 主体 | info |
 
 決定 (Step 1 の 4 チェックの Mode と Fingerprint。ADR 0005):
@@ -980,6 +982,7 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 | guardduty_findings | state | finding ID | 重大度 + count | アーカイブされていない finding。GuardDuty の重大度 7 以上 → high、4 以上 → medium、他は low。count の増加は changed |
 | posture | state | `cloudtrail_logging` / `cloudtrail_log_validation` / `guardduty_enabled\|<region>` / `root_mfa` / `s3_public_access_block` / `password_policy` / `alb_waf\|<region>\|<ALB の名前>` | 重大度 + 問題の中身 (無効な項目・最小文字数など) | 記録中のマルチリージョン証跡が無い (high)、ログファイル検証が無効な証跡 (medium)、GuardDuty 無効 (high)、ルート MFA 無し (high)、PAB 未設定 / 無効な項目 (high)、パスワードポリシー未設定 / 最小文字数 < `checks.posture.min_password_length` (既定 14) (medium)、インターネット向けの ALB に WAFv2 の WebACL が付いていない (medium。ALB ごと。Data は region・name・arn。決定 (ADR 0048): 最低限の防御として推奨するが、無くても直ちに侵害の兆候ではないので medium)。取れなかった項目は前回の finding を維持 (ALB はリージョン単位) |
 | access_analyzer | state | finding ID | 重大度 + リソース + 許可先 + action | ACTIVE な外部アクセスのアナライザーの ACTIVE な finding。公開は high、他は medium |
+| log_hygiene | state | `<ソースの id>\|<種類>` | 重大度 + 種類 (+ unfiltered_param では当たった項目名の集合) | 窓 (7 日) の行数が 1 以上 (下の「log_hygiene」。ADR 0050) |
 | ai_path_usage | event | `<ARN>\|<ip>` | info + IP | allowlist の `tags: [ai]` を持つ承認済みの主体で、principal_ips.last_seen が窓内の組を毎回 info に 1 行 (件数は累計) |
 
 決定 (waf_review。ADR 0023): 週次に、daily が貯めた wafv2 の日次集計 (2 章) と `waf-config` の設定から、決まった規則で WAF の修正提案の候補を作る。
@@ -1026,6 +1029,69 @@ arata は LLM を使わず候補だけを作り、aratam の LLM は候補を文
 - allowlist の `source_ips` に含まれる IP は 3 チェックとも対象外。
 - パス・メソッド・ステータス・閾値は設定の `checks:` で顧客ごとに変える (examples/arata.yaml)。既定: sign-in は `POST` で `/users/sign_in`, `/login`, `/signin` へ 401 / 403 / 422、
   機密パスは `/.env`, `/.git/`, `/wp-login.php` などへの 403 / 404。`probe_paths.exclude_paths` で正規の管理画面などを外す。
+
+決定 (log_hygiene。ADR 0050): アプリのログ (CloudWatch Logs) に残った「載せるべきでない値」を、ロググループ × 種類の**行数だけ**で報告する (weekly、状態型)。
+値もサンプルの行も引かない・保存しない・通知しない。種類・重大度・finding の形・保持期間・誤検知・限界は ADR 0050 のとおり。ここには実装で固定したことを書く。
+
+- 設定は `checks.log_hygiene` の `sources` (cloudwatch-logs のソースの id)・`kinds`・`param_fields`。既定は 3 つとも空で、空ならチェックは skip
+  (理由は `checks.log_hygiene.sources is empty` のように、何を書けば動くかを書く。doctor の「skip される」の行も同じ)。
+  3 つとも収集の条件なので `overrides` では変えられない (スナップショットは全プロファイルで共有)
+- 決定: `kinds` に `unfiltered_param` があって `param_fields` が空、またはその逆は `CONFIG_INVALID`。前者は何も数えないのに「0 件」に見え、
+  後者は書いた項目名が見られていないのに見ているように読める
+- `format: text` は行を解釈しない形式 (正規化レコードを出さない。`yields`・`regex`・`fields` は書けない)。log_hygiene だけが読む。
+  `sources` に無い text のソースはどのチェックにも読まれない (doctor が warn にする)
+- 決定 (必要な種類だけを流す): 1 つのソースが形式の集計 (http_access / waf_action) と log_hygiene の両方を出せる。run はプロファイルのチェックが必要とする種類だけを流す
+  (`cwlogs.Collector.Select`)。weekly は衛生のクエリ 1 本だけ、daily は今までどおりの集計だけで、必要としない側のスナップショット・日次集計は置き換えない。
+  種類を絞らない収集 (`arata collect`・`arata init`) は log_hygiene を流さない (過去の期間を区切って引く用途で、状態のスナップショットを古い期間の値で置き換えないため)
+- 決定 (範囲): run の窓 (weekly なら 7 日)。ingest_delay の再走査と、失敗したソースの追いつき (ADR 0038) の分は足さない。状態を見るチェックなので追いつく必要が無く、
+  足すと読み取りが倍になって `max_scan_gb` を超え、1 度の失敗から抜けられなくなる。
+  そのプロファイルが log_hygiene のためだけに読むソースは、追いつきの対象にもしない (`SOURCE_CATCHUP` を出さず、run の窓も広げない)。cron が遅れて窓そのものが延びたとき・試しの実行 (`--window`) では、その窓を読む。
+  見た範囲は data の `window_hours` に残し、見出しの「直近 7 日」はそこから書く (ADR の Data に足した項目)
+- クエリの形 (1 ソース 1 本):
+
+  ```
+  fields (@message like /<種類の正規表現>/) as f_<種類>, …, (@message like /"<項目>"…/) as f_param_<番号>, …
+  | stats count(*) as n_lines, sum(f_<種類>) as n_<種類>, …, sum(f_param_<番号>) as n_param_<番号>, …
+  ```
+
+  - 一時フィールドの名前は種類の名前と番号から作る (設定の値を識別子に入れない。同じ名前を 2 度定義しない)
+  - 決定: `stream_prefix` のあるソースは、先頭に `filter @logStream like /^<接頭辞>/` を 1 段だけ足す (同じロググループを分けた 2 つのソースを別に数えるため)。
+    `filter` は行を絞るだけで、結果に値を出さない。wafv2 の `resources` は見ない (資源で絞るには行を解釈する必要がある。1 ソース = 1 ロググループ)
+  - 決定: `stats` に `count(*) as n_lines` (見た行数) を足す。値ではなく数で、「何行を見て 0 件だったか」を標準エラーのログに残す (0 行なら WARN)。finding には載せない
+  - 項目名は設定の検査 (1〜64 字の英数字・`_`・`-`、32 個まで) を通っていても、クエリの組み立てでもう一度形を確かめ、`regexLiteral` を通す。
+    形に合わない名前・制御文字を含む `stream_prefix` はクエリに入れず `QUERY_INVALID` にする (検査が緩んでも段が増えない)
+- 正規表現 (先読み・後方参照を使わない。Go の regexp でも同じ意味になることを `TestHygieneConditions` と `FuzzHygieneQuery` が固定する。`<NP>` は下の説明):
+
+  ```
+  secret_aws_access_key        <NP>AKIA[A-Z0-9]{16}([^A-Z0-9]|$)
+  secret_slack_token           (xox[abeprs]|xapp)-[0-9A-Za-z-]{10,}
+  secret_private_key           -----BEGIN ([A-Z0-9]+ )*PRIVATE KEY( BLOCK)?-----
+  presigned_url_long_term_key  X-Amz-Credential=AKIA
+  presigned_url                X-Amz-Signature=        (かつ X-Amz-Credential=AKIA に当たらない行)
+  unfiltered_param             "(<項目>|<項目>|…)"\s*(=>|:)\s*"[^"\[]     (項目ごとの行数は "<項目>"\s*(=>|:)\s*"[^"\[] )
+  debug_sql                    \(\d+(\.\d+)?m?s\)(\s|.\[[0-9;]*m)*(SELECT|INSERT|UPDATE|DELETE)\s
+  ```
+
+  - 決定 (`<NP>`): 署名付き URL の中のキー ID を除くのは「直前が `X-Amz-Credential=` でない」という条件で、後方参照の否定が要る。これを選択肢の並び
+    `((^|[^=])|(^|[^l])=|(^|[^a])l=|…|(^|[^X])-Amz-Credential=)` で書く (`notPrecededBy`。素直な判定と同じ意味になることを `FuzzNotPrecededBy` が確かめる)。
+    行ではなくキー ID ごとの判定なので、同じ行に URL の外のキー ID もあれば両方の種類に数える。キー ID の後ろに英大文字・数字が続くもの (もっと長い並び) は数えない
+  - 決定 (Slack): 接頭辞は `xoxb-`・`xoxp-`・`xoxa-`・`xoxr-`・`xoxs-`・`xoxe-`・`xapp-`、続きは英数字とハイフン 10 字以上
+  - 決定 (debug_sql): 実行時間 (`(0.5ms)`・`(0.000435s)`) の後ろに、空白と色付けのエスケープを任意で挟んで文が続く形。エスケープは ESC の字を書かず
+    「任意の 1 字 + `[`・数字と `;`・`m`」で表す (`\x1b` の書き方が Insights で通るかに依らない)。文は値を持ち得る SELECT / INSERT / UPDATE / DELETE だけ (BEGIN・COMMIT は数えない)
+  - 限界 (ADR の限界に加えて): URL エンコードされた署名付き URL (`X-Amz-Credential%3DAKIA…`) は署名付き URL に数えず、キー ID は `secret_aws_access_key` (high) に数える。
+    JSON の中の文字列として入った JSON (`\"name\":\"x\"`) と、シンボルの鍵 (`:name=>`・`name:`) は `unfiltered_param` に数えない
+- 結果の読み方: 行は 1 つ。各列を「10 進の数字、任意で小数部と指数」の書き方の、負でない整数 (2^53 − 1 以下) として、浮動小数を経ずに桁で読む
+  (`12`・`12.0`・`1.2E3` は受け取る。符号・空白・16 進・小数・NaN・無限大は受け取らない)。列が無い・読めない・行が 2 つ以上なら `COLLECT_FAILED` で、
+  エラーの文には列の名前だけを書く (結果の値を写さない)。行が 0 (ログが 1 行も無い) と、範囲がロググループの作成前・保持期間の外は、全部 0
+- スナップショット (`log_hygiene`): ソースごとに、設定の種類 1 つにつき 1 項目 (key = 種類。0 件も 0 として残す)。成功した収集だけがソース単位で置き換える。
+  失敗したソースは前回のままで、チェックは前回の項目を読み直すので finding が維持される (全部のソースが失敗した週はチェックが skip)
+- チェックは、設定から外したソース・種類・項目名を、前のスナップショットに残っていても報告しない。finding に載せる文字列は設定の値と決まった語だけで、
+  スナップショットの中の文字列はロググループの名前 (名前の形のときだけ) を除いて写さない (`FuzzLogHygieneSnapshot`)
+- doctor: text のソースには解釈率とサンプルのクエリ (生の行を引く) を流さず、log_hygiene のクエリの構文検査 (`QUERY_INVALID`) だけを行う。
+  費用は `cost` の行を別に 1 つ出す (run ごとに 1 本・範囲は窓。ロググループの量は測らず単価を示す。wafv2 のソースは実測した 1 日の量から見積もる)。
+  `max_scan_gb` が無ければ warn
+- 未確認: 上の正規表現が Insights の方言でそのまま通るか (`{16}`・`{10,}`・`\s`・`\d`・`<NP>` の長い選択肢、条件を 40 個ほど並べた `fields`)。
+  開発では実際の AWS に接続しないので、実際のロググループで doctor と weekly の run を流して確かめ、通らなければ表現を直してここに残す
 
 決定 (対処手順。ADR 0025): チェックごとに `docs/ai/playbooks/<check>.md` (見出しは固定: この指摘の意味 / まず確かめること / 判断の分かれ目 / 対処の選択肢 / やってはいけないこと) を書き、
 `arata help ai playbook <check>` で出す。登録済みのチェックすべてに playbook が要る (テストで固定)。新しいチェックを足すときは playbook も書く。封じ込めは人が判断して実行し、LLM は提案まで。

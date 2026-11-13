@@ -14,6 +14,8 @@ const (
 	FormatWAFv2       = "wafv2"
 	FormatJSON        = "json"
 	FormatRegex       = "regex"
+	// FormatText は行を解釈しない形式 (正規化レコードを出さない)。log_hygiene だけが読む (ADR 0050)。
+	FormatText = "text"
 )
 
 // 正規化レコードの種類のうち cloudwatch-logs が出せるもの。record パッケージの Kind と同じ文字列。
@@ -29,6 +31,7 @@ var formatYields = map[string][]string{
 	FormatWAFv2:       {YieldsWAFAction},
 	FormatJSON:        {YieldsHTTPAccess},
 	FormatRegex:       {YieldsHTTPAccess},
+	FormatText:        {},
 }
 
 // RequiredFields は正規化レコードごとの必須フィールド。json の fields と regex の名前付きキャプチャはこれを含む必要がある。
@@ -83,7 +86,12 @@ func (s *Source) validateLogs() error {
 	if !ok {
 		return fmt.Errorf("format %q: want one of %s", s.Format, strings.Join(Formats(), ", "))
 	}
-	if !contains(ys, s.Yields) {
+	if s.Format == FormatText {
+		// 決定 (ADR 0050): 行を解釈しないので、解釈のための項目は書けない (書いても効かないものを黙って受け取らない)
+		if s.Yields != "" {
+			return fmt.Errorf("format %s does not parse lines: yields cannot be set", FormatText)
+		}
+	} else if !contains(ys, s.Yields) {
 		return fmt.Errorf("format %s cannot yield %q (want %s)", s.Format, s.Yields, strings.Join(ys, ", "))
 	}
 	if s.ExpectedMatchRate <= 0 || s.ExpectedMatchRate > 1 {

@@ -65,6 +65,12 @@ type Collector struct {
 	// group はロググループの作成時刻と保持期間 (DescribeLogGroups から 1 回だけ引く。取れなければ nil で範囲を判定しない)。
 	group       *types.LogGroup
 	groupLoaded bool
+	// HygieneFrom は log_hygiene の範囲の始まり (ゼロなら窓の From)。engine が run の窓の始まりを渡す。
+	// 決定 (ADR 0050): 範囲は run の窓 (weekly なら 7 日)。失敗したソースの追いつき (ADR 0038) の分は足さない: 状態を見るチェックなので
+	// 追いつく必要が無く、足すと読み取りが倍になって max_scan_gb を超え、失敗が続く (1 度の失敗から抜けられなくなる)。
+	HygieneFrom time.Time
+	// selected は Select で絞った、この収集で出す種類 (nil なら形式の集計だけ)。
+	selected map[record.Kind]bool
 }
 
 // 問い合わせ範囲が Insights に拒否される理由 (FormatStats.OutOfRange)。
@@ -102,13 +108,52 @@ func sleepFor(ctx context.Context, d time.Duration) error {
 	}
 }
 
-func (c *Collector) ID() string            { return c.src.ID }
-func (c *Collector) Yields() []record.Kind { return []record.Kind{c.prof.Yields} }
-func (c *Collector) Profile() Profile      { return c.prof }
+func (c *Collector) ID() string       { return c.src.ID }
+func (c *Collector) Profile() Profile { return c.prof }
+
+// Yields はこの収集で出す種類。既定は形式の集計 (http_access / waf_action) だけで、log_hygiene は Select で求められたときだけ出す。
+func (c *Collector) Yields() []record.Kind {
+	var out []record.Kind
+	if c.formatSelected() {
+		out = append(out, c.prof.Yields)
+	}
+	if c.hygieneSelected() {
+		out = append(out, record.KindLogHygiene)
+	}
+	return out
+}
+
+// Select はこの収集で出す種類を、needs (プロファイルのチェックが必要とする種類) にあるものだけに絞る。
+//
+// 決定 (ADR 0050): 1 つのソースが形式の集計と log_hygiene の両方を出せる。weekly の run は衛生のクエリだけを、daily の run は
+// 今までどおりの集計だけを流す (必要としない側のクエリを流さず、そのスナップショット・日次集計も置き換えない)。
+// Select しない収集 (collect・init) は log_hygiene を流さない: 過去の期間を区切って引く用途で、状態のスナップショットを古い期間の値で置き換えないため。
+func (c *Collector) Select(needs map[record.Kind]bool) {
+	c.selected = map[record.Kind]bool{}
+	for k, v := range needs {
+		c.selected[k] = v
+	}
+}
+
+func (c *Collector) formatSelected() bool {
+	return c.prof.Yields != "" && (c.selected == nil || c.selected[c.prof.Yields])
+}
+
+func (c *Collector) hygieneSelected() bool {
+	return c.selected[record.KindLogHygiene] && c.hygieneCovered()
+}
 
 // Queries は Collect が流すクエリ (名前 → クエリ。doctor の構文検査用)。サンプルは含まない。
 func (c *Collector) Queries() map[string]string {
 	out := map[string]string{}
+	if c.hygieneCovered() {
+		if q, _, err := HygieneQuery(c.src, c.checks.LogHygiene); err == nil {
+			out["log_hygiene"] = q
+		}
+	}
+	if c.prof.Yields == "" {
+		return out
+	}
 	for _, q := range c.queries() {
 		out[q.Name] = q.Query
 	}
@@ -198,6 +243,9 @@ func (c *Collector) Scanned() float64 { return c.scanned }
 // QueryCount は 1 回の Collect で流すクエリの本数 (解釈率 + 集計。範囲全体のスキャン量で何本分かを表す。
 // 日ごとに分けて流すクエリ・行数の上限で分けたクエリも 1 本と数える)。
 func (c *Collector) QueryCount() int {
+	if c.prof.Yields == "" {
+		return 0
+	}
 	n := len(c.queries())
 	if c.prof.Yields == record.KindWAFAction {
 		n++ // レート
@@ -221,9 +269,24 @@ func DayStart(t time.Time) time.Time {
 // 解釈率は最初のクエリ (集計とまとめたもの) で測り、expected_match_rate を下回ったら残りのクエリを流さず、metrics も出さずに
 // FORMAT_MISMATCH を返す (誤った集計で平常帯を汚さないため)。
 // 決定 (ADR 0031): 集計はソースごとに数本にまとめる (MergedQuery)。
+// 決定 (ADR 0050): log_hygiene を求められていれば (Select)、最後に衛生のクエリを 1 本流す (hygiene.go)。どちらかが失敗すればソースの失敗。
 func (c *Collector) Collect(ctx context.Context, w collect.Window, sink collect.RecordSink) error {
-	from, to := DayStart(w.Start()), w.To
 	c.scanned = 0
+	c.stats = nil
+	if c.formatSelected() {
+		if err := c.collectFormat(ctx, w, sink); err != nil {
+			return err
+		}
+	}
+	if c.hygieneSelected() {
+		return c.collectHygiene(ctx, w, sink)
+	}
+	return nil
+}
+
+// collectFormat は形式プロファイルの集計 (解釈率と日次の metric)。
+func (c *Collector) collectFormat(ctx context.Context, w collect.Window, sink collect.RecordSink) error {
+	from, to := DayStart(w.Start()), w.To
 	c.stats = &collect.FormatStats{Source: c.src.ID, Format: c.src.Format, LogGroup: c.src.LogGroup, Expected: c.src.ExpectedMatchRate}
 	from, reason := c.queryRange(ctx, from, to)
 	if reason != "" {

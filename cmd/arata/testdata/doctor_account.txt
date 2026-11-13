@@ -19,6 +19,7 @@ posture               posture                    permission  ok      -          
 posture               posture                    permission  ok      -              wafv2:GetWebACLForResource (インターネット向けの ALB が無いため未確認)
 -                     -                          check       warn    -              cost_anomaly は skip される: no cost_anomaly source (profile daily)
 -                     -                          check       warn    -              endpoint_abuse は skip される: no http_access source (profile daily)
+-                     -                          check       warn    -              log_hygiene は skip される: checks.log_hygiene.sources is empty (nothing to read; see `arata help ai playbook log_hygiene`) (profile weekly)
 -                     -                          check       warn    -              login_bruteforce は skip される: no http_access source (profile daily)
 -                     -                          check       warn    -              probe_paths は skip される: no http_access source (profile daily)
 -                     -                          check       warn    -              waf_block_trend は skip される: no waf_action source (profile daily)
@@ -27,4 +28,4 @@ posture               posture                    permission  ok      -          
 
 必要な IAM action: access-analyzer:ListAnalyzers, access-analyzer:ListFindings, account:ListRegions, cloudtrail:DescribeTrails, cloudtrail:GetTrailStatus, cloudtrail:LookupEvents, elasticloadbalancing:DescribeLoadBalancers, guardduty:GetDetector, guardduty:GetFindings, guardduty:ListDetectors, guardduty:ListFindings, iam:GenerateCredentialReport, iam:GetAccountPasswordPolicy, iam:GetAccountSummary, iam:GetCredentialReport, s3:GetAccountPublicAccessBlock, wafv2:GetWebACLForResource
   (iam:GenerateCredentialReport だけは書き込み系: 認証情報レポートの生成のみ。拒否されても 4 時間以内に生成済みのレポートがあれば使う)
-結果: ng 2 / warn 6
+結果: ng 2 / warn 7
