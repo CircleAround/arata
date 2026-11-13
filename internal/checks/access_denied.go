@@ -180,9 +180,7 @@ func (c AccessDenied) Evaluate(ctx context.Context, q store.Query, w collect.Win
 		a.extra["breadth_threshold"] = breadthThr
 		a.extra["volume_threshold"] = volumeThr
 		a.extra["threshold"] = reason
-		if acct, ok := record.ExternalAccount(arn, p.kind); ok {
-			a.extra["external_account"] = acct
-		}
+		markAccountOnly(a.extra, "principal_identity", arn, p.kind)
 		label := record.PrincipalLabel(arn, p.kind)
 		summary := fmt.Sprintf("拒否された API 呼び出し: %s が %d 種類 (%d 件) で拒否 (列挙の兆候)", label, distinct, a.count)
 		if reason == deniedVolume {

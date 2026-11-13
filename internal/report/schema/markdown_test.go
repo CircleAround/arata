@@ -20,3 +20,56 @@ func TestMarkdownKeepsLogValuesOnOneLine(t *testing.T) {
 		}
 	}
 }
+
+// 主体がアカウントしか分からない finding (data.external_account) は、report.md で ARN (`...:root`) を「外部アカウント NNN (呼び出した主体は記録に無い)」と書く。
+// report.md は LLM が使えないときの通知の本文にもなる。ルートユーザーが使われたと読ませない。
+func TestMarkdownAccountOnlyCaller(t *testing.T) {
+	const root = "arn:aws:iam::111122223333:root"
+	r := &Report{Name: "n", Profile: "hourly"}
+	r.Findings.New = []Finding{
+		{ID: "f1", Check: "unknown_assume_role", Key: root + "->arn:aws:iam::123456789012:role/Admin", Severity: "high",
+			Summary: "既知リストに無い外部アカウント 111122223333 (呼び出した主体は記録に無い) が自アカウントのロール Admin を 1 回引き受け (内向き、MFA 不明)",
+			Data:    map[string]any{"caller": root, "caller_kind": "unknown", "caller_identity": "account_only", "external_account": "111122223333", "role_arn": "arn:aws:iam::123456789012:role/Admin"}},
+		// 以前の版の arata が作った finding (caller_identity が無い) も external_account で分かる
+		{ID: "f2", Check: "access_denied", Key: root, Severity: "medium", Summary: "s", Data: map[string]any{"principal": root, "external_account": "111122223333"}},
+		// 本物のルートユーザー (external_account が無い) はそのまま
+		{ID: "f3", Check: "root_usage", Key: "arn:aws:iam::123456789012:root|203.0.113.1", Severity: "critical", Summary: "s", Data: map[string]any{"principal": "arn:aws:iam::123456789012:root"}},
+		// external_account と違うアカウントの ARN、形の違う値は置き換えない
+		{ID: "f4", Check: "new_principal", Key: "k", Severity: "medium", Summary: "s", Data: map[string]any{"principal": "arn:aws:iam::444455556666:root", "external_account": "111122223333", "note": root + "x"}},
+	}
+	md := r.Markdown()
+	for _, want := range []string{
+		"  - caller: 外部アカウント 111122223333 (呼び出した主体は記録に無い)\n",
+		"  - caller_identity: account_only\n",
+		"  - principal: 外部アカウント 111122223333 (呼び出した主体は記録に無い)\n",
+		"  - principal: arn:aws:iam::123456789012:root\n",
+		"  - principal: arn:aws:iam::444455556666:root\n",
+		"  - note: " + root + "x\n",
+	} {
+		if !strings.Contains(md, want) {
+			t.Errorf("report.md に %q が無い:\n%s", want, md)
+		}
+	}
+	if strings.Contains(md, ": "+root+"\n") {
+		t.Errorf("アカウントしか分からない主体の ARN が root のまま出た:\n%s", md)
+	}
+}
+
+func TestFindingAccountOnly(t *testing.T) {
+	for _, c := range []struct {
+		data map[string]any
+		want string
+	}{
+		{map[string]any{"external_account": "111122223333"}, "111122223333"},
+		{map[string]any{"external_account": "111122223333\n"}, ""},
+		{map[string]any{"external_account": "１１１１２２２２３３３３"}, ""},
+		{map[string]any{"external_account": 111122223333.0}, ""},
+		{map[string]any{"caller_identity": "account_only"}, ""}, // アカウント ID が無ければ置き換える先が無い
+		{nil, ""},
+	} {
+		got, ok := Finding{Data: c.data}.AccountOnly()
+		if got != c.want || ok != (c.want != "") {
+			t.Errorf("%v: %q %v", c.data, got, ok)
+		}
+	}
+}

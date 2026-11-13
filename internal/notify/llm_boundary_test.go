@@ -183,11 +183,11 @@ func TestParseSummaryDropsUnsafeText(t *testing.T) {
 func TestParseBlockNotesChecksFreeText(t *testing.T) {
 	targets := []findingRef{{id: "f0"}, {id: "f1"}, {id: "f2"}}
 	for _, body := range []string{`{"summary":"https://evil.example を開く"}`, `{"summary":"BLOCK に切り替えてください"}`} {
-		if _, err := ParseBlockNotes([]byte(body), targets); err == nil {
+		if _, err := ParseBlockNotes([]byte(body), &Input{Kind: KindRun, Run: &schema.Report{}}, targets); err == nil {
 			t.Errorf("通した: %s", body)
 		}
 	}
-	n, err := ParseBlockNotes([]byte(`{"summary":"s","next":[{"finding_id":"f0","action":"@here 実行"},{"finding_id":"f1","action":"BLOCK に設定する"},{"finding_id":"f2","action":"鍵を無効化する"}]}`), targets)
+	n, err := ParseBlockNotes([]byte(`{"summary":"s","next":[{"finding_id":"f0","action":"@here 実行"},{"finding_id":"f1","action":"BLOCK に設定する"},{"finding_id":"f2","action":"鍵を無効化する"}]}`), &Input{Kind: KindRun, Run: &schema.Report{}}, targets)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -140,7 +140,7 @@ func TestAccessDenied(t *testing.T) {
 	}
 
 	r := obs[extRoot]
-	if r.Data["external_account"] != "444455556666" || !strings.Contains(r.Summary, "外部アカウント 444455556666 が") {
+	if r.Data["external_account"] != "444455556666" || r.Data["principal_identity"] != "account_only" || !strings.Contains(r.Summary, "外部アカウント 444455556666 が") {
 		t.Fatalf("external root: %+v", r)
 	}
 

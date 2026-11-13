@@ -93,7 +93,7 @@ LLM は critical / high を「情報」に格下げして沈黙させない。
 
 ## 書いてはいけないこと
 
-- 個人特定値 (氏名・メールアドレス) を書かない。主体は ARN、外部アカウントは「外部アカウント NNN」と書く
+- 個人特定値 (氏名・メールアドレス) を書かない。主体は ARN、外部アカウントは「外部アカウント NNN」と書く。data に `caller_identity` / `principal_identity: account_only` (または `external_account`) がある finding の主体 `arn:aws:iam::NNN:root` を「NNN の root」「ルートユーザー」と書かない (アカウント NNN のどの主体かは記録に無い。正規の CI や SaaS のロールも同じ形。ルートユーザーの利用は root_usage だけが報告する)
 - エンジンのログのサンプル行 (FORMAT_MISMATCH の samples) を要約に転記しない
 - 推測を事実として書かない。裏取りしていないことは「可能性」と書く
 

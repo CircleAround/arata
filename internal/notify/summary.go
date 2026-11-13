@@ -120,6 +120,8 @@ func findingIndex(in *Input) ([]findingRef, map[string]findingRef) {
 // 決定 (ADR 0041。ファズで見つけた): LLM が任意に増やせる節で本文を埋めさせない。
 //   - incidents は maxIncidents 件まで。1 件の中の同じ finding_id は 1 つにする。
 //   - approve_suggestions は finding 1 件につき 1 つ (2 件目以降は捨てる)。
+//
+// 決定 (account_only.go): 主体がアカウントしか分からない finding をルートユーザーの利用と書いた文は、ARN を置き換え、root の語が残れば捨てる。
 func ParseSummary(raw []byte, in *Input, urgent string) (*Summary, error) {
 	b := bytes.TrimSpace(raw)
 	if i, j := bytes.IndexByte(b, '{'), bytes.LastIndexByte(b, '}'); i >= 0 && j > i {
@@ -135,7 +137,12 @@ func ParseSummary(raw []byte, in *Input, urgent string) (*Summary, error) {
 	if why := rejectLLMText(s.Headline); why != "" {
 		return nil, fmt.Errorf("llm headline rejected: %s", why)
 	}
-	_, byID := findingIndex(in)
+	all, byID := findingIndex(in)
+	// 決定 (account_only.go): アカウントしか分からない主体をルートユーザーと書いた文は直すか捨てる
+	var why string
+	if s.Headline, why = newRootGuard(all...).apply(s.Headline, false); why != "" {
+		return nil, fmt.Errorf("llm headline rejected: %s", why)
+	}
 	seen := map[string]bool{}
 	items := []Item{}
 	for _, it := range s.Items {
@@ -143,6 +150,10 @@ func ParseSummary(raw []byte, in *Input, urgent string) (*Summary, error) {
 			continue
 		}
 		if why := rejectLLMText(it.Reason); why != "" {
+			s.Rejected = append(s.Rejected, it.FindingID+": "+why)
+			continue
+		}
+		if it.Reason, why = newRootGuard(byID[it.FindingID]).apply(it.Reason, true); why != "" {
 			s.Rejected = append(s.Rejected, it.FindingID+": "+why)
 			continue
 		}
@@ -161,14 +172,20 @@ func ParseSummary(raw []byte, in *Input, urgent string) (*Summary, error) {
 			continue
 		}
 		var ids []string
+		var refs []findingRef
 		inIncident := map[string]bool{}
 		for _, id := range inc.FindingIDs {
-			if _, ok := byID[id]; ok && !inIncident[id] {
+			if f, ok := byID[id]; ok && !inIncident[id] {
 				inIncident[id] = true
 				ids = append(ids, id)
+				refs = append(refs, f)
 			}
 		}
 		if len(ids) == 0 {
+			continue
+		}
+		if inc.Summary, why = newRootGuard(refs...).apply(inc.Summary, true); why != "" {
+			s.Rejected = append(s.Rejected, "incident: "+why)
 			continue
 		}
 		if len(incidents) == maxIncidents {
@@ -187,6 +204,10 @@ func ParseSummary(raw []byte, in *Input, urgent string) (*Summary, error) {
 			continue
 		}
 		if why := rejectLLMText(sg.Reason); why != "" {
+			s.Rejected = append(s.Rejected, sg.FindingID+": "+why)
+			continue
+		}
+		if sg.Reason, why = newRootGuard(f).apply(sg.Reason, true); why != "" {
 			s.Rejected = append(s.Rejected, sg.FindingID+": "+why)
 			continue
 		}
@@ -471,10 +492,11 @@ func SystemPrompt(kind, context, playbooks string) string {
 - 個人を特定できる値 (氏名・メールアドレスなど) を書かない。主体は ARN で書く。
 - 追加の照会はできない。report.json に書かれていることだけで判断し、推測は「可能性」と書く。
 %s
+%s
 - reason は 1〜2 文 (120 字程度)、incidents の summary は 200 字程度、approve_suggestions の reason も 1〜2 文にする。
   重大度・data の値は通知に別に表示されるので繰り返さない (「severity high。」や data.xxx= の書き方をしない)。何がなぜ問題かだけを書く。
 
 ---
 
-%s%s%s`, input, untrustedInputRule, t.Markdown(), playbooks, contextSection(context))
+%s%s%s`, input, untrustedInputRule, accountOnlyRule, t.Markdown(), playbooks, contextSection(context))
 }

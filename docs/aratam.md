@@ -114,6 +114,20 @@ LLM に求める出力:
   - `urgent_severity` 以上の finding への `approve_suggestions` は捨てる。
   - 自由文 (`headline`・`reason`・`incidents` の `summary`・blocks の `summary` と `next`・提案の書き起こし) に URL、`@channel` / `@here` / `@everyone`、BLOCK に強める記述があれば項目を捨てて規則の行に戻す。`headline` と blocks の `summary` なら形の不正 (再試行し、だめなら LLM の失敗と同じ扱い)。捨てたら `LLM_OUTPUT_REJECTED` の WARN (理由だけ。文の中身はログに写さない)。
   - LLM の文が載る通知は、既存の末尾の行に「要約と → は LLM による (ログの文字列に影響され得る)」を添える。`provider: none` と LLM の失敗では出さない。
+- 決定 (アカウントしか分からない主体をルートユーザーと書かせない。`internal/notify/account_only.go`): arata は、CloudTrail に呼び出し元のアカウント ID しか残らない主体を
+  `arn:aws:iam::NNN:root` と書く (Key と data。arata 設計書 6 章)。内向きの unknown_assume_role を LLM が「NNN の root から引き受けられた。急いで確かめる」と要約したことがあったため
+  (実際は相手のアカウントの CI のロールによる正規の引き受け)、プロンプトと規則の両方で守る。対象は data に `external_account` がある finding
+  (`caller_identity` / `principal_identity: account_only` を足す前の版の report.json でも効く。期間レポートの events は data が無いので、主体のチェックの key の形で見分ける)。
+  - system に規則を足す (`accountOnlyRule`。summary と blocks の 2 つ)。`docs/ai/report.md` と playbook にも同じことを書く。
+  - LLM の自由文の中の、その主体の ARN は「外部アカウント NNN (呼び出した主体は記録に無い)」に置き換える。
+  - 置き換えた後、そのアカウント ID から同じ文の 16 文字以内に root・ルートの語があれば捨てる。
+  - その finding に付く文 (`reason`・blocks の `next`・`approve_suggestions`・その finding を含む `incidents`) は、root・ルートの語があれば捨てる (finding は規則の行に戻る)。
+  - 全体の文 (`headline`・blocks の `summary`) は「ルートユーザー」「root アカウント」などの言い方があれば形の不正にする (再試行し、だめなら LLM の失敗と同じ扱い)。
+    語だけでは捨てない (`root_causes`・ルートテーブルなど別の話で要約の全部を失わないため)。
+  - 本物のルートの指摘 (root_usage、posture の root_mfa など。チェック名・key・見出しに root・ルートの語がある finding) が同じ範囲 (全体の文なら報告の全部、
+    インシデント候補ならその finding) にあるときは、語と言い方では捨てない (アカウント ID の近くだけを見る)。取り違えを完全には防げない範囲として残る。
+  - 規則で組み立てる行も同じ表記にする: 主要キーの `caller` はその ARN なら置き換え、blocks のまとめの主体は「外部アカウント NNN」。
+  - 重大度と送り先 (緊急・メンション) は変えない。未承認の引き受けは high のままで、正規なら approve (`account:`) で以後報告されなくなる。
 
 ### 3-1. プロバイダ
 

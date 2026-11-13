@@ -99,8 +99,11 @@ func TestChecks(t *testing.T) {
 			}
 		}},
 		{UnknownAssumeRole{}, "arn:aws:iam::111122223333:root->arn:aws:iam::1:role/ExampleSaaSRole;arn:aws:iam::1:user/expired->arn:aws:iam::1:role/Admin;arn:aws:iam::1:user/unknown->arn:aws:iam::1:role/Admin", func(t *testing.T, obs []Observation) {
-			if !strings.Contains(obs[0].Summary, "外部アカウント 111122223333 が") || obs[0].Data["external_account"] != "111122223333" {
+			if !strings.Contains(obs[0].Summary, "外部アカウント 111122223333 (呼び出した主体は記録に無い) が") || obs[0].Data["external_account"] != "111122223333" || obs[0].Data["caller_identity"] != "account_only" {
 				t.Fatalf("external account: %+v", obs[0])
+			}
+			if _, has := obs[2].Data["caller_identity"]; has {
+				t.Fatalf("IAM ユーザーの呼び出し元に caller_identity は付けない: %+v", obs[2])
 			}
 			if obs[1].Data["allowlist_status"] != "expired" || obs[2].Data["allowlist_status"] != "unknown" || obs[2].Data["count"] != 2 || obs[2].Severity != High {
 				t.Fatalf("%+v", obs)
@@ -110,8 +113,11 @@ func TestChecks(t *testing.T) {
 			}
 		}},
 		{NewPrincipal{}, "arn:aws:iam::111122223333:root;arn:aws:iam::1:user/expired;arn:aws:iam::1:user/unknown", func(t *testing.T, obs []Observation) {
-			if obs[0].Summary != "新規の主体 外部アカウント 111122223333 (unknown)" || obs[0].Data["external_account"] != "111122223333" {
+			if obs[0].Summary != "新規の主体 外部アカウント 111122223333 (unknown)" || obs[0].Data["external_account"] != "111122223333" || obs[0].Data["principal_identity"] != "account_only" {
 				t.Fatalf("external account: %+v", obs[0])
+			}
+			if _, has := obs[2].Data["principal_identity"]; has {
+				t.Fatalf("IAM ユーザーに principal_identity は付けない: %+v", obs[2])
 			}
 			if obs[2].Severity != Medium || obs[2].Data["count"] != 6 || len(obs[2].Data["ips"].([]string)) != 2 || obs[2].Data["kind"] != "user" {
 				t.Fatalf("%+v", obs[2])
@@ -328,5 +334,28 @@ func TestRootUsageSummaryWithIP(t *testing.T) {
 	}
 	if _, ok := obs[0].Data["invoked_by"]; ok {
 		t.Fatalf("invoked_by: %v", obs[0].Data)
+	}
+}
+
+// 主体がアカウントしか分からないとき (record.ExternalAccount) だけ、external_account と <field> を足す。
+func TestMarkAccountOnly(t *testing.T) {
+	d := map[string]any{}
+	markAccountOnly(d, "principal_identity", "arn:aws:iam::111122223333:root", record.PrincipalUnknown)
+	if d["external_account"] != "111122223333" || d["principal_identity"] != "account_only" {
+		t.Fatalf("%+v", d)
+	}
+	for _, c := range []struct {
+		arn  string
+		kind record.PrincipalKind
+	}{
+		{"arn:aws:iam::123456789012:root", record.PrincipalRoot}, // 本物のルートユーザー
+		{"arn:aws:iam::111122223333:role/x", record.PrincipalRole},
+		{"arn:aws:iam::111122223333:root\n", record.PrincipalUnknown},
+	} {
+		d := map[string]any{}
+		markAccountOnly(d, "principal_identity", c.arn, c.kind)
+		if len(d) != 0 {
+			t.Errorf("%s (%s): %+v", c.arn, c.kind, d)
+		}
 	}
 }
