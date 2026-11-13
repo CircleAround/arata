@@ -70,6 +70,7 @@ arata を呼ばず、AWS の監査ロールもストアも使わない (出力�
    (ここは `arata run --dry-run` ではなく、ふつうの run にする。試しの実行はストアに書かないので、指摘が報告済みにならない)
    (run はストアに確定するので、以後の定期実行は新しく起きたことだけを報せる。daily と weekly の両方で行う)。
    片付ける順番と ack / snooze の選び方は `arata help ai onboarding`
+   (チェックやソースを後から足すときも同じ順で進める。その流れと、設定の値を実データで決める方法も同じ文書)
 
 ```sh
 aratam config init                          # ./aratam.yaml (全項目を明示した雛形。provider は none)
