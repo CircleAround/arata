@@ -71,6 +71,8 @@ LookupEvents はリージョン単位で、グローバルサービス (IAM の�
 
 初期に用意する形式プロファイル: `nginx_access`, `alb_access`, `wafv2`, `cloudtrail` (CloudWatch Logs 配信版), `regex`。
 Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応し、使い回せる正規表現をサンプル集として同梱する。
+提案 (未実装。ADR 0051): 1 リクエストが複数行に分かれるログ (Rails の既定のログなど) は 1 行ずつの `regex` では拾いきれない。request_id でリクエスト単位にまとめてから集計する形式と、
+取れる項目 (ユーザー ID など) ごとに動かせるチェックの整理は ADR 0051。採用を決めたら、この章と 7 章に仕様として書く。
 
 決定 (cloudwatch-logs ソース。Step 2 の実装。クエリテンプレートの構造は ADR 0009):
 - 実装したプロファイルは `nginx_access` (combined 形式) / `alb_access` / `wafv2` / `json` / `regex`。`cloudtrail` (CloudWatch Logs 配信版) は未実装 (`cloudtrail-lookup` で足りるため後回し)。
