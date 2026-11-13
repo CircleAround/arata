@@ -15,16 +15,20 @@
 (nginx・ALB・JSON の行ログ) はこれで足りる。
 
 アプリの標準のログは 1 リクエストが複数行に分かれることがある。Rails の既定のログは次の形で、送信元とパスは最初の行、ステータスは最後の行にある。
-本番の既定では行の先頭に `[<request_id>]` が付く (`config.log_tags = [:request_id]`)。
+本番の既定では各行の本文の前に `[<request_id>]` のタグが付く (`config.log_tags = [:request_id]`)。
+タグは行頭には来ない。Ruby の Logger の既定の formatter では、重大度・時刻・プロセス番号の後ろに付く (下の例)。
+独自の formatter では、行頭に別の角括弧 (ホスト名やコンテナの ID など。英数字とハイフン) が付くこともある。
 
 ```
-[5b0c…e1] Started POST "/users/sign_in" for 203.0.113.10 at 2026-11-01 01:02:03 +0000
-[5b0c…e1] Processing by Devise::SessionsController#create as HTML
-[5b0c…e1]   Parameters: {…}
-[5b0c…e1] Completed 401 Unauthorized in 12ms
+I, [2026-11-01T01:02:03.000000 #1]  INFO -- : [5b0c…e1] Started POST "/users/sign_in" for 203.0.113.10 at 2026-11-01 01:02:03 +0000
+I, [2026-11-01T01:02:03.004000 #1]  INFO -- : [5b0c…e1] Processing by Devise::SessionsController#create as HTML
+I, [2026-11-01T01:02:03.005000 #1]  INFO -- : [5b0c…e1]   Parameters: {…}
+I, [2026-11-01T01:02:03.016000 #1]  INFO -- : [5b0c…e1] Completed 422 Unprocessable Content in 12ms
 ```
 
-1 行ずつの `regex` プロファイルでは「このパスへのリクエストが 401 だった」を数えられない (設計書 2 章は Rails を `regex` で扱うとしていたが、拾いきれない)。
+(認証ライブラリの既定では、ログインの失敗は入力画面の再表示で 422 になる。古い設定では 200。`login_bruteforce` の `failure_statuses` で合わせる。`docs/ai/logs.md`)
+
+1 行ずつの `regex` プロファイルでは「このパスへのリクエストが失敗のステータス (422 など) だった」を数えられない (設計書 2 章は Rails を `regex` で扱うとしていたが、拾いきれない)。
 アプリの前に nginx や ALB のログが無い利用者では、`http_access` を使うチェック (`login_bruteforce`・`probe_paths`・`endpoint_abuse`) が skip されたままになる。
 
 ### 確かめた事実 (実環境の Logs Insights)
@@ -58,7 +62,7 @@ sources:
     log_group: prod-app.log
     format: request_lines                 # yields は http_access (ユーザー ID が取れる設定なら http_user も)
     request:
-      id: '^\[(?P<request_id>[A-Za-z0-9-]{1,255})\] '
+      id: ' -- : \[(?P<request_id>[A-Za-z0-9-]{1,255})\] '   # 前の区切り (既定の formatter の ` -- : `) まで含めて書く
       max_duration: 60s                   # 問い合わせ範囲の前後に足す余白 (6 節)
       lines:
         - name: started
@@ -77,12 +81,12 @@ sources:
 
 ```
 # クエリの形の例 (sign_in_failures。値を拾う関数は実装のときに固定する)
-parse @message /^\[(?<rid>[A-Za-z0-9-]{1,255})\] /
+parse @message / -- : \[(?<rid>[A-Za-z0-9-]{1,255})\] /
 | parse @message /Started (?<m>[A-Z]+) "(?<p>[^"?]*)[^"]*" for (?<i>\S+) at /
 | parse @message /Completed (?<s>\d{3}) /
 | filter ispresent(rid)
 | stats earliest(m) as method, earliest(p) as path, earliest(i) as ip, latest(s) as status, count(m) as starts by rid
-| filter path = "/users/sign_in" and method = "POST" and status = 401
+| filter path = "/users/sign_in" and method = "POST" and status = 422
 | stats sum(starts) as n by ip
 ```
 
@@ -97,6 +101,17 @@ parse @message /^\[(?<rid>[A-Za-z0-9-]{1,255})\] /
   - 行の解釈率 = request_id の付いた行 / 全行。`lines_total` / `lines_matched` は今の意味のまま (ロググループ全体の行数。endpoint_abuse の「収集した日」に使う)。`expected_match_rate` 未満で `FORMAT_MISMATCH`
   - まとめられた割合 = `ip` と `path` が揃ったリクエスト / request_id の数 (`requests_total` / `requests_complete`)。`expected_complete_rate` 未満でも `FORMAT_MISMATCH`。
     ステータスの取れた割合・ユーザー ID の付いた割合も添える
+- **request_id の正規表現は、前の区切りまで含めて書く。行頭にも「最初の角括弧」にも頼らない**。
+  行頭に固定すると、既定の formatter のログでは 1 行も当たらない (これは行の解釈率が 0 になるので気づける)。
+  固定を外して「最初の `[…]`」を取ると、時刻やホスト名の角括弧を request_id と取り違え、全部の行が数個の鍵にまとまる。
+  このときは行の解釈率もまとめられた割合も高く出るので、**黙って数が壊れる**。そこで
+  - 設定の見本と `arata help ai` は、区切りを含む形 (既定の formatter なら ` -- : \[…\] `) だけを載せる。独自の formatter では、その形の区切りを利用者の見本の行から書く
+  - doctor と run は「request_id の異なりの数」と「最初の行 (Started) の数」を比べる。異なりの数が最初の行の数より極端に少ない
+    (既定の案: 半分未満。`request_id_reused` が大半を占める形) なら取り違えとみなし、doctor は ng、run は `FORMAT_MISMATCH` にして集計を保存しない
+    (平常帯を汚さない。設計書 2-2 と同じ扱い)
+    。送る側が ID を大量に使い回してもこの検査に当たり得るが、そのときも黙って数えずに失敗として報告に出るほうを選ぶ (終了コード 3 で気づける)
+  - テストの性質に入れる: 既定の formatter の行・行頭に別の角括弧がある行の見本で、見本の設定がリクエストの数だけ鍵を作ること。
+    取り違える設定 (最初の角括弧) を与えると、上の検査が必ず止めること
 - **request_id は信用しない** (ADR 0037)。Rails は、リクエストに `X-Request-Id` ヘッダーがあればその値 (英数字とハイフン、255 文字まで) を request_id に使う。
   送る側が値を選べるので、次の規則を置く
   - 鍵の正規表現は UUID の形に絞らない。絞ると、形の違う ID を付けたリクエストが「request_id の無い行」になり、全部のチェックから外れる
@@ -182,7 +197,7 @@ parse @message /^\[(?<rid>[A-Za-z0-9-]{1,255})\] /
 - アプリに足してもらう 1 行の勧める形 (種類と ID だけ。メールアドレス・氏名・ログイン名は出さない):
 
 ```
-[<request_id>] actor kind=user id=42
+I, [2026-11-01T01:02:03.010000 #1]  INFO -- : [<request_id>] actor kind=user id=42
 ```
 
 ```ruby
@@ -201,7 +216,7 @@ after_action { logger.info("actor kind=user id=#{current_user.id}") if current_u
   arata 自身は LLM を呼ばない (ADR 0001)
 - 確かめる手順は道具で固定する:
   1. `arata config check` (オフライン。正規表現が RE2 で読めるか、キャプチャの名前が決まったものか、必須の項目があるか)
-  2. `arata doctor` (行の解釈率・まとめられた割合・ステータスの取れた割合・ID の付いた割合・`request_id_reused`・行の種類ごとの当たった数・スキャン量の見積もり)。
+  2. `arata doctor` (行の解釈率・まとめられた割合・ステータスの取れた割合・ID の付いた割合・request_id の異なりの数と最初の行の数の比 (取り違えの検査)・`request_id_reused`・行の種類ごとの当たった数・スキャン量の見積もり)。
      行の種類ごとの数が出るので、LLM は当たらない行の種類を見て直せる
   3. `arata run --dry-run` (ADR 0049) で、実際に出る指摘を見る
 - LLM の書いた設定は「利用者のファイル」として信用しない入力に当たる。解釈する関数にはファズテストを足す (ADR 0041)。
@@ -256,7 +271,7 @@ after_action { logger.info("actor kind=user id=#{current_user.id}") if current_u
   原本は CloudWatch Logs にあるので、切り口を足したいときは集計を足して引き直す。却下
 - **新しいレコードの種類 `http_request` を作り、チェックを別に書く**: 既存の 3 つのチェックを二重に持つことになり、平常帯も別になる。
   1 行のログも「1 行 = 1 リクエスト」なので、前処理の違いとして吸収する。却下
-- **最初の行 (Started) だけを 1 行ずつ読む**: 今の `regex` で書ける。ステータスが無いので `login_bruteforce` (401)・`probe_paths` (403・404) が判定できない。却下
+- **最初の行 (Started) だけを 1 行ずつ読む**: 今の `regex` で書ける。ステータスが無いので `login_bruteforce` (失敗のステータス)・`probe_paths` (403・404) が判定できない。却下
 - **アプリに 1 行の JSON のログ (lograge など) へ変えてもらうことを前提にする**: 一番きれいだが、アプリの変更とログを読む他の仕組みへの影響があり、導入が利用者の開発の都合で止まる。
   勧める道として文書に残し、前提にはしない。変えたアプリは今の `json` 形式でそのまま読める
 - **ユーザー ID の無いリクエストを、同じ送信元・近い時刻のリクエストの ID で補う**: 推測で主体を決めることになり、NAT の後ろで別の利用者に付く。却下。ID の無いものは無いまま数える
