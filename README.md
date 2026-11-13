@@ -63,7 +63,8 @@ arata を呼ばず、AWS の監査ロールもストアも使わない (出力�
    AI (LLM) に下書きさせるなら `arata help ai runtime` を読ませ、読み取り専用ロールで読める構成から書かせて、人が事実を確かめる。事実が変わったら直す
 4. **最初の run は通知せずに中身を見る**。`init` は finding を出さないが、その後の最初の run は長く溜まっていた設定や主体が一度に出て、通知が多くなり得る。
    手元で `arata run --out <dir>` → `aratam notify --in <dir> --dry-run` で見て、approve・ack・resolve で片付けてから定期実行につなぐ
-   (run はストアに確定するので、以後の定期実行は新しく起きたことだけを報せる。daily と weekly の両方で行う)
+   (run はストアに確定するので、以後の定期実行は新しく起きたことだけを報せる。daily と weekly の両方で行う)。
+   片付ける順番と ack / snooze の選び方は `arata help ai onboarding`
 
 ```sh
 aratam config init                          # ./aratam.yaml (全項目を明示した雛形。provider は none)
@@ -204,8 +205,8 @@ arata config init --audit-account none   # 雛形を ./arata.yaml に書き出�
 #   --audit-account は必須 (下の「監査する側のアカウント」)。別のアカウントから監査するなら none の代わりにその 12 桁の ID
 # name / store / sources (cloudwatch-logs はコメントの例を外す) を編集する
 arata doctor                      # 権限・ロググループ・解釈率を検査 (問題があれば終了コード 2)
-arata init --window 7d
-arata run --profile daily --out /tmp/arata-out
+arata init --window 7d            # ベースライン収集 (findings は出さない)。終わると次の手順を表示する
+arata run --profile daily --out /tmp/arata-out   # 最初の run は通知をつながずに流し、arata review で 1 件ずつ片付ける (流れは arata help ai onboarding)
 
 arata profiles                    # プロファイルごとに実際に走るチェックとパラメータ、その由来 (overrides / checks: / 既定値)
 arata config init --diff          # 版を上げたら: 入っていないチェック・既定値と違う値・未知のキー・選んでいない audit_account

@@ -13,8 +13,9 @@ func TestSections(t *testing.T) {
 		"ai report": {"report.json の構造", "読む順序", "要約の手順", "相関付け", "分類の基準", "書いてはいけないこと", "追加の裏取り (任意)", "WAF の修正提案の候補 (proposals)", "期間レポート (report --month / --from --to)", "approve について"},
 		"ai approve": {"原則", "allowlist.yaml を PR で直す運用", "承認してよい主体の目安", "SaaS 連携は account で承認する", "行き先を既知にする (assume_destinations)", "監査する側のアカウント (audit_account)", "外部アカウント root の見方", "arn_pattern の使いどころ",
 			"期限付き承認の使いどころ", "tags の語彙", "access_denied が鳴ったとき", "principal_new_source・secret_access が鳴ったとき", "approve ではなく ack / snooze / resolve にするもの"},
-		"ai runtime":  {"使い方", "リポジトリと fork", "ワークフローのトリガー", "OIDC の信頼", "main の保護と書き込み権限", "secrets", "Actions の設定", "ワークフローの形", "監査対象の前提 (context_file) の下書き", "報告の書き方"},
-		"ai playbook": {"使い方", "一覧"},
+		"ai runtime":    {"使い方", "リポジトリと fork", "ワークフローのトリガー", "OIDC の信頼", "main の保護と書き込み権限", "secrets", "Actions の設定", "ワークフローの形", "監査対象の前提 (context_file) の下書き", "報告の書き方"},
+		"ai onboarding": {"流れ", "最初の run で出るもの", "1 件ずつ片付ける", "ack・snooze・resolve の使い分け", "導入作業の記録を拾う", "定時の通知を始める"},
+		"ai playbook":   {"使い方", "一覧"},
 	}
 	for _, tp := range Topics {
 		d := tp.Parse()
@@ -38,7 +39,7 @@ func TestSections(t *testing.T) {
 }
 
 func TestLookup(t *testing.T) {
-	for _, sub := range []string{"", "report", "approve", "runtime", "playbook", "playbook root_usage"} {
+	for _, sub := range []string{"", "report", "approve", "runtime", "onboarding", "playbook", "playbook root_usage"} {
 		if _, err := Lookup(sub); err != nil {
 			t.Fatal(err)
 		}
@@ -190,6 +191,86 @@ func TestPlaybookMentioned(t *testing.T) {
 		tp, _ := Lookup(sub)
 		if !strings.Contains(tp.Markdown(), "arata help ai playbook") {
 			t.Errorf("help %s must point to arata help ai playbook", tp.Name)
+		}
+	}
+}
+
+// TestOnboarding は導入の流れ (arata help ai onboarding) が、手順の順番と、片付け方の規則を持つことを固定する。
+func TestOnboarding(t *testing.T) {
+	tp, err := Lookup("onboarding")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := tp.Markdown()
+	sec := map[string]string{}
+	for _, s := range tp.Parse().Sections {
+		sec[s.Title] = s.Body
+	}
+	// 流れ: この順に並ぶ (config init → doctor → init → 通知なしの run (daily と weekly) → review → もう一度 daily → 定時の通知)
+	pos := -1
+	for _, want := range []string{"arata config init", "arata doctor", "arata init", "arata run --profile daily", "arata run --profile weekly", "arata review", "arata run --profile daily", "aratam"} {
+		i := strings.Index(sec["流れ"][pos+1:], want)
+		if i < 0 {
+			t.Fatalf("流れ lacks %q (or it is out of order)", want)
+		}
+		pos += 1 + i
+	}
+	if !strings.Contains(sec["流れ"], "通知") {
+		t.Errorf("流れ must say that the first runs are not notified")
+	}
+	// 片付け方: 4 つの手段と、承認は人がすること
+	for _, want := range []string{"arata approve", "arata ack", "arata snooze", "--until", "allowlist.yaml", "人が"} {
+		if !strings.Contains(sec["1 件ずつ片付ける"], want) {
+			t.Errorf("1 件ずつ片付ける lacks %q", want)
+		}
+	}
+	// 使い分け: 3 つの状態の違い (設計書 6 章の規則と同じ)
+	for _, want := range []string{"`ack`", "`snooze --until", "`resolve`", "再報告しない", "期日", "新規"} {
+		if !strings.Contains(sec["ack・snooze・resolve の使い分け"], want) {
+			t.Errorf("ack・snooze・resolve の使い分け lacks %q", want)
+		}
+	}
+	// 選び方: 直すつもりなら snooze、ack は正規の動きか終わった出来事だけ。報告が来なくなると困るものを ack にしない
+	for _, want := range []string{"直すつもりなら snooze", "正規の動き", "終わった出来事", "二度と報告されない", "報告が来なくなると困るものを ack にしない", "重大度"} {
+		if !strings.Contains(sec["ack・snooze・resolve の使い分け"], want) {
+			t.Errorf("ack・snooze・resolve の使い分け lacks %q", want)
+		}
+	}
+	// 「重大度が上がれば再報告」を当てにできない場面: 最も重い重大度で出たものを ack すると二度と報告されない
+	for _, want := range []string{"最も重い重大度", "上がる余地が無い", "当てにできない"} {
+		if !strings.Contains(sec["ack・snooze・resolve の使い分け"], want) {
+			t.Errorf("ack・snooze・resolve の使い分け lacks %q", want)
+		}
+	}
+	// secret_access の一括読み出し (導入直後は min_distinct だけで判定される): snooze で待つ。ack しない。secrets_access では消えない
+	for _, want := range []string{"min_distinct", "baseline_days", "baseline_median_distinct", "arata snooze", "ack しない", "初出", "書いても high は消えない"} {
+		if !strings.Contains(sec["最初の run で出るもの"], want) {
+			t.Errorf("最初の run で出るもの lacks %q", want)
+		}
+	}
+	if strings.Contains(body, "残ったら ack する") {
+		t.Errorf("must not tell to ack whatever remains")
+	}
+	// 導入作業の記録: CloudTrail の配信遅れ (最大 15 分) を待ってからもう一度流す
+	for _, want := range []string{"15 分", "arata run --profile daily"} {
+		if !strings.Contains(sec["導入作業の記録を拾う"], want) {
+			t.Errorf("導入作業の記録を拾う lacks %q", want)
+		}
+	}
+	// 顧客の情報を書かない: アカウント ID は架空の値だけ、メールアドレスは書かない
+	for _, id := range regexp.MustCompile(`\b\d{12}\b`).FindAllString(body, -1) {
+		if id != "123456789012" && id != "111122223333" {
+			t.Errorf("account id %s (use 123456789012 / 111122223333)", id)
+		}
+	}
+	if m := regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`).FindString(body); m != "" {
+		t.Errorf("email address %q", m)
+	}
+	// 入口と、状態を変える判断の文書から案内している
+	for _, sub := range []string{"", "approve"} {
+		other, _ := Lookup(sub)
+		if !strings.Contains(other.Markdown(), "arata help ai onboarding") {
+			t.Errorf("help %s must point to arata help ai onboarding", other.Name)
 		}
 	}
 }

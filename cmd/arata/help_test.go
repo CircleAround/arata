@@ -9,7 +9,7 @@ import (
 	"github.com/CircleAround/arata/internal/engine"
 )
 
-// TestRootHelp は引数なしの arata の出力を固定する。人向けの 4 行手順 (config init → doctor → init → run) と AI 向けの入口が最初に見えること。
+// TestRootHelp は引数なしの arata の出力を固定する。人向けの 5 行手順 (config init → doctor → init → run → review) と AI 向けの入口が最初に見えること。
 func TestRootHelp(t *testing.T) {
 	c := newCLI(t)
 	if code := c.run(); code != 0 {
@@ -17,7 +17,7 @@ func TestRootHelp(t *testing.T) {
 	}
 	compareGolden(t, "root_help.txt", c.stdout.Bytes())
 	out := c.stdout.String()
-	for _, want := range []string{"arata help ai", "1. arata config init", "2. arata doctor", "3. arata init", "4. arata run", "\n  ai          AI (LLM) 向けの使い方"} {
+	for _, want := range []string{"arata help ai", "1. arata config init", "2. arata doctor", "3. arata init", "4. arata run", "5. arata review", "arata help ai onboarding", "\n  ai          AI (LLM) 向けの使い方"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("root help lacks %q", want)
 		}
@@ -39,6 +39,8 @@ func TestHelpAI(t *testing.T) {
 		{[]string{"ai", "approve"}, "approve"},
 		{[]string{"help", "ai", "runtime"}, "runtime"},
 		{[]string{"ai", "runtime"}, "runtime"},
+		{[]string{"help", "ai", "onboarding"}, "onboarding"},
+		{[]string{"ai", "onboarding"}, "onboarding"},
 		{[]string{"help", "ai", "playbook"}, "playbook"},
 		{[]string{"ai", "playbook"}, "playbook"},
 		{[]string{"help", "ai", "playbook", "root_usage"}, "playbook root_usage"},
