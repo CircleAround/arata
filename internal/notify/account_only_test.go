@@ -201,8 +201,8 @@ func TestRuleLinesShowAccountOnly(t *testing.T) {
 //   - 通した文で、そのアカウント ID の近くに root・ルートの語が無い
 //   - 対象のアカウントが無ければ、文を変えず、捨てない
 func FuzzAccountOnlyText(f *testing.F) {
-	for _, s := range []string{"111122223333 の root から引き受けられた", aoRoot + " が引き受け", "arn:aws-cn:iam::111122223333:root", "ROOT ユーザー", "ル​ート ユーザー",
-		"外部アカウント 111122223333 (呼び出した主体は記録に無い) がロール role/root-admin を引き受け", "root_causes", "r‮oot 111122223333", "", "１１１１２２２２３３３３ の root",
+	for _, s := range []string{"111122223333 の root から引き受けられた", aoRoot + " が引き受け", "arn:aws-cn:iam::111122223333:root", "ROOT ユーザー", "ル\u200bート ユーザー",
+		"外部アカウント 111122223333 (呼び出した主体は記録に無い) がロール role/root-admin を引き受け", "root_causes", "r\u202eoot 111122223333", "", "１１１１２２２２３３３３ の root",
 		"arn:aws:iam::111122223333:rootarn:aws:iam::111122223333:root", "111122223333。root"} {
 		f.Add(s, true, false)
 		f.Add(s, false, true)
