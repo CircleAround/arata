@@ -59,9 +59,7 @@ func (c NewPrincipal) Evaluate(ctx context.Context, q store.Query, w collect.Win
 		if status == allowlist.StatusExpired {
 			label = "承認期限切れの主体"
 		}
-		if acct, ok := record.ExternalAccount(p.ARN, p.Kind); ok {
-			data["external_account"] = acct
-		}
+		markAccountOnly(data, "principal_identity", p.ARN, p.Kind)
 		obs = append(obs, Observation{
 			Check:       c.Name(),
 			Key:         p.ARN,
@@ -72,4 +70,14 @@ func (c NewPrincipal) Evaluate(ctx context.Context, q store.Query, w collect.Win
 		})
 	}
 	return obs, nil
+}
+
+// markAccountOnly は、主体がアカウントしか分からないとき (record.ExternalAccount。CloudTrail に呼び出し元のアカウント ID しか無い記録) に、
+// data へ `external_account` (アカウント ID) と field (`caller_identity` / `principal_identity`) = account_only を足す。
+// 決定 (設計書 6 章): Key と data の ARN (`arn:aws:iam::NNN:root`) は変えず、ルートユーザーではないことを data で区別できるようにする。
+func markAccountOnly(data map[string]any, field, arn string, kind record.PrincipalKind) {
+	if acct, ok := record.ExternalAccount(arn, kind); ok {
+		data["external_account"] = acct
+		data[field] = record.IdentityAccountOnly
+	}
 }

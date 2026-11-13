@@ -19,6 +19,7 @@ const (
 	ownRole   = "arn:aws:iam::123456789012:role/Admin"
 	otherRole = "arn:aws:iam::111122223333:role/partner-admin"
 	otherRoot = "arn:aws:iam::111122223333:root"
+	ownRole2  = "arn:aws:iam::123456789012:role/Deploy2"
 )
 
 // 向きは規則で決める。決められないときは書かない (推測しない。設計書 6 章)。
@@ -103,6 +104,8 @@ func TestUnknownAssumeRoleDirectionAndMFA(t *testing.T) {
 		ev("n2", ownUser, record.PrincipalUser, "198.51.100.8", map[string]any{"role_arn": ownRole, "recipient_account": ownAcct, "session_mfa": "false"}),
 		// 向きが決まらない (ロールの呼び出し元で、受け取ったアカウントの記録が無い。以前の版で集めたイベント)
 		ev("u1", "arn:aws:iam::123456789012:role/Deploy", record.PrincipalAssumedRole, "198.51.100.9", map[string]any{"role_arn": otherRole, "session_mfa": "false"}),
+		// 向きが決まらない (受け取ったアカウントが食い違う) うえ、呼び出し元はアカウントしか分からない
+		ev("u2", otherRoot, record.PrincipalUnknown, "198.51.100.10", map[string]any{"role_arn": ownRole2, "recipient_account": otherAcct}),
 	} {
 		if err := st.InsertEvent(ctx, e); err != nil {
 			t.Fatal(err)
@@ -119,7 +122,7 @@ func TestUnknownAssumeRoleDirectionAndMFA(t *testing.T) {
 			t.Fatalf("重大度は high のまま: %+v", o)
 		}
 	}
-	if len(by) != 4 {
+	if len(by) != 5 {
 		t.Fatalf("keys: %s", keys(obs))
 	}
 	check := func(key, summary string, data map[string]any, absent ...string) {
@@ -149,19 +152,44 @@ func TestUnknownAssumeRoleDirectionAndMFA(t *testing.T) {
 	check(ownUser+"->"+otherRole,
 		"既知リストに無い自アカウントの user/alice が外部アカウント 111122223333 のロール partner-admin を 1 回引き受け (外向き、MFA あり)",
 		map[string]any{"direction": "outbound", "mfa": "true", "caller_account": ownAcct, "role_account": otherAcct, "invoked_by": "AWS Internal", "caller": ownUser, "role_arn": otherRole},
-		"ips", "external_account")
+		"ips", "external_account", "caller_identity")
+	// 呼び出し元がアカウントしか分からない (ロール側の記録)。Key と caller は ARN のまま (既存の ack・既知リスト・approve との一致を保つ) だが、
+	// 見出しは root と読めない文にし、data に caller_identity: account_only を持たせる。caller_kind は主体の種類の語彙 (unknown) のまま
 	check(otherRoot+"->"+ownRole,
-		"既知リストに無い外部アカウント 111122223333 が自アカウントのロール Admin を 1 回引き受け (内向き、MFA 不明)",
-		map[string]any{"direction": "inbound", "mfa": "unknown", "external_account": otherAcct, "ips": "198.51.100.7"}, "invoked_by")
+		"既知リストに無い外部アカウント 111122223333 (呼び出した主体は記録に無い) が自アカウントのロール Admin を 1 回引き受け (内向き、MFA 不明)",
+		map[string]any{"direction": "inbound", "mfa": "unknown", "external_account": otherAcct, "ips": "198.51.100.7",
+			"caller": otherRoot, "caller_kind": "unknown", "caller_identity": "account_only"}, "invoked_by")
 	check(ownUser+"->"+ownRole,
 		"既知リストに無い自アカウントの user/alice が自アカウントのロール Admin を 2 回引き受け (内部、MFA の有無が混在)",
-		map[string]any{"direction": "internal", "mfa": "mixed", "ips": "198.51.100.8"})
+		map[string]any{"direction": "internal", "mfa": "mixed", "ips": "198.51.100.8"}, "caller_identity")
 	check("arn:aws:iam::123456789012:role/Deploy->"+otherRole,
 		"既知リストに無い arn:aws:iam::123456789012:role/Deploy が arn:aws:iam::111122223333:role/partner-admin を 1 回引き受け (MFA なし)",
-		map[string]any{"mfa": "false"}, "direction")
+		map[string]any{"mfa": "false"}, "direction", "caller_identity")
+	check(otherRoot+"->"+ownRole2,
+		"既知リストに無い 外部アカウント 111122223333 (呼び出した主体は記録に無い) が arn:aws:iam::123456789012:role/Deploy2 を 1 回引き受け (MFA 不明)",
+		map[string]any{"mfa": "unknown", "external_account": otherAcct, "caller_identity": "account_only"}, "direction")
+	// 見出しに root・ルートの語を出さない (アカウントしか分からない呼び出し元をルートユーザーと読ませない)
+	for _, k := range []string{otherRoot + "->" + ownRole, otherRoot + "->" + ownRole2} {
+		if s := by[k].Summary; strings.Contains(s, "root") || strings.Contains(s, "ルート") {
+			t.Fatalf("見出しに root の語がある: %s", s)
+		}
+	}
 	// Fingerprint は変えない (重大度 + IP 集合 + allowlist 状態)。既存の finding を changed にしない
 	if fp := by[ownUser+"->"+ownRole].Fingerprint; fp != "high|198.51.100.8|unknown" {
 		t.Fatalf("fingerprint: %q", fp)
+	}
+}
+
+// 呼び出し元もロールも自アカウントで、呼び出し元がアカウントしか分からない記録 (種類の無い記録など) は「外部」とも root とも書かない。
+func TestAssumeSummaryAccountOnlyInternal(t *testing.T) {
+	const ownRoot = "arn:aws:iam::123456789012:root"
+	p := newAssumeParties(ownRoot, record.PrincipalUnknown, ownRole, ownAcct)
+	if p.direction != dirInternal {
+		t.Fatalf("direction: %q", p.direction)
+	}
+	got := assumeSummary(p, true, "", ownRole, 2, mfaUnknown)
+	if want := "既知リストに無い自アカウント (呼び出した主体は記録に無い) が自アカウントのロール Admin を 2 回引き受け (内部、MFA 不明)"; got != want {
+		t.Fatalf("\n got: %s\nwant: %s", got, want)
 	}
 }
 
@@ -217,6 +245,13 @@ func FuzzAssumeDirection(f *testing.F) {
 		for _, l := range []string{p.callerLabel, p.roleLabel} {
 			if l == "" || len(l) > maxAssumeLabel || headlineUnsafe.MatchString(l) {
 				t.Fatalf("見出しに出せない表記: %q", l)
+			}
+		}
+		// 呼び出し元がアカウントしか分からないなら、見出しの呼び出し元に root の語を出さない (ロールの名前に含まれる分は別)
+		if acct, accountOnly := record.ExternalAccount(caller, kind); accountOnly {
+			sum := assumeSummary(p, true, record.AccountOnlyLabel(acct), role, 1, mfaUnknown)
+			if rest := strings.Replace(sum, p.roleLabel, "", 1); strings.Contains(rest, "root") || !strings.Contains(sum, "呼び出した主体は記録に無い") {
+				t.Fatalf("アカウントしか分からない呼び出し元を root と読める見出し: %q", sum)
 			}
 		}
 	})

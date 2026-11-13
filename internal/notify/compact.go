@@ -45,6 +45,10 @@ func detail(f schema.Finding) string {
 		if !ok || v == nil {
 			continue
 		}
+		// 決定 (account_only.go): アカウントしか分からない主体の ARN (`...:root`) は「外部アカウント NNN (呼び出した主体は記録に無い)」と書く
+		if x, isStr := v.(string); isStr {
+			v = f.AccountOnlyText(x)
+		}
 		s, ok := valueText(v, f.Summary)
 		if !ok {
 			continue

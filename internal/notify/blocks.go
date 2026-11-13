@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/CircleAround/arata/docs/ai"
+	"github.com/CircleAround/arata/internal/report/schema"
 )
 
 // Block Kit の通知 (slack.format: blocks。ADR 0029)。
@@ -226,9 +227,13 @@ func numSuffix(f findingRef, field, unit string) string {
 	return ""
 }
 
-// principalName は ARN の末尾 (user/x・role/x)。外部アカウントならアカウント ID を添える。
+// principalName は ARN の末尾 (user/x・role/x)。data に external_account があればアカウント ID を添える。
 func principalName(f findingRef) string {
 	arn, _, _ := strings.Cut(f.key, "|")
+	// 決定 (account_only.go): アカウントしか分からない主体 (`arn:aws:iam::NNN:root`) は「外部アカウント NNN」と書く (ARN の末尾の `root` を出さない)
+	if a, ok := accountOnlyOf(f); ok && schema.AccountRootARNRe.FindString(arn) == arn {
+		return code("外部アカウント " + a)
+	}
 	s := code(arnTail(arn))
 	if f.finding != nil {
 		if a, ok := f.finding.Data["external_account"].(string); ok && a != "" {
@@ -674,15 +679,18 @@ func BlocksSystemPrompt(kind, context, playbooks string, targets []findingRef) s
 - 個人を特定できる値 (氏名・メールアドレスなど) を書かない。主体は ARN や ID で書く。
 - 追加の照会はできない。report.json に書かれていることだけで判断し、推測は「可能性」と書く。
 %s
+%s
 
 ---
 
-%s%s%s`, input, list, untrustedInputRule, t.Markdown(), playbooks, contextSection(context))
+%s%s%s`, input, list, untrustedInputRule, accountOnlyRule, t.Markdown(), playbooks, contextSection(context))
 }
 
 // ParseBlockNotes は blocks の契約の出力を検証する。summary が空なら形が不正 (再試行し、だめなら規則で組み立てる)。
 // 知らない id・「まず対応」以外の id・同じ id の 2 件目以降・空の action は捨てる (捨てた項目は規則の「→」になる)。
-func ParseBlockNotes(raw []byte, targets []findingRef) (*BlockNotes, error) {
+// 決定 (account_only.go): 主体がアカウントしか分からない finding をルートユーザーの利用と書いた文は、ARN を置き換え、root の語が残れば捨てる
+// (summary は形の不正、「→」は規則の文に戻る)。in は報告の全体 (summary の検査に使う)。
+func ParseBlockNotes(raw []byte, in *Input, targets []findingRef) (*BlockNotes, error) {
 	b := bytes.TrimSpace(raw)
 	if i, j := bytes.IndexByte(b, '{'), bytes.LastIndexByte(b, '}'); i >= 0 && j > i {
 		b = b[i : j+1]
@@ -703,20 +711,30 @@ func ParseBlockNotes(raw []byte, targets []findingRef) (*BlockNotes, error) {
 	if why := rejectLLMText(out.Summary); why != "" {
 		return nil, fmt.Errorf("llm summary rejected: %s", why)
 	}
-	allowed := map[string]bool{}
-	for _, f := range targets {
-		allowed[f.id] = true
+	all, _ := findingIndex(in)
+	summary, why := newRootGuard(all...).apply(out.Summary, false)
+	if why != "" {
+		return nil, fmt.Errorf("llm summary rejected: %s", why)
 	}
-	n := &BlockNotes{Summary: out.Summary, Next: map[string]string{}}
+	allowed := map[string]findingRef{}
+	for _, f := range targets {
+		allowed[f.id] = f
+	}
+	n := &BlockNotes{Summary: summary, Next: map[string]string{}}
 	for _, x := range out.Next {
 		a := oneLine(x.Action)
-		if !allowed[x.FindingID] || a == "" {
+		f, ok := allowed[x.FindingID]
+		if !ok || a == "" {
 			continue
 		}
 		if _, dup := n.Next[x.FindingID]; dup {
 			continue
 		}
 		if why := rejectLLMText(a); why != "" {
+			n.Rejected = append(n.Rejected, x.FindingID+": "+why)
+			continue
+		}
+		if a, why = newRootGuard(f).apply(a, true); why != "" {
 			n.Rejected = append(n.Rejected, x.FindingID+": "+why)
 			continue
 		}

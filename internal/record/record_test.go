@@ -51,6 +51,16 @@ func TestExternalAccount(t *testing.T) {
 	if _, ok := ExternalAccount("arn:aws:iam::111122223333:role/x", PrincipalRole); ok {
 		t.Fatal("role is not an account")
 	}
+	// 末尾の改行つきは決まった形ではない (`$` は改行の前にも合うので \z で見る)
+	if _, ok := ExternalAccount("arn:aws:iam::111122223333:root\n", PrincipalUnknown); ok {
+		t.Fatal("trailing newline")
+	}
+	if l := AccountOnlyLabel("111122223333"); l != "外部アカウント 111122223333 (呼び出した主体は記録に無い)" {
+		t.Fatal(l)
+	}
+	if IdentityAccountOnly != "account_only" {
+		t.Fatal(IdentityAccountOnly)
+	}
 }
 
 func TestSnapshotItemAccessors(t *testing.T) {

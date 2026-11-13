@@ -287,9 +287,7 @@ func (c PrincipalNewSource) Evaluate(ctx context.Context, q store.Query, w colle
 			}
 			data["new_regions"] = rs
 		}
-		if acct, ok := record.ExternalAccount(arn, p.Kind); ok {
-			data["external_account"] = acct
-		}
+		markAccountOnly(data, "principal_identity", arn, p.Kind)
 		var parts []string
 		if len(prefixes) > 0 {
 			parts = append(parts, fmt.Sprintf("初めての送信元 %s から使われた (書き込み %.0f 件)", strings.Join(prefixes, ", "), writes))

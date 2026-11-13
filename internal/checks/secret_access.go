@@ -282,9 +282,7 @@ func (c SecretAccess) Evaluate(ctx context.Context, q store.Query, w collect.Win
 			a.extra["new_secret_count"] = len(newSecrets)
 			a.extra["first_reader"] = firstReader
 		}
-		if acct, ok := record.ExternalAccount(arn, p.kind); ok {
-			a.extra["external_account"] = acct
-		}
+		markAccountOnly(a.extra, "principal_identity", arn, p.kind)
 		label := record.PrincipalLabel(arn, p.kind)
 		var parts []string
 		if bulk {

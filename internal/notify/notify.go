@@ -284,7 +284,7 @@ func summarizeBlocks(ctx context.Context, o Options, log *slog.Logger, in *Input
 	system := BlocksSystemPrompt(in.Kind, o.Context, playbooksPrompt(orderedChecks(in), log), top)
 	err := callLLM(ctx, o, log, system, in.JSON, func(raw []byte) error {
 		var err error
-		n, err = ParseBlockNotes(raw, top)
+		n, err = ParseBlockNotes(raw, in, top)
 		return err
 	})
 	if err == nil {

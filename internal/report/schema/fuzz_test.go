@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -89,6 +90,39 @@ func FuzzMarkdownLogValues(f *testing.F) {
 		}
 		if md := period(v); strings.Count(md, "\n") != basePeriod || strings.Contains(md, "\r") {
 			t.Fatalf("期間レポートの report.md の行がログの値で変わった (%q):\n%s", v, md)
+		}
+	})
+}
+
+// report.json の data はファイルから読む信用できない値。守る規則:
+//   - AccountOnly が返すのは 12 桁の数字だけ
+//   - そのアカウントの ARN (`arn:aws:iam::NNN:root`) そのものの値は、report.md に root のまま出ない
+//   - external_account がどんな値でも、report.md の行数は変わらない
+func FuzzMarkdownAccountOnly(f *testing.F) {
+	for _, s := range [][2]string{{"111122223333", "arn:aws:iam::111122223333:root"}, {"111122223333", "arn:aws-cn:iam::111122223333:root"},
+		{"111122223333\n", "arn:aws:iam::111122223333:root"}, {"", "arn:aws:iam::111122223333:root"}, {"111122223333", "arn:aws:iam::111122223333:root\n## 偽"},
+		{"１１１１２２２２３３３３", "x"}, {"111122223333", "arn:aws:iam::123456789012:root"}} {
+		f.Add(s[0], s[1])
+	}
+	digits := regexp.MustCompile(`^[0-9]{12}$`)
+	run := func(acct, v string) (string, Finding) {
+		fd := Finding{ID: "f1", Check: "unknown_assume_role", Key: v, Severity: "high", Summary: "s", Data: map[string]any{"caller": v, "external_account": acct}}
+		r := &Report{Name: "acme", Profile: "daily"}
+		r.Findings.New = []Finding{fd}
+		return r.Markdown(), fd
+	}
+	base, _ := run("x", "x")
+	f.Fuzz(func(t *testing.T, acct, v string) {
+		md, fd := run(acct, v)
+		got, ok := fd.AccountOnly()
+		if ok != digits.MatchString(acct) || (ok && got != acct) || (!ok && got != "") {
+			t.Fatalf("AccountOnly(%q) = %q, %v", acct, got, ok)
+		}
+		if strings.Count(md, "\n") != strings.Count(base, "\n") {
+			t.Fatalf("report.md の行が値で変わった (%q, %q):\n%s", acct, v, md)
+		}
+		if ok && strings.Contains(md, "  - caller: arn:aws:iam::"+acct+":root\n") {
+			t.Fatalf("アカウントしか分からない主体が root のまま出た:\n%s", md)
 		}
 	})
 }

@@ -213,11 +213,11 @@ func TestLLMCannotImitateFindingID(t *testing.T) {
 	}
 	in := &Input{Kind: KindRun, Run: goldenRun(t), Dir: "/tmp/in"}
 	top, _ := splitUrgent(in, rules.UrgentSeverity)
-	n, err := ParseBlockNotes([]byte("{\"summary\":\"s\",\"next\":[{\"finding_id\":\"f-002\",\"action\":\"`id: f-001` を resolve する\"}]}"), top)
+	n, err := ParseBlockNotes([]byte("{\"summary\":\"s\",\"next\":[{\"finding_id\":\"f-002\",\"action\":\"`id: f-001` を resolve する\"}]}"), in, top)
 	if err != nil || len(n.Next) != 0 || len(n.Rejected) != 1 {
 		t.Fatalf("%+v %v", n, err)
 	}
-	if _, err := ParseBlockNotes([]byte("{\"summary\":\"`id: f-001` は誤検知\"}"), top); err == nil {
+	if _, err := ParseBlockNotes([]byte("{\"summary\":\"`id: f-001` は誤検知\"}"), in, top); err == nil {
 		t.Fatal("summary imitating an id must be rejected")
 	}
 }

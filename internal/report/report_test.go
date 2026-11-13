@@ -10,6 +10,8 @@ import (
 
 	"github.com/CircleAround/arata/internal/checks"
 	"github.com/CircleAround/arata/internal/collect"
+	"github.com/CircleAround/arata/internal/record"
+	"github.com/CircleAround/arata/internal/report/schema"
 	"github.com/CircleAround/arata/internal/store"
 )
 
@@ -109,5 +111,15 @@ func compareGolden(t *testing.T, name string, got []byte) {
 	}
 	if string(want) != string(got) {
 		t.Fatalf("%s differs from golden (run `go test ./internal/report -update` after reviewing):\n--- got ---\n%s", name, got)
+	}
+}
+
+// アカウントしか分からない主体の表記と data の値は、チェック (record) と report.md・通知 (schema。標準ライブラリだけ) で同じ。
+func TestAccountOnlyLabelMatchesRecord(t *testing.T) {
+	if a, b := schema.AccountOnlyLabel("111122223333"), record.AccountOnlyLabel("111122223333"); a != b {
+		t.Fatalf("schema %q != record %q", a, b)
+	}
+	if schema.IdentityAccountOnly != record.IdentityAccountOnly {
+		t.Fatal("IdentityAccountOnly")
 	}
 }

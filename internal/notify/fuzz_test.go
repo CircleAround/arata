@@ -315,7 +315,7 @@ func FuzzParseBlockNotes(f *testing.F) {
 		"{\"summary\":\"`ID :f-001` は誤検知\"}",
 		`{"summary":"https://evil.example を開く"}`, `{"summary":"s\u2028*偽の行*","next":[{}]}`, `{"summary":"s","next":null}`, `{}`, ``)
 	f.Fuzz(func(t *testing.T, raw []byte) {
-		n, err := ParseBlockNotes(raw, top)
+		n, err := ParseBlockNotes(raw, in, top)
 		if err != nil {
 			if n != nil {
 				t.Fatal("エラーなのに結果を返した")
