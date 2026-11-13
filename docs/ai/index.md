@@ -46,6 +46,7 @@ LLM の役割は「危険の判定を代行する」ことではなく「人が�
 | `arata approve <id> --note ... [--expires] [--tag] [--commit]` | allowlist に追記し finding を解消 (`--destination` は主体ではなく、外向きの引き受けの行き先のアカウントを既知にする) | **しない** (人に提案する) |
 | `arata ack / snooze --until / resolve <id>` | finding の状態を変える | 人の指示があれば |
 | `arata help ai onboarding` | 導入の流れ (init の後、最初の run の指摘を通知の前に片付ける手順。ack / snooze / resolve の使い分け) | よい (読み取りのみ) |
+| `arata help ai logs` | 記録の集め方 (どの記録があればどのチェックが動くか、ログの出し方、doctor の読み方) | よい (読み取りのみ) |
 | `arata help ai playbook [<check>]` | チェックごとの対処手順 | よい (読み取りのみ) |
 | `arata help ai runtime` | GitHub Actions で動かす環境 (リポジトリの設定・OIDC の信頼・secrets) のチェックリストと、`context_file` の下書きの手順 | よい (読み取りのみ) |
 
@@ -126,6 +127,7 @@ assume_destinations:              # 外向きの引き受けで、行き先と�
 - `arata help ai report`: report.json の構造と要約の手順
 - `arata help ai approve`: 承認判断の基準
 - `arata help ai onboarding`: 導入の流れ。init の後の最初の run は通知せずに流し、review で 1 件ずつ片付けてから定時の通知を始める
+- `arata help ai logs`: 記録の集め方。チェックが skip される・解釈率が低い・ロググループが無いときに読む (チェックと記録の対応表、ALB・WAF・nginx・アプリのログの出し方)
 - `arata help ai playbook <check>`: チェックごとの対処手順 (確かめる順番・判断の分かれ目・対処の選択肢)。一覧は `arata help ai playbook`
 - `arata help ai runtime`: 利用者の環境 (GitHub Actions で動かすリポジトリ) を作る・見直すときのチェックリスト。
   環境を作るときは、aratam の `llm.context_file` (監査対象の前提) の下書きまで行う (手順は同じ文書。マージは人)

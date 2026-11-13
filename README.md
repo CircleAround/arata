@@ -27,6 +27,7 @@ AWS のログと設定を定期的に改め、**前回から新しく発生し�
 
 `arata help ai` を最初に読ませる (report の読み方は `arata help ai report`、承認判断は `arata help ai approve`、チェックごとの対処手順は `arata help ai playbook <check>`、`--format json` も可)。
 内容はバイナリに埋め込まれていて、エンジンの版と常に揃う。
+チェックが skip される・解釈率が低いなど、記録が足りないときは `arata help ai logs` (チェックと記録の対応表、ログの出し方) を読ませる。
 GitHub Actions で動かす利用者の環境 (リポジトリの設定・OIDC の信頼・secrets) を作る・見直すときは `arata help ai runtime` を読ませる (チェックリスト。設定を変えるのは人)。
 
 ## 通知 (aratam)
@@ -204,7 +205,7 @@ cd /path/to/target
 arata config init --audit-account none   # 雛形を ./arata.yaml に書き出す (既存ファイルは --force が無ければ上書きしない。標準出力へは --out -)
 #   --audit-account は必須 (下の「監査する側のアカウント」)。別のアカウントから監査するなら none の代わりにその 12 桁の ID
 # name / store / sources (cloudwatch-logs はコメントの例を外す) を編集する
-arata doctor                      # 権限・ロググループ・解釈率を検査 (問題があれば終了コード 2)
+arata doctor                      # 権限・ロググループ・解釈率を検査 (問題があれば終了コード 2。足りない記録の出し方は arata help ai logs)
 arata init --window 7d            # ベースライン収集 (findings は出さない)。終わると次の手順を表示する
 arata run --profile daily --out /tmp/arata-out   # 最初の run は通知をつながずに流し、arata review で 1 件ずつ片付ける (流れは arata help ai onboarding)
 
@@ -390,6 +391,8 @@ store: s3://example-arata-store/my-service
 `sources` に `kind: cloudwatch-logs` を足し、ロググループと形式プロファイルを紐付ける (examples/arata.yaml)。生ログは引かず、
 Logs Insights の集計クエリで日次集計 (IP 別の sign-in 失敗数など) だけを `metrics` に貯める。スキャン量課金なので次に注意する。
 
+- どの記録があればどのチェックが動くか、ALB・WAF・nginx・アプリのログの出し方、保存期間と費用の目安、よく詰まる点は `arata help ai logs` にまとめてある
+  (人が読んでもよい。doctor は足りない記録の行に、読む節を示す)。
 - まず `arata doctor` で、ロググループの有無・直近 100 行の解釈率・集計クエリが Insights に受理されるかを確かめる。
   解釈率が `expected_match_rate` (既定 0.8) 未満なら形式の指定 (`format` / `fields` / `regex` / `stream_prefix`) を見直す
 - 集計クエリは窓に重なる UTC 日の 0 時から引くので、1 回のスキャンは最大で窓 + 24h 分。`max_scan_gb` でソースごとに上限を付けられる (超えたら `QUERY_LIMIT`)

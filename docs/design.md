@@ -463,7 +463,7 @@ internal/report/              JSON / Markdown 生成、期間集計 (period.go)�
 tools/agegate/                CI 用の依存の age-gate (エンジンには入らない小さな main。決定: internal/ ではなく tools/ に置く。ADR 0017)
 tools/actionsgate/            CI 用の Actions の検査 (SHA 固定・版の一致・7 日待機。ADR 0035)
 tools/wordscan/               CI 用の禁止語の検査 (語の一覧は secrets から読む。ADR 0036)
-docs/ai/*.md                  LLM 向けの使い方。embed でバイナリに入り `arata help ai [report|approve|runtime|onboarding|playbook <check>]` で出る (決定: skills/ の同梱は取りやめ。ADR 0012)
+docs/ai/*.md                  LLM 向けの使い方。embed でバイナリに入り `arata help ai [report|approve|runtime|onboarding|logs|playbook <check>]` で出る (決定: skills/ の同梱は取りやめ。ADR 0012)
 deploy/iam/readonly-role.yaml 顧客に配る読み取りロール + Roles Anywhere 用信頼ポリシーの CloudFormation (決定: 信頼先は AWS の主体と Roles Anywhere のトラストアンカーをパラメータで受ける。action は collector の一覧と Go のテストで一致させる。ADR 0020)
 deploy/sandbox/               試験環境 (sandbox = arata の試験用に条件を整えた開発用アカウント上の環境) の CDK (TypeScript)。Go モジュールとは独立。readonly-role.yaml を CfnInclude で取り込む (ADR 0020)
 deploy/lambda/                Lambda 配備用 CDK or SAM テンプレート (S3 ストア、別アカウント推奨)
@@ -1026,7 +1026,7 @@ arata review    [--status open|acked]
 arata approve   <finding-id> --note "..." [--expires date] [--tag deploy] [--by name] [--commit] [--account | --arn-pattern glob]
 arata approve   <finding-id> --destination --note "..." [--destination-role glob] [--expires date] [--by name] [--commit]   # 行き先のアカウントを既知にする (ADR 0047)
 arata ack|snooze|resolve <finding-id>        # snooze は --until date
-arata help ai [report|approve|runtime|onboarding|playbook [check]] [--format json]   # LLM 向けの使い方 (arata ai と同じ)。playbook はチェックごとの対処手順
+arata help ai [report|approve|runtime|onboarding|logs|playbook [check]] [--format json]   # LLM 向けの使い方 (arata ai と同じ)。playbook はチェックごとの対処手順
 arata prune     [--dry-run]
 arata rebuild   [--from-scratch [--baseline]] [--format text|json]   # raw JSONL から SQLite を再構築 (5-4、ADR 0033)
 ```
@@ -1165,6 +1165,21 @@ approve は人の判断を経て実行する。
   報告が来なくなると困るものを ack にしない。規則 (6 章の状態遷移) は変えず、使い方の基準だけを書く
 - 却下: init が run まで続けて行う (init が finding を出さない前提が崩れ、通知をつないだ実行と区別できない)。
   「最初の run は通知しない」を arata の機能にする (arata は通知を知らない。ADR 0018)。README だけに書く (版とずれる。ADR 0012)
+
+決定 (記録の集め方を arata から引けるようにする): どの記録があればどのチェックが動くか、その記録をどう出すかは 2 章と ADR (0006・0028・0046 など) に散らばり、
+利用者が読む場所が無かった。`arata help ai logs` (docs/ai/logs.md) にまとめる。
+
+- 中身: チェックと記録の対応表、記録ごとの勧める出し方 (CloudTrail・ALB・WAF・nginx・アプリの JSON 行ログ・ECS)、保存期間と Logs Insights の費用の目安、設定の例、doctor の読み方、よく詰まる点、外部の基準への案内
+- 対応表は「要るソースの組」ごとに 1 行。Registry のチェックの `Needs` / `StoredNeeds` とソースの種類 (`kindsOf`) からテスト (`internal/engine` の `TestLogsGuideTable`) が同じ表を作り、
+  文書の表と一字一句比べる。チェックを足す・`Needs` を変える・ソースの種類や形式を足すと落ちる。却下: 表を実行時に作って埋め込む (playbook の一覧と違い、前後の説明と一緒に読む表なので、文書に置いてテストで縛る)
+- doctor は足りない記録の行 (`LOG_GROUP_MISSING`、`FORMAT_MISMATCH`、行が無い、ソースが無くチェックが skip) に、読む節を添える。
+  JSON では行の `hint` (`arata help ai logs (「<節>」)`)、表では後ろに「記録の集め方: ...」を節ごとに 1 行 (DETAIL は長くしない)。節の名前が文書に実在することをテストで固定する。
+  権限・クエリの不備・費用の行には付けない (記録の出し方の問題ではない)
+- よく詰まる点は一般化して書く (特定の利用者の構成は書かない)。Devise のログイン失敗のステータス (responder の `error_status` の既定は 200) のように、
+  既定の `failure_statuses` では数えられない構成があることを書く。既定値そのものは変えない (失敗を 200 で返すかはアプリの設定次第で、200 を既定に入れると正常な応答を失敗と数える)
+- ALB の CloudWatch Logs への配信は 2-3 の提案 (ADR 0046) の第 1 段をそのまま案内し、「doctor の解釈率で確かめる」と添える (行の細部は未確認のまま)
+- 外部の文書の URL は実在を確かめたものだけを書く (確認日 2026-11-13)
+- 入口: ルートのヘルプ、`arata help ai` の表と「次に読むもの」、`arata help ai onboarding` の doctor の手順、README
 
 ### 9-1. report.json から通知までの LLM の仕事
 

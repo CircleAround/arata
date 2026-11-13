@@ -17,7 +17,7 @@ func TestRootHelp(t *testing.T) {
 	}
 	compareGolden(t, "root_help.txt", c.stdout.Bytes())
 	out := c.stdout.String()
-	for _, want := range []string{"arata help ai", "1. arata config init", "2. arata doctor", "3. arata init", "4. arata run", "5. arata review", "arata help ai onboarding", "\n  ai          AI (LLM) 向けの使い方"} {
+	for _, want := range []string{"arata help ai", "1. arata config init", "2. arata doctor", "3. arata init", "4. arata run", "5. arata review", "arata help ai onboarding", "arata help ai logs", "\n  ai          AI (LLM) 向けの使い方"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("root help lacks %q", want)
 		}
@@ -41,6 +41,8 @@ func TestHelpAI(t *testing.T) {
 		{[]string{"ai", "runtime"}, "runtime"},
 		{[]string{"help", "ai", "onboarding"}, "onboarding"},
 		{[]string{"ai", "onboarding"}, "onboarding"},
+		{[]string{"help", "ai", "logs"}, "logs"},
+		{[]string{"ai", "logs"}, "logs"},
 		{[]string{"help", "ai", "playbook"}, "playbook"},
 		{[]string{"ai", "playbook"}, "playbook"},
 		{[]string{"help", "ai", "playbook", "root_usage"}, "playbook root_usage"},

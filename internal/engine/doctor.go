@@ -43,6 +43,8 @@ type DoctorRow struct {
 	Status string `json:"status"`
 	Code   string `json:"code,omitempty"`
 	Detail string `json:"detail"`
+	// Hint は足りない記録 (ロググループが無い・解釈率が低い・行が無い・ソースが無くチェックが skip) の行に添える、読む文書の案内。
+	Hint string `json:"hint,omitempty"`
 	// Samples は解釈できなかった行の例 (マスク済み、sample_lines: false なら空)。
 	Samples []string `json:"samples,omitempty"`
 }
@@ -54,6 +56,23 @@ type DoctorResult struct {
 	RequiredActions []string `json:"required_actions"`
 	// StoreActions は s3:// のストアのバケットに必要な IAM action。監査対象の読み取りロールには付けない (ADR 0034)。
 	StoreActions []string `json:"store_actions,omitempty"`
+}
+
+// arata help ai logs (docs/ai/logs.md) の節の名前。doctor が足りない記録の行に添える (節が実在することはテストで固定する)。
+const (
+	LogsGuideChecks   = "チェックと記録の対応"
+	LogsGuideCollect  = "記録ごとの集め方"
+	LogsGuideVerify   = "確かめ方"
+	LogsGuidePitfalls = "よく詰まる点"
+)
+
+// logsGuideHint は足りない記録の行に添える案内。
+// 決定: 直し方は版と一緒に配る文書 (ADR 0012) に置き、doctor はその節の名前だけを示す (表の DETAIL を長くしない)。
+func logsGuideHint(section string) string { return "arata help ai logs (「" + section + "」)" }
+
+// hintLast は最後に足した行に案内を添える。
+func (d *doctor) hintLast(section string) {
+	d.res.Rows[len(d.res.Rows)-1].Hint = logsGuideHint(section)
 }
 
 // Problems は ng の項目があるか。
@@ -308,6 +327,7 @@ func (d *doctor) logs(ctx context.Context, src config.Source) {
 	}
 	if !found {
 		d.add(src, "log_group", DoctorNG, collect.CodeLogGroupMissing, src.LogGroup+" が "+src.Regions[0]+" に無い")
+		d.hintLast(LogsGuideCollect)
 		return
 	}
 	d.add(src, "log_group", DoctorOK, "", src.LogGroup+" ("+src.Regions[0]+")")
@@ -365,12 +385,14 @@ func (d *doctor) matchRate(src config.Source, prof cwlogs.Profile, rows []map[st
 	}
 	if total == 0 {
 		d.add(src, "match_rate", DoctorWarn, "", fmt.Sprintf("直近 %s に行が無い (stream_prefix とロググループを確認)", d.window))
+		d.hintLast(LogsGuideVerify)
 		return
 	}
 	rate := float64(matched) / float64(total)
 	detail := fmt.Sprintf("%.2f (%d/%d 行、閾値 %.2f、形式 %s)", rate, matched, total, src.ExpectedMatchRate, src.Format)
 	if rate < src.ExpectedMatchRate {
-		d.res.Rows = append(d.res.Rows, DoctorRow{Source: src.ID, Kind: src.Kind, Item: "match_rate", Status: DoctorNG, Code: collect.CodeFormatMismatch, Detail: detail, Samples: samples})
+		d.res.Rows = append(d.res.Rows, DoctorRow{Source: src.ID, Kind: src.Kind, Item: "match_rate", Status: DoctorNG, Code: collect.CodeFormatMismatch, Detail: detail, Samples: samples,
+			Hint: logsGuideHint(LogsGuidePitfalls)})
 		return
 	}
 	d.add(src, "match_rate", DoctorOK, "", detail)
@@ -431,7 +453,7 @@ func (d *doctor) checks() {
 		}
 		sort.Strings(ps)
 		d.res.Rows = append(d.res.Rows, DoctorRow{Source: "-", Kind: "-", Item: "check", Status: DoctorWarn,
-			Detail: fmt.Sprintf("%s は skip される: %s (profile %s)", n, reasons[n], strings.Join(ps, ", "))})
+			Detail: fmt.Sprintf("%s は skip される: %s (profile %s)", n, reasons[n], strings.Join(ps, ", ")), Hint: logsGuideHint(LogsGuideChecks)})
 	}
 }
 
@@ -452,6 +474,14 @@ func (r *DoctorResult) WriteTable(w io.Writer) error {
 	for _, row := range r.Rows {
 		for _, s := range row.Samples {
 			fmt.Fprintf(w, "  %s: 解釈できなかった行の例: %s\n", row.Source, s)
+		}
+	}
+	// 足りない記録の案内 (同じものは 1 回。出た順)
+	seen := map[string]bool{}
+	for _, row := range r.Rows {
+		if row.Hint != "" && !seen[row.Hint] {
+			seen[row.Hint] = true
+			fmt.Fprintf(w, "  記録の集め方: %s\n", row.Hint)
 		}
 	}
 	fmt.Fprintf(w, "\n必要な IAM action: %s\n", strings.Join(r.RequiredActions, ", "))

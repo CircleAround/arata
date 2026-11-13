@@ -15,6 +15,7 @@ func TestSections(t *testing.T) {
 			"期限付き承認の使いどころ", "tags の語彙", "access_denied が鳴ったとき", "principal_new_source・secret_access が鳴ったとき", "approve ではなく ack / snooze / resolve にするもの"},
 		"ai runtime":    {"使い方", "リポジトリと fork", "ワークフローのトリガー", "OIDC の信頼", "main の保護と書き込み権限", "secrets", "Actions の設定", "ワークフローの形", "監査対象の前提 (context_file) の下書き", "報告の書き方"},
 		"ai onboarding": {"流れ", "最初の run で出るもの", "1 件ずつ片付ける", "ack・snooze・resolve の使い分け", "導入作業の記録を拾う", "定時の通知を始める"},
+		"ai logs":       {"使い方", "チェックと記録の対応", "記録ごとの集め方", "保存期間と費用", "設定の書き方", "確かめ方", "よく詰まる点", "外部の拠り所"},
 		"ai playbook":   {"使い方", "一覧"},
 	}
 	for _, tp := range Topics {
@@ -39,7 +40,7 @@ func TestSections(t *testing.T) {
 }
 
 func TestLookup(t *testing.T) {
-	for _, sub := range []string{"", "report", "approve", "runtime", "onboarding", "playbook", "playbook root_usage"} {
+	for _, sub := range []string{"", "report", "approve", "runtime", "onboarding", "logs", "playbook", "playbook root_usage"} {
 		if _, err := Lookup(sub); err != nil {
 			t.Fatal(err)
 		}
@@ -271,6 +272,57 @@ func TestOnboarding(t *testing.T) {
 		other, _ := Lookup(sub)
 		if !strings.Contains(other.Markdown(), "arata help ai onboarding") {
 			t.Errorf("help %s must point to arata help ai onboarding", other.Name)
+		}
+	}
+}
+
+// TestLogs は記録の集め方 (arata help ai logs) が、記録ごとの勧め・確かめ方・詰まりやすい点を持つことを固定する。
+// チェックと記録の対応表がコードと合っていることは internal/engine の TestLogsGuideTable が確かめる。
+func TestLogs(t *testing.T) {
+	tp, err := Lookup("logs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := tp.Markdown()
+	sec := map[string]string{}
+	for _, s := range tp.Parse().Sections {
+		sec[s.Title] = s.Body
+	}
+	for title, wants := range map[string][]string{
+		// 記録ごとの勧め: ALB は配信 (plain・既定の項目)、WAF はロググループ名の決まり、nginx は combined、アプリは 1 行の JSON
+		"記録ごとの集め方": {"alb_access", "Integrations", "plain", "aws-waf-logs-", "combined", "awslogs", "lograge", "remote_ip", "slog", "pino", "cloudtrail-lookup", "90 日"},
+		// 保存期間は平常帯より長く。短くする操作は defense_evasion が報告する。WAF は上限を必ず置く
+		"保存期間と費用": {"baseline_days", "min_log_retention_days", "defense_evasion", "max_scan_gb", "QUERY_LIMIT", "USD"},
+		"設定の書き方":  {"kind: cloudwatch-logs", "prod-nginx-access", "format: json", "fields:", "expected_match_rate", "stream_prefix"},
+		"確かめ方":    {"arata doctor", "match_rate", "FORMAT_MISMATCH", "LOG_GROUP_MISSING", "skip", "coverage.formats"},
+		// 一般化した詰まりやすい点: Devise の 200、配信先のロググループ名、複数行のログ、証跡が無くても動くこと
+		"よく詰まる点": {"Devise", "failure_statuses: [200]", "error_status", "/aws/vendedlogs/", "複数行", "LookupEvents", "X-Forwarded-For"},
+		"外部の拠り所": {"Well-Architected", "CIS AWS Foundations Benchmark"},
+	} {
+		for _, want := range wants {
+			if !strings.Contains(sec[title], want) {
+				t.Errorf("%s lacks %q", title, want)
+			}
+		}
+	}
+	// arata は読み取り専用。記録を出す設定を変えるのは人 (LLM は読んで提案するまで)
+	if !strings.Contains(sec["使い方"], "人が") || !strings.Contains(sec["使い方"], "読み取り") {
+		t.Errorf("使い方 must say that arata only reads and a person changes the logging settings")
+	}
+	// 顧客の情報を書かない: アカウント ID は架空の値だけ、メールアドレスは書かない
+	for _, id := range regexp.MustCompile(`\b\d{12}\b`).FindAllString(body, -1) {
+		if id != "123456789012" && id != "111122223333" {
+			t.Errorf("account id %s (use 123456789012 / 111122223333)", id)
+		}
+	}
+	if m := regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`).FindString(body); m != "" {
+		t.Errorf("email address %q", m)
+	}
+	// 入口と導入の流れから案内している
+	for _, sub := range []string{"", "onboarding"} {
+		other, _ := Lookup(sub)
+		if !strings.Contains(other.Markdown(), "arata help ai logs") {
+			t.Errorf("help %s must point to arata help ai logs", other.Name)
 		}
 	}
 }
