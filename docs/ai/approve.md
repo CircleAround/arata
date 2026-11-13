@@ -47,6 +47,18 @@ CloudTrail ではその主体が「外部アカウント NNN」(`arn:aws:iam::NN
 - アカウント ID が SaaS の公式ドキュメントに載っているものと一致するかを確かめてから提案する
 - 自社の別アカウント (本番 / 検証) も同じ扱い。`--account` で ARN の主体のアカウント全体を承認できる
 
+## 監査する側のアカウント (audit_account)
+
+別のアカウントのロールが監査対象の読み取り専用ロールを引き受けて arata を動かす構成では、監査そのものが「外部アカウント NNN の AssumeRole」として記録される。
+
+- `arata config init --audit-account NNN` が、設定に `audit_account: "NNN"` を、allowlist.yaml に `account: "NNN"` (note つき) を書く。
+  監査対象を足すたびに init を使えば書き忘れない
+- 設定の `audit_account` と同じアカウントからの読み取り専用ロールの引き受けが unknown_assume_role に出ていたら、allowlist の書き忘れか期限切れ。
+  `arata config check` が ng で示す。承認ではなく、allowlist.yaml に `account: "NNN"` を足す PR を提案する
+- `audit_account` と違うアカウントが読み取り専用ロールを引き受けていたら、正規の監査ではない。承認を提案せず、信頼ポリシーの確認を提案する
+- `audit_account: none` (外から監査しない) なのに外部アカウントが読み取り専用ロールを引き受けていたら、同じく信頼ポリシーの確認を提案する
+- `audit_account` に監査対象のアカウント自身の ID を書いてはいけない (`account:` がそのアカウントの全主体を承認する。`arata doctor` が ng にする)
+
 ## 外部アカウント root の見方
 
 - 「外部アカウント NNN」は、そのアカウントの誰か (どの IAM 主体かは CloudTrail に残らない) が操作したことを表す。

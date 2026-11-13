@@ -95,15 +95,31 @@ aws cloudformation deploy --stack-name arata-readonly \
 順序は 1 → 2 です。信頼ポリシーに書く主体 (実行用ロール) は、先に存在している必要があります。
 出力の `RoleArn` が手順 1 の `AuditRoleArns` と違う (ロールの名前を変えた) ときは、手順 1 を正しい ARN でもう一度実行します。
 
-実行用ロールの `AssumeRole` は CloudTrail に残るので、allowlist に足さないと `unknown_assume_role` が毎回報告します。
+実行用ロールの `AssumeRole` は監査対象の CloudTrail に残るので、allowlist に足さないと `unknown_assume_role` が監査そのものを high で毎回報告します。
+書き方は、実行の仕組み (手順 1) を置いたアカウントで決まります。`arata config init` は、どちらなのかを `--audit-account` で必ず選ばせます (手順 3。ADR 0045)。
 
-```yaml
-principals:
-  - arn: arn:aws:iam::123456789012:role/arata-runner
-    note: GitHub Actions の実行用ロール
-    approved_at: 2026-11-04
-    dynamic_source: true   # ランナーの送信元は毎回変わる (ADR 0027)
-```
+- **監査対象とは別のアカウントに置いた** (例: 実行の仕組みが `111122223333`、監査対象が `123456789012`): 監査対象の CloudTrail には、呼び出し元の
+  アカウント ID しか残りません (どのロールかは残りません)。`arata config init --audit-account 111122223333` が、allowlist にアカウントを書きます
+
+  ```yaml
+  principals:
+    - account: "111122223333"
+      note: 監査する側のアカウント。このアカウントの実行用ロールが、監査対象の読み取り専用ロールを引き受けて arata を動かす (arata config init --audit-account が記入)
+      approved_at: 2026-11-13
+  ```
+
+  `account:` はそのアカウントの全主体を承認します。読み取り専用ロールを引き受けられる主体は、信頼ポリシー (`TrustedPrincipalArn`) で実行用ロールだけに絞ります
+
+- **監査対象と同じアカウントに置いた**: `arata config init --audit-account none` で作り、実行用ロールを `arn:` で手で足します
+  (`--audit-account` に監査対象のアカウント自身の ID を書くと、`account:` がそのアカウントの全主体を承認してしまいます。`arata doctor` が ng にします)
+
+  ```yaml
+  principals:
+    - arn: arn:aws:iam::123456789012:role/arata-runner
+      note: GitHub Actions の実行用ロール
+      approved_at: 2026-11-04
+      dynamic_source: true   # ランナーの送信元は毎回変わる (ADR 0027)
+  ```
 
 <details>
 <summary>テンプレートを使わない場合</summary>
@@ -121,6 +137,14 @@ principals:
 ### 3. 設定ファイル
 
 `arata/` に `arata.yaml`・`aratam.yaml`・`allowlist.yaml` を置きます (任意で `llm.context_file` のファイル)。
+`arata.yaml` と `allowlist.yaml` は `arata config init` で作ります。監査する側のアカウント (実行の仕組みを置いたアカウント) の指定は必須です (手順 2 の 2 つの場合)。
+
+```sh
+arata config init --audit-account 111122223333 --out arata/arata.yaml   # 別のアカウントから監査する: arata/allowlist.yaml にも書く
+arata config init --audit-account none --out arata/arata.yaml           # 同じアカウントの中で動かす: 実行用ロールを arn: で allowlist に足す
+```
+
+選んだ結果は `arata.yaml` の `audit_account` に残り、PR の `arata config check` (下の「PR で設定を検査する」) が、allowlist に書き忘れていないかを確かめます。
 
 ```yaml
 # arata/arata.yaml
@@ -485,7 +509,10 @@ name: prod                                # 通知に出す名前。アカウン
   ```
 
   アカウントごとに secret を分けて `secrets[...]` で選ぶ形にはしません (式で動的に選ぶと、ジョブにすべての secrets が渡ります)
-- **allowlist**: 実行用ロールの `principals` の行を、各アカウントの `allowlist.yaml` に書きます
+- **allowlist**: 監査する側のアカウントを、各アカウントの `allowlist.yaml` に書きます。アカウントを足すたびに
+  `arata config init --audit-account 111122223333 --out aws/<名前>/arata.yaml` で作れば書き忘れません (実行の仕組みと同じアカウントの監査対象だけは
+  `--audit-account none` で作り、実行用ロールを `arn:` で足します)。書き忘れると、足したアカウントの最初の監査が `unknown_assume_role` (high) を通知します。
+  `audit_account` を書いた設定なら、PR の `arata config check` が ng で止めます
 - **初回の収集**: アカウントごとに手元で `arata init -c aws/<名前>/arata.yaml` を実行します (ストアはアカウントごとなので、順番でも並べてもかまいません。時間と認証の期限の注意は「初回の収集は手元で」)
 - **Slack**: Webhook は全アカウントで共通です。宛先を分けたいときは、アカウントごとの `aratam.yaml` の `webhook_env` に別の名前を書き、ワークフローの notify の `env` に足します
   (アカウントを足すたびに secret が増えます)。**bot トークンの方式なら secret は 1 つのまま**で、アカウントごとの `aratam.yaml` の `slack.channel` / `urgent_channel` に

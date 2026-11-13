@@ -4,6 +4,8 @@
 #   書き込み系は iam:GenerateCredentialReport (認証情報レポートの生成) だけ。拒否しても 4 時間以内のレポートがあれば arata はそれを使う
 # - 信頼する主体はパラメータ。AWS の主体 (TrustedPrincipalArn) と IAM Roles Anywhere (RolesAnywhereTrustAnchorArn) の
 #   どちらか、または両方を指定する。どちらも空ならスタックを作らせない (Rules)
+# - TrustedPrincipalArn が別のアカウントの主体なら、その引き受けはこのアカウントの CloudTrail に「外部アカウントの AssumeRole」として残る。
+#   既知リストに無いと unknown_assume_role が監査そのものを high で報告するので、設定を arata config init --audit-account <そのアカウントの ID> で作る (ADR 0045)
 # - CDK を使わずに配れるよう素の CloudFormation にしている。開発用の sandbox (deploy/sandbox) はこのファイルを CfnInclude で取り込む
 #   (定義は 1 か所。ADR 0020)。action の過不足は internal/engine/readonly_role_test.go が Go の collector と突き合わせて確かめる
 #

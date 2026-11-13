@@ -85,7 +85,7 @@ func TestConfigCheckRules(t *testing.T) {
 		want  []string
 	}{
 		{"unknown key with line", func(c *cli) { c.writeConfig(cfgOf(c) + "retension:\n  events: 30d\n") }, 2,
-			[]string{"ng    " + "<dir>/config.yaml", "field retension not found", "line 19"}},
+			[]string{"ng    " + "<dir>/config.yaml", "field retension not found", "line 20"}},
 		{"type", func(c *cli) {
 			c.writeConfig(strings.Replace(cfgOf(c), "checks: [root_usage, unknown_assume_role]", "checks: root_usage", 1))
 		}, 2,

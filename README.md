@@ -199,16 +199,36 @@ arata は実行時に暗黙の既定を持たない。**実行されるのは設
 
 ```sh
 cd /path/to/target
-arata config init                 # 雛形を ./arata.yaml に書き出す (既存ファイルは --force が無ければ上書きしない。標準出力へは --out -)
+arata config init --audit-account none   # 雛形を ./arata.yaml に書き出す (既存ファイルは --force が無ければ上書きしない。標準出力へは --out -)
+#   --audit-account は必須 (下の「監査する側のアカウント」)。別のアカウントから監査するなら none の代わりにその 12 桁の ID
 # name / store / sources (cloudwatch-logs はコメントの例を外す) を編集する
 arata doctor                      # 権限・ロググループ・解釈率を検査 (問題があれば終了コード 2)
 arata init --window 7d
 arata run --profile daily --out /tmp/arata-out
 
 arata profiles                    # プロファイルごとに実際に走るチェックとパラメータ、その由来 (overrides / checks: / 既定値)
-arata config init --diff          # 版を上げたら: 入っていないチェック・既定値と違う値・未知のキー
+arata config init --diff          # 版を上げたら: 入っていないチェック・既定値と違う値・未知のキー・選んでいない audit_account
 arata config check                # 設定と allowlist.yaml の形だけを検査 (AWS・ストアに繋がない。PR の CI 向け。問題があれば終了コード 2)
 ```
+
+#### 監査する側のアカウント (`--audit-account`)
+
+`arata config init` は、監査する側のアカウントを必ず選ばせる (既定は無い。選ばなければエラー。ADR 0045)。選んだ結果は設定の `audit_account` に残る。
+
+| 指定 | 構成 | init が書くもの |
+|---|---|---|
+| `--audit-account 111122223333` | 別のアカウント (例 `111122223333`) のロールが、監査対象の読み取り専用ロール (`deploy/iam/readonly-role.yaml`) を引き受けて監査する | 設定に `audit_account: "111122223333"`、既知リスト (`allowlist.yaml`) の `principals` に `account: "111122223333"` (理由の note つき) |
+| `--audit-account none` | 外から監査しない (監査対象と同じアカウントの中で動かす・手元の認証で直接動かす) | 設定に `audit_account: none`。既知リストには書かない |
+
+- 別のアカウントからの引き受けは、監査対象の CloudTrail に「外部アカウント 111122223333 が読み取り専用ロールを引き受けた」と毎回記録される。
+  既知リストに無いと `unknown_assume_role` が監査そのものを high で報告するので、init の時点で書く
+- 既知リストが既にあれば末尾に足すだけで、ほかの行は変えない。`approved_by` は `--by alice` を付けたときだけ書く
+- `--audit-account` に監査対象のアカウント自身の ID を書いてはいけない (`account:` がそのアカウントの全主体を承認してしまう。`arata doctor` が確かめる)。
+  同じアカウントの中の実行用ロールが読み取り専用ロールを引き受けるなら、その実行用ロールを `arn:` で既知リストに書く
+- `arata config check` (オフライン) は、`audit_account` に ID を書いたのに既知リストに期限内の `account:` が無ければ ng (終了コード 2) にする
+- **この項目より前の版で作った設定**: `audit_account` が無くても `run` / `doctor` は今までどおり動く。`config check` は warn (終了コード 0)、
+  `config init --diff` は `[missing_key] audit_account` を出す。設定に `audit_account: none` か `audit_account: "<12 桁の ID>"` を 1 行足せば消える
+  (ID を書くなら既知リストにも `account: "<同じ ID>"` を足す)
 
 設定ファイルは `-c` (`--config`) で指定する。省略時は環境変数 `ARATA_CONFIG`、それも無ければカレントディレクトリの `./arata.yaml` を読む
 (`-c` > `ARATA_CONFIG` > `./arata.yaml`)。どれも無ければ探した場所を並べて `CONFIG_INVALID` (終了コード 2)。
