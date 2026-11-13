@@ -6,7 +6,7 @@
 これを通知 (aratam) に流さず、手元で 1 件ずつ片付けてから定時の実行に任せる。毎回この順番で行う。
 
 1. `arata config init --audit-account <12 桁の ID>|none` で雛形を書き出し、name / store / sources を編集する
-2. `arata doctor` で権限・ロググループ・解釈率を確かめる (問題があれば終了コード 2。直してから進む)
+2. `arata doctor` で権限・ロググループ・解釈率を確かめる (問題があれば終了コード 2。直してから進む。足りない記録の出し方は `arata help ai logs`)
 3. `arata init` でベースラインを収集する (findings は出さない。止まったら `arata init --resume`)
 4. **通知をつながずに**、設定に書いたプロファイルを 1 つずつ流す。`--out` は手元のディレクトリにする
 

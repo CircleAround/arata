@@ -11,6 +11,7 @@ rails   cloudwatch-logs    match_rate  ok      -             0.97 (97/100 行、
 -       -                  check       warn    -             cost_anomaly は skip される: no cost_anomaly source (profile daily)
 -       -                  check       warn    -             unused_region_activity は skip される: no unused_region_event source (profile daily)
 -       -                  check       warn    -             waf_block_trend は skip される: no waf_action source (profile daily)
+  記録の集め方: arata help ai logs (「チェックと記録の対応」)
 
 必要な IAM action: cloudtrail:LookupEvents, logs:DescribeLogGroups, logs:GetQueryResults, logs:StartQuery, logs:StopQuery
 結果: ng 0 / warn 4

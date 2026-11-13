@@ -3,7 +3,7 @@ arata は AWS のログと設定を定期的に改め、前回から新しく発
 
 はじめての手順:
   1. arata config init                             推奨設定の雛形を ./arata.yaml に書き出す (name / store / sources を編集する)
-  2. arata doctor                                  権限・ロググループ・ログ形式の解釈率を確かめる
+  2. arata doctor                                  権限・ロググループ・ログ形式の解釈率を確かめる (記録の出し方は arata help ai logs)
   3. arata init                                    ベースラインを収集する (findings は出さない)
   4. arata run --profile daily --out out/          差分を判定し out/report.md と report.json を出す
   5. arata review                                  最初の run の指摘を、通知を始める前に 1 件ずつ片付ける (流れは arata help ai onboarding)
@@ -13,7 +13,8 @@ arata は AWS のログと設定を定期的に改め、前回から新しく発
 新しい版との差分は arata config init --diff で確かめる。設定と allowlist.yaml の形だけなら arata config check (AWS に繋がない)。
 
 AI (LLM) から使う場合は `arata help ai` を最初に読んでください (report の読み方は `arata help ai report`、承認判断は `arata help ai approve`、
-チェックごとの対処手順は `arata help ai playbook <check>`、GitHub Actions で動かす環境を作る・見直すときは `arata help ai runtime`、導入の流れは `arata help ai onboarding`)。
+チェックごとの対処手順は `arata help ai playbook <check>`、GitHub Actions で動かす環境を作る・見直すときは `arata help ai runtime`、導入の流れは `arata help ai onboarding`、
+どの記録があればどのチェックが動くかとログの出し方は `arata help ai logs`)。
 
 Usage:
   arata [command]
