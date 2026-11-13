@@ -236,6 +236,21 @@ func TestOnboarding(t *testing.T) {
 			t.Errorf("ack・snooze・resolve の使い分け lacks %q", want)
 		}
 	}
+	// 「重大度が上がれば再報告」を当てにできない場面: 最も重い重大度で出たものを ack すると二度と報告されない
+	for _, want := range []string{"最も重い重大度", "上がる余地が無い", "当てにできない"} {
+		if !strings.Contains(sec["ack・snooze・resolve の使い分け"], want) {
+			t.Errorf("ack・snooze・resolve の使い分け lacks %q", want)
+		}
+	}
+	// secret_access の一括読み出し (導入直後は min_distinct だけで判定される): snooze で待つ。ack しない。secrets_access では消えない
+	for _, want := range []string{"min_distinct", "baseline_days", "baseline_median_distinct", "arata snooze", "ack しない", "初出", "書いても high は消えない"} {
+		if !strings.Contains(sec["最初の run で出るもの"], want) {
+			t.Errorf("最初の run で出るもの lacks %q", want)
+		}
+	}
+	if strings.Contains(body, "残ったら ack する") {
+		t.Errorf("must not tell to ack whatever remains")
+	}
 	// 導入作業の記録: CloudTrail の配信遅れ (最大 15 分) を待ってからもう一度流す
 	for _, want := range []string{"15 分", "arata run --profile daily"} {
 		if !strings.Contains(sec["導入作業の記録を拾う"], want) {

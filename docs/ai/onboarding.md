@@ -28,12 +28,20 @@ LLM がこの流れを手伝うときも、run と review を読んで材料を�
 
 | 出やすいもの | チェック | 典型的な片付け方 |
 |---|---|---|
-| アプリの起動時に、実行用のロールが秘匿値をまとめて読む | secret_access | 正規の読み手なら allowlist.yaml の `secrets_access` に主体と秘匿値を書く |
+| アプリの起動時に、実行用のロールが秘匿値をまとめて読む (一括読み出し。high) | secret_access | 正規の読み手なら、平常帯がそろう日まで snooze (下の注)。ack しない |
 | 導入作業の IAM 変更 (読み取り専用ロールを作る・ポリシーを付ける) | iam_changes | 作業として確認できたら ack。IaC のデプロイ主体なら approve (`--tag deploy`) |
 | 監査の仕組みや社員によるロールの引き受け | unknown_assume_role / new_principal | 説明できる主体は approve。受託先などへのスイッチロールは行き先を `assume_destinations` に |
 | 設定していない守り (証跡・GuardDuty・パスワードポリシーなど) | posture | 直す日を決めて snooze。意図して外しているなら理由を残して ack |
 | 古いアクセスキー・MFA の無いユーザー | credential_hygiene | 直す日を決めて snooze |
 | 監査の主体や調査用のロールの、想定内の拒否 | access_denied | 設定で直す (`expected_denied`) |
+
+secret_access の一括読み出しの注: 閾値は `max(min_distinct, その主体の日ごとの数の中央値 × factor)`。中央値は過去 `baseline_days` (既定 14) 日で取り、記録の無い日は 0 と数える。
+導入直後は中央値が 0 (data の `baseline_median_distinct: 0`、`baseline_days_with_data` が小さい) で、絶対の閾値 `min_distinct` だけで判定されるので、
+毎日同じ十数個を読むだけの正規のロールも high になる。
+
+- 正規の読み手だと確かめたら、導入から `baseline_days` が過ぎる日まで `arata snooze <id> --until YYYY-MM-DD`。平常帯がそろえば出なくなる。期日の後も出るなら調べる
+- **ack しない**。high は secret_access の最も重い重大度なので、ack すると本物の持ち出しが後で起きても報告されない (下の「使い分け」)
+- allowlist.yaml の `secrets_access` は初出 (low / medium) を止めるだけで、一括読み出しの数には数える。書いても high は消えない。初出を止めたいときだけ書く
 
 チェックごとの確かめ方は `arata help ai playbook <check>`、承認してよいかの基準は `arata help ai approve`。
 
@@ -44,13 +52,14 @@ finding の ID は `arata review` と report に出る。手段は 4 つで、�
 1. **承認する**: 誰が・何のために使うかを説明できる主体は、人が `arata approve <id> --note "<理由>"` を実行する (allowlist.yaml に追記され、finding は解消する)。
    LLM は提案まで。approve できるのは主体の承認になるチェックだけで、`arata review` が対象を示す
 2. **設定で直す**: 主体の承認ではない正常な動作は、allowlist.yaml の該当する節に人が書く
-   (`secrets_access` / `source_ips` / `assume_destinations` / `expected_denied`。形式は `arata help ai`)。編集したら `arata config check`。以後の run はそれを指摘しない (既に出た finding が残ったら ack する)
+   (`secrets_access` / `source_ips` / `assume_destinations` / `expected_denied`。形式は `arata help ai`)。編集したら `arata config check`。
+   何が止まるかは節ごとに違う (`secrets_access` が止めるのは初出だけ。一括読み出しは止まらない)。既に出た finding が残ったら、下の選び方で snooze か ack を選ぶ
 3. **直す予定を決める**: 直すつもりのもの (設定していない守り、使っていないキーなど) は、期日を決めて `arata snooze <id> --until YYYY-MM-DD`
 4. **確認して残す**: 正規の動きか、もう終わった出来事だと確かめたものだけ `arata ack <id>`
 
 - 説明の付かないものは片付けない。playbook の「封じ込め」に進み、人が判断する
 - critical / high を、数が多いことを理由に ack で流さない
-- 何もしなかった finding は open のまま残る。一度レポートに出たものは次の run で再報告されないので、**定時の通知には出てこない** (`arata review` と週次の未対応にだけ残る)。
+- 何もしなかった finding は open のまま残る。一度レポートに出たものは、同じ内容のままなら次の run で再報告されないので、**定時の通知には出てこない** (`arata review` と週次の未対応にだけ残る)。
   だから通知を始める前に、ここで全部に目を通す
 
 ## ack・snooze・resolve の使い分け
@@ -67,7 +76,9 @@ ack と snooze の選び方:
 - **ack は、正規の動きか、もう終わった出来事にだけ**使う。例: 導入作業で読み取り専用ロールを作った IAM 変更 (終わった出来事)、
   意図して入れていない守り (理由を記録したうえで)。ack したものは、同じ内容である限り二度と報告されない
 - **報告が来なくなると困るものを ack にしない**。「いつか直す」「後で調べる」を ack にすると、直さないまま誰にも報されなくなる。期日を決めて snooze にする
-- ack / snooze 中でも、重大度がそのときより上がれば変化 (changed) として再報告される。これを当てにして ack しない
+- ack / snooze 中でも、重大度がそのときより上がれば変化 (changed) として再報告される。ただし当てにできない場面がある:
+  **そのチェックの最も重い重大度 (例: secret_access の high) で出た finding を ack すると、重大度が上がる余地が無いので、後で本物が起きても二度と報告されない**。
+  最も重い重大度のものは ack せず、期日を決めて snooze にする
 - まだ観測され続けるもの (今の状態を見るチェックや、数日分を集計するチェック) を `resolve` すると、次の run で同じものが新規に戻る。直る前に `resolve` しない
 - 状態型 (new_principal と週次のチェック) は、直して観測されなくなれば自動で解消になる。`resolve` を打たなくてよい
 - 主体の承認は approve (allowlist.yaml に残る)。ack は承認ではなく、その finding を黙らせるだけ
