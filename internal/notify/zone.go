@@ -55,9 +55,23 @@ func (z Zone) Name() string { return z.location().String() }
 
 func (z Zone) isUTC() bool { return z.Name() == "UTC" }
 
-// label はその時刻でのゾーンの略称 (JST、EDT)。略称の無いゾーンは +04:00 の形。
-func (z Zone) label(t time.Time) string {
+// in は t を設定のゾーンで返す。ただし、その時刻のオフセットに秒の端数があれば UTC で返す。
+//
+// 決定 (ADR 0041。ファズで見つけた): 標準時が決まる前の地方平均時など (Asia/Kathmandu の古い時代は +05:41:16、Africa/Monrovia は 1972 年まで -00:44:30) は、
+// オフセットを RFC 3339 (分まで) で書けない。分に丸めて書くと 60 秒未満ずれた別の瞬間になり、秒まで書くと RFC 3339 でなくなる
+// (読む側と stampRe が解釈できない)。その時刻だけ UTC で書けば、同じ瞬間を指す RFC 3339 のままで、オフセットも丸めない。
+// 監査の報告の時刻 (現在) では起きず、当たるのはログ由来の古い・壊れた時刻だけなので、表示の形を増やさない。
+func (z Zone) in(t time.Time) time.Time {
 	t = t.In(z.location())
+	if _, offset := t.Zone(); offset%60 != 0 {
+		return t.UTC()
+	}
+	return t
+}
+
+// label はその時刻でのゾーンの略称 (JST、EDT)。略称の無いゾーンは +04:00 の形。秒の端数のあるオフセットの時刻は UTC (in)。
+func (z Zone) label(t time.Time) string {
+	t = z.in(t)
 	if name, _ := t.Zone(); name != "" && name[0] != '+' && name[0] != '-' {
 		return name
 	}
@@ -70,7 +84,7 @@ func (z Zone) parseStamp(s string) (time.Time, bool) {
 	if err != nil {
 		return time.Time{}, false
 	}
-	t = t.In(z.location())
+	t = z.in(t)
 	if y := t.Year(); y < 0 || y > 9999 {
 		return time.Time{}, false
 	}
@@ -129,8 +143,10 @@ func dateSpan(from, to string) string {
 //
 // 決定: 規則が書く時刻 (期間・初出・主要キー・取れた期間) は Stamp / span で確実に直す。LLM の文の中の時刻は LLM が直すので、
 // 検証はしない (文中の時刻は補足で、判定には使わない)。直し間違いを減らすため、オフセットを数値で渡す。
+//
+// 決定: at のオフセットに秒の端数があれば何も足さない。規則が書く時刻が UTC になる (in) ので、LLM にも UTC のまま書かせる。
 func (z Zone) promptRule(at time.Time) string {
-	if z.isUTC() {
+	if z.isUTC() || z.in(at).Location() == time.UTC {
 		return ""
 	}
 	label := z.label(at)
