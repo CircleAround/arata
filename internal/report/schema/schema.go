@@ -25,6 +25,11 @@ type Report struct {
 	// Proposals は WAF の修正提案の候補 (waf_review。ADR 0023)。finding ではなく、毎回その時点の候補を出す (差分判定に乗せない)。
 	// waf_review が走らなかった run では出さない (omitempty)。読む側は無い節を「候補なし」として扱う。
 	Proposals []Proposal `json:"proposals,omitempty"`
+	// DryRun は試しの実行 (`arata run --dry-run`。ADR 0049) の報告にだけ付く。ストアに何も書いていないので、ここに出た指摘は
+	// 報告済みになっておらず、次の定時の実行でも出る。新規の指摘の id はストアに無い (定時の実行で付け直される)。
+	// window は実際に見た範囲で、定時の実行との違いは coverage.notes にある。aratam はこの報告を送らない。
+	// 定時の実行の報告には出さない (omitempty。既存の報告の形を変えない)。
+	DryRun bool `json:"dry_run,omitempty"`
 }
 
 // Proposal は WAF の修正提案の候補 1 件。arata が決まった規則で作り、根拠の数字を Evidence に持つ。適用は人が判断する。
@@ -132,6 +137,9 @@ type Coverage struct {
 	ChecksSkipped []SkippedCheck  `json:"checks_skipped"`
 	// Formats は cloudwatch-logs ソースの解釈率 (設計書 2-2)。「取れていたか」の一部として必ず出す。
 	Formats []FormatCoverage `json:"formats"`
+	// Notes は「取れていたか」についての注記 (人が読む文)。今は試しの実行が、見た範囲が定時の実行より狭いことと、
+	// 日次集計を使うチェックが評価しなかった日を書く。注記が無ければ出さない (omitempty)。
+	Notes []string `json:"notes,omitempty"`
 }
 
 // FormatCoverage はソース 1 つの解釈率。match_rate は行が無ければ null。

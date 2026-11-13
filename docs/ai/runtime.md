@@ -123,6 +123,8 @@ gh api repos/OWNER/REPO/actions/permissions/access
 - `run:` に `${{ }}` の式を埋め込まない (値は `env:` で渡す)
 - secrets は、使う step の `env:` か `with:` にだけ渡す。`secrets[...]` で動的に選ばない、`secrets: inherit` を使わない
 - Actions のログと artifacts に、ARN・アカウント ID・レポートの本文を出さない
+- 手動実行に試しの実行の入力 (`dry_run`) があるなら、次の 3 つを満たす: `dry_run` のときは `aratam notify` を呼ばない、ストアのバケットに何も置かない、
+  結果は件数と重大度だけをログに出す (指摘の中身を出さない)。排他の group は定時の実行と分ける (試しの実行が、待っている定時の実行を取り消さないように)
 
 ## 監査対象の前提 (context_file) の下書き
 

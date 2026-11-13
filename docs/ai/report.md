@@ -18,12 +18,12 @@
 - `summary.max_severity`: new / changed / recurred の最大。still_open は含まない
 - `already_reported`: 別の周期 (hourly など) で報告済みの事象。二重に騒がない
 - `info`: 重大度 info (既知デプロイ主体の IAM 変更など)。記録のみ
-- `coverage.sources_failed`: 取れなかったソースと `code`、不足した `action`。`covered_from` / `covered_until` は取れた期間。
-  `partial: true` は一部の項目だけ取れなかった (取れた項目で評価済み。取れなかった項目は前回の状態のまま)
+- `coverage.sources_failed`: 取れなかったソースと `code`、不足した `action`。`covered_from` / `covered_until` は取れた期間。`partial: true` は一部の項目だけ取れなかった (取れた項目で評価済み。取れなかった項目は前回の状態のまま)
 - `coverage.checks_skipped`: 走らなかったチェックと理由 (必要なソースが無い / 失敗)
-- `coverage.formats`: アプリログの解釈率 (`match_rate`、`code` が FORMAT_MISMATCH / FORMAT_DRIFT のこともある)。
-  `truncated` は結果の行の上限に当たった集計 (件数は少なめ)
+- `coverage.formats`: アプリログの解釈率 (`match_rate`、`code` が FORMAT_MISMATCH / FORMAT_DRIFT のこともある)。`truncated` は結果の行の上限に当たった集計 (件数は少なめ)
 - `proposals` (weekly の waf_review が走ったときだけ): WAF の修正提案の候補と observation。下の「WAF の修正提案の候補」
+- `dry_run: true` (試しの実行 `arata run --dry-run` の報告だけ): ストアに何も書いていない報告。**通知ではない** (aratam は送らない)。指摘は報告済みになっておらず、次の定時の実行でもう一度出る。分類はストアの今の状態に対するもの。新規の指摘の `id` はストアに無く、`arata review` / `approve` / `ack` に使えない
+- `coverage.notes` (試しの実行で、見た範囲が定時の実行より狭いときだけ): 入っていない期間と、日次集計を使うチェックが評価しなかった UTC の日。必ず伝え、その期間・その日を「何も無かった」と書かない (見ていない)。`window` は実際に見た範囲
 
 ## 読む順序
 

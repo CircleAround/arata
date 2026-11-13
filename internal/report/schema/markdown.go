@@ -10,6 +10,10 @@ import (
 func (r *Report) Markdown() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# arata %s レポート (%s)\n\n", r.Profile, r.Name)
+	if r.DryRun {
+		// 決定 (ADR 0049): 冒頭に書く。report.md は人がそのまま読み、aratam の原文送信の本文にもなるので、定時の報告と取り違えさせない
+		b.WriteString("- **試しの実行 (--dry-run)**: ストアに何も書いていません。ここに出た指摘は報告済みになっておらず、次の定時の実行でも出ます。新規の指摘の id は定時の実行で変わります\n")
+	}
 	fmt.Fprintf(&b, "- 期間: %s 〜 %s\n", r.Window.From, r.Window.To)
 	fmt.Fprintf(&b, "- 新規 %d / 変化 %d / 再発 %d / 解消 %d / 未対応 %d", r.Summary.New, r.Summary.Changed, r.Summary.Recurred, r.Summary.Resolved, r.Summary.StillOpen)
 	if r.Summary.MaxSeverity != "" {
@@ -33,6 +37,9 @@ func (r *Report) Markdown() string {
 	}
 	proposals(&b, r.Proposals)
 	b.WriteString("## カバレッジ\n\n")
+	for _, n := range r.Coverage.Notes {
+		fmt.Fprintf(&b, "- **注意**: %s\n", inline(n))
+	}
 	fmt.Fprintf(&b, "- 取得できたソース: %s\n", orNone(r.Coverage.SourcesOK))
 	if len(r.Coverage.SourcesFailed) == 0 {
 		b.WriteString("- 取得に失敗したソース: なし\n")

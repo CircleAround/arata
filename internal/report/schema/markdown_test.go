@@ -73,3 +73,24 @@ func TestFindingAccountOnly(t *testing.T) {
 		}
 	}
 }
+
+// 試しの実行 (ADR 0049) の report.md は冒頭にその旨を書き、カバレッジに注記を出す。定時の実行の report.md は変わらない。
+func TestMarkdownDryRun(t *testing.T) {
+	r := &Report{Name: "acme", Profile: "daily"}
+	plain := r.Markdown()
+	if strings.Contains(plain, "試しの実行") || strings.Contains(plain, "注意") {
+		t.Fatalf("a scheduled report must not mention a dry run:\n%s", plain)
+	}
+	r.DryRun, r.Coverage.Notes = true, []string{"見た範囲は A から B まで\n## 偽の見出し"}
+	md := r.Markdown()
+	head, cov, _ := strings.Cut(md, "## カバレッジ")
+	if !strings.Contains(head, "試しの実行 (--dry-run)") {
+		t.Fatalf("the head must say it is a dry run:\n%s", md)
+	}
+	if !strings.Contains(cov, "- **注意**: 見た範囲は A から B まで ## 偽の見出し\n") {
+		t.Fatalf("the note must be one line under coverage:\n%s", md)
+	}
+	if got, want := strings.Count(md, "\n"), strings.Count(plain, "\n")+2; got != want {
+		t.Fatalf("lines: got %d want %d", got, want)
+	}
+}

@@ -31,10 +31,15 @@ const (
 	CodeLLMFailed       = "LLM_FAILED"
 	// CodeLLMOutputRejected は LLM の出力の項目を検査で捨てた (WARN。ADR 0037)。
 	CodeLLMOutputRejected = "LLM_OUTPUT_REJECTED"
+	// CodeDryRunReport は arata の試しの実行 (dry_run: true) の報告なので送らなかった (WARN。ADR 0049)。
+	CodeDryRunReport = "DRY_RUN_REPORT"
 )
 
 // FallbackNotice は LLM が使えず原文を送るときに冒頭へ書く注記。
 const FallbackNotice = "要約に失敗したため原文を送ります"
+
+// DryRunReportNotice は、arata の試しの実行の報告を aratam notify --dry-run で表示するときに冒頭へ書く注記。
+const DryRunReportNotice = "arata の試しの実行 (run --dry-run) の報告です。実際の通知では送りません"
 
 // Route は送り先。
 type Route string
@@ -142,12 +147,22 @@ func Run(ctx context.Context, o Options) Result {
 	}
 
 	in.Zone = o.Rules.Zone
+	var warnings []string
+	if in.Run != nil && in.Run.DryRun {
+		// 決定 (ADR 0049): arata の試しの実行の報告は送らない。規則で止める (LLM も呼ばない)。--force でも送らず、通知済みの印も付けない。
+		// 入力の問題 (終了コード 4) にはしない: 緊急用に「実行されていない」と送ると、試しただけで通知が飛ぶ。
+		// 定時の経路に流れていれば、次の定時の報告が同じディレクトリを上書きするまで何も送られず、この WARN が残る。
+		if !o.DryRun {
+			log.Warn("arata の試しの実行 (run --dry-run) の報告のため送りません (文面は aratam notify --dry-run で見られます)", "code", CodeDryRunReport, "run_id", in.Run.RunID)
+			return Result{Exit: ExitOK}
+		}
+		warnings = append(warnings, DryRunReportNotice)
+	}
 	key := in.Key()
 	if !o.Force && Notified(o.Dir, key) {
 		log.Info("通知済みのため送りません (再送は --force)", "code", CodeAlreadyNotified, "run_id", key)
 		return Result{Exit: ExitOK}
 	}
-	var warnings []string
 	if in.Name() != o.Rules.Name {
 		w := fmt.Sprintf("設定の name (%s) と report.json の name (%s) が違います", o.Rules.Name, in.Name())
 		log.Warn(w, "code", CodeNameMismatch)

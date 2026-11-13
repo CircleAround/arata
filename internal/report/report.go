@@ -41,6 +41,8 @@ type Input struct {
 	ChecksSkipped []SkippedCheck
 	Formats       []FormatCoverage
 	Proposals     []schema.Proposal
+	// DiffFrom は差分判定の境界 (ゼロなら Window.From)。試しの実行が定時の実行の境界に合わせるのに使う (ADR 0049)。
+	DiffFrom time.Time
 }
 
 // Build は差分判定の結果からレポートを組み立てる。
@@ -51,6 +53,10 @@ type Input struct {
 //   - max_severity は new / changed / recurred の最大 (still_open を含めると毎回鳴るため)。
 //   - suppressed (acked / snoozed) はレポートに出さない。
 func Build(in Input) *Report {
+	diffFrom := in.Window.From
+	if !in.DiffFrom.IsZero() {
+		diffFrom = in.DiffFrom
+	}
 	r := &Report{
 		Profile:         in.Profile,
 		Name:            in.Name,
@@ -95,7 +101,7 @@ func Build(in Input) *Report {
 				r.Info = append(r.Info, f)
 				continue
 			}
-			if !res.Finding.ReportedAt.IsZero() && res.Finding.FirstSeen.After(in.Window.From) {
+			if !res.Finding.ReportedAt.IsZero() && res.Finding.FirstSeen.After(diffFrom) {
 				r.AlreadyReported = append(r.AlreadyReported, f)
 			} else {
 				r.Findings.StillOpen = append(r.Findings.StillOpen, f)

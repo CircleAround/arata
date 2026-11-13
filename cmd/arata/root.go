@@ -380,13 +380,45 @@ func (o *outputFlags) stager(d *Deps) (func(*report.Report) error, func() *stage
 }
 
 func newRunCmd(d *Deps, g *globalFlags) *subcmd.Command {
-	var profile string
+	var profile, window string
+	var dryRun bool
 	o := &outputFlags{}
 	cmd := &subcmd.Command{
 		Use:   "run",
 		Short: "collect → evaluate → report を実行する",
+		Long: `プロファイルのチェックに要るソースを収集し、評価して、レポートを出す。結果はストアに保存し、出した指摘を報告済みにする。
+
+--dry-run は試しの実行。ストアに何も書かない (raw・SQLite・S3 のどれも変えない)。ストアは読むだけで、今の状態 (平常帯・既知の主体・
+指摘の状態) に対して「いま定時の実行を流したら何が出るか」を先に見る。出た指摘は報告済みにならず、窓も進まないので、次の定時の実行は
+同じ指摘をもう一度出す。レポートには dry_run: true が付き、aratam notify は送らない (aratam notify --dry-run で文面は見られる)。
+
+--window は --dry-run のときだけ使える。窓を「今 - 期間 から 今」にし、前回の実行からの追いつきをしない (省略時はプロファイルの window)。
+短くすると CloudTrail の読み取りの時間と Logs Insights のスキャン量が減る。見た範囲が定時の実行より狭いときは、レポートの
+coverage.notes に、入っていない期間と、日次集計を使うチェックが評価しなかった日が出る。`,
 		Run: func(ctx context.Context, _ []string) error {
-			e, _, err := openEngine(ctx, d, g)
+			var w time.Duration
+			switch {
+			case window != "" && !dryRun:
+				return configErr(d, errors.New("--window can be used only with --dry-run (a scheduled run continues from the previous window end)"))
+			case window != "":
+				var err error
+				if w, err = config.ParseDuration(window); err != nil {
+					return configErr(d, fmt.Errorf("invalid --window: %w", err))
+				}
+				if w <= 0 {
+					return configErr(d, errors.New("invalid --window: must be positive"))
+				}
+			}
+			cfg, err := loadConfig(d, g)
+			if err != nil {
+				return err
+			}
+			// 決定 (ADR 0049): 試しの実行はストアの複製を開く。以降の流れは同じで、Commit は何も送らない
+			open := engine.OpenContext
+			if dryRun {
+				open = engine.OpenDryRun
+			}
+			e, err := open(ctx, cfg, d.Engine)
 			if err != nil {
 				return err
 			}
@@ -397,7 +429,7 @@ func newRunCmd(d *Deps, g *globalFlags) *subcmd.Command {
 					st.cleanup()
 				}
 			}()
-			res, err := e.RunWith(ctx, profile, prepare)
+			res, err := e.RunWithOptions(ctx, profile, engine.RunOptions{Prepare: prepare, DryRun: dryRun, Window: w})
 			if err != nil {
 				return err
 			}
@@ -415,6 +447,8 @@ func newRunCmd(d *Deps, g *globalFlags) *subcmd.Command {
 		},
 	}
 	cmd.StringVar(&profile, "profile", "daily", "プロファイル名 (profiles のキー)")
+	cmd.BoolVar(&dryRun, "dry-run", false, "試しの実行。ストアに何も書かず、いま定時の実行を流したら出るものを見る")
+	cmd.StringVar(&window, "window", "", "試しの実行で見る期間 (例: 1h, 30m。--dry-run のときだけ。省略時はプロファイルの window)")
 	o.bind(cmd)
 	return cmd
 }

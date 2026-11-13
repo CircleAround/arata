@@ -20,6 +20,9 @@
 7. 15 分以上置いてから、もう一度 `arata run --profile daily --out /tmp/arata-first/daily` を流し、導入作業そのものの記録を拾って同じように片付ける
 8. 定時の実行と通知 (aratam) を始める
 
+4 と 7 は `arata run --dry-run` (試しの実行) にしない。試しの実行はストアに何も書かないので、指摘が報告済みにならず、定時の通知にそのまま出る。
+ここでの run は、溜まっていた指摘をストアに記録して報告済みにするための実行。
+
 LLM がこの流れを手伝うときも、run と review を読んで材料を整えるところまで。approve は人が実行し、ack / snooze / resolve は人の指示があるときだけ実行する。
 
 ## 最初の run で出るもの
@@ -100,3 +103,7 @@ CloudTrail は記録まで最大 15 分ほど遅れるので、最初の run に
   通知の文面を見たければ `aratam notify --in /tmp/arata-first/daily --dry-run` (送らない)
 - allowlist.yaml の変更は git に commit する (approve の `--commit` か、人が行う)。PR で直す運用は `arata help ai approve`
 - ack / snooze にしたものは `arata review` (`--status snoozed` で snooze 中も) でいつでも見直せる
+- 定時の通知を始めた後に、設定や allowlist.yaml を直した結果を定時の前に確かめたいときは、試しの実行を使う:
+  `arata run --profile daily --dry-run --window 1h --out /tmp/arata-try`。ストアに何も書かないので、指摘は報告済みにならず、窓も進まない
+  (次の定時の実行は、試さなかったときと同じ通知を出す)。`--window` で見る期間を短くすると、CloudTrail の読み取りの時間と Logs Insights の費用が減る。
+  見た範囲が定時の実行より狭いときは、入っていない期間が report.md のカバレッジの「注意」に出る
