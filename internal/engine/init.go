@@ -130,6 +130,15 @@ func (e *Engine) Init(ctx context.Context, o InitOptions) (*InitResult, error) {
 		for _, f := range cr.Formats {
 			if t, ok := totals[f.Source]; ok {
 				t.Total, t.Matched, t.BytesScanned = t.Total+f.Total, t.Matched+f.Matched, t.BytesScanned+f.BytesScanned
+				if q := f.Requests; q != nil && t.Requests != nil {
+					r := *t.Requests
+					r.Total, r.Complete, r.WithStatus = r.Total+q.Total, r.Complete+q.Complete, r.WithStatus+q.WithStatus
+					r.Starts, r.Reused, r.StartsUntagged = r.Starts+q.Starts, r.Reused+q.Reused, r.StartsUntagged+q.StartsUntagged
+					t.Requests = &r
+				} else if q != nil {
+					r := *q
+					t.Requests = &r
+				}
 			} else {
 				f := f
 				totals[f.Source] = &f
@@ -223,6 +232,11 @@ func formatTotals(m map[string]*report.FormatCoverage) []report.FormatCoverage {
 		if c.Total > 0 {
 			r := round3(float64(c.Matched) / float64(c.Total))
 			c.MatchRate = &r
+		}
+		if c.Requests != nil {
+			r := *c.Requests
+			setCompleteRate(&r)
+			c.Requests = &r
 		}
 		out = append(out, c)
 	}

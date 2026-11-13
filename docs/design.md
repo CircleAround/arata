@@ -71,13 +71,13 @@ LookupEvents はリージョン単位で、グローバルサービス (IAM の�
 
 初期に用意する形式プロファイル: `nginx_access`, `alb_access`, `wafv2`, `cloudtrail` (CloudWatch Logs 配信版), `regex`。
 Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応し、使い回せる正規表現をサンプル集として同梱する。
-提案 (未実装。ADR 0051): 1 リクエストが複数行に分かれるログ (Rails の既定のログなど) は 1 行ずつの `regex` では拾いきれない。request_id でリクエスト単位にまとめてから集計する形式と、
-取れる項目 (ユーザー ID など) ごとに動かせるチェックの整理は ADR 0051。採用を決めたら、この章と 7 章に仕様として書く。
+決定 (ADR 0051): 1 リクエストが複数行に分かれるログ (Rails の既定のログなど) は 1 行ずつの `regex` では拾いきれない。request_id でリクエスト単位にまとめてから
+集計する形式 `request_lines` を足した (2-4)。取れる項目 (ユーザー ID など) ごとに動かせる新しいチェックは未実装 (ADR 0051 の 7 節の 3 以降)。
 
 決定 (cloudwatch-logs ソース。Step 2 の実装。クエリテンプレートの構造は ADR 0009):
-- 実装したプロファイルは `nginx_access` (combined 形式) / `alb_access` / `wafv2` / `json` / `regex`。`cloudtrail` (CloudWatch Logs 配信版) は未実装 (`cloudtrail-lookup` で足りるため後回し)。
+- 実装したプロファイルは `nginx_access` (combined 形式) / `alb_access` / `wafv2` / `json` / `regex` / `request_lines` (2-4)。`cloudtrail` (CloudWatch Logs 配信版) は未実装 (`cloudtrail-lookup` で足りるため後回し)。
 - `region` は 1 つ (既定 `aws.region`)。ロググループはリージョンに属するため、`cloudtrail-lookup` のような us-east-1 の自動追加はしない。
-- `yields` の既定は形式ごとに決まる (`nginx_access` / `alb_access` / `json` / `regex` → `http_access`、`wafv2` → `waf_action`)。
+- `yields` の既定は形式ごとに決まる (`nginx_access` / `alb_access` / `json` / `regex` / `request_lines` → `http_access`、`wafv2` → `waf_action`)。
 - `http_access` の必須フィールドは `ip` と `path`。`method` / `status` / `ua` / `duration` は任意で、無ければそのフィールドを使う集計が 0 件になる。
   `json` の `fields` と `regex` の名前付きキャプチャは必須フィールドを含まなければ `CONFIG_INVALID`。`fields.time` は受け付けるが使わない (Insights の `@timestamp` で日を切る)。
 - `regex` は Python 形式 `(?P<name>...)` を Insights の `(?<name>...)` に、`/` を `\/` に直して `parse @message /.../` にする。
@@ -208,6 +208,7 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
 | `nginx_access`, `alb_access`, `wafv2`, `cloudtrail` | 形式が固定のもの | 名前だけ |
 | `json` | lograge (Rails)、zap/slog (Go)、pino/winston (Node) など JSON 行ログ | どの JSON フィールドが ip / path / status / user_id に当たるかの対応表 |
 | `regex` | 非 JSON の素のアプリログ | 名前付きキャプチャ付き正規表現 |
+| `request_lines` | 1 リクエストが複数行に分かれるアプリのログ (Rails の既定のログなど) | まとめる鍵 (request_id) と、行の種類ごとの名前付きキャプチャ付き正規表現 (2-4) |
 
 ```yaml
   - id: rails_app
@@ -266,6 +267,83 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
   `Ephemeral field is already defined` で拒否される。doctor のサンプルは判定フィールドを列挙せず `ispresent(<判定フィールド>) as arata_matched` で返し、
   `json` の対応表で元と正規化名が同じ (`path: path`) ときは別名を付けない。doctor の `queries` 検査は集計クエリに加えてサンプル用と doctor 自身のクエリも対象にする。
 - report.json の `coverage.formats` に各 cloudwatch-logs ソースの `total` / `matched` / `match_rate` / `expected` / `recent_average` / `bytes_scanned` / `code` を必ず出す。
+- `request_lines` のソースは解釈率を 2 つ測り、`coverage.formats[].requests` と run の stats の `request_stats` にも出す (2-4)。
+
+### 2-4. 複数行のログをリクエスト単位にまとめる (`request_lines`。ADR 0051 の段 0)
+
+Rails の既定のログは、送信元とパスが最初の行 (`Started …`)、ステータスが最後の行 (`Completed …`) にあり、各行に `[<request_id>]` のタグが付く。
+`request_lines` は、行を request_id でまとめる 1 段目の `stats` を Insights のクエリに挟み、その結果 (1 リクエスト 1 行) に今の `http_access` の集計をそのまま当てる。
+出すレコードは `http_access` で、チェック (`login_bruteforce`・`probe_paths`・`endpoint_abuse`)・metric の名前・key は変えない。リクエストの行は手元にもストアにも持たない。
+
+```yaml
+  - id: rails_app
+    kind: cloudwatch-logs
+    log_group: prod-app.log
+    format: request_lines
+    request:
+      id: '(?:^| -- : )\[(?P<request_id>[A-Za-z0-9_@-]{1,255})\] '   # Logger の既定の formatter。前置きのあと (` -- : `) と行頭 (続きの行) を受ける
+      max_duration: 60s                # 問い合わせ範囲の後ろに足す余白 (既定 60s)
+      lines:
+        - name: started                # ip と path を取り出す行 = 最初の行。リクエストはこの行の数で数える
+          regex: 'Started (?P<method>[A-Z]+) "(?P<path>[^"?]*)[^"]*" for (?P<ip>\S+) at '
+        - name: completed
+          regex: 'Completed (?P<status>\d{3}) '
+        - name: no_route               # 経路の無いリクエストは最後の行が出ない。例外の行で status を補う
+          regex: 'ActionController::RoutingError'
+          set: { status: 404 }
+    expected_match_rate: 0.8           # 行の解釈率 (request_id の付いた行 / 全行) の閾値
+    expected_complete_rate: 0.8        # まとめられた割合 (最初の行のあるリクエスト / request_id の数) の閾値 (既定 0.8)
+```
+
+確かめた事実 (本番相当のログの Logs Insights。ADR 0051 の「確かめが要る点」の答え):
+
+- `stats` は 3 段でも動く。実装が使うのは 2 段
+- 1 段目 (`by <request_id>`) の中間の結果は、1 日 1 万弱のリクエストでは切れなかった (1 段の最初の行の数と 2 段の合計が一致)。量の多いログでの上限は**未確認**
+- `earliest` / `latest` は、その項目の無い行を飛ばす (値のある行の値を返す)
+- 1 段目で作った時刻は 2 段目の `bin()`・`datefloor()`・`fromMillis()` に渡せない (Type Mismatch)。`stats … by <鍵>, bin(1h) as h` は h が結果に残らない。
+  動く形は、1 段目の前に `fields bin(1d) as <名前>` を置き、1 段目で `min(<名前>) as day`、2 段目で `by day`
+- `stats` の後の `fields if(<条件>, "404", <項目>) as <別の名前>` は動く (`set` の補いはこの形)
+- 例外など複数行のメッセージは、2 行目以降が CloudWatch Logs の別のイベントになり、Logger の前置き (`I, [時刻 #pid]  INFO -- : `) が無く、行頭が `[<request_id>] ` になる。
+  経路の無いリクエストの RoutingError の行もこの形で、そのリクエストには最後の行 (`Completed`) が出ない
+- `count_distinct` は概数で、実際の数より数 % 多く出た例がある (この形式では使っていない。request_id の数は 2 段目の `count(*)` で正確に数える)
+- 一時フィールドは同じ名前を 2 度定義できない
+- Rails は `X-Request-Id` ヘッダーの値から英数字・`_`・`-`・`@` 以外を除き、255 文字までを request_id に使う。除いた結果が空になる値 (記号だけ) を送ると、
+  その行には request_id のタグが付かない (Rails の実装を読んで確認)
+
+決定:
+
+- **設定**: `request.id` の名前付きキャプチャは `request_id` だけ。`request.lines` の正規表現で取り出せる項目は `ip`・`method`・`path`・`status`・`ua`・`duration` だけで、
+  知らない名前は `CONFIG_INVALID` (利用者の入力が入る行から任意の値を取り出す設定は書けない)。`ip` と `path` は同じ行の種類で取り出す (その行が「最初の行」)。
+  同じ項目を 2 つの行の種類が取り出すことはできない。`set` で補えるのは `status` (100〜599) だけで、status を取り出す行が別に要る。
+  行の種類は 8 つまで、正規表現は 512 文字まで (Insights のクエリの長さの上限に収める)。どれも RE2 で読めること。`config check` がオフラインで確かめる
+- **鍵の正規表現は、行頭だけにも、最初の角括弧にも頼らない** (ADR 0051 の「行頭に頼らない」をこう読み替える)。続きの行は行頭に鍵が来るので、
+  既定の formatter の見本は「前置きのあと」と「行頭」の両方を受ける。行頭だけに固定すると既定の formatter の行に当たらず (行の解釈率が 0 になる)、
+  「最初の `[…]`」を取ると時刻やホスト名を鍵に取り違える。**行頭に別の角括弧 (ホスト名など) が付く formatter では、見本の「行頭」の選択肢がその角括弧を拾う**ので、
+  その形の区切りだけを受ける形に書き直す (下の検査が止めるので、黙って壊れはしない)
+- **鍵の文字の集まりは UUID の形に絞らない**。見本は Rails が通す文字 (`[A-Za-z0-9_@-]`) を全部受ける。絞ると、形の違う ID を送ったリクエストが全部のチェックから外れる
+- **件数は最初の行の数で数える**。1 段目で request_id ごとに最初の行の数を数え、2 段目の件数はその和 (`sum`) にする。同じ request_id を何度使っても、数えたリクエストの数は最初の行の数より減らない。
+  1 つの request_id に最初の行が 2 つ以上あるものは項目が混ざる (status と duration は最後の値、ほかは最初の値) ので、その数を日次の metric `request_id_reused` と coverage に残す
+- **解釈率は 2 つ**。行の解釈率 = request_id の付いた行 / 全行 (`lines_matched` / `lines_total`。今の意味のまま。`expected_match_rate`)。
+  まとめられた割合 = 最初の行のある request_id / request_id の数 (`requests_complete` / `requests_total`。`expected_complete_rate`、既定 0.8)。どちらかが閾値未満なら `FORMAT_MISMATCH`
+- **鍵の取り違えの検査**: request_id の異なりの数が最初の行の数の半分未満なら `FORMAT_MISMATCH` (details の `reason` は `request_id`。まとめられた割合のときは `complete_rate`)。
+  集計は保存しない (平常帯を汚さない)。送る側が ID を大量に使い回してもこの検査に当たるが、そのときも黙って数えずに失敗として報告に出す。閾値 (半分) は実データで見直す
+- **タグの無い最初の行**は、どのリクエストにもまとめられず、どの集計にも入らない (記号だけの `X-Request-Id` を送ればこうなる)。数を coverage (`starts_untagged`) と WARN、doctor に出す。
+  前段 (リバースプロキシなど) で `X-Request-Id` を上書きする設定を文書で勧める (勧めるだけで、前提にはしない)
+- **窓の境界**: リクエストは最初の行の時刻の日 (endpoint_abuse は時間幅) に数える。問い合わせの範囲は後ろに `request.max_duration` だけ広げ (今より先には広げない)、
+  余白の中で始まったリクエストは捨てる (次の範囲が数える)。**前には広げない** (ADR 0051 の 6 節の「前後」から変えた): 最初の行が範囲に無いリクエストは最初の行の数が 0 で、
+  どの件数にも入らないので、広げなくても結果は同じ。広げると、前の日の集計を一部だけの値で置き換えてしまう。
+  まとめられた割合の分母には、日をまたいだリクエストの後ろの行だけの request_id が入る (1 日に余白の間の分だけ)
+- **範囲を分ける境目**は、最初の行の時刻の区切りに揃う所だけ (日次の集計は日、endpoint_abuse は時間幅)。境目が区切りの途中だと、余白の中で始まったリクエストを両方の範囲が数える。
+  そのため日次の集計 (解釈率 + `probe_paths`、`sign_in_failures` + `probe_hits`) は、行数の上限に当たっても 1 日より細かくは分けない (当たれば `truncated`)
+- **解釈率のクエリだけは request_id の無い行も 1 段目に通す** (全行を数える)。無い行は 1 つの組にまとまり、その組の日は範囲の最初の日になるので、解釈率のクエリは 1 日ずつ流す
+  (スキャン量は変わらない)。`lines_total` / `lines_matched` は、日の境目の余白の分だけ概数になる
+- **本数は 1 行のログと同じ 3 本** (解釈率 + `probe_paths`、`sign_in_failures` + `probe_hits`、endpoint_abuse)。パスの印 (探索パス・画面の glob) は最初の行のパスから 1 段目の前に作る
+- 日次の metric を 3 つ足す (key なし): `requests_total`・`requests_complete`・`request_id_reused`
+- `set` は「その行の種類があり、status がほかの行から取れなかったリクエスト」にだけ効く
+- 1 段目で作った時刻は 2 段目では数になる前提で、結果の時刻は「日時の文字列」と「エポックからのミリ秒 (12〜14 桁の数字)」の両方を読む
+- doctor は `requests` の行に、まとめられた割合・最初の行の数・ステータスのある数・使い回しの数・タグの無い最初の行の数・行の種類ごとの当たった数・取れている項目・スキャン量を出す (8 章)
+- 未確認 (実データで確かめる): request_id の無い行が 1 段目で 1 つの組にまとまること (1 行のログの集計では、軸の値が無い行が 1 つの組にまとまることを使っている)、
+  2 段目の `by` に 1 段目の件数 (数) を置けること、量の多いログで 1 段目が時間内に終わること
 
 ### 2-3. ALB のアクセスログから http_access を取る (提案。未実装・未確認)
 
@@ -1068,6 +1146,8 @@ arata rebuild   [--from-scratch [--baseline]] [--format text|json]   # raw JSONL
 - ストアを開かない (ロックを取らないので run と並行でき、ストアが無くても動く)。`--window` (既定 24h) は解釈率のサンプルを探す範囲、`--format table|json`。
 - 検査項目: `permission` (LookupEvents を 1 件だけ引く / 各 API の AccessDenied に不足 action を添える)、`log_group` (DescribeLogGroups で完全一致を探す)、
   `match_rate` (直近 100 行を `fields @timestamp, @message, ispresent(<判定フィールド>) as arata_matched | sort @timestamp desc | limit 100` で取り、手元で数える。生ログを引くのはここだけ)、
+  `requests` (`request_lines` のソースだけ。解釈率のクエリを `--window` に 1 本流し、まとめられた割合・鍵の取り違えの検査・使い回し・行の種類ごとの当たった数を出す。
+  まとめられた割合が閾値未満・鍵の取り違えは ng、当たらない行の種類・使い回し・タグの無い最初の行は warn。2-4)、
   `queries` (集計・解釈率・サンプル・doctor 自身のクエリを StartQuery して直ちに StopQuery し、Insights の構文検査だけを受ける。match_rate より先に行う)、`check` (必要なレコードを出すソースが無いチェック = warn)、`config` (allowlist の検証)。
 - ng が 1 つでもあれば終了コード 2。ng の行は標準エラーに固定語彙の `code` 付きで 1 行ずつ出す。warn だけなら 0。
 - 表の最後に、設定のソースに必要な IAM action (`cloudtrail:LookupEvents`, `logs:DescribeLogGroups`, `logs:StartQuery`, `logs:GetQueryResults`, `logs:StopQuery`) を列挙する。

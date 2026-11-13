@@ -39,7 +39,7 @@ const DoctorSampleLines = 100
 type DoctorRow struct {
 	Source string `json:"source"`
 	Kind   string `json:"kind"`
-	Item   string `json:"item"` // config / audit_account / permission / log_group / match_rate / queries / check
+	Item   string `json:"item"` // config / audit_account / permission / log_group / match_rate / requests / queries / check
 	Status string `json:"status"`
 	Code   string `json:"code,omitempty"`
 	Detail string `json:"detail"`
@@ -367,6 +367,9 @@ func (d *doctor) logs(ctx context.Context, src config.Source) {
 	} else {
 		d.matchRate(src, prof, rows)
 	}
+	if prof.RequestLines() {
+		d.requests(ctx, src, c)
+	}
 	if prof.Yields == record.KindWAFAction {
 		d.wafCost(ctx, src, c)
 		d.wafResources(ctx, src)
@@ -396,6 +399,65 @@ func (d *doctor) matchRate(src config.Source, prof cwlogs.Profile, rows []map[st
 		return
 	}
 	d.add(src, "match_rate", DoctorOK, "", detail)
+}
+
+// requests は request_lines のソースの、行をリクエスト単位にまとめた結果を出す (ADR 0051)。
+// 解釈率のクエリ (2 段の stats) を直近 --window に 1 本流す (生ログは引かない)。
+//
+// 決定: まとめられた割合が閾値未満・鍵の取り違え (request_id の異なりの数が最初の行の数の半分未満) は run と同じく ng (FORMAT_MISMATCH)。
+// 行の種類ごとの当たった数を出し、1 行も当たらない種類があれば warn にする (設定を書いた LLM が、当たらない行の種類を見て直せる)。
+// 同じ request_id の使い回し・タグの無い最初の行があるときも warn (数は壊れないが、項目が混ざる・集計に入らないリクエストがある)。
+func (d *doctor) requests(ctx context.Context, src config.Source, c *cwlogs.Collector) {
+	before := c.Scanned()
+	s, err := c.RequestSummary(ctx, d.now.Add(-d.window), d.now)
+	if err != nil {
+		d.addErr(src, "requests", err)
+		return
+	}
+	st := s.Stats
+	if st.Total == 0 {
+		d.add(src, "requests", DoctorWarn, "", fmt.Sprintf("直近 %s に request_id の付いた行が無い (request.id の正規表現とロググループを確認)", d.window))
+		d.hintLast(LogsGuideVerify)
+		return
+	}
+	rate, _ := st.CompleteRate()
+	var kinds, missing []string
+	for _, k := range s.Kinds {
+		kinds = append(kinds, fmt.Sprintf("%s=%d", k.Name, k.Lines))
+		if k.Lines == 0 {
+			missing = append(missing, k.Name)
+		}
+	}
+	detail := fmt.Sprintf("まとめられた割合 %.2f (%d/%d リクエスト、閾値 %.2f)、最初の行 %d、ステータスあり %d、request_id の使い回し %d、タグの無い最初の行 %d。"+
+		"行の種類: %s。取れている項目: %s。スキャン %.1f MB (直近 %s の 1 本分。run は 1 回に %d 本)",
+		rate, st.Complete, st.Total, st.Expected, st.Starts, st.WithStatus, st.Reused, st.StartsUntagged,
+		strings.Join(kinds, ", "), strings.Join(c.Profile().Fields(), ", "), (c.Scanned()-before)/1e6, d.window, c.QueryCount())
+	switch cwlogs.RequestProblem(st) {
+	case cwlogs.RequestProblemID:
+		d.add(src, "requests", DoctorNG, collect.CodeFormatMismatch,
+			fmt.Sprintf("request_id の異なりの数 %d が最初の行の数 %d の半分未満。request.id が別の角括弧 (時刻・ホスト名など) を拾っているか、同じ ID が大量に使い回されている。", st.Total, st.Starts)+detail)
+		d.hintLast(LogsGuidePitfalls)
+		return
+	case cwlogs.RequestProblemComplete:
+		d.add(src, "requests", DoctorNG, collect.CodeFormatMismatch, detail)
+		d.hintLast(LogsGuidePitfalls)
+		return
+	}
+	var warns []string
+	if len(missing) > 0 {
+		warns = append(warns, "当たらない行の種類: "+strings.Join(missing, ", "))
+	}
+	if st.Reused > 0 {
+		warns = append(warns, "同じ request_id に最初の行が複数ある (項目が混ざる。件数は減らない)")
+	}
+	if st.StartsUntagged > 0 {
+		warns = append(warns, "request_id の付かない最初の行がある (リクエストにまとめられず、集計に入らない)")
+	}
+	if len(warns) > 0 {
+		d.add(src, "requests", DoctorWarn, "", detail+"。"+strings.Join(warns, "。"))
+		return
+	}
+	d.add(src, "requests", DoctorOK, "", detail)
 }
 
 // checks は各プロファイルのチェックのうち、必要なレコードを出すソースが無いものを警告する。

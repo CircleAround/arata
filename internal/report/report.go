@@ -24,7 +24,9 @@ type (
 	Finding        = schema.Finding
 	Coverage       = schema.Coverage
 	FormatCoverage = schema.FormatCoverage
-	SkippedCheck   = schema.SkippedCheck
+	// RequestCoverage は request_lines 形式のリクエスト単位の集計。
+	RequestCoverage = schema.RequestCoverage
+	SkippedCheck    = schema.SkippedCheck
 )
 
 // Input は Build への入力。

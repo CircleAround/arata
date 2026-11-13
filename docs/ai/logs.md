@@ -16,7 +16,7 @@ arata のチェックは、設定の `sources` に書いた記録からしか動
 | ソース (kind。括弧は format) | 出る記録 | 動くチェック (周期) |
 |---|---|---|
 | cloudtrail-lookup | trail_event, principal_seen | root_usage (hourly), unknown_assume_role (hourly), new_principal (daily), iam_changes (daily), access_denied (daily), defense_evasion (daily), public_exposure (daily), principal_new_source (daily), secret_access (daily), ai_path_usage (daily) |
-| cloudwatch-logs (alb_access / json / nginx_access / regex) | http_access | login_bruteforce (daily), probe_paths (daily), endpoint_abuse (daily) |
+| cloudwatch-logs (alb_access / json / nginx_access / regex / request_lines) | http_access | login_bruteforce (daily), probe_paths (daily), endpoint_abuse (daily) |
 | cloudtrail-unused-regions | unused_region_event | unused_region_activity (daily) |
 | cost-anomaly | cost_anomaly | cost_anomaly (daily) |
 | cloudwatch-logs (wafv2) | waf_action | waf_block_trend (daily) |
@@ -27,7 +27,8 @@ arata のチェックは、設定の `sources` に書いた記録からしか動
 | waf-config + cloudwatch-logs (wafv2) | waf_config, waf_action | waf_review (weekly) |
 
 - `cloudtrail-lookup` だけで 10 個のチェックが動く。最初はこれとアカウント単位のソース (追加の準備が要らない) から始め、アプリ層 (`cloudwatch-logs`) を足していく
-- `http_access` は、送信元 IP・パス・ステータスが**同じ 1 行**にあるアクセスログ。ALB・nginx・アプリの JSON 行ログのどれか 1 つあればよい (同じリクエストを二重に数えないよう、1 つの入口につき 1 つ)
+- `http_access` は、送信元 IP・パス・ステータスが**同じ 1 行**にあるアクセスログ。ALB・nginx・アプリの JSON 行ログのどれか 1 つあればよい (同じリクエストを二重に数えないよう、1 つの入口につき 1 つ)。
+  1 リクエストが複数行に分かれるアプリのログしか無いときは、`format: request_lines` でリクエスト単位にまとめて読む (書き方は `arata help ai request_lines`)
 - `waf_review` は weekly に WebACL の設定を読み、daily が貯めた wafv2 の日次集計と突き合わせる (両方のソースが要る)
 - `guardduty`・`access-analyzer`・`cost-anomaly` は AWS 側でその機能を有効にしていることが前提 (無効なら posture が指摘するか、そのチェックが skip)
 
@@ -44,8 +45,9 @@ arata のチェックは、設定の `sources` に書いた記録からしか動
 - **nginx**: アクセスログを **combined 形式**のまま標準出力に出し、コンテナなら awslogs ドライバで送る (EC2 なら CloudWatch エージェント)。`format: nginx_access`。
   `log_format` を独自にしているなら combined に戻すか、`format: regex` で合わせる
 - **アプリの JSON 行ログ**: 1 リクエストを **1 行の JSON** にして標準出力に出す。`format: json` と `fields` (対応表) で読む。要るのは送信元 IP とパス (メソッド・ステータスもあるとよい)
-  - Rails: 標準のログは 1 リクエストが複数行で、IP・パス・ステータスが別の行に分かれるので読めない。lograge で 1 行の JSON にする (`Lograge::Formatters::Json`)。
-    lograge は既定では送信元 IP を出さないので、`custom_payload` などで `remote_ip` (`request.remote_ip`) を足す
+  - Rails: 標準のログは 1 リクエストが複数行で、IP・パス・ステータスが別の行に分かれる。アプリを変えられるなら lograge で 1 行の JSON にする (`Lograge::Formatters::Json`)。
+    lograge は既定では送信元 IP を出さないので、`custom_payload` などで `remote_ip` (`request.remote_ip`) を足す。
+    アプリを変えないなら、標準のログのまま `format: request_lines` で読む (書き方は `arata help ai request_lines`)
   - Go の slog (`slog.NewJSONHandler`)、Node の pino なども同じ。リクエストごとに 1 行、IP・メソッド・パス・ステータスを項目にする
   - 行の全体が JSON であること (時刻やタグを JSON の前に付けると、Logs Insights が項目として読めない)。パスにクエリ文字列を入れない。個人を特定できる値 (メールアドレス、氏名) を項目に入れない
 - **ECS / Fargate**: タスク定義の `logConfiguration` を awslogs ドライバにして標準出力を送る。コンテナごとにストリームの接頭辞 (`awslogs-stream-prefix`) を分けておくと、
@@ -106,11 +108,12 @@ sources:
 | `log_group` | `LOG_GROUP_MISSING` なら名前かリージョンが違う。名前は完全一致 (`aws logs describe-log-groups --log-group-name-prefix <接頭辞>` で確かめる) |
 | `queries` | `QUERY_INVALID` なら `regex` や `fields` の書き方を Logs Insights が受け付けていない |
 | `match_rate` | 直近 `--window` (既定 24h) の 100 行を形式で読めた割合。`expected_match_rate` 未満なら `FORMAT_MISMATCH` (ng) で、読めなかった行の例が出る。「行が無い」(warn) は、ログが届いていないか `stream_prefix` の誤り |
+| `requests` | `request_lines` のソースだけ。直近 `--window` の行をまとめた結果。まとめられた割合 (最初の行のあるリクエスト / request_id の数) が `expected_complete_rate` 未満、または request_id の異なりの数が最初の行の数の半分未満 (鍵の取り違え) なら `FORMAT_MISMATCH` (ng)。「行の種類」は種類ごとの当たった行数で、0 の種類があれば warn (その行の正規表現を見直す)。使い回し・タグの無い最初の行があるときも warn |
 | `cost` | wafv2 のソースの 1 日のスキャン量と費用の概算、`max_scan_gb` の推奨値 |
 | `check` | 「skip される: no ... source」は、そのチェックの記録を出すソースが設定に無い (上の対応表)。使わないチェックなら `profiles` から外す |
 
 - 解釈率が 1.00 に近ければよい。混在するロググループでは低くて正常なので、落ち着いた値の少し下を `expected_match_rate` にする。低すぎる閾値は形式の変化を見逃す
-- 行の例を見て直す: 形式が違う (→ format を合わせる)、別のコンテナの行が混ざる (→ `stream_prefix`)、1 リクエストが複数行 (→ アプリのログを 1 行にする)
+- 行の例を見て直す: 形式が違う (→ format を合わせる)、別のコンテナの行が混ざる (→ `stream_prefix`)、1 リクエストが複数行 (→ アプリのログを 1 行にするか、`format: request_lines`)
 - run の後は report.json の `coverage.formats` (ソースごとの `match_rate`・`bytes_scanned`・`code`) と `coverage.sources_failed`、skip されたチェックとその理由を見る。
   解釈率が直近の平均から急に落ちると `FORMAT_DRIFT` (デプロイでログの形が変わった合図)
 - 解釈率が高くても、チェックの条件 (パス・ステータス) が合っていなければ鳴らない。ログイン失敗を 1 回起こし、その行のパスとステータスを Logs Insights で見て設定と比べる
@@ -122,8 +125,8 @@ sources:
   `checks.login_bruteforce` を `failure_statuses: [200]` にする (既定の `[401, 403, 422]` では 1 件も数えない)。実際のログで確かめてから決める
 - **ログインの送信先は 1 つとは限らない**: Devise はモデルごとに送信先を持つ (`/users/sign_in` と `/admins/sign_in` など)。`paths` は完全一致なので、全部を書く
 - **ALB の配信先のロググループ名**: CloudWatch Logs への配信は、名前が `/aws/vendedlogs/` で始まるロググループになりがち。`log_group` には配信の設定に出ている名前をそのまま書く
-- **Rails の標準ログをそのまま標準出力に出している** (ECS、AWS Copilot の既定の構成など): 複数行で読めない。lograge にするか、ALB のログを使う。
-  `format: regex` で `Started GET "/path" for <IP>` の行を読む手はあるが、ステータスが別の行なのでログイン失敗は数えられない
+- **Rails の標準ログをそのまま標準出力に出している** (ECS、AWS Copilot の既定の構成など): 1 リクエストが複数行で、1 行ずつの形式 (`regex`) ではステータスが別の行なのでログイン失敗を数えられない。
+  ALB のログを使うか、lograge にするか、`format: request_lines` でリクエスト単位にまとめる (`arata help ai request_lines`。`requests` が `FORMAT_MISMATCH` のときの直し方もそこ)
 - **nginx が ALB の後ろにある**: `$remote_addr` が ALB の IP になり、全リクエストが同じ送信元に見える。realip モジュールで X-Forwarded-For から戻すか、ALB のログを使う。
   アプリの JSON ログも同じで、プロキシを信頼する設定をしたうえでの送信元 IP (Rails なら `request.remote_ip`) を出す
 - **ヘルスチェックの行が多い**: 解釈率は変わらないが、スキャン量と取り込みの費用が増える。出さない設定にできるなら出さない

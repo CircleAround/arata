@@ -25,6 +25,7 @@ const (
 func (e *Engine) formatCoverage(ctx context.Context, st collect.FormatStats, collectErr error, runID string) report.FormatCoverage {
 	fc := report.FormatCoverage{Source: st.Source, Format: st.Format, LogGroup: st.LogGroup, Total: st.Total, Matched: st.Matched,
 		Expected: st.Expected, BytesScanned: st.BytesScanned, Truncated: st.Truncated}
+	fc.Requests = requestCoverage(st.Requests)
 	rate, ok := st.Rate()
 	if !ok {
 		return fc
@@ -58,6 +59,25 @@ func (e *Engine) formatCoverage(ctx context.Context, st collect.FormatStats, col
 	return fc
 }
 
+// requestCoverage は request_lines のリクエスト単位の集計を report の形にする (それ以外の形式では nil)。
+func requestCoverage(rs *collect.RequestStats) *report.RequestCoverage {
+	if rs == nil {
+		return nil
+	}
+	rc := &report.RequestCoverage{Total: rs.Total, Complete: rs.Complete, Expected: rs.Expected, WithStatus: rs.WithStatus,
+		Starts: rs.Starts, Reused: rs.Reused, StartsUntagged: rs.StartsUntagged}
+	setCompleteRate(rc)
+	return rc
+}
+
+func setCompleteRate(rc *report.RequestCoverage) {
+	rc.CompleteRate = nil
+	if rc.Total > 0 {
+		r := round3(float64(rc.Complete) / float64(rc.Total))
+		rc.CompleteRate = &r
+	}
+}
+
 // recentMatchRate は直近 driftRuns 回 (このソースの解釈率を記録した run) の平均。
 func (e *Engine) recentMatchRate(ctx context.Context, source string) (float64, int, error) {
 	runs, err := e.st.RecentRuns(ctx, driftScanRuns)
@@ -88,8 +108,16 @@ func addFormatStats(stats map[string]any, formats []report.FormatCoverage) {
 	if len(formats) == 0 {
 		return
 	}
-	rates, scanned, truncated := map[string]any{}, map[string]any{}, map[string]any{}
+	rates, scanned, truncated, requests := map[string]any{}, map[string]any{}, map[string]any{}, map[string]any{}
 	for _, f := range formats {
+		if q := f.Requests; q != nil {
+			m := map[string]any{"total": q.Total, "complete": q.Complete, "with_status": q.WithStatus, "starts": q.Starts,
+				"request_id_reused": q.Reused, "starts_untagged": q.StartsUntagged}
+			if q.CompleteRate != nil {
+				m["complete_rate"] = *q.CompleteRate
+			}
+			requests[f.Source] = m
+		}
 		if f.MatchRate != nil {
 			rates[f.Source] = *f.MatchRate
 		}
@@ -103,6 +131,10 @@ func addFormatStats(stats map[string]any, formats []report.FormatCoverage) {
 	// 行の上限 (10000) に当たった集計 (件数は少なめ。ADR 0023)
 	if len(truncated) > 0 {
 		stats["truncated_aggregates"] = truncated
+	}
+	// request_lines のリクエスト単位の集計 (まとめられた割合・使い回し。ADR 0051)
+	if len(requests) > 0 {
+		stats["request_stats"] = requests
 	}
 }
 
