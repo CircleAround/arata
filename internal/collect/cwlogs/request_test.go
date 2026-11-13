@@ -144,6 +144,12 @@ func TestRequestQueries(t *testing.T) {
 			t.Fatalf("%s: 最初の行の時刻の区切りの列が無い", q.Name)
 		}
 	}
+	// set の補いは coalesce の形 (実データで確認: stats の後の if() は、else に項目を置くと null を返し、取れていたステータスが消える)
+	for _, q := range qs {
+		if !strings.Contains(q.Query, `| fields coalesce(rl_status_0, if(rl_n2 > 0, "404", "")) as status`) || strings.Contains(q.Query, ", rl_status_0) as") {
+			t.Fatalf("%s: set の補いが coalesce の形でない:\n%s", q.Name, q.Query)
+		}
+	}
 	checkGolden(t, "request_queries.golden", b.String())
 	if col.QueryCount() != 3 {
 		t.Fatalf("本数は 1 行のログと同じ 3 本: %d", col.QueryCount())
@@ -507,4 +513,34 @@ func TestParseEpochMillis(t *testing.T) {
 			t.Errorf("parseTime(%q) を時刻として読んだ", s)
 		}
 	}
+}
+
+// 取れたステータスは set の補いで消えない (200・302・422 はそのまま、経路の無いリクエストだけ 404、どちらも無ければステータスなし)。
+// 偽の Insights は、else に項目を置く if() (本物では null になる形) のクエリを受け付けない。
+func TestRequestStatusFallback(t *testing.T) {
+	c := checksCfg()
+	var ev []cwlogstest.Event
+	for i, st := range []int{200, 302, 422, 0} {
+		for j := 0; j < 5; j++ {
+			ev = append(ev, railsReq(day21(1, i, j), "", rid(i*10+j), "POST", "/users/sign_in", "198.51.100.7", st)...)
+		}
+	}
+	ev = append(ev, railsNoRoute(day21(2, 0, 0), rid(100), "/.env", "198.51.100.8")...)
+	sink, col, _, err := collectRequests(t, railsSource(), c, ev, collect.Window{From: now.Add(-24 * time.Hour), To: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := sink.metrics()
+	if m["2026-10-21|sign_in_failures|198.51.100.7"] != 5 || m["2026-10-21|probe_hits|198.51.100.8"] != 1 {
+		t.Fatalf("metrics: %v", m)
+	}
+	if rs := col.FormatStats().Requests; rs.Total != 21 || rs.WithStatus != 16 {
+		t.Fatalf("ステータスのある数: %+v", rs)
+	}
+	defer func() {
+		if recover() == nil {
+			t.Fatal("else に項目を置く if() を Sim が受け付けた")
+		}
+	}()
+	(&cwlogstest.Sim{}).Rows("stats latest(s) as s0, count(k) as n by id\n| fields if(n > 0 and not ispresent(s0), \"404\", s0) as status\n| stats count(*) as c by status", now, now, nil)
 }

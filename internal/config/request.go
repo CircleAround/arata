@@ -17,7 +17,7 @@ import (
 //     (同じ request_id を使い回しても数が減らない。ADR 0051 の 1 節)
 //   - 同じ項目を 2 つの行の種類が取り出すことはできない (Insights の一時フィールドは同じ名前を 2 度定義できず、
 //     どちらの値を使うかの規則も要る)。行に値が出ないときの補いは set で書く
-//   - set で補えるのは status (100〜599) だけ。status を取り出す行が別にあり、その値が無いリクエストにだけ効く
+//   - set で補えるのは status (100〜599) だけで、書ける行の種類は 1 つ。status を取り出す行が別にあり、その値が無いリクエストにだけ効く
 //     (経路の無いリクエストは最後の行が出ない)
 //   - 行の種類の数と正規表現の長さに上限を置く (Insights のクエリの長さの上限 10000 文字に収める)
 const (
@@ -161,11 +161,16 @@ func (r *Request) Groups() ([][]string, error) {
 		return nil, fmt.Errorf("request.lines: ip and path must be captured by the same line (the first line of a request; requests are counted by it), got %s and %s",
 			r.Lines[ip].Name, r.Lines[path].Name)
 	}
-	if _, ok := owner["status"]; !ok {
-		for _, l := range r.Lines {
-			if len(l.Set) > 0 {
-				return nil, fmt.Errorf("request.lines.%s: set: status needs a line that captures status (set only fills requests that lack it)", l.Name)
-			}
+	sets := 0
+	for _, l := range r.Lines {
+		if len(l.Set) == 0 {
+			continue
+		}
+		if _, ok := owner["status"]; !ok {
+			return nil, fmt.Errorf("request.lines.%s: set: status needs a line that captures status (set only fills requests that lack it)", l.Name)
+		}
+		if sets++; sets > 1 {
+			return nil, fmt.Errorf("request.lines.%s: set: only one line can set status", l.Name)
 		}
 	}
 	return out, nil

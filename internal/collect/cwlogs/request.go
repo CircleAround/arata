@@ -22,7 +22,7 @@ import (
 //	| parse rl_path /<印>/                        … 集計が使うパスの印 (探索パス・画面の glob)。最初の行のパスから作る
 //	| filter ispresent(rl_request_id)             … 解釈率のクエリ以外
 //	| stats count(rl_path) as rl_starts, min(rl_bin) as day, earliest(rl_ip) as ip, … latest(rl_status) as status … by rl_request_id
-//	| fields if(rl_n2 > 0 and not ispresent(rl_status_0), "404", rl_status_0) as status   … set の補い
+//	| fields coalesce(rl_status_0, if(rl_n2 > 0, "404", "")) as status   … set の補い (status が取れなかったリクエストだけ)
 //	| filter <リクエスト単位の条件>
 //	| stats sum(rl_starts) as <件数> by day, <軸>  … 1 行 = 1 リクエストの形式と同じ集計。件数だけ最初の行の数の和にする
 //
@@ -241,12 +241,12 @@ func (p Profile) head(bin, binName, cond string, marks []mark, lines, first bool
 		aggs = append(aggs, "earliest("+rlMark+m.name+") as "+m.name)
 	}
 	b.WriteString("\n| stats " + strings.Join(aggs, ", ") + " by " + rlID)
-	for j, s := range p.req.sets {
-		src, dst := "rl_status_"+strconv.Itoa(j), "rl_status_"+strconv.Itoa(j+1)
-		if j == len(p.req.sets)-1 {
-			dst = "status"
-		}
-		b.WriteString("\n| fields if(" + kindCount(s.kind) + " > 0 and not ispresent(" + src + `), "` + strconv.Itoa(s.status) + `", ` + src + ") as " + dst)
+	// 決定 (実データで確認): stats の後の if() は、else に stats 由来の項目を置くと null を返す
+	// (`if(<条件>, "404", rl_status_0)` は 404 と null だけになり、取れていたステータスが消える)。
+	// そこで coalesce で「取れた値が先、無ければ補い」と書き、if の else は空の文字列にする (空は Go の側でステータスなしとして扱う)。
+	// set を書ける行の種類は 1 つだけ (config が検証する。補いを重ねる形は確かめていない)
+	for _, s := range p.req.sets {
+		b.WriteString("\n| fields coalesce(rl_status_0, if(" + kindCount(s.kind) + ` > 0, "` + strconv.Itoa(s.status) + `", "")) as status`)
 	}
 	if cond != "" {
 		b.WriteString("\n| filter " + cond)

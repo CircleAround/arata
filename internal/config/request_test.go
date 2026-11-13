@@ -80,6 +80,7 @@ func TestRequestLinesInvalid(t *testing.T) {
 		{"何も取り出さない行", head + id + "      lines:\n" + started + "        - { name: noop, regex: 'Rendered' }\n", "captures nothing"},
 		{"set に status 以外", head + id + "      lines:\n" + started + "        - { name: c, regex: 'Completed (?P<status>\\d{3})' }\n        - { name: x, regex: 'RoutingError', set: { path: 1 } }\n", "set: only status"},
 		{"set の status の範囲", head + id + "      lines:\n" + started + "        - { name: c, regex: 'Completed (?P<status>\\d{3})' }\n        - { name: x, regex: 'RoutingError', set: { status: 99 } }\n", "100-599"},
+		{"set が 2 つの行に", head + id + "      lines:\n" + started + "        - { name: c, regex: 'Completed (?P<status>\\d{3})' }\n        - { name: x, regex: 'RoutingError', set: { status: 404 } }\n        - { name: y, regex: 'Timeout', set: { status: 504 } }\n", "only one line can set status"},
 		{"set だけで status の行が無い", head + id + "      lines:\n" + started + "        - { name: x, regex: 'RoutingError', set: { status: 404 } }\n", "needs a line that captures status"},
 		{"行の正規表現が読めない", head + id + "      lines:\n" + started + "        - { name: c, regex: 'Completed (?P<status>\\d{3}' }\n", "regex"},
 		{"max_duration が長い", head + id + "      max_duration: 2h\n      lines:\n" + started, "max_duration"},
@@ -97,7 +98,7 @@ func TestRequestLinesInvalid(t *testing.T) {
 	var many strings.Builder
 	many.WriteString(head + id + "      lines:\n" + started)
 	for i := 0; i < MaxRequestLines; i++ {
-		many.WriteString("        - { name: x" + string(rune('a'+i)) + ", regex: 'RoutingError', set: { status: 404 } }\n")
+		many.WriteString("        - { name: x" + string(rune('a'+i)) + ", regex: 'Completed (?P<status>\\d{3})' }\n")
 	}
 	if _, err := Load(write(t, logsSource(many.String()))); err == nil || !strings.Contains(err.Error(), "at most") {
 		t.Errorf("too many lines: %v", err)

@@ -21,7 +21,8 @@ type Event struct {
 // Sim はログの行の集まりから、Insights の集計クエリの結果を作るフェイク。クエリを上から順に解釈する。
 //
 //   - `fields <a> as <b>` (別名)、`fields bin(<N><d|h|m>) as <name>` (行の時刻の区切り)、
-//     `fields if(<f> > 0 and not ispresent(<g>), "<値>", <g>) as <name>` (stats の後の補い。collector が作る形だけ)
+//     `fields coalesce(<g>, if(<f> > 0, "<値>", "")) as <name>` (stats の後の補い。collector が作る形だけ)。
+//     `fields if(<条件>, "<値>", <項目>)` は受け付けない: 本物は else に項目を置くと null を返し、取れていた値が消える (実データで確認)
 //   - `parse <field> /<re>/` (名前付きキャプチャをフィールドにする。同じ名前を 2 度定義するクエリは、本物と同じく受け付けない)
 //   - `filter ispresent(<f>)`。それ以外の `filter` はクエリから読まず、テストが Go で渡す (Response に渡す関数)。
 //     評価する位置は、最初の stats より後ろに filter があればその位置 (リクエスト単位の filter)、無ければ最初の stats の直前
@@ -48,7 +49,8 @@ var (
 	statsLine   = regexp.MustCompile(`^stats (.*?)(?: by (.*))?$`)
 	binExpr     = regexp.MustCompile(`^bin\((\d+)([dhm])\) as (\S+)$`)
 	aggExpr     = regexp.MustCompile(`^(count|sum|min|max|earliest|latest)\(([^)]*)\) as (\S+)$`)
-	ifExpr      = regexp.MustCompile(`^fields if\((\S+) > 0 and not ispresent\((\S+)\), "([^"]*)", (\S+)\) as (\S+)$`)
+	ifExpr      = regexp.MustCompile(`^fields if\((.+), "([^"]*)", ([A-Za-z_]\w*)\) as (\S+)$`)
+	coalesceIf  = regexp.MustCompile(`^fields coalesce\((\S+), if\((\S+) > 0, "([^"]*)", ""\)\) as (\S+)$`)
 	presentExpr = regexp.MustCompile(`^filter ispresent\((\S+)\)$`)
 )
 
@@ -117,17 +119,21 @@ func (s *Sim) Rows(query string, from, to time.Time, filter func(map[string]stri
 	seenStats := 0
 	for _, line := range lines {
 		switch {
-		case ifExpr.MatchString(line):
-			m := ifExpr.FindStringSubmatch(line)
-			define(m[5])
+		case coalesceIf.MatchString(line):
+			m := coalesceIf.FindStringSubmatch(line)
+			define(m[4])
 			ops = append(ops, each(func(r simRow) {
 				switch {
-				case num(r.f[m[1]]) > 0 && r.f[m[2]] == "":
-					r.f[m[5]] = m[3]
-				case r.f[m[4]] != "":
-					r.f[m[5]] = r.f[m[4]]
+				case r.f[m[1]] != "":
+					r.f[m[4]] = r.f[m[1]]
+				case num(r.f[m[2]]) > 0:
+					r.f[m[4]] = m[3]
 				}
 			}))
+		case ifExpr.MatchString(line):
+			// 本物の癖 (実データで確認): stats の後の if() は、else に項目を置くと null を返す。
+			// この形のクエリは取れていた値を消すので、Sim は受け付けない (同じ誤りをテストで止める)
+			panic("sim: if() with a field in the else branch returns null after stats; use coalesce(<field>, if(<cond>, \"<value>\", \"\")): " + line)
 		case strings.HasPrefix(line, "fields "):
 			for _, part := range strings.Split(strings.TrimPrefix(line, "fields "), ", ") {
 				if bm := binExpr.FindStringSubmatch(part); bm != nil {
