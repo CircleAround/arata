@@ -22,7 +22,6 @@ import (
 //	| parse rl_path /<印>/                        … 集計が使うパスの印 (探索パス・画面の glob)。最初の行のパスから作る
 //	| filter ispresent(rl_request_id)             … 解釈率のクエリ以外
 //	| stats count(rl_path) as rl_starts, min(rl_bin) as day, earliest(rl_ip) as ip, … latest(rl_status) as status … by rl_request_id
-//	                                              … status_from: first なら earliest(rl_status)
 //	| fields coalesce(rl_status_0, if(rl_n2 > 0, "404", "")) as status   … set の補い (status が取れなかったリクエストだけ)
 //	| filter <リクエスト単位の条件>
 //	| stats sum(rl_starts) as <件数> by day, <軸>  … 1 行 = 1 リクエストの形式と同じ集計。件数だけ最初の行の数の和にする
@@ -30,14 +29,7 @@ import (
 // 決定:
 //   - 件数は「まとめた件数」ではなく最初の行 (ip と path を取り出す行) の数で数える。同じ request_id を使い回されても数が減らない。
 //     1 つの request_id に最初の行が 2 つ以上あるものは項目が混ざる (どの値になるかは下の規則) ので、その数を request_id_reused に残す
-//   - 行をまたいで値を拾う規則: status は request.status_from で選ぶ (last = 最後の値 latest。既定 / first = 最初の値 earliest)、
-//     duration は最後の値 (latest)、それ以外は最初の値 (earliest)。どれも項目の無い行を飛ばす
-//   - status_from: first が要る形: Rails はアクションごとに Completed を出す。認証の失敗でログイン画面を描き直す形 (Devise) は
-//     1 つの request_id に「Completed 401 → Completed 200」が並び、最後の値では失敗が画面の表示 (200) と区別できない。
-//     CSRF の失敗 (422 → 例外の画面の 500) も同じで、どの形でも最初の Completed がアクションの結果になる
-//   - duration は status_from に合わせず、最後の値のまま。今は duration を読む集計が無く、数え方を変えない方を選んだ。
-//     first のとき、status と duration が別の行の値になり得る (duration を読む集計を足すときに、どの行の値を使うかを決め直す)
-//   - set の補いは status_from と関係なく同じ形 (取れた値が 1 つも無いリクエストにだけ効くので、最初でも最後でも結果は同じ)
+//   - 行をまたいで値を拾う規則: status と duration は最後の値 (latest)、それ以外は最初の値 (earliest)。どちらも項目の無い行を飛ばす
 //   - リクエストは最初の行の時刻の日 (endpoint_abuse は時間幅) に数える。問い合わせの範囲は後ろに request.max_duration だけ広げ、
 //     区切りが範囲の終わり以降の行 (余白の中で始まったリクエスト) は捨てる (次の範囲が数える)。
 //     前には広げない: 最初の行が範囲に無いリクエストは最初の行の数が 0 で、どの件数にも入らない (前の日の分)。
@@ -81,11 +73,9 @@ const maxRequestCount = 1e9
 // requestStage は request_lines の 1 段目の材料。
 type requestStage struct {
 	margin time.Duration
-	// statusFirst は、ステータスの行が複数あるリクエストで最初の値を使うか (request.status_from: first)。
-	statusFirst bool
-	kinds       []string // 行の種類の名前 (設定順)
-	fields      []string // 取り出す項目 (config.RequestLineFields の順)
-	sets        []requestSet
+	kinds  []string // 行の種類の名前 (設定順)
+	fields []string // 取り出す項目 (config.RequestLineFields の順)
+	sets   []requestSet
 }
 
 // requestSet は「行の種類 kind があり、status が取れなかったリクエスト」に補う値。
@@ -103,7 +93,7 @@ func requestProfile(p *Profile, r *config.Request) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	st := &requestStage{margin: r.MaxDuration, statusFirst: r.StatusFirst()}
+	st := &requestStage{margin: r.MaxDuration}
 	parts := []string{"parse @message /" + escapeSlashes(prefixCaptures(r.ID, rlPrefix)) + "/"}
 	has := map[string]bool{}
 	for i, l := range r.Lines {
@@ -230,7 +220,7 @@ func (p Profile) head(bin, binName, cond string, marks []mark, lines, first bool
 	}
 	for _, f := range p.req.fields {
 		fn, name := "earliest", f
-		if f == "duration" || (f == "status" && !p.req.statusFirst) {
+		if f == "status" || f == "duration" {
 			fn = "latest"
 		}
 		if f == "status" && len(p.req.sets) > 0 {
@@ -473,17 +463,6 @@ func (c *Collector) RequestSummary(ctx context.Context, from, to time.Time) (*Re
 		s.Tagged += int64(math.Min(num(r[MetricLinesMatched]), maxRequestCount))
 	}
 	return s, nil
-}
-
-// StatusFrom は、ステータスの行が複数あるリクエストで使う値 (first / last。request_lines だけ。それ以外は空)。
-func (p Profile) StatusFrom() string {
-	switch {
-	case p.req == nil:
-		return ""
-	case p.req.statusFirst:
-		return config.RequestStatusFirst
-	}
-	return config.RequestStatusLast
 }
 
 // Fields は前処理が取り出す項目 (ip / path を含む。request_lines だけ。doctor が「取れている項目」として出す)。

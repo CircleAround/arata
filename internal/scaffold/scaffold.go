@@ -242,7 +242,6 @@ func Generate(reg *checks.Registry, auditAccount string) []byte {
 	w("  #   request:\n")
 	cm(`  #     id: '(?:^| -- : )\[(?P<request_id>[A-Za-z0-9_@-]{1,255})\] '`, "まとめる鍵。前の区切りまで含めて書く (最初の角括弧を取らない)")
 	cm(fmt.Sprintf("  #     # max_duration: %ds", int(config.DefaultRequestMaxDuration.Seconds())), "問い合わせ範囲の後ろに足す余白")
-	cm("  #     # status_from: "+config.DefaultRequestStatusFrom, "ステータスの行が複数あるリクエストで使う値 (first / last)。Devise のログイン失敗 (401 → 200) を数えるなら first")
 	w("  #     lines:\n")
 	w(`  #       - { name: started, regex: 'Started (?P<method>[A-Z]+) "(?P<path>[^"?]*)[^"]*" for (?P<ip>\S+) at ' }` + "\n")
 	w(`  #       - { name: completed, regex: 'Completed (?P<status>\d{3}) ' }` + "\n")

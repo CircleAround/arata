@@ -32,7 +32,6 @@ sources:
       # まとめる鍵。名前付きキャプチャは request_id だけ。前の区切りまで含めて書く
       id: '(?:^| -- : )\[(?P<request_id>[A-Za-z0-9_@-]{1,255})\] '
       # max_duration: 60s            # 1 リクエストの行が出終わるまでの見込み (既定 60s)。問い合わせ範囲の後ろに足す余白
-      # status_from: last            # ステータスの行が複数あるリクエストで使う値 (first / last。既定 last)。下の「ステータスの行が複数あるリクエスト」
       lines:
         - name: started              # ip と path を取り出す行 = 最初の行。リクエストはこの行の数で数える
           regex: 'Started (?P<method>[A-Z]+) "(?P<path>[^"?]*)[^"]*" for (?P<ip>\S+) at '
@@ -52,7 +51,6 @@ sources:
 - `request.id` の名前付きキャプチャは `(?P<request_id>…)` だけ。`request.lines` で取り出せる項目は `ip`・`method`・`path`・`status`・`ua`・`duration` だけ
   (`Parameters:` の行のように利用者の入力が入る行から、任意の値を取り出す設定は書けない)
 - `ip` と `path` は同じ行の種類で取り出す。同じ項目を 2 つの行の種類で取り出さない。値の出ない場合の補いは `set` (書けるのは `status` だけで、`set` を持つ行の種類は 1 つ)
-- `request.status_from` は `first` か `last` (省略時は `last`)。`first` を書くなら status を取り出す行が要る
 - 正規表現は Go (RE2) で読める形。先読み・後方参照は使えない。行の種類は 8 つまで、1 つ 512 文字まで
 
 ## 鍵 (request.id) の書き方
@@ -67,9 +65,9 @@ sources:
 - 鍵の文字を UUID の形に絞らない。Rails はリクエストの `X-Request-Id` ヘッダーの値を (英数字・`_`・`-`・`@` 以外を除き、255 文字までに切って) request_id に使うので、
   絞ると、形の違う ID を送ったリクエストが全部のチェックから外れる
 
-## ステータスの行が複数あるリクエスト (status_from)
+## ステータスの行が複数あるリクエスト (Devise のログインの失敗)
 
-Rails はアクションごとに `Completed` を出すので、1 つの request_id に `Completed` が 2 回出ることがある。
+Rails はアクションごとに `Completed` を出すので、1 つの request_id に `Completed` が 2 回出ることがある。arata は**最後の `Completed`** のステータスを使う (選ぶ設定は無い)。
 
 ```
 I, [2026-11-01T01:02:03.000000 #1]  INFO -- : [5b0c1d2e-7a3f-4c1b-9e2d-0a1b2c3d4e5f] Started POST "/users/sign_in" for 203.0.113.10 at 2026-11-01 01:02:03 +0000
@@ -79,13 +77,14 @@ I, [2026-11-01T01:02:03.214000 #1]  INFO -- : [5b0c1d2e-7a3f-4c1b-9e2d-0a1b2c3d4
 I, [2026-11-01T01:02:03.230000 #1]  INFO -- : [5b0c1d2e-7a3f-4c1b-9e2d-0a1b2c3d4e5f] Completed 200 OK in 16ms
 ```
 
-- Devise のログインでパスワードが違うとき: 最初の `Completed` が 401、最後が 200 (ログイン画面の描き直し)。`last` では 200 になり、ログイン画面の表示 (GET の 200) と区別できない
-- CSRF の検証の失敗: `Completed 422` のあと、例外の画面で `Completed 500`
-- 401 だけで終わる形、成功 (302 だけ) の形は、`Completed` が 1 回なのでどちらでも同じ
-- どの形でも、**最初の `Completed` がアクションの結果**。こういうログでは `status_from: first` を書く
-- 省略時は `last` (この設定ができる前の動き)。切り替えると、その日からステータスごとの件数が変わる (ログインの失敗の平常帯も作り直しになる)
-- `duration` は `status_from` と関係なく最後の値。`set` の補い (経路の無いリクエストの 404 など) はどちらでも同じに効く
-- ログインの失敗を数える設定の組は `arata help ai logs` の「よく詰まる点」
+- **ログの `Completed 401` は HTTP の 401 ではない**。認証に失敗してアクションが `throw :warden` で打ち切られたときに、Devise がログ用に入れる値。実際の応答は、そのあとで作られる
+- **パスワードの誤り・該当者なし**: 上の形。ログイン画面を描き直し (recall)、最後の `Completed` が応答のステータスになる。
+  responder の `error_status` がライブラリの既定 (`:ok`) なら 200、`:unprocessable_entity` (4.9 以降に生成した initializer) なら 422
+- **`Completed 401` だけで終わる**: パスワードは合っているが、アカウントが有効でない場合 (confirmable の未確認など)。HTTP ではログイン画面への 302 で、パスワードの誤りではない
+- 成功は `Completed 302` (設定によっては 303) が 1 回
+- そこで `checks.login_bruteforce` は、`error_status` が既定なら `failure_statuses: [200]`、`:unprocessable_entity` なら `[422]` と書く (`methods: [POST]` のまま。POST の 200 は失敗だけ)。
+  **`[401]` は書かない**: 401 で数えると、パスワードの誤り (最後は 200 / 422) は 1 件も入らず、正しいパスワードでの未確認ログインだけが入る
+- どちらの設定のアプリかは、ログインの失敗を 1 回起こし、その request_id の行を Logs Insights で見て確かめる
 
 ## 確かめ方
 
@@ -95,9 +94,7 @@ I, [2026-11-01T01:02:03.230000 #1]  INFO -- : [5b0c1d2e-7a3f-4c1b-9e2d-0a1b2c3d4
    - 「request_id の異なりの数が最初の行の数の半分未満」も ng。`request.id` が別の角括弧 (時刻・ホスト名) を拾っている。実際の行と見比べ、鍵の直前の区切りを含めて書き直す
    - 「行の種類」は種類ごとの当たった行数。0 の種類があれば warn (その行の正規表現を見直す。経路の無いリクエストが窓に無いだけなら、そのままでよい)
    - `match_rate` (request_id の付いた行の割合) は、SQL や起動時の行などタグの付かない行が多いロググループでは低くて正常 (`expected_match_rate` を下げる)
-   - 「ステータスの取り方」は `status_from` の値 (`first` / `last`)。ステータスの行が複数あるリクエストがあるかどうかは doctor では数えない (下の 3 で確かめる)
-3. `arata run <profile> --dry-run` で、実際に出る指摘を見る。ログイン失敗を 1 回起こして数えられるかを確かめる (`checks.login_bruteforce` の `paths`・`failure_statuses`)。
-   そのリクエストの行を Logs Insights で request_id で絞って見て、`Completed` が 2 回出ていれば `status_from: first` にする
+3. `arata run <profile> --dry-run` で、実際に出る指摘を見る。ログイン失敗を 1 回起こして数えられるかを確かめる (`checks.login_bruteforce` の `paths`・`failure_statuses`)
 4. run の後は report.json の `coverage.formats[].requests` (`complete_rate`・`request_id_reused`・`starts_untagged`) を見る
 
 ## 送る側が選べる値
@@ -111,7 +108,7 @@ I, [2026-11-01T01:02:03.230000 #1]  INFO -- : [5b0c1d2e-7a3f-4c1b-9e2d-0a1b2c3d4
 ## 数え方
 
 - リクエストは最初の行の時刻の日に数える。日をまたぐリクエストは始まった日の分
-- ステータスは、行が複数あれば `status_from` の側 (既定は最後) の値。値のある行が 1 つならその値
+- ステータスは最後の行の値 (`Completed` が複数あれば最後)。値のある行が 1 つならその値
 - 件数は最初の行の数。同じ request_id に最初の行が複数あれば、その数だけ数える
 - 問い合わせは範囲の後ろに `request.max_duration` (既定 60s) だけ広げて、終わりぎわに始まったリクエストの残りの行を拾う。これより長いリクエストはステータスが欠ける
 - Rails の既定のログには UA が無い。endpoint_abuse の「同じ UA が多くの IP にまたがる」は出ない

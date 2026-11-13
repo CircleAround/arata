@@ -19,9 +19,6 @@ import (
 //     どちらの値を使うかの規則も要る)。行に値が出ないときの補いは set で書く
 //   - set で補えるのは status (100〜599) だけで、書ける行の種類は 1 つ。status を取り出す行が別にあり、その値が無いリクエストにだけ効く
 //     (経路の無いリクエストは最後の行が出ない)
-//   - 1 つのリクエストにステータスの行が複数あるとき、どれを使うかは status_from で選ぶ (first = 最初、last = 最後。省略時は last)。
-//     Rails はアクションごとに Completed を出すので、認証の失敗 (401) のあとにログイン画面を描き直す (200) 形では、最初の値がアクションの結果になる。
-//     既定を last のままにするのは、今ある設定の数え方を変えないため (設計書 2-4)
 //   - 行の種類の数と正規表現の長さに上限を置く (Insights のクエリの長さの上限 10000 文字に収める)
 const (
 	FormatRequestLines = "request_lines"
@@ -33,11 +30,6 @@ const (
 	DefaultRequestMaxDuration = 60 * time.Second
 	// MaxRequestMaxDuration は request.max_duration の上限。
 	MaxRequestMaxDuration = time.Hour
-	// RequestStatusFirst / RequestStatusLast は request.status_from の値 (ステータスの行が複数あるリクエストで、最初 / 最後の値を使う)。
-	RequestStatusFirst = "first"
-	RequestStatusLast  = "last"
-	// DefaultRequestStatusFrom は request.status_from の既定値。
-	DefaultRequestStatusFrom = RequestStatusLast
 	// MaxRequestLines は request.lines に書ける行の種類の数。
 	MaxRequestLines = 8
 	// MaxRequestRegexLen は request.id と request.lines[].regex の長さの上限。
@@ -54,13 +46,8 @@ type Request struct {
 	// MaxDuration は 1 リクエストの行が出終わるまでの長さの見込み。問い合わせ範囲の後ろにこの長さの余白を足す (既定 60s。0 で足さない)。
 	MaxDuration    time.Duration `yaml:"-"`
 	MaxDurationRaw string        `yaml:"max_duration"`
-	// StatusFrom は、1 つのリクエストにステータスの行が複数あるときに使う値 (first / last。既定 last)。
-	StatusFrom string        `yaml:"status_from"`
-	Lines      []RequestLine `yaml:"lines"`
+	Lines          []RequestLine `yaml:"lines"`
 }
-
-// StatusFirst は、ステータスを最初の行から取るか (status_from: first)。空 (設定を通さずに作った値) は last として扱う。
-func (r *Request) StatusFirst() bool { return r != nil && r.StatusFrom == RequestStatusFirst }
 
 // RequestLine は行の種類 1 つ。
 type RequestLine struct {
@@ -79,9 +66,6 @@ func (s *Source) applyRequestDefaults() error {
 	}
 	if s.Request == nil {
 		return nil
-	}
-	if s.Request.StatusFrom == "" {
-		s.Request.StatusFrom = DefaultRequestStatusFrom
 	}
 	s.Request.MaxDuration = DefaultRequestMaxDuration
 	if raw := s.Request.MaxDurationRaw; raw != "" {
@@ -122,9 +106,6 @@ func (r *Request) Groups() ([][]string, error) {
 	}
 	if len(names) != 1 || names[0] != RequestIDCapture {
 		return nil, fmt.Errorf("request.id: want only (?P<%s>...) as a named capture, got %v", RequestIDCapture, names)
-	}
-	if r.StatusFrom != "" && r.StatusFrom != RequestStatusFirst && r.StatusFrom != RequestStatusLast {
-		return nil, fmt.Errorf("request.status_from %q: want %s or %s", r.StatusFrom, RequestStatusFirst, RequestStatusLast)
 	}
 	if len(r.Lines) == 0 {
 		return nil, fmt.Errorf("request.lines: at least one line is required")
@@ -179,9 +160,6 @@ func (r *Request) Groups() ([][]string, error) {
 	if ip != path {
 		return nil, fmt.Errorf("request.lines: ip and path must be captured by the same line (the first line of a request; requests are counted by it), got %s and %s",
 			r.Lines[ip].Name, r.Lines[path].Name)
-	}
-	if _, ok := owner["status"]; !ok && r.StatusFirst() {
-		return nil, fmt.Errorf("request.status_from: needs a line that captures status")
 	}
 	sets := 0
 	for _, l := range r.Lines {

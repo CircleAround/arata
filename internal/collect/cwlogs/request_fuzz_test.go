@@ -11,7 +11,6 @@ import (
 
 	"github.com/CircleAround/arata/internal/collect"
 	"github.com/CircleAround/arata/internal/collect/cwlogs/cwlogstest"
-	"github.com/CircleAround/arata/internal/config"
 )
 
 // request_lines のファズテスト (ADR 0041・0051)。設定の正規表現 (利用者のファイル。LLM が書く) と、Insights の結果 (ログ由来の値) を解釈する関数が対象。
@@ -242,64 +241,6 @@ func FuzzCollectRequestRows(f *testing.F) {
 		checkRecords(t, sink.recs, fuzzEmail)
 		if rs := c.FormatStats().Requests; rs == nil || rs.Complete > rs.Total || rs.Starts < rs.Complete {
 			t.Fatalf("requests: %+v", rs)
-		}
-	})
-}
-
-// 1 つのリクエストに Completed が何回も出るログ (Devise のログインの失敗は 401 → 200) から、収集の全体を通す
-// (cwlogstest.Sim が 2 段の stats を解釈する。実 AWS には接続しない)。
-// reqs の各バイトが 1 リクエストで、下位 2 ビットが Completed の回数 (0〜3)、その上の 2 ビットずつが各回のステータスの番号。
-// 守る規則 (request.status_from):
-//   - first は最初の Completed、last は最後の Completed のステータスだけで失敗を判定する。途中の値や、ほかの回の値では数えない
-//   - Completed が 1 回以下のリクエストは、どちらの取り方でも同じ結果になる
-//   - リクエストの数・ステータスのある数は、取り方で変わらない
-func FuzzRequestStatusFrom(f *testing.F) {
-	f.Add([]byte{0b0001_10, 0b0100_10, 0b01, 0b00, 0b1001_00_11})
-	f.Add([]byte{0b0100_10, 0b0100_10, 0b0100_10})
-	f.Add([]byte{0b0001_10})
-	f.Add([]byte{})
-	codes := []int{401, 200, 422, 500}
-	f.Fuzz(func(t *testing.T, reqs []byte) {
-		if len(reqs) > 120 {
-			reqs = reqs[:120]
-		}
-		c := checksCfg()
-		c.LoginBruteforce.FailureStatuses = []int{401}
-		var ev []cwlogstest.Event
-		wantFirst, wantLast, withStatus := 0.0, 0.0, int64(0)
-		for i, b := range reqs {
-			var statuses []int
-			for j := 0; j < int(b&3); j++ {
-				statuses = append(statuses, codes[(b>>(2+2*j))&3])
-			}
-			ev = append(ev, railsMulti(day21(1, i/60, i%60), rid(i+1), "POST", "/users/sign_in", "198.51.100.7", statuses...)...)
-			if len(statuses) == 0 {
-				continue
-			}
-			withStatus++
-			if statuses[0] == 401 {
-				wantFirst++
-			}
-			if statuses[len(statuses)-1] == 401 {
-				wantLast++
-			}
-		}
-		w := collect.Window{From: now.Add(-24 * time.Hour), To: now}
-		for _, tc := range []struct {
-			from string
-			want float64
-		}{{config.RequestStatusFirst, wantFirst}, {config.RequestStatusLast, wantLast}, {"", wantLast}} {
-			sink, col, _, err := collectRequests(t, statusFromSource(tc.from), c, ev, w)
-			if err != nil {
-				t.Fatalf("status_from=%q: %v", tc.from, err)
-			}
-			if got := sink.metrics()["2026-10-21|sign_in_failures|198.51.100.7"]; got != tc.want {
-				t.Fatalf("status_from=%q: ログインの失敗 %v 件のはずが %v 件 (reqs=%v)", tc.from, tc.want, got, reqs)
-			}
-			if rs := col.FormatStats().Requests; len(reqs) > 0 && (rs == nil || rs.Total != int64(len(reqs)) || rs.WithStatus != withStatus) {
-				t.Fatalf("status_from=%q: リクエスト %d・ステータスあり %d のはずが %+v", tc.from, len(reqs), withStatus, rs)
-			}
-			checkRecords(t, sink.recs)
 		}
 	})
 }
