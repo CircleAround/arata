@@ -16,7 +16,7 @@ func TestSections(t *testing.T) {
 		"ai runtime":       {"使い方", "リポジトリと fork", "ワークフローのトリガー", "OIDC の信頼", "main の保護と書き込み権限", "secrets", "Actions の設定", "ワークフローの形", "監査対象の前提 (context_file) の下書き", "報告の書き方"},
 		"ai onboarding":    {"流れ", "最初の run で出るもの", "1 件ずつ片付ける", "ack・snooze・resolve の使い分け", "導入作業の記録を拾う", "定時の通知を始める"},
 		"ai logs":          {"使い方", "チェックと記録の対応", "記録ごとの集め方", "保存期間と費用", "設定の書き方", "確かめ方", "よく詰まる点", "外部の拠り所"},
-		"ai request_lines": {"使い方", "見本 (Rails の既定のログ)", "書き方の決まり", "鍵 (request.id) の書き方", "確かめ方", "送る側が選べる値", "数え方"},
+		"ai request_lines": {"使い方", "見本 (Rails の既定のログ)", "書き方の決まり", "鍵 (request.id) の書き方", "ステータスの行が複数あるリクエスト (status_from)", "確かめ方", "送る側が選べる値", "数え方"},
 		"ai playbook":      {"使い方", "一覧"},
 	}
 	for _, tp := range Topics {
@@ -297,7 +297,7 @@ func TestLogs(t *testing.T) {
 		"設定の書き方":  {"kind: cloudwatch-logs", "prod-nginx-access", "format: json", "fields:", "expected_match_rate", "stream_prefix"},
 		"確かめ方":    {"arata doctor", "match_rate", "FORMAT_MISMATCH", "LOG_GROUP_MISSING", "skip", "coverage.formats"},
 		// 一般化した詰まりやすい点: Devise の 200、配信先のロググループ名、複数行のログ、証跡が無くても動くこと
-		"よく詰まる点": {"Devise", "failure_statuses: [200]", "error_status", "/aws/vendedlogs/", "複数行", "LookupEvents", "X-Forwarded-For"},
+		"よく詰まる点": {"Devise", "failure_statuses: [200]", "最初の Completed が 401、最後が 200", "request.status_from: first", "failure_statuses: [401]", "error_status", "/aws/vendedlogs/", "複数行", "LookupEvents", "X-Forwarded-For"},
 		"外部の拠り所": {"Well-Architected", "CIS AWS Foundations Benchmark"},
 	} {
 		for _, want := range wants {

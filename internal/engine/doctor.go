@@ -466,6 +466,8 @@ func (d *doctor) matchRate(src config.Source, prof cwlogs.Profile, rows []map[st
 // 決定: まとめられた割合が閾値未満・鍵の取り違え (request_id の異なりの数が最初の行の数の半分未満) は run と同じく ng (FORMAT_MISMATCH)。
 // 行の種類ごとの当たった数を出し、1 行も当たらない種類があれば warn にする (設定を書いた LLM が、当たらない行の種類を見て直せる)。
 // 同じ request_id の使い回し・タグの無い最初の行があるときも warn (数は壊れないが、項目が混ざる・集計に入らないリクエストがある)。
+// ステータスの取り方 (request.status_from) は値をそのまま出す。ステータスの行が複数あるリクエストの数は数えない
+// (解釈率のクエリの軸が増える。ログインの失敗を 1 回起こして確かめる手順を文書に書く)。
 func (d *doctor) requests(ctx context.Context, src config.Source, c *cwlogs.Collector) {
 	before := c.Scanned()
 	s, err := c.RequestSummary(ctx, d.now.Add(-d.window), d.now)
@@ -488,9 +490,9 @@ func (d *doctor) requests(ctx context.Context, src config.Source, c *cwlogs.Coll
 		}
 	}
 	detail := fmt.Sprintf("まとめられた割合 %.2f (%d/%d リクエスト、閾値 %.2f)、最初の行 %d、ステータスあり %d、request_id の使い回し %d、タグの無い最初の行 %d。"+
-		"行の種類: %s。取れている項目: %s。スキャン %.1f MB (直近 %s の 1 本分。run は 1 回に %d 本)",
+		"行の種類: %s。取れている項目: %s。ステータスの取り方: %s (status_from。ステータスの行が複数あるリクエストで使う値)。スキャン %.1f MB (直近 %s の 1 本分。run は 1 回に %d 本)",
 		rate, st.Complete, st.Total, st.Expected, st.Starts, st.WithStatus, st.Reused, st.StartsUntagged,
-		strings.Join(kinds, ", "), strings.Join(c.Profile().Fields(), ", "), (c.Scanned()-before)/1e6, d.window, c.QueryCount())
+		strings.Join(kinds, ", "), strings.Join(c.Profile().Fields(), ", "), c.Profile().StatusFrom(), (c.Scanned()-before)/1e6, d.window, c.QueryCount())
 	switch cwlogs.RequestProblem(st) {
 	case cwlogs.RequestProblemID:
 		d.add(src, "requests", DoctorNG, collect.CodeFormatMismatch,

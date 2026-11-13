@@ -55,6 +55,31 @@ func TestRequestLinesSource(t *testing.T) {
 	}
 }
 
+// status_from: 1 つのリクエストにステータスの行が複数あるとき、どれを使うか。省略時は last (今までの動き)。
+func TestRequestStatusFrom(t *testing.T) {
+	load := func(extra string) *Request {
+		t.Helper()
+		cfg, err := Load(write(t, logsSource(railsRequest+extra)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cfg.Sources[len(cfg.Sources)-1].Request
+	}
+	if r := load(""); r.StatusFrom != RequestStatusLast || r.StatusFirst() {
+		t.Fatalf("省略時は last: %q", r.StatusFrom)
+	}
+	if r := load("      status_from: last\n"); r.StatusFrom != RequestStatusLast || r.StatusFirst() {
+		t.Fatalf("last: %q", r.StatusFrom)
+	}
+	if r := load("      status_from: first\n"); r.StatusFrom != RequestStatusFirst || !r.StatusFirst() {
+		t.Fatalf("first: %q", r.StatusFrom)
+	}
+	// 設定を通さずに作った値 (空) は last として扱う
+	if (&Request{}).StatusFirst() {
+		t.Fatal("空の status_from が first になった")
+	}
+}
+
 func TestRequestLinesInvalid(t *testing.T) {
 	id := `      id: ' -- : \[(?P<request_id>[A-Za-z0-9-]{1,255})\] '` + "\n"
 	started := `        - { name: started, regex: 'Started (?P<method>[A-Z]+) "(?P<path>[^"]*)" for (?P<ip>\S+) at ' }` + "\n"
@@ -83,6 +108,9 @@ func TestRequestLinesInvalid(t *testing.T) {
 		{"set が 2 つの行に", head + id + "      lines:\n" + started + "        - { name: c, regex: 'Completed (?P<status>\\d{3})' }\n        - { name: x, regex: 'RoutingError', set: { status: 404 } }\n        - { name: y, regex: 'Timeout', set: { status: 504 } }\n", "only one line can set status"},
 		{"set だけで status の行が無い", head + id + "      lines:\n" + started + "        - { name: x, regex: 'RoutingError', set: { status: 404 } }\n", "needs a line that captures status"},
 		{"行の正規表現が読めない", head + id + "      lines:\n" + started + "        - { name: c, regex: 'Completed (?P<status>\\d{3}' }\n", "regex"},
+		{"status_from が知らない値", head + id + "      status_from: middle\n      lines:\n" + started + "        - { name: c, regex: 'Completed (?P<status>\\d{3})' }\n", "status_from"},
+		{"status_from の大文字", head + id + "      status_from: First\n      lines:\n" + started + "        - { name: c, regex: 'Completed (?P<status>\\d{3})' }\n", "status_from"},
+		{"status_from があるのに status の行が無い", head + id + "      status_from: first\n      lines:\n" + started, "status_from: needs a line that captures status"},
 		{"max_duration が長い", head + id + "      max_duration: 2h\n      lines:\n" + started, "max_duration"},
 		{"max_duration が負", head + id + "      max_duration: -1s\n      lines:\n" + started, "max_duration"},
 		{"expected_complete_rate の範囲", head + id + "      lines:\n" + started + "    expected_complete_rate: 1.5\n", "expected_complete_rate"},
@@ -111,18 +139,27 @@ func TestRequestLinesInvalid(t *testing.T) {
 
 // 設定の request: (利用者のファイル。LLM が書く) の検証 (ADR 0041・0051)。
 // 守る規則: 受け付けた設定は、鍵の正規表現に request_id だけ、行の正規表現に決まった名前のキャプチャだけを持ち、どれも RE2 で読め、
-// ip と path は同じ行にあり、同じ項目を 2 つの行が取り出さず、set は 100〜599 の status だけ。
+// ip と path は同じ行にあり、同じ項目を 2 つの行が取り出さず、set は 100〜599 の status だけ、status_from は first か last だけ。
 func FuzzRequestValidate(f *testing.F) {
-	f.Add(`(?:^| -- : )\[(?P<request_id>[A-Za-z0-9_@-]{1,255})\] `, `Started (?P<method>[A-Z]+) "(?P<path>[^"?]*)[^"]*" for (?P<ip>\S+) at `, `Completed (?P<status>\d{3}) `, `ActionController::RoutingError`, 404)
-	f.Add(`\[(?<request_id>\w+)\]`, `(?<ip>\S+) (?<path>\S+)`, `(?P<status>\d+)`, `x`, 99)
-	f.Add(`\[(?P<request_id>\w+)\] (?P<ip>\S+)`, `(?P<ip>\S+) (?P<path>\S+) (?P<params>.*)`, `(?P<ip>\d+)`, `(`, 600)
-	f.Add(`(?P<request_id>`, `\(?P<ip>\S+) (?P<path>/)`, `[(?P<status>x)]`, `(?P<request_id>a)`, 0)
-	f.Add("", "", "", "", -1)
-	f.Fuzz(func(t *testing.T, id, first, second, third string, status int) {
-		r := &Request{ID: id, Lines: []RequestLine{{Name: "a", Regex: first}, {Name: "b", Regex: second}, {Name: "c", Regex: third, Set: map[string]int{"status": status}}}}
+	f.Add(`(?:^| -- : )\[(?P<request_id>[A-Za-z0-9_@-]{1,255})\] `, `Started (?P<method>[A-Z]+) "(?P<path>[^"?]*)[^"]*" for (?P<ip>\S+) at `, `Completed (?P<status>\d{3}) `, `ActionController::RoutingError`, 404, "")
+	f.Add(`(?:^| -- : )\[(?P<request_id>[A-Za-z0-9_@-]{1,255})\] `, `Started (?P<method>[A-Z]+) "(?P<path>[^"?]*)[^"]*" for (?P<ip>\S+) at `, `Completed (?P<status>\d{3}) `, `ActionController::RoutingError`, 404, "first")
+	f.Add(`\[(?<request_id>\w+)\]`, `(?<ip>\S+) (?<path>\S+)`, `(?P<status>\d+)`, `x`, 99, "last")
+	f.Add(`\[(?<request_id>\w+)\]`, `(?<ip>\S+) (?<path>\S+)`, `(?P<status>\d+)`, `x`, 200, "First")
+	f.Add(`\[(?P<request_id>\w+)\] (?P<ip>\S+)`, `(?P<ip>\S+) (?P<path>\S+) (?P<params>.*)`, `(?P<ip>\d+)`, `(`, 600, "first ")
+	f.Add(`(?P<request_id>`, `\(?P<ip>\S+) (?P<path>/)`, `[(?P<status>x)]`, `(?P<request_id>a)`, 0, "earliest")
+	f.Add("", "", "", "", -1, "\n")
+	f.Fuzz(func(t *testing.T, id, first, second, third string, status int, statusFrom string) {
+		r := &Request{ID: id, StatusFrom: statusFrom, Lines: []RequestLine{{Name: "a", Regex: first}, {Name: "b", Regex: second}, {Name: "c", Regex: third, Set: map[string]int{"status": status}}}}
 		groups, err := r.Groups()
 		if err != nil {
 			return
+		}
+		// status_from は決まった 2 つの値 (と、既定を当てる前の空) だけ。first になるのは "first" と書いたときだけ
+		if statusFrom != "" && statusFrom != RequestStatusFirst && statusFrom != RequestStatusLast {
+			t.Fatalf("知らない status_from %q を受け付けた", statusFrom)
+		}
+		if r.StatusFirst() != (statusFrom == RequestStatusFirst) {
+			t.Fatalf("status_from %q の解釈: first=%v", statusFrom, r.StatusFirst())
 		}
 		re, cerr := regexp.Compile(id)
 		if cerr != nil {

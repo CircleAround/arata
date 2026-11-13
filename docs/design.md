@@ -284,6 +284,7 @@ Rails の既定のログは、送信元とパスが最初の行 (`Started …`)�
     request:
       id: '(?:^| -- : )\[(?P<request_id>[A-Za-z0-9_@-]{1,255})\] '   # Logger の既定の formatter。前置きのあと (` -- : `) と行頭 (続きの行) を受ける
       max_duration: 60s                # 問い合わせ範囲の後ろに足す余白 (既定 60s)
+      status_from: last                # ステータスの行が複数あるリクエストで使う値 (first / last。既定 last)
       lines:
         - name: started                # ip と path を取り出す行 = 最初の行。リクエストはこの行の数で数える
           regex: 'Started (?P<method>[A-Z]+) "(?P<path>[^"?]*)[^"]*" for (?P<ip>\S+) at '
@@ -307,6 +308,11 @@ Rails の既定のログは、送信元とパスが最初の行 (`Started …`)�
   (括弧を足しても、条件を変えても同じ)。`coalesce(<項目>, if(<条件>, "404", ""))` は取れていた値と 404 の両方が正しく出る。`set` の補いはこの形
 - 例外など複数行のメッセージは、2 行目以降が CloudWatch Logs の別のイベントになり、Logger の前置き (`I, [時刻 #pid]  INFO -- : `) が無く、行頭が `[<request_id>] ` になる。
   経路の無いリクエストの RoutingError の行もこの形で、そのリクエストには最後の行 (`Completed`) が出ない
+- 1 つの request_id に `Completed` が 2 回出るリクエストがある。Rails はアクションごとに `Completed` を出すので、アクションが途中で打ち切られ、
+  別のアクションが続きを描く形ではこうなる。Devise のログインでパスワードが違うときは
+  `Processing by …SessionsController#create` → `Completed 401 Unauthorized` → `Processing by …SessionsController#new` → `Completed 200 OK` (ログイン画面の描き直し)、
+  CSRF の検証の失敗は `Completed 422` のあと例外の画面で `Completed 500`。401 だけで終わる形、成功 (302 だけ) の形もある。
+  **どの形でも、最初の `Completed` がアクションの結果**で、最後の値では失敗 (401) がログイン画面の表示 (GET の 200) と区別できない
 - `count_distinct` は概数で、実際の数より数 % 多く出た例がある (この形式では使っていない。request_id の数は 2 段目の `count(*)` で正確に数える)
 - 一時フィールドは同じ名前を 2 度定義できない
 - Rails は `X-Request-Id` ヘッダーの値から英数字・`_`・`-`・`@` 以外を除き、255 文字までを request_id に使う。除いた結果が空になる値 (記号だけ) を送ると、
@@ -324,7 +330,7 @@ Rails の既定のログは、送信元とパスが最初の行 (`Started …`)�
   その形の区切りだけを受ける形に書き直す (下の検査が止めるので、黙って壊れはしない)
 - **鍵の文字の集まりは UUID の形に絞らない**。見本は Rails が通す文字 (`[A-Za-z0-9_@-]`) を全部受ける。絞ると、形の違う ID を送ったリクエストが全部のチェックから外れる
 - **件数は最初の行の数で数える**。1 段目で request_id ごとに最初の行の数を数え、2 段目の件数はその和 (`sum`) にする。同じ request_id を何度使っても、数えたリクエストの数は最初の行の数より減らない。
-  1 つの request_id に最初の行が 2 つ以上あるものは項目が混ざる (status と duration は最後の値、ほかは最初の値) ので、その数を日次の metric `request_id_reused` と coverage に残す
+  1 つの request_id に最初の行が 2 つ以上あるものは項目が混ざる (status は `status_from` に従い、duration は最後の値、ほかは最初の値) ので、その数を日次の metric `request_id_reused` と coverage に残す
 - **解釈率は 2 つ**。行の解釈率 = request_id の付いた行 / 全行 (`lines_matched` / `lines_total`。今の意味のまま。`expected_match_rate`)。
   まとめられた割合 = 最初の行のある request_id / request_id の数 (`requests_complete` / `requests_total`。`expected_complete_rate`、既定 0.8)。どちらかが閾値未満なら `FORMAT_MISMATCH`
 - **鍵の取り違えの検査**: request_id の異なりの数が最初の行の数の半分未満なら `FORMAT_MISMATCH` (details の `reason` は `request_id`。まとめられた割合のときは `complete_rate`)。
@@ -341,6 +347,14 @@ Rails の既定のログは、送信元とパスが最初の行 (`Started …`)�
   (スキャン量は変わらない)。`lines_total` / `lines_matched` は、日の境目の余白の分だけ概数になる
 - **本数は 1 行のログと同じ 3 本** (解釈率 + `probe_paths`、`sign_in_failures` + `probe_hits`、endpoint_abuse)。パスの印 (探索パス・画面の glob) は最初の行のパスから 1 段目の前に作る
 - 日次の metric を 3 つ足す (key なし): `requests_total`・`requests_complete`・`request_id_reused`
+- **ステータスの取り方は `request.status_from` で選ぶ** (`first` = 最初の値 `earliest`、`last` = 最後の値 `latest`)。上の「`Completed` が 2 回出る」形で、
+  失敗を数えるには最初の値が要る。**省略時は `last`** (この設定を足す前の動きのまま)。`first` を既定にしなかったのは、今ある設定の数え方と平常帯を黙って変えないため
+  (既定を変えるなら、新しい判断として記録する)。`first` / `last` 以外の値と、status を取り出す行が無いのに `first` を書いた設定は `CONFIG_INVALID`。
+  名前は「どの行から取るか」を表す `status_from` にした (`status: first` は値そのものの指定に見え、`status_line` は行の種類の名前と紛れる)。
+  クエリの違いは 1 段目の `latest(rl_status)` が `earliest(rl_status)` になることだけで、本数・スキャン量は変わらない。doctor の `requests` に取り方を出す
+- **duration は `status_from` に合わせず、最後の値のまま**。今は duration を読む集計が無く、結果に影響しないので、数え方を変えない方を選んだ。
+  `first` のときは status と duration が別の行の値になり得る (401 の行の status と、描き直しの行の duration)。duration を読む集計を足すときに、どの行の値を使うかを決め直す
+- `set` の補いは `status_from` と関係なく同じ形で効く (取れた status が 1 つも無いリクエストにだけ効くので、最初でも最後でも結果は同じ)
 - `set` は「その行の種類があり、status がほかの行から取れなかったリクエスト」にだけ効く。クエリは `coalesce(<取れた status>, if(<その行の数> > 0, "<値>", ""))` の形で、
   どちらも無いリクエストの status は空の文字列になる (空はステータスなしとして扱う)。偽の Insights (`cwlogstest.Sim`) は、else に項目を置く `if()` のクエリを受け付けない (同じ誤りをテストで止める)
 - 1 段目で作った時刻は 2 段目では数になる前提で、結果の時刻は「日時の文字列」と「エポックからのミリ秒 (12〜14 桁の数字)」の両方を読む

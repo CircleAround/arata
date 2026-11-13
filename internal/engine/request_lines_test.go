@@ -164,7 +164,7 @@ func TestDoctorRequestLines(t *testing.T) {
 		t.Fatalf("requests の行が無い: %+v", res.Rows)
 	}
 	for _, want := range []string{"まとめられた割合 0.98 (980/1000 リクエスト、閾値 0.80)", "最初の行 980", "ステータスあり 980", "request_id の使い回し 0",
-		"行の種類: started=1000, completed=1000, no_route=0", "取れている項目: ip, method, path, status", "スキャン"} {
+		"行の種類: started=1000, completed=1000, no_route=0", "取れている項目: ip, method, path, status", "ステータスの取り方: last (status_from", "スキャン"} {
 		if !strings.Contains(row.Detail, want) {
 			t.Errorf("detail に %q が無い: %s", want, row.Detail)
 		}
