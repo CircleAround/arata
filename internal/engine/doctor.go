@@ -77,7 +77,9 @@ func Doctor(ctx context.Context, cfg *config.Config, deps Deps, window time.Dura
 	if len(opts) > 0 {
 		d.opts = opts[0]
 	}
-	d.auditAccount(ctx, d.allowlist())
+	al := d.allowlist()
+	d.auditAccount(ctx, al)
+	d.assumeDestinations(ctx, al)
 	d.store(ctx)
 	actions := map[string]bool{}
 	for _, src := range cfg.Sources {

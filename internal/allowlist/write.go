@@ -45,11 +45,16 @@ func (e NewEntry) Subject() string {
 // Append は path の allowlist.yaml の principals の末尾に e を追記し、追記したテキストを返す。
 // ファイルが無ければ作る。書き込みは一時ファイル + rename で行い、書いた結果が Parse できることを確かめてから置き換える。
 func Append(path string, e NewEntry) (string, error) {
+	return appendFile(path, func(src []byte) ([]byte, string, error) { return AppendBytes(src, e) })
+}
+
+// appendFile は path を読み、edit の結果を書く (ファイルが無ければ空として edit に渡す)。
+func appendFile(path string, edit func(src []byte) ([]byte, string, error)) (string, error) {
 	src, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return "", fmt.Errorf("allowlist: %w", err)
 	}
-	out, added, err := AppendBytes(src, e)
+	out, added, err := edit(src)
 	if err != nil {
 		return "", err
 	}
@@ -117,6 +122,26 @@ func AppendBytes(src []byte, e NewEntry) ([]byte, string, error) {
 			return nil, "", fmt.Errorf("%w: %s (edit the entry directly to change note / expires / tags)", ErrAlreadyListed, e.Subject())
 		}
 	}
+	result, added, err := appendToSection(src, "principals", e.render)
+	if err != nil {
+		return nil, "", err
+	}
+	after, err := Parse(result)
+	if err != nil {
+		return nil, "", fmt.Errorf("allowlist: refusing to write an invalid file: %w", err)
+	}
+	if len(after.Principals) != len(before.Principals)+1 || after.Principals[len(after.Principals)-1].Subject() != e.Subject() {
+		return nil, "", fmt.Errorf("allowlist: refusing to write: the new entry did not land at the end of principals")
+	}
+	return result, added, nil
+}
+
+// sectionFirstKey は、節をブロック形式に直すよう求めるエラー文の例に書くキー。
+var sectionFirstKey = map[string]string{"principals": "arn", "assume_destinations": "account"}
+
+// appendToSection は allowlist.yaml のテキストの節 section (トップレベルの列) の末尾に、render が書く 1 要素を差し込む (ADR 0010)。
+// 検証 (今のファイルが読めるか・足した結果が読めるか) は呼ぶ側がする。
+func appendToSection(src []byte, section string, render func(indent string) string) ([]byte, string, error) {
 	text := strings.ReplaceAll(string(src), "\r\n", "\n")
 	lines := strings.Split(text, "\n")
 	if len(lines) > 0 && lines[len(lines)-1] == "" {
@@ -135,19 +160,19 @@ func AppendBytes(src []byte, e NewEntry) ([]byte, string, error) {
 	keyIdx := -1
 	if doc != nil {
 		for i := 0; i+1 < len(doc.Content); i += 2 {
-			if doc.Content[i].Value == "principals" {
+			if doc.Content[i].Value == section {
 				keyIdx = i
 			}
 		}
 	}
 	switch {
 	case keyIdx < 0:
-		added = e.render("  ")
+		added = render("  ")
 		out = append(out, lines...)
 		if len(out) > 0 && strings.TrimSpace(out[len(out)-1]) != "" {
 			out = append(out, "")
 		}
-		out = append(out, "principals:")
+		out = append(out, section+":")
 		out = append(out, strings.Split(strings.TrimSuffix(added, "\n"), "\n")...)
 	default:
 		key, val := doc.Content[keyIdx], doc.Content[keyIdx+1]
@@ -158,10 +183,10 @@ func AppendBytes(src []byte, e NewEntry) ([]byte, string, error) {
 			line := lines[first.Line-1]
 			dash := strings.LastIndex(line[:first.Column-1], "-")
 			if dash < 0 {
-				return nil, "", fmt.Errorf("allowlist: cannot locate the principals list")
+				return nil, "", fmt.Errorf("allowlist: cannot locate the %s list", section)
 			}
 			indent = line[:dash]
-			added = e.render(indent)
+			added = render(indent)
 			at := len(lines)
 			if keyIdx+2 < len(doc.Content) {
 				at = doc.Content[keyIdx+2].Line - 1
@@ -173,9 +198,9 @@ func AppendBytes(src []byte, e NewEntry) ([]byte, string, error) {
 			out = append(out, strings.Split(strings.TrimSuffix(added, "\n"), "\n")...)
 			out = append(out, lines[at:]...)
 		case val.Kind == yaml.SequenceNode && len(val.Content) > 0:
-			return nil, "", fmt.Errorf("allowlist: principals is written in flow style; rewrite it as a block list (- arn: ...) before approve")
+			return nil, "", fmt.Errorf("allowlist: %s is written in flow style; rewrite it as a block list (- %s: ...) before approve", section, sectionFirstKey[section])
 		case val.Kind == yaml.SequenceNode || val.Tag == "!!null":
-			// `principals: []` / `principals:` (値なし)。キーの行を `principals:` (行末コメントは残す) にして直後に差し込む
+			// `<節>: []` / `<節>:` (値なし)。キーの行を `<節>:` (行末コメントは残す) にして直後に差し込む
 			line := lines[key.Line-1]
 			comment := ""
 			if val.LineComment != "" {
@@ -183,24 +208,16 @@ func AppendBytes(src []byte, e NewEntry) ([]byte, string, error) {
 			} else if key.LineComment != "" {
 				comment = " " + key.LineComment
 			}
-			added = e.render(indent)
+			added = render(indent)
 			out = append(out, lines[:key.Line-1]...)
-			out = append(out, line[:key.Column-1]+"principals:"+comment)
+			out = append(out, line[:key.Column-1]+section+":"+comment)
 			out = append(out, strings.Split(strings.TrimSuffix(added, "\n"), "\n")...)
 			out = append(out, lines[key.Line:]...)
 		default:
-			return nil, "", fmt.Errorf("allowlist: principals must be a list")
+			return nil, "", fmt.Errorf("allowlist: %s must be a list", section)
 		}
 	}
-	result := []byte(strings.Join(out, "\n") + "\n")
-	after, err := Parse(result)
-	if err != nil {
-		return nil, "", fmt.Errorf("allowlist: refusing to write an invalid file: %w", err)
-	}
-	if len(after.Principals) != len(before.Principals)+1 || after.Principals[len(after.Principals)-1].Subject() != e.Subject() {
-		return nil, "", fmt.Errorf("allowlist: refusing to write: the new entry did not land at the end of principals")
-	}
-	return result, added, nil
+	return []byte(strings.Join(out, "\n") + "\n"), added, nil
 }
 
 func (e NewEntry) validate() error {

@@ -49,6 +49,23 @@ func (a *eventAgg) add(t time.Time, name, ip string) {
 	}
 }
 
+// merge は b の件数・時刻・イベント名・IP を a に足す (extra は足さない)。
+func (a *eventAgg) merge(b *eventAgg) {
+	a.count += b.count
+	if a.first.IsZero() || (!b.first.IsZero() && b.first.Before(a.first)) {
+		a.first = b.first
+	}
+	if b.last.After(a.last) {
+		a.last = b.last
+	}
+	for n := range b.names {
+		a.names[n] = true
+	}
+	for ip := range b.ips {
+		a.ips[ip] = true
+	}
+}
+
 func (a *eventAgg) data() map[string]any {
 	d := map[string]any{
 		"count":      a.count,

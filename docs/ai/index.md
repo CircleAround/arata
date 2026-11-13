@@ -43,7 +43,7 @@ LLM の役割は「危険の判定を代行する」ことではなく「人が�
 | `arata report --profile daily [--format md]` | 最後のレポートを再表示 | よい |
 | `arata report --month 2026-10` / `--from D --to D` | ストアだけから期間レポート (収集しない) | よい |
 | `arata review [--format json]` | 未対応 (open / acked) の一覧と approve の対象 | よい |
-| `arata approve <id> --note ... [--expires] [--tag] [--commit]` | allowlist に追記し finding を解消 | **しない** (人に提案する) |
+| `arata approve <id> --note ... [--expires] [--tag] [--commit]` | allowlist に追記し finding を解消 (`--destination` は主体ではなく、外向きの引き受けの行き先のアカウントを既知にする) | **しない** (人に提案する) |
 | `arata ack / snooze --until / resolve <id>` | finding の状態を変える | 人の指示があれば |
 | `arata help ai playbook [<check>]` | チェックごとの対処手順 | よい (読み取りのみ) |
 | `arata help ai runtime` | GitHub Actions で動かす環境 (リポジトリの設定・OIDC の信頼・secrets) のチェックリストと、`context_file` の下書きの手順 | よい (読み取りのみ) |
@@ -102,6 +102,10 @@ source_ips:
 secrets_access:                   # 主体 × 読んでよい秘匿値 (名前・パスの glob)。secret_access の初出に数えない
   - principal: arn:aws:iam::123456789012:role/example-app-task
     secrets: ["prod/app/*"]
+assume_destinations:              # 外向きの引き受けで、行き先として既知のアカウント。そこへの MFA ありの引き受けは unknown_assume_role が報告しない
+  - account: "111122223333"       # principals の account: (呼び出し元の承認) とは別。主体は承認されない
+    note: 運用を受託しているアカウント  # 必須
+    expires: 2027-03-31           # 任意。roles: ["ReadOnly"] でロールに絞れる
 ```
 
 承認の判断基準は `arata help ai approve`。

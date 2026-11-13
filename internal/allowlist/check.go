@@ -3,6 +3,7 @@ package allowlist
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -10,7 +11,7 @@ import (
 // EntryError は Parse が 1 つの項目 (principals[2] など) で見つけた検証エラー。
 // 文言は従来どおり「principals[2]: …」。Check が項目の行番号を引くために、節と番号を持つ。
 type EntryError struct {
-	Section string // principals / source_ips / secrets_access
+	Section string // principals / source_ips / secrets_access / assume_destinations
 	Index   int
 	Err     error
 }
@@ -34,14 +35,22 @@ type Problem struct {
 // Check は allowlist.yaml をオフラインで検査する (`arata config check`)。
 //
 // 決定:
+//
 //   - エラーの規則は Parse そのもの (run / doctor が起動時にする検証)。ここでは規則を足さず、項目の行番号を添えるだけにする。
 //     Parse は最初のエラーで止まるので、エラーは多くても 1 件
+//
 //   - 同じ主体 (arn / account / arn_pattern が同じ) の項目の重複は警告にする。run は重複を受け付ける (expected_denied は項目ごとに
 //     書いてよく、和で判定する) のでエラーにはできないが、expires・tags・dynamic_source は 1 つの項目のものしか使われないので、
 //     片方だけ直したつもりの誤りになりやすい
 //
+//   - assume_destinations (ADR 0047) の重なる項目 (同じアカウントで、片方がアカウント全体か、絞ったロールの集合が同じ) も警告にする。
+//     アカウント全体の項目があるのにロールを絞った項目を足しても絞れていない
+//
+//   - assume_destinations の、at の時点で期限の切れた項目は警告にする。run は止まらないが、その行き先への引き受けは次の run から high で
+//     報告される (契約が続くなら期限を延ばし、終わったなら項目を消す)。principals の期限切れは見ない (従来どおり。期限切れは finding で知らせる)
+//
 // エラーがあれば List は nil。
-func Check(b []byte) (*List, []Problem) {
+func Check(b []byte, at time.Time) (*List, []Problem) {
 	l, err := Parse(b)
 	if err != nil {
 		p := Problem{Msg: err.Error()}
@@ -63,6 +72,21 @@ func Check(b []byte) (*List, []Problem) {
 		}
 		out = append(out, Problem{Line: lines[i], Warn: true, Msg: fmt.Sprintf(
 			"principals[%d]: duplicate of principals[%d] (line %d): %s (expires, tags and dynamic_source are taken from only one of them; merge the entries)", i, j, lines[j], s)})
+	}
+	lines = entryLines(b, "assume_destinations")
+	for i := range l.AssumeDestinations {
+		e := &l.AssumeDestinations[i]
+		for j := 0; j < i; j++ {
+			if x := &l.AssumeDestinations[j]; sameDestination(x.Account, x.Roles, e.Account, e.Roles) {
+				out = append(out, Problem{Line: lines[i], Warn: true, Msg: fmt.Sprintf(
+					"assume_destinations[%d]: duplicate of assume_destinations[%d] (line %d): account %s (an entry without roles covers the whole account; merge the entries)", i, j, lines[j], e.Account)})
+				break
+			}
+		}
+		if !e.active(at) {
+			out = append(out, Problem{Line: lines[i], Warn: true, Msg: fmt.Sprintf(
+				"assume_destinations[%d]: expired on %s: account %s (assuming roles there is reported as high again; extend expires if the work continues, or remove the entry)", i, e.Expires, e.Account)})
+		}
 	}
 	return l, out
 }

@@ -629,6 +629,12 @@ admin_users: [113, 2048]         # アプリ層の管理者 ID
 secrets_access:
   - principal: arn:aws:iam::...:role/ProdEcsTaskRoleMyApp
     secrets: ["prod/db/*"]
+assume_destinations:             # 外向きの引き受けで、行き先として既知のアカウント (ADR 0047)。principals (呼び出し元) とは別
+  - account: "111122223333"
+    note: 運用を受託しているアカウント
+    approved_by: alice
+    approved_at: 2026-11-13
+    expires: 2027-03-31
 ```
 
 決定: `allowlist.yaml` が無い場合は空のリストとして扱う (init 直後の運用を許す)。主体 ARN の突合は完全一致。AssumedRole 主体はセッション ARN ではなくロール ARN (`sessionContext.sessionIssuer.arn`) に正規化してから突合する (セッション名に個人名やメールが入るため)。
@@ -696,6 +702,21 @@ secrets_access:
   主体に一致する期限内の項目すべての `expected_denied` の和で判定する (項目ごとに理由と期限が違ってよいため。タグの判定に使う項目の選び方と、同じ arn の重複の後勝ちは変えない)。
   期限切れの項目の分は除かない。空のリスト・空の要素・コロンの無いもの・空白を含むものは読み込みエラー。`expected_denied` を持つ項目は `note` が必須。
   項目そのものは主体も承認する (expected_denied のためだけに項目を作ると new_principal なども止まる)。
+- 決定 (ADR 0047): `assume_destinations` は、外向きの引き受けで「行き先として既知のアカウント」。unknown_assume_role は、
+  **外向き・行き先のアカウントが期限内で載っている・MFA あり (その組の全イベントで)** の全部を満たす引き受けだけを報告しない。
+  知らない行き先、MFA なし・不明・混在、内向き、内部、向きが決まらない引き受けは今までどおり high。
+  - `principals` の `account:` (呼び出し元として既知。そのアカウントの全主体を承認する) とは意味が逆なので、節を分ける。
+    行き先を既知にしても呼び出し元は承認されず、呼び出し元を承認しても行き先は既知にならない
+  - `account` (12 桁。必須) と `note` (必須) を書く。`roles` (任意) はロール名の glob (ARN の `role/` より後ろ。パスを含む。先頭から末尾までの一致) で、
+    書けばそのロールだけに絞る。ARN や `arn_pattern` は書けない (アカウントを決めるのは `account` だけ)。`expires` は principals と同じ
+  - 同じアカウントの項目は複数書ける (ロールごとに理由と期限を分けられる)。期限内の項目が 1 つでも一致すれば既知
+  - 報告しなかった分は、行き先のアカウントごとに info で 1 行出す (Key は `known-destination:<アカウント>`。data に件数・`callers`・`roles`・`ips`)。
+    黙って消さない。info は件数・通知に数えない。Fingerprint は固定 (顔ぶれが変わっても changed にしない)
+  - 既知にした行き先なのに報告するときは、data に `destination_status` (approved / expired) を出し、見出しの括弧に理由
+    (「行き先は既知だが、MFA ありと確かめられないので報告」「行き先の承認は期限切れ」) を足す。Key・重大度・Fingerprint は変えない
+  - 却下した案「MFA があれば行き先に関係なく報告しない」: 知らないアカウントへの移動・MFA 後のセッションの奪取・本人の不正が見えなくなる。
+    行き先を既知にしても、MFA 後のセッションの奪取は見えない (principal_new_source と、行き先のアカウント側の監査で補う)。契約が終わったら項目を消す
+  - `config check` は重なる項目と期限切れを warn にする。`doctor` は監査対象のアカウントそのものを書いた項目を ng にする (sts:GetCallerIdentity で比べる)
 
 ### 6-2. 状態遷移
 
@@ -706,12 +727,15 @@ secrets_access:
    │     → allowlist.yaml に追記 (approved_by は OS ユーザーか --by)、finding は resolved
    │     → 追記後の allowlist で対象主体が承認済みになる他の finding (new_principal / unknown_assume_role) も resolved
    │     → git への commit は人が行う (--commit で代行も可)
+   ├─ arata approve <finding-id> --destination --note "..." [--destination-role glob] [--expires 2027-03-31]
+   │     → unknown_assume_role の外向き・MFA ありの finding の行き先のアカウントを assume_destinations に追記 (主体は承認しない)、finding は resolved (ADR 0047)
+   │     → 同じ行き先への外向き・MFA ありの他の finding (ack 済みを含む) も resolved
    ├─ arata ack <finding-id>         → acked。再報告しないが週次の未対応一覧には残る (重大度が上がれば changed で再報告)
    ├─ arata snooze <finding-id> --until 2026-11-01   → 期日まで沈黙、期日に再報告
    ├─ arata resolve <finding-id>     → resolved。再び観測されたら new
    └─ 放置                              → still_open。週次の未対応一覧に残り続ける
 
-allowlist.yaml を人が直接編集して承認 ──> 次の evaluate の冒頭で該当 finding を resolved (reason: allowlisted)
+allowlist.yaml を人が直接編集して承認 ──> 次の evaluate の冒頭で該当 finding を resolved (reason: allowlisted。行き先を足したときは known_destination)
 expires 到来 ──> その主体の次回観測は new (expired) として再報告
 90 日間観測の無い approved 主体 ──> 四半期レポートで「削除候補」
 ```
@@ -730,6 +754,15 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
   allowlist で承認済みのものを resolved にし、Data に `resolved_reason: allowlisted` と `allowlist_subject` を残す。evaluate で解消したものはレポートの `resolved` に出る。
   unknown_assume_role は event 型で、観測されなくても resolved にならないため、これが無いと承認後も未対応一覧に残り続ける。
   iam_changes は対象外 (承認済みでも deploy タグの無い主体の IAM 変更は報告するチェックなので、承認を理由に解消すると次の観測で new に戻る)。approve した 1 件だけを resolved にする。
+- 決定 (ADR 0047): `approve <id> --destination` は、主体ではなく行き先のアカウントを `assume_destinations` の末尾に追記する (差し込み方は principals と同じ。節が無ければ末尾に足す)。
+  対象は unknown_assume_role の外向きで MFA ありの finding だけ (MFA が無い・不明の finding は、行き先を足しても報告が続くので断る)。
+  アカウントは finding の data (ログ由来) の `role_arn` から取り、12 桁のロールの ARN として読めて `role_account` と一致するときだけ書く。
+  `--destination-role <glob>` (複数可) でロールに絞る (finding のロールに一致するものを求める)。`--account` / `--arn-pattern` / `--tag` / `--expected-denied` とは一緒に使えない。
+  重なる項目が既にあれば拒否する。`review --format json` は、使える finding に `approve_destination` (行き先のアカウント ID) を出す。
+- 決定 (ADR 0047): 行き先による一括解消も、同じ 2 か所 (approve の直後と evaluate の冒頭) でする。open / acked / snoozed の unknown_assume_role のうち、
+  外向き・行き先が期限内で既知・finding の `mfa` が true のものを resolved にし、`resolved_reason: known_destination` と `allowlist_subject` を残す。
+  ack 済みの finding も同じ (MFA が無い・不明のものは残る)。行き先を消す・期限が切れると、次の引き受けは new として報告される。
+  報告しなかった分の info の行は、その行き先の期限内の項目が無くなったら resolved にする (`resolved_reason: destination_removed`)。
 - 決定 (ADR 0022): access_denied は `approve <id> --expected-denied <glob>` (複数可) でだけ approve できる。主体 (外部アカウントの root なら `account:`) の項目を
   `expected_denied` 付きで追記し、finding は resolved にしない (次の run で除いて数え直す。event 型なので閾値を下回れば open のまま沈黙する)。
   主体の項目が既にあれば書き換えずに止まり、足す行 (`expected_denied: [...]`) をエラーに示す。`--expected-denied` を付けない approve は拒否する。
@@ -743,7 +776,7 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 |---|---|---|---|---|
 | root_usage | hourly | trail_event | Root の利用 | critical |
 | defense_evasion (決定: 当初の trail_tampering を置き換え。daily) | daily | trail_event | 監査・検知の仕組み (CloudTrail・GuardDuty・Access Analyzer・ログ・フローログ・Config・Security Hub・WAF のログ・証跡の宛先バケット) を止める・弱める操作の成功。決定: ADR 0026 | critical / high (deploy タグなら 1 段下げる) |
-| unknown_assume_role | hourly | trail_event | 呼び出し元 ARN が allowlist に無い AssumeRole。決定: AWS サービス主体 (EC2 / Lambda がインスタンスロールを引き受けるもの) は対象外。向き (外向き / 内向き / 内部) と MFA の有無を見出しと data に出す (6 章の決定) | high |
+| unknown_assume_role | hourly | trail_event | 呼び出し元 ARN が allowlist に無い AssumeRole。決定: AWS サービス主体 (EC2 / Lambda がインスタンスロールを引き受けるもの) は対象外。向き (外向き / 内向き / 内部) と MFA の有無を見出しと data に出す (6 章の決定)。決定 (ADR 0047): 外向きで、行き先のアカウントが allowlist の `assume_destinations` に期限内で載っていて、MFA ありの引き受けは報告しない (行き先ごとに info で 1 行残す) | high (報告しなかった分の行は info) |
 | secret_access (決定: 当初の secret_access_unknown を置き換え。daily) | daily | trail_event | 秘匿値 (Secrets Manager・SSM SecureString) の「主体 × 秘匿値」の初出と一括読み出し。決定: ADR 0027 | low / medium / high |
 | guardduty_findings | hourly (High) / daily (他)。決定: Step 3 は weekly のみ (state) | guardduty | finding ID 初出、count 増加 | severity 準拠 |
 | iam_changes | daily | trail_event | CreateAccessKey / CreateUser / Attach*Policy / Put*Policy / UpdateAssumeRolePolicy / CreateLoginProfile | medium (既知デプロイ主体なら info。決定: 既知デプロイ主体 = allowlist の principals で `tags: [deploy]` を持つもの) |
@@ -773,7 +806,7 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 | チェック | Mode | Key | Fingerprint |
 |---|---|---|---|
 | root_usage | event | `<root ARN>\|<ip>` | 重大度 + IP 集合 + MFA の有無 |
-| unknown_assume_role | event | `<caller ARN>-><role ARN>` | 重大度 + IP 集合 + allowlist 状態 (unknown / expired) |
+| unknown_assume_role | event | `<caller ARN>-><role ARN>` (報告しなかった分の info の行は `known-destination:<行き先のアカウント>`) | 重大度 + IP 集合 + allowlist 状態 (unknown / expired)。info の行は固定 |
 | iam_changes | event | `<event name>\|<caller ARN>\|<対象>` | 重大度 + IP 集合 + 対象 + policy ARN (全件拒否のときは denied) |
 | new_principal | state | `<ARN>` | 重大度 + IP 集合 + 種類 + allowlist 状態 |
 
@@ -991,6 +1024,7 @@ arata report    --from 2026-10-01 --to 2026-10-31 --format md|json [--template m
                 # 決定: 期間を指定せず、そのプロファイルの run がまだ無ければ REPORT_NOT_FOUND を 1 行出して終了コード 2 (--out のディレクトリも作らない)
 arata review    [--status open|acked]
 arata approve   <finding-id> --note "..." [--expires date] [--tag deploy] [--by name] [--commit] [--account | --arn-pattern glob]
+arata approve   <finding-id> --destination --note "..." [--destination-role glob] [--expires date] [--by name] [--commit]   # 行き先のアカウントを既知にする (ADR 0047)
 arata ack|snooze|resolve <finding-id>        # snooze は --until date
 arata help ai [report|approve|playbook [check]] [--format json]   # LLM 向けの使い方 (arata ai と同じ)。playbook はチェックごとの対処手順
 arata prune     [--dry-run]

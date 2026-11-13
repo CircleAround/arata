@@ -19,7 +19,8 @@ AWS のログと設定を定期的に改め、**前回から新しく発生し�
   `credential_hygiene`, `guardduty_findings`, `posture`, `access_analyzer`, `waf_review` (weekly。WAF の修正提案の候補を report.json の `proposals` に)
 - ストア: `dir://` (JSONL 原本 + SQLite)、`s3://` (毎回消える実行環境向けのオプション。「S3 ストア」の節)
 - CLI: `config init` (推奨設定の雛形と `--diff`) / `config check` (設定と allowlist のオフラインの検査) / `profiles` (効いているチェックとパラメータ) / `init` (日単位の分割と `--resume`) / `doctor` / `run` / `collect` / `evaluate` / `report` (`--from --to` / `--month` で期間レポート) / `review` / `approve` / `ack` / `snooze` / `resolve` / `help ai`
-- allowlist: `principals[]` の `arn` / `account` (アカウント単位) / `arn_pattern` (glob)、`tags` は `deploy` / `ai`、`expected_denied` (access_denied で数えない想定済みの拒否。ADR 0022)
+- allowlist: `principals[]` の `arn` / `account` (アカウント単位) / `arn_pattern` (glob)、`tags` は `deploy` / `ai`、`expected_denied` (access_denied で数えない想定済みの拒否。ADR 0022)、
+  `assume_destinations[]` (外向きの引き受けで行き先として既知のアカウント。そこへの MFA ありの引き受けを unknown_assume_role が報告しない。ADR 0047)
 - ack / snooze 中の finding も、重大度が上がれば changed として再報告する (ADR 0022)
 
 ## AI (LLM) から使う
@@ -297,6 +298,7 @@ arata rebuild                                 # raw JSONL から audit.sqlite �
 ```sh
 arata review                     # 未対応 (open / acked) の一覧。APPROVE 列が approve の対象
 arata approve <finding-id> --note "外注先の調査用" --expires 2026-12-31 [--tag deploy] [--commit]
+arata approve <finding-id> --destination --note "運用を受託しているアカウント" [--expires 2027-03-31]   # 主体ではなく、外向きの引き受けの行き先を既知にする
 arata ack     <finding-id>       # 確認済み。再報告しないが一覧には残る
 arata snooze  <finding-id> --until 2026-11-01
 arata resolve <finding-id>
@@ -304,6 +306,21 @@ arata resolve <finding-id>
 
 - `approve` は allowlist.yaml の principals の末尾に追記する (他の行・コメント・空行は変えない)。git への commit は人が行う。`--commit` は allowlist.yaml だけを commit する
 - SaaS 連携 (監視 SaaS など) のクロスアカウント AssumeRole は「外部アカウント NNN」と表示され、approve すると `account: "NNN"` で承認される
+- 社員が別のアカウント (受託先など) のロールに MFA 付きでスイッチロールするのが通常業務なら、社員を承認するのではなく、行き先のアカウントを既知にする
+  (`approve --destination`、または allowlist.yaml の `assume_destinations` に書く。ADR 0047)。
+
+  ```yaml
+  assume_destinations:
+    - account: "111122223333"        # 行き先のアカウント。principals の account: (呼び出し元の承認) とは別
+      note: 運用を受託しているアカウント   # 必須
+      approved_by: alice
+      approved_at: 2026-11-13
+      expires: 2027-03-31            # 任意。roles: ["ReadOnly"] でロールに絞れる
+  ```
+
+  報告されなくなるのは「外向き・そのアカウントのロール・MFA あり」の全部を満たす引き受けだけ (行き先ごとに info の 1 行で件数を残す)。
+  知らないアカウントへの引き受けと、MFA なし・不明の引き受けは high のまま。社員を承認すると、知らないアカウントへの引き受けまで止まる。
+  MFA 済みのセッションを奪われた場合は見えないので principal_new_source と併せて使い、契約が終わったら項目を消す
 - 主体に関しない finding (root_usage やアプリ層) は approve できない。ack / snooze / resolve を使う
 - LLM には approve を実行させず、人に提案させる (`arata help ai approve`)
 
