@@ -393,8 +393,11 @@ func TestInitResume(t *testing.T) {
 	if !strings.Contains(c.stdout.String(), "days: 1/3 (until 2026-10-20T00:00:00Z)") || !strings.Contains(c.stdout.String(), "arata init --resume") {
 		t.Fatalf("stdout: %s", c.stdout)
 	}
+	if strings.Contains(c.stdout.String(), "次の手順") {
+		t.Fatalf("a partial init must not print the next steps: %s", c.stdout)
+	}
 	c.fake.ErrFor = nil
-	if code := c.run("init", "--config", c.cfg, "--resume"); code != 0 || !strings.Contains(c.stdout.String(), "days: 3/3") {
+	if code := c.run("init", "--config", c.cfg, "--resume"); code != 0 || !strings.Contains(c.stdout.String(), "days: 3/3") || !strings.Contains(c.stdout.String(), "次の手順") {
 		t.Fatalf("resume exit %d: %s%s", code, c.stdout, c.stderr)
 	}
 	if code := c.run("init", "--config", c.cfg, "--resume"); code != 0 || !strings.Contains(c.stdout.String(), "再開する init はありません") {
@@ -449,5 +452,38 @@ func TestRunWithBadFormatDoesNotConsumeFindings(t *testing.T) {
 	}
 	if s := rep["summary"].(map[string]any); s["new"] == float64(0) {
 		t.Fatalf("%v", s)
+	}
+}
+
+// TestInitNextSteps は init が終わったときに、次の手順 (通知せずに run → review) と文書の場所を標準出力に出すことを確かめる。
+// 途中で止まった init と、再開するものが無い init には出さない (次にすることが違う)。
+func TestInitNextSteps(t *testing.T) {
+	c := newCLI(t)
+	if code := c.run("init", "--config", c.cfg, "--window", "1d"); code != 0 {
+		t.Fatalf("init exit %d: %s", code, c.stderr)
+	}
+	out := c.stdout.String()
+	i := strings.Index(out, "\n次の手順")
+	if i < 0 {
+		t.Fatalf("init must print the next steps:\n%s", out)
+	}
+	next := out[i+1:]
+	for _, want := range []string{"arata run --profile", "daily", "weekly", "通知", "arata review", "arata help ai onboarding"} {
+		if !strings.Contains(next, want) {
+			t.Errorf("the next steps lack %q:\n%s", want, next)
+		}
+	}
+	// 設定に書いたプロファイルを全部、窓の短い順に並べる (暗黙の既定の名前を出さない)
+	if !strings.Contains(next, "hourly, daily, weekly") {
+		t.Errorf("the next steps must list the configured profiles:\n%s", next)
+	}
+	if n := strings.Count(strings.TrimRight(next, "\n"), "\n") + 1; n > 3 {
+		t.Errorf("the next steps must be 3 lines or fewer, got %d:\n%s", n, next)
+	}
+	if strings.Contains(c.stderr.String(), "次の手順") {
+		t.Errorf("the next steps go to stdout (stderr is JSON lines)")
+	}
+	if code := c.run("init", "--config", c.cfg, "--resume"); code != 0 || strings.Contains(c.stdout.String(), "次の手順") {
+		t.Fatalf("nothing to resume must not print the next steps (exit %d):\n%s", code, c.stdout)
 	}
 }

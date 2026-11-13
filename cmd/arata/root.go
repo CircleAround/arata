@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -210,12 +211,33 @@ LookupEvents は毎秒 2 リクエストが上限なので、7 日分で数時�
 				fmt.Fprintln(d.Stdout, "init は途中で止まりました。原因を直してから arata init --resume で続きから再開してください。")
 				return errPartial
 			}
+			writeInitNextSteps(d.Stdout, cfg)
 			return nil
 		},
 	}
 	cmd.StringVar(&window, "window", "7d", "ベースラインとして収集する期間 (例: 7d, 24h)。--resume では使わない")
 	cmd.BoolVar(&resume, "resume", false, "途中で止まった init を続きから再開する")
 	return cmd
+}
+
+// writeInitNextSteps は init が終わったときに、次の手順を標準出力に出す。
+// 決定: init は finding を出さず、最初の run で溜まっていた指摘が一度に出る。通知に流す前に手元で片付ける流れを、終わった場所で案内する (設計書 8 章)。
+// プロファイルは設定に書いたものを窓の短い順に並べる (暗黙の既定の名前を出さない。ADR 0014)。標準エラーは JSON 行なので標準出力に出す。
+func writeInitNextSteps(w io.Writer, cfg *config.Config) {
+	names := make([]string, 0, len(cfg.Profiles))
+	for n := range cfg.Profiles {
+		names = append(names, n)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		a, b := cfg.Profiles[names[i]], cfg.Profiles[names[j]]
+		if a.Window != b.Window {
+			return a.Window < b.Window
+		}
+		return names[i] < names[j]
+	})
+	fmt.Fprintf(w, "次の手順 (流れの全体は arata help ai onboarding):\n"+
+		"  1. 通知をつながずに arata run --profile <名前> --out DIR をプロファイルごとに流す (設定のプロファイル: %s)\n"+
+		"  2. arata review で指摘を確かめ、1 件ずつ approve / snooze / ack か設定で片付けてから、定時の通知を始める\n", strings.Join(names, ", "))
 }
 
 // initCommitTimeout は中断された init の進捗をストアへ確定するのに待つ上限。

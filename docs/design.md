@@ -463,7 +463,7 @@ internal/report/              JSON / Markdown 生成、期間集計 (period.go)�
 tools/agegate/                CI 用の依存の age-gate (エンジンには入らない小さな main。決定: internal/ ではなく tools/ に置く。ADR 0017)
 tools/actionsgate/            CI 用の Actions の検査 (SHA 固定・版の一致・7 日待機。ADR 0035)
 tools/wordscan/               CI 用の禁止語の検査 (語の一覧は secrets から読む。ADR 0036)
-docs/ai/*.md                  LLM 向けの使い方。embed でバイナリに入り `arata help ai [report|approve|playbook <check>]` で出る (決定: skills/ の同梱は取りやめ。ADR 0012)
+docs/ai/*.md                  LLM 向けの使い方。embed でバイナリに入り `arata help ai [report|approve|runtime|onboarding|playbook <check>]` で出る (決定: skills/ の同梱は取りやめ。ADR 0012)
 deploy/iam/readonly-role.yaml 顧客に配る読み取りロール + Roles Anywhere 用信頼ポリシーの CloudFormation (決定: 信頼先は AWS の主体と Roles Anywhere のトラストアンカーをパラメータで受ける。action は collector の一覧と Go のテストで一致させる。ADR 0020)
 deploy/sandbox/               試験環境 (sandbox = arata の試験用に条件を整えた開発用アカウント上の環境) の CDK (TypeScript)。Go モジュールとは独立。readonly-role.yaml を CfnInclude で取り込む (ADR 0020)
 deploy/lambda/                Lambda 配備用 CDK or SAM テンプレート (S3 ストア、別アカウント推奨)
@@ -1026,7 +1026,7 @@ arata review    [--status open|acked]
 arata approve   <finding-id> --note "..." [--expires date] [--tag deploy] [--by name] [--commit] [--account | --arn-pattern glob]
 arata approve   <finding-id> --destination --note "..." [--destination-role glob] [--expires date] [--by name] [--commit]   # 行き先のアカウントを既知にする (ADR 0047)
 arata ack|snooze|resolve <finding-id>        # snooze は --until date
-arata help ai [report|approve|playbook [check]] [--format json]   # LLM 向けの使い方 (arata ai と同じ)。playbook はチェックごとの対処手順
+arata help ai [report|approve|runtime|onboarding|playbook [check]] [--format json]   # LLM 向けの使い方 (arata ai と同じ)。playbook はチェックごとの対処手順
 arata prune     [--dry-run]
 arata rebuild   [--from-scratch [--baseline]] [--format text|json]   # raw JSONL から SQLite を再構築 (5-4、ADR 0033)
 ```
@@ -1152,6 +1152,19 @@ approve は人の判断を経て実行する。
 バイナリに入れて `arata help ai` / `arata help ai report` / `arata help ai approve` / `arata help ai runtime` (利用者の環境のチェックリスト) で出す (`--format json` で `{topic, title, sections: [{title, body}]}`)。
 組み込み側の LLM には「最初に `arata help ai` を読む」とだけ指示すればよく、手順とエンジンの版がずれない。
 引数なしの `arata` (ルートのヘルプ) は、人向けの手順 (config init → doctor → init → run。決定: Step 3 で config init を先頭に足した。ADR 0014) と `arata help ai` への案内を最初に出す。
+
+決定 (導入の流れを arata から引けるようにする): init は finding を出さず、その後の最初の run で溜まっていた指摘が一度に出る。
+それを通知に流さず、run → review → 1 件ずつ approve / 設定で直す / snooze / ack で片付け、CloudTrail の遅れ (最大 15 分) の後にもう一度 daily を流して
+導入作業の記録を拾ってから定時の通知を始める。この流れを `arata help ai onboarding` (docs/ai/onboarding.md) に書き、次の 3 か所から案内する。
+
+- `arata init` が最後まで終わったとき、標準出力に次の手順を 3 行で出す (標準エラーは JSON 行なので使わない。途中で止まった init・再開するものが無い init には出さない)。
+  run に渡すプロファイルは設定に書いたものを窓の短い順に並べる (暗黙の既定の名前を出さない。ADR 0014)
+- ルートのヘルプの手順に 5 行目 (`arata review`) を足す
+- README の「はじめての手順」と aratam の節から参照する
+- ack と snooze の選び方も同じ文書に置く: 直すつもりなら snooze (期日以降に再報告される。直れば解消)、ack は正規の動きか終わった出来事にだけ使い、
+  報告が来なくなると困るものを ack にしない。規則 (6 章の状態遷移) は変えず、使い方の基準だけを書く
+- 却下: init が run まで続けて行う (init が finding を出さない前提が崩れ、通知をつないだ実行と区別できない)。
+  「最初の run は通知しない」を arata の機能にする (arata は通知を知らない。ADR 0018)。README だけに書く (版とずれる。ADR 0012)
 
 ### 9-1. report.json から通知までの LLM の仕事
 
