@@ -307,6 +307,12 @@ Rails の既定のログは、送信元とパスが最初の行 (`Started …`)�
   (括弧を足しても、条件を変えても同じ)。`coalesce(<項目>, if(<条件>, "404", ""))` は取れていた値と 404 の両方が正しく出る。`set` の補いはこの形
 - 例外など複数行のメッセージは、2 行目以降が CloudWatch Logs の別のイベントになり、Logger の前置き (`I, [時刻 #pid]  INFO -- : `) が無く、行頭が `[<request_id>] ` になる。
   経路の無いリクエストの RoutingError の行もこの形で、そのリクエストには最後の行 (`Completed`) が出ない
+- 1 つの request_id に `Completed` が 2 回出るリクエストがある。Rails はアクションごとに `Completed` を出す。Devise のログインでパスワードが違うとき (該当者なしも同じ) は
+  `Processing by …SessionsController#create` → `Completed 401 Unauthorized` → `Processing by …SessionsController#new` → `Completed 200 OK` になる。
+  **この 401 は HTTP の 401 ではない**: アクションが `throw :warden` で打ち切られ、ステータスが決まらないままのときに、Devise がログ用に入れる値 (Devise の実装を読んで確認)。
+  実際の応答は、そのあと failure app が作る。recall (ログイン画面の描き直し) なら responder の `error_status` (ライブラリの既定は 200、`:unprocessable_entity` なら 422) で、
+  **最後の `Completed` がクライアントに返したステータス**になる。recall の無い失敗 (パスワードは合っているが、アカウントが有効でない。confirmable の未確認など) は
+  ログイン画面へのリダイレクト (HTTP では 302) で、ログには `Completed 401` だけが出る。CSRF の検証の失敗は `Completed 422` のあと例外の画面で `Completed 500` になる例がある
 - `count_distinct` は概数で、実際の数より数 % 多く出た例がある (この形式では使っていない。request_id の数は 2 段目の `count(*)` で正確に数える)
 - 一時フィールドは同じ名前を 2 度定義できない
 - Rails は `X-Request-Id` ヘッダーの値から英数字・`_`・`-`・`@` 以外を除き、255 文字までを request_id に使う。除いた結果が空になる値 (記号だけ) を送ると、
@@ -341,6 +347,11 @@ Rails の既定のログは、送信元とパスが最初の行 (`Started …`)�
   (スキャン量は変わらない)。`lines_total` / `lines_matched` は、日の境目の余白の分だけ概数になる
 - **本数は 1 行のログと同じ 3 本** (解釈率 + `probe_paths`、`sign_in_failures` + `probe_hits`、endpoint_abuse)。パスの印 (探索パス・画面の glob) は最初の行のパスから 1 段目の前に作る
 - 日次の metric を 3 つ足す (key なし): `requests_total`・`requests_complete`・`request_id_reused`
+- **status は最後の `Completed` (recall の後の値) を使う** (`latest`。今の動きのまま。取り方を選ぶ設定は足さない)。最初の値は、正しいパスワードでの未確認ログイン
+  (`Completed 401` だけで終わる) も含むので使わない。最初の値で数えると、パスワードの誤りとアカウントの状態による拒否が混ざり、総当たりの数にならない。
+  最後の値は 1 行のログ (ALB・nginx) が持つステータスと同じ意味になり、`checks.login_bruteforce` の `failure_statuses` を同じ考え方で書ける
+  (Devise なら `error_status` が既定のとき `[200]`、`:unprocessable_entity` のとき `[422]`。POST の成功は 302 / 303 なので、POST の 200 は失敗だけ)。
+  却下した案: `request.status_from: first | last` を足して最初の値を選べるようにする (上の理由で、選べても勧められる場面が無い)。duration も最後の値のまま
 - `set` は「その行の種類があり、status がほかの行から取れなかったリクエスト」にだけ効く。クエリは `coalesce(<取れた status>, if(<その行の数> > 0, "<値>", ""))` の形で、
   どちらも無いリクエストの status は空の文字列になる (空はステータスなしとして扱う)。偽の Insights (`cwlogstest.Sim`) は、else に項目を置く `if()` のクエリを受け付けない (同じ誤りをテストで止める)
 - 1 段目で作った時刻は 2 段目では数になる前提で、結果の時刻は「日時の文字列」と「エポックからのミリ秒 (12〜14 桁の数字)」の両方を読む

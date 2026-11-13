@@ -126,9 +126,9 @@ sources:
 
 ## よく詰まる点
 
-- **Devise のログイン失敗は 200 で返ることがある**: Devise は失敗時にフォームを再表示し、そのステータスは responder の `error_status` で決まる。ライブラリの既定は `:ok` (200) で、
-  4.9 以降に生成した initializer は 422 にしている。古い initializer のままのアプリでは失敗が 200、成功が 302 (設定によっては 303) なので、
-  `checks.login_bruteforce` を `failure_statuses: [200]` にする (既定の `[401, 403, 422]` では 1 件も数えない)。実際のログで確かめてから決める
+- **Devise のログイン失敗は 200 で返ることがある**: Devise は失敗時にフォームを再表示し、そのステータスは responder の `error_status` で決まる。ライブラリの既定は `:ok` (200) で、4.9 以降に生成した initializer は 422 にしている。
+  古い initializer のままのアプリでは失敗が 200、成功が 302 (設定によっては 303) なので、`checks.login_bruteforce` を `failure_statuses: [200]` にする (既定の `[401, 403, 422]` では 1 件も数えない)。実際のログで確かめてから決める
+- **Rails の標準のログ (`request_lines`) に出る `Completed 401` は HTTP の 401 ではない** (Devise がログ用に入れる値)。パスワードの誤りは「401 → 200 (または 422)」と 2 回出て、arata は最後の値を使うので、上と同じく `failure_statuses: [200]` (`error_status` が `:unprocessable_entity` なら `[422]`)。401 だけで終わるのは、正しいパスワードでアカウントが有効でない場合 (`arata help ai request_lines`)
 - **ログインの送信先は 1 つとは限らない**: Devise はモデルごとに送信先を持つ (`/users/sign_in` と `/admins/sign_in` など)。`paths` は完全一致なので、全部を書く
 - **ALB の配信先のロググループ名**: CloudWatch Logs への配信は、名前が `/aws/vendedlogs/` で始まるロググループになりがち。`log_group` には配信の設定に出ている名前をそのまま書く
 - **Rails の標準ログをそのまま標準出力に出している** (ECS、AWS Copilot の既定の構成など): 1 リクエストが複数行で、1 行ずつの形式 (`regex`) ではステータスが別の行なのでログイン失敗を数えられない。
