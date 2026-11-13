@@ -253,10 +253,11 @@ func newDoctorCmd(d *Deps, g *globalFlags) *subcmd.Command {
 
   - permission  必要な IAM action が許可されているか (拒否されたら ACCESS_DENIED)
   - log_group   ロググループがあるか (LOG_GROUP_MISSING)
-  - match_rate  直近 100 行を形式プロファイルで解釈できた割合 (閾値未満なら FORMAT_MISMATCH)
+  - match_rate  直近 100 行を形式プロファイルで解釈できた割合 (閾値未満なら FORMAT_MISMATCH)。format: text のソースは行を解釈しないので測らない (生の行を引かない)
   - queries     集計クエリのテンプレートを Logs Insights が受理するか (QUERY_INVALID。regex の方言違いもここで分かる)
   - check       必要なレコードを出すソースが無く skip されるチェック (warn)
   - cost        wafv2 のソースの Logs Insights の費用の概算。max_scan_gb が無ければ warn (1 日のスキャン量は直近 24h の集計で実測。1 日分の読み取りの費用がかかる。--no-measure-scan で推定)
+                log_hygiene が読むソースには、その読み取り (run ごとに 1 本・範囲は窓) の行を別に出す。max_scan_gb が無ければ warn
   - resources   wafv2 のソースの resources が、ログの宛先が同じ WebACL の資源に見当たるか (warn)
   - store_*     s3:// のストアのバケットを読めるか (書き込みは試さない) と、推奨 (バージョニング・暗号化・パブリックアクセスブロック。warn)。
                 読み取り専用は監査対象のアカウントへの約束で、ストアのバケットは別`,
