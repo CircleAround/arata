@@ -160,3 +160,34 @@ func TestAppendExpectedDenied(t *testing.T) {
 		t.Fatalf("bad glob: %v", err)
 	}
 }
+
+// TestWrite は config init が使う書き込みを確かめる: 壊れた中身は書かず、既にあるファイルの権限を保つ。
+func TestWrite(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "allowlist.yaml")
+	if err := Write(p, []byte("principals:\n  - note: 主体が無い\n")); err == nil {
+		t.Fatal("an invalid allowlist must not be written")
+	}
+	if _, err := os.Stat(p); err == nil {
+		t.Fatal("file was created")
+	}
+	body := []byte("principals:\n  - account: \"111122223333\"\n")
+	if err := Write(p, body); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(p, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Write(p, append(body, []byte("source_ips: []\n")...)); err != nil {
+		t.Fatal(err)
+	}
+	st, err := os.Stat(p)
+	if err != nil || st.Mode().Perm() != 0o600 {
+		t.Fatalf("mode %v %v", st.Mode(), err)
+	}
+	if b, _ := os.ReadFile(p); !strings.HasSuffix(string(b), "source_ips: []\n") {
+		t.Fatalf("%s", b)
+	}
+	if ents, _ := os.ReadDir(filepath.Dir(p)); len(ents) != 1 {
+		t.Fatalf("temporary files left: %v", ents)
+	}
+}

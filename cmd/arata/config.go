@@ -124,11 +124,7 @@ func newConfigInitCmd(d *Deps, g *globalFlags) *subcmd.Command {
 				return err
 			}
 			if alBody != nil {
-				mode := os.FileMode(0o640)
-				if st, err := os.Stat(alPath); err == nil {
-					mode = st.Mode().Perm()
-				}
-				if err := os.WriteFile(alPath, alBody, mode); err != nil {
+				if err := allowlist.Write(alPath, alBody); err != nil {
 					return err
 				}
 			}

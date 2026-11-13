@@ -53,29 +53,46 @@ func Append(path string, e NewEntry) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if err := writeAtomic(path, out); err != nil {
+		return "", err
+	}
+	return added, nil
+}
+
+// Write は body を path の allowlist.yaml として書く (`arata config init` が AppendBytes の結果を書くのに使う)。
+// Parse できない中身は書かない。書き込みは Append と同じく一時ファイル + rename で、既にあるファイルの権限は保つ。
+func Write(path string, body []byte) error {
+	if _, err := Parse(body); err != nil {
+		return fmt.Errorf("allowlist: refusing to write an invalid file: %w", err)
+	}
+	return writeAtomic(path, body)
+}
+
+// writeAtomic は一時ファイルに書いてから rename で置き換える (途中で止まっても元のファイルが壊れない)。
+func writeAtomic(path string, out []byte) error {
 	mode := os.FileMode(0o644)
 	if st, err := os.Stat(path); err == nil {
 		mode = st.Mode().Perm()
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".allowlist-*.yaml")
 	if err != nil {
-		return "", fmt.Errorf("allowlist: %w", err)
+		return fmt.Errorf("allowlist: %w", err)
 	}
 	defer os.Remove(tmp.Name())
 	if _, err := tmp.Write(out); err != nil {
 		tmp.Close()
-		return "", fmt.Errorf("allowlist: %w", err)
+		return fmt.Errorf("allowlist: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
-		return "", fmt.Errorf("allowlist: %w", err)
+		return fmt.Errorf("allowlist: %w", err)
 	}
 	if err := os.Chmod(tmp.Name(), mode); err != nil {
-		return "", fmt.Errorf("allowlist: %w", err)
+		return fmt.Errorf("allowlist: %w", err)
 	}
 	if err := os.Rename(tmp.Name(), path); err != nil {
-		return "", fmt.Errorf("allowlist: %w", err)
+		return fmt.Errorf("allowlist: %w", err)
 	}
-	return added, nil
+	return nil
 }
 
 // AppendBytes は allowlist.yaml のテキストに e を追記した結果と、追記した部分を返す。
