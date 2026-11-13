@@ -1,0 +1,14 @@
+principals:
+  - arn: arn:aws:iam::123456789012:role/Deploy
+    note: GitHub Actions のデプロイロール
+    tags: [deploy]
+assume_destinations:
+  - account: "111122223333"
+    note: 運用を受託しているアカウント
+    approved_by: alice
+    approved_at: 2026-10-21
+  - account: "444455556666"
+    note: 保守を受託 (契約 B)
+    approved_by: alice
+    approved_at: 2026-10-22
+    expires: 2027-03-31

@@ -1,8 +1,10 @@
 package allowlist
 
 import (
+	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCheck(t *testing.T) {
@@ -40,7 +42,7 @@ func TestCheck(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			l, got := Check([]byte(tc.body))
+			l, got := Check([]byte(tc.body), time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC))
 			if len(got) != len(tc.want) {
 				t.Fatalf("got %+v, want %+v", got, tc.want)
 			}
@@ -63,7 +65,7 @@ func TestCheck(t *testing.T) {
 
 // ファズテスト (ADR 0041)。Check は利用者が書いたファイルを読む。規則:
 //   - エラーの有無は Parse と一致する (config check が通した allowlist は run でも読める。逆も同じ)
-//   - エラーは多くても 1 件。警告は Parse が通ったときだけで、重複した項目の数と一致する
+//   - エラーは多くても 1 件。警告は Parse が通ったときだけで、重複した主体の数 + 行き先 (assume_destinations) の重なる項目と期限切れの数と一致する
 //   - 行番号は負にならず、ファイルの行数を超えない
 func FuzzCheck(f *testing.F) {
 	for _, s := range []string{
@@ -73,11 +75,15 @@ func FuzzCheck(f *testing.F) {
 		"principals: &a\n  - arn: a\nsource_ips: *a\n",
 		"principals:\n  - arn: a\nprincipals:\n  - arn: a\n",
 		"secrets_access:\n  - principal: p\n", "- x\n", "principals: 1\n", "",
+		"assume_destinations:\n  - account: \"111122223333\"\n    note: n\n  - account: \"111122223333\"\n    roles: [ReadOnly]\n    note: n\n    expires: 2026-01-01\n",
+		"assume_destinations:\n  - account: \"111122223333\"\n    roles: [a, b]\n    note: n\n  - account: \"111122223333\"\n    roles: [b, a]\n    note: n\n  - account: \"111122223333\"\n    roles: [c]\n    note: n\n",
+		"assume_destinations: [{account: \"111122223333\"}]\n", "assume_destinations: &a\n  - account: x\nprincipals: *a\n",
 	} {
 		f.Add([]byte(s))
 	}
+	at := time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC)
 	f.Fuzz(func(t *testing.T, b []byte) {
-		l, ps := Check(b)
+		l, ps := Check(b, at)
 		pl, perr := Parse(b)
 		errs, warns := 0, 0
 		maxLine := strings.Count(string(b), "\n") + 1
@@ -104,8 +110,25 @@ func FuzzCheck(f *testing.F) {
 		for i := range pl.Principals {
 			subjects[pl.Principals[i].Subject()] = true
 		}
-		if want := len(pl.Principals) - len(subjects); warns != want {
-			t.Fatalf("重複の警告が %d 件 (重複は %d 件): %+v", warns, want, ps)
+		want := len(pl.Principals) - len(subjects)
+		for i := range pl.AssumeDestinations {
+			e := &pl.AssumeDestinations[i]
+			for j := 0; j < i; j++ {
+				x := &pl.AssumeDestinations[j]
+				sa, sb := append([]string(nil), x.Roles...), append([]string(nil), e.Roles...)
+				sort.Strings(sa)
+				sort.Strings(sb)
+				if x.Account == e.Account && (len(sa) == 0 || len(sb) == 0 || strings.Join(sa, "\x00") == strings.Join(sb, "\x00")) {
+					want++
+					break
+				}
+			}
+			if e.Expires != "" && e.Expires < "2026-11-13" { // YYYY-MM-DD は文字列の順が日付の順
+				want++
+			}
+		}
+		if warns != want {
+			t.Fatalf("警告が %d 件 (重複と期限切れは %d 件): %+v", warns, want, ps)
 		}
 	})
 }

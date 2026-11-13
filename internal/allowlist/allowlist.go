@@ -190,6 +190,8 @@ type List struct {
 	SourceIPs     []SourceIPEntry      `yaml:"source_ips"`
 	AdminUsers    []string             `yaml:"admin_users"`
 	SecretsAccess []SecretsAccessEntry `yaml:"secrets_access"`
+	// AssumeDestinations は、外向きの引き受けで行き先として既知のアカウント (ADR 0047)。principals (呼び出し元) とは別。
+	AssumeDestinations []DestinationEntry `yaml:"assume_destinations"`
 
 	byARN map[string]*PrincipalEntry
 	// broad は account / arn_pattern のエントリ
@@ -297,6 +299,11 @@ func Parse(b []byte) (*List, error) {
 				return nil, entryErr("secrets_access", i, "secrets[%d]: %w", j, err)
 			}
 			e.secrets = append(e.secrets, re)
+		}
+	}
+	for i := range l.AssumeDestinations {
+		if err := l.AssumeDestinations[i].validate(); err != nil {
+			return nil, entryErr("assume_destinations", i, "%w", err)
 		}
 	}
 	for i := range l.SourceIPs {

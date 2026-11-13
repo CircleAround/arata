@@ -25,6 +25,10 @@ AWS のサービス主体 (EC2・Lambda などのインスタンスロール) �
 - 向きが書かれていない (`direction` が無い): 記録から決められなかった。`caller` と `role_arn` のアカウント ID を読み、どちらが自アカウントかを人に確かめる。推測で向きを書かない
 - **MFA** (`mfa`): `true` (あり)・`false` (なし)・`unknown` (不明。記録に MFA の項目が無い。**「なし」ではない**)・`mixed` (イベントによって違う)
 
+- **既知の行き先** (allowlist の `assume_destinations`): 外向き・行き先が既知・MFA ありの引き受けは high にならず、行き先ごとの info の行
+  (Key `known-destination:<アカウント>`) に件数が残る。通常業務の記録で、対応は要らない
+- `destination_status` がある finding は、行き先は既知だが MFA ありと確かめられない (`approved`) か期限切れ (`expired`)。「既知だから問題ない」と書かない
+
 - Key は `<呼び出し元 ARN>-><引き受けたロール ARN>`
 - data: `caller`、`caller_kind`、`caller_identity` (`account_only` のときだけ)、`role_arn`、`direction`・`caller_account`・`role_account` (向きが決まったとき)、`mfa`、`external_account` (そのときのアカウント ID)、`allowlist_status` (unknown / expired)、`count`、`ips`、`event_names` (AssumeRole / AssumeRoleWithWebIdentity / AssumeRoleWithSAML など)、
   `has_errors` (失敗した引き受けを含む)、`invoked_by` (送信元の IP が無く、AWS のサービス経由のとき。コンソールのスイッチロールなど)
@@ -76,7 +80,8 @@ AWS のサービス主体 (EC2・Lambda などのインスタンスロール) �
    (`AWSRevokeOlderSessions` のインラインポリシーが付き、それより前に発行されたセッションを拒否する)
    外向きのときは、自アカウントで止められるのは呼び出し元だけ (呼び出し元のアクセスキーの無効化、`sts:AssumeRole` の権限を絞る)。外部アカウントのロールのセッションは相手の管理者が失効する
 2. **承認**: 正規なら `arata approve <id> --note "<理由>"` を人に提案する。`caller_identity: account_only` の finding は `account:` で承認される。期限付きの委託は `--expires`。基準は `arata help ai approve`
-3. **expected_denied**: 対象外 (access_denied のための設定)
+3. **行き先を既知にする**: 外向きで `mfa: true`、受託先などへの通常業務なら `arata approve <id> --destination --note "<理由>"` を人に提案する
+   (呼び出し元は承認されない。基準は `arata help ai approve`)。expected_denied は対象外
 4. **ack / snooze**: 承認したくないが当面続くもの (移行期間など) は ack、終わりが決まっているものは snooze
 5. **設定の修正**: SaaS 連携の信頼ポリシーに `sts:ExternalId` の条件を付ける、Principal をアカウント全体ではなく特定のロールにする
 
@@ -88,3 +93,4 @@ AWS のサービス主体 (EC2・Lambda などのインスタンスロール) �
 - `caller_identity: account_only` の呼び出し元を「NNN の root」「ルートユーザー」と書かない (その証拠は記録に無い)
 - 向きを逆に書かない。外向き (自アカウントの主体が外部のロールを引き受けた) を「外部の主体が自アカウントのロールを引き受けた」と要約しない。見出しの括弧と `direction` のとおりに書く
 - `mfa: unknown` を「MFA なし」と書かない
+- 外向きを止めるために呼び出し元を承認しない (知らないアカウントへの引き受けまで止まる)。行き先が何者か確かめずに `--destination` を提案しない

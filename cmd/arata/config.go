@@ -228,7 +228,11 @@ AWS にもストアにも繋がず、認証も要らない。PR の CI で allow
 				alOK = false
 				row("ng", alPath, err.Error())
 			default:
-				l, problems := allowlist.Check(b)
+				checkNow := time.Now
+				if d.Engine.Now != nil {
+					checkNow = d.Engine.Now
+				}
+				l, problems := allowlist.Check(b, checkNow())
 				for _, p := range problems {
 					where, status := alPath, "ng"
 					if p.Line > 0 {
@@ -241,7 +245,7 @@ AWS にもストアにも繋がず、認証も要らない。PR の CI で allow
 				}
 				list, alOK = l, l != nil
 				if l != nil {
-					row("ok", alPath, fmt.Sprintf("principals %d, source_ips %d, admin_users %d, secrets_access %d", len(l.Principals), len(l.SourceIPs), len(l.AdminUsers), len(l.SecretsAccess)))
+					row("ok", alPath, fmt.Sprintf("principals %d, source_ips %d, admin_users %d, secrets_access %d, assume_destinations %d", len(l.Principals), len(l.SourceIPs), len(l.AdminUsers), len(l.SecretsAccess), len(l.AssumeDestinations)))
 				}
 			}
 			// 決定 (ADR 0045): 監査する側のアカウント (audit_account) と既知リストの食い違い。既知リストが読めないときは上の ng に任せる

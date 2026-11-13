@@ -187,7 +187,7 @@ func TestAssumeSummaryAccountOnlyInternal(t *testing.T) {
 	if p.direction != dirInternal {
 		t.Fatalf("direction: %q", p.direction)
 	}
-	got := assumeSummary(p, true, "", ownRole, 2, mfaUnknown)
+	got := assumeSummary(p, true, "", ownRole, 2, mfaUnknown, allowlist.StatusUnknown)
 	if want := "既知リストに無い自アカウント (呼び出した主体は記録に無い) が自アカウントのロール Admin を 2 回引き受け (内部、MFA 不明)"; got != want {
 		t.Fatalf("\n got: %s\nwant: %s", got, want)
 	}
@@ -249,10 +249,294 @@ func FuzzAssumeDirection(f *testing.F) {
 		}
 		// 呼び出し元がアカウントしか分からないなら、見出しの呼び出し元に root の語を出さない (ロールの名前に含まれる分は別)
 		if acct, accountOnly := record.ExternalAccount(caller, kind); accountOnly {
-			sum := assumeSummary(p, true, record.AccountOnlyLabel(acct), role, 1, mfaUnknown)
+			sum := assumeSummary(p, true, record.AccountOnlyLabel(acct), role, 1, mfaUnknown, allowlist.StatusUnknown)
 			if rest := strings.Replace(sum, p.roleLabel, "", 1); strings.Contains(rest, "root") || !strings.Contains(sum, "呼び出した主体は記録に無い") {
 				t.Fatalf("アカウントしか分からない呼び出し元を root と読める見出し: %q", sum)
 			}
+		}
+	})
+}
+
+const (
+	unknownAcct    = "444455556666"
+	scopedAcct     = "111111111111"
+	expiredAcct    = "999999999999"
+	ownUser2       = "arn:aws:iam::123456789012:user/bob"
+	otherRole2     = "arn:aws:iam::111122223333:role/ops/ReadOnly"
+	knownDestsYAML = `
+assume_destinations:
+  - account: "111122223333"
+    note: 運用を受託しているアカウント
+    approved_by: alice
+  - account: "111111111111"
+    roles: ["ReadOnly"]
+    note: 読み取りのロールだけ
+  - account: "999999999999"
+    note: 契約が終わった
+    expires: 2026-01-31
+`
+)
+
+func knownDests(t *testing.T) *allowlist.List {
+	t.Helper()
+	al, err := allowlist.Parse([]byte(knownDestsYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return al
+}
+
+// 外向きで、行き先が既知リストの assume_destinations に期限内で載っていて、MFA ありの引き受けだけを報告しない (ADR 0047)。
+// それ以外 (知らない行き先、MFA なし・不明・混在、内向き、内部、向きが決まらない、期限切れ、絞ったロールの外) は今までどおり high。
+func TestUnknownAssumeRoleKnownDestination(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	w := collect.Window{From: now.Add(-24 * time.Hour), To: now}
+	at := now.Add(-time.Hour)
+	n := 0
+	ev := func(caller string, kind record.PrincipalKind, role string, data map[string]any) {
+		t.Helper()
+		n++
+		d := map[string]any{"role_arn": role, "recipient_account": ownAcct}
+		for k, v := range data {
+			if v == nil {
+				delete(d, k)
+			} else {
+				d[k] = v
+			}
+		}
+		e := record.TrailEvent{EventID: "e" + strings.Repeat("x", n), Time: at.Add(time.Duration(n) * time.Minute), Source: "trail", Name: "AssumeRole", EventSource: "sts.amazonaws.com",
+			PrincipalARN: caller, PrincipalKind: kind, IP: "198.51.100.8", Data: d, ReadOnly: true}
+		if err := st.InsertEvent(ctx, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mfa := map[string]any{"session_mfa": "true"}
+	role := func(acct, name string) string { return "arn:aws:iam::" + acct + ":role/" + name }
+	// 報告しない: 既知の行き先 + MFA あり (alice が 2 つのロールに 3 回、bob が 1 回)
+	ev(ownUser, record.PrincipalUser, otherRole, mfa)
+	ev(ownUser, record.PrincipalUser, otherRole, map[string]any{"mfa_serial": true})
+	ev(ownUser, record.PrincipalUser, otherRole2, mfa)
+	ev(ownUser2, record.PrincipalUser, otherRole, mfa)
+	// 報告しない: ロールを絞った行き先の、そのロール
+	ev(ownUser, record.PrincipalUser, role(scopedAcct, "ReadOnly"), mfa)
+	// high: 知らない行き先 (MFA あり)
+	ev(ownUser, record.PrincipalUser, role(unknownAcct, "Admin"), mfa)
+	// high: 既知の行き先だが MFA 不明 / なし / 混在
+	ev(ownUser, record.PrincipalUser, role(otherAcct, "mfa-unknown"), nil)
+	ev(ownUser, record.PrincipalUser, role(otherAcct, "mfa-none"), map[string]any{"session_mfa": "false"})
+	ev(ownUser, record.PrincipalUser, role(otherAcct, "mfa-mixed"), mfa)
+	ev(ownUser, record.PrincipalUser, role(otherAcct, "mfa-mixed"), nil)
+	// high: 絞ったロールの外
+	ev(ownUser, record.PrincipalUser, role(scopedAcct, "Admin"), mfa)
+	// high: 行き先の期限切れ
+	ev(ownUser, record.PrincipalUser, role(expiredAcct, "Admin"), mfa)
+	// high: 内向き (行き先として既知のアカウントから、自アカウントのロールへ)。行き先の既知は呼び出し元を承認しない
+	ev(otherRoot, record.PrincipalUnknown, ownRole, mfa)
+	// high: 内部
+	ev(ownUser, record.PrincipalUser, ownRole, mfa)
+	// high: 向きが決まらない (ロールの呼び出し元で、受け取ったアカウントの記録が無い)
+	ev("arn:aws:iam::123456789012:role/Deploy", record.PrincipalAssumedRole, otherRole, map[string]any{"session_mfa": "true", "recipient_account": nil})
+
+	obs, err := UnknownAssumeRole{}.Evaluate(ctx, st, w, knownDests(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	by := map[string]Observation{}
+	for _, o := range obs {
+		by[o.Key] = o
+	}
+	for _, k := range []string{ownUser + "->" + otherRole, ownUser + "->" + otherRole2, ownUser2 + "->" + otherRole, ownUser + "->" + role(scopedAcct, "ReadOnly")} {
+		if o, ok := by[k]; ok {
+			t.Fatalf("既知の行き先 + MFA ありを報告した: %+v", o)
+		}
+	}
+	high := map[string][2]string{ // Key → 見出しの括弧、data.destination_status
+		ownUser + "->" + role(unknownAcct, "Admin"):           {"(外向き、MFA あり)", ""},
+		ownUser + "->" + role(otherAcct, "mfa-unknown"):       {"(外向き、MFA 不明。行き先は既知だが、MFA ありと確かめられないので報告)", "approved"},
+		ownUser + "->" + role(otherAcct, "mfa-none"):          {"(外向き、MFA なし。行き先は既知だが、MFA ありと確かめられないので報告)", "approved"},
+		ownUser + "->" + role(otherAcct, "mfa-mixed"):         {"(外向き、MFA の有無が混在。行き先は既知だが、MFA ありと確かめられないので報告)", "approved"},
+		ownUser + "->" + role(scopedAcct, "Admin"):            {"(外向き、MFA あり)", ""},
+		ownUser + "->" + role(expiredAcct, "Admin"):           {"(外向き、MFA あり。行き先の承認は期限切れ)", "expired"},
+		otherRoot + "->" + ownRole:                            {"(内向き、MFA あり)", ""},
+		ownUser + "->" + ownRole:                              {"(内部、MFA あり)", ""},
+		"arn:aws:iam::123456789012:role/Deploy->" + otherRole: {"(MFA あり)", ""},
+	}
+	for k, want := range high {
+		o, ok := by[k]
+		if !ok {
+			t.Fatalf("報告されない: %s (%s)", k, keys(obs))
+		}
+		if o.Severity != High || !strings.HasSuffix(o.Summary, want[0]) {
+			t.Fatalf("%s: %s %s, want high …%s", k, o.Severity, o.Summary, want[0])
+		}
+		if got, _ := o.Data["destination_status"].(string); got != want[1] {
+			t.Fatalf("%s: destination_status = %q, want %q", k, got, want[1])
+		}
+		// Fingerprint は変えない (既存の ack 済みの finding を changed にしない)
+		if o.Fingerprint != "high|198.51.100.8|unknown" {
+			t.Fatalf("%s: fingerprint %q", k, o.Fingerprint)
+		}
+	}
+	// 報告しなかった分は、行き先のアカウントごとに info で 1 行残す (黙って消さない)
+	info, ok := by["known-destination:"+otherAcct]
+	if !ok {
+		t.Fatalf("info の行が無い: %s", keys(obs))
+	}
+	if want := "既知の行き先 (外部アカウント 111122223333) への MFA ありの引き受け 4 回は報告していない (呼び出し元 2、ロール 2)"; info.Severity != Info || info.Summary != want {
+		t.Fatalf("info: %s %s\nwant: %s", info.Severity, info.Summary, want)
+	}
+	for k, want := range map[string]any{"known_destination": true, "role_account": otherAcct, "direction": "outbound", "mfa": "true", "count": 4,
+		"callers": ownUser + "," + ownUser2, "callers_total": 2, "roles": otherRole2 + "," + otherRole, "roles_total": 2, "ips": "198.51.100.8",
+		"allowlist_subjects": "assume_destination:111122223333"} {
+		got := info.Data[k]
+		if l, ok := got.([]string); ok {
+			got = strings.Join(l, ",")
+		}
+		if got != want {
+			t.Fatalf("info: data.%s = %v, want %v", k, info.Data[k], want)
+		}
+	}
+	// approve が主体として読む項目は info の行に持たせない (行き先の行を主体の承認にしない)
+	for _, k := range []string{"caller", "caller_kind", "role_arn", "allowlist_status"} {
+		if _, has := info.Data[k]; has {
+			t.Fatalf("info: data.%s は出さない", k)
+		}
+	}
+	// 呼び出し元やロールが増えても changed にしない (毎時の窓で顔ぶれが変わる)
+	if info.Fingerprint != "info||known-destination" {
+		t.Fatalf("info: fingerprint %q", info.Fingerprint)
+	}
+	if o, ok := by["known-destination:"+scopedAcct]; !ok || o.Data["count"] != 1 || strings.Join(o.Data["allowlist_subjects"].([]string), ",") != "assume_destination:111111111111 roles:ReadOnly" {
+		t.Fatalf("ロールを絞った行き先の info: %+v", o)
+	}
+	if len(by) != len(high)+2 {
+		t.Fatalf("keys: %s", keys(obs))
+	}
+}
+
+// 既知リストに行き先が無ければ、何も変わらない (見出し・data・info の行)。
+func TestUnknownAssumeRoleWithoutDestinations(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	if err := st.InsertEvent(ctx, record.TrailEvent{EventID: "o1", Time: now.Add(-time.Hour), Source: "trail", Name: "AssumeRole", EventSource: "sts.amazonaws.com",
+		PrincipalARN: ownUser, PrincipalKind: record.PrincipalUser, Data: map[string]any{"role_arn": otherRole, "recipient_account": ownAcct, "session_mfa": "true"}, ReadOnly: true}); err != nil {
+		t.Fatal(err)
+	}
+	obs, err := UnknownAssumeRole{}.Evaluate(ctx, st, collect.Window{From: now.Add(-24 * time.Hour), To: now}, &allowlist.List{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(obs) != 1 || obs[0].Severity != High || !strings.HasSuffix(obs[0].Summary, "(外向き、MFA あり)") {
+		t.Fatalf("%+v", obs)
+	}
+	if _, has := obs[0].Data["destination_status"]; has {
+		t.Fatalf("destination_status は行き先が既知リストにあるときだけ: %+v", obs[0].Data)
+	}
+}
+
+// finding の data (ストアから読み戻した値) で、報告しない条件を満たすかを決める (approve と、既知リストを直した後の解消が使う)。
+func TestKnownDestinationOf(t *testing.T) {
+	al := knownDests(t)
+	base := func(over map[string]any) map[string]any {
+		d := map[string]any{"direction": "outbound", "mfa": "true", "role_arn": otherRole, "role_account": otherAcct, "caller": ownUser}
+		for k, v := range over {
+			d[k] = v
+		}
+		return d
+	}
+	cases := []struct {
+		name string
+		data map[string]any
+		want string
+	}{
+		{"外向き + 既知 + MFA あり", base(nil), "assume_destination:111122223333"},
+		{"MFA 不明", base(map[string]any{"mfa": "unknown"}), ""},
+		{"MFA なし", base(map[string]any{"mfa": "false"}), ""},
+		{"MFA 混在", base(map[string]any{"mfa": "mixed"}), ""},
+		{"MFA の項目が無い (以前の版の finding)", base(map[string]any{"mfa": nil}), ""},
+		{"MFA の型が違う", base(map[string]any{"mfa": true}), ""},
+		{"内向き", base(map[string]any{"direction": "inbound"}), ""},
+		{"内部", base(map[string]any{"direction": "internal"}), ""},
+		{"向きが無い", base(map[string]any{"direction": nil}), ""},
+		{"知らない行き先", base(map[string]any{"role_arn": "arn:aws:iam::444455556666:role/x", "role_account": unknownAcct}), ""},
+		{"role_account が role_arn と食い違う", base(map[string]any{"role_account": unknownAcct}), ""},
+		{"role_arn がロールの ARN でない", base(map[string]any{"role_arn": "arn:aws:iam::111122223333:user/x"}), ""},
+		{"期限切れ", base(map[string]any{"role_arn": "arn:aws:iam::999999999999:role/x", "role_account": expiredAcct}), ""},
+		{"絞ったロール", base(map[string]any{"role_arn": "arn:aws:iam::111111111111:role/ReadOnly", "role_account": scopedAcct}), "assume_destination:111111111111 roles:ReadOnly"},
+		{"絞ったロールの外", base(map[string]any{"role_arn": "arn:aws:iam::111111111111:role/Admin", "role_account": scopedAcct}), ""},
+		{"data が無い", nil, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if c.data != nil {
+				for k, v := range c.data {
+					if v == nil {
+						delete(c.data, k)
+					}
+				}
+			}
+			e, ok := KnownDestinationOf(al, c.data, now)
+			if ok != (c.want != "") || (ok && e.Subject() != c.want) {
+				t.Fatalf("got %v %+v, want %q", ok, e, c.want)
+			}
+		})
+	}
+}
+
+// 報告しない条件は、ログ由来の値 (呼び出し元・ロールの ARN・受け取ったアカウント・MFA の項目) で決まる (ADR 0041・0047)。守る規則:
+//   - 行き先が既知になるのは、向きが外向きで、ロールの ARN のアカウントが既知リストに書いた 12 桁と文字どおり同じときだけ
+//     (呼び出し元のアカウントが行き先と同じ・内向き・内部・向きが決まらない引き受けは、どんな値でも既知にならない)
+//   - finding の data から決める側 (KnownDestinationOf) は、それに加えて mfa が文字どおり true のときだけ満たす。
+//     data の role_account が role_arn と食い違えば満たさない
+func FuzzKnownDestination(f *testing.F) {
+	kinds := []record.PrincipalKind{record.PrincipalUser, record.PrincipalRole, record.PrincipalAssumedRole, record.PrincipalRoot, record.PrincipalService, record.PrincipalUnknown}
+	for _, s := range [][4]string{
+		{ownUser, otherRole, ownAcct, "true"}, {ownUser, otherRole, ownAcct, "unknown"}, {ownUser, otherRole, ownAcct, "false"}, {ownUser, otherRole, "", "mixed"},
+		{ownUser, "arn:aws:iam::444455556666:role/x", ownAcct, "true"}, {otherRoot, ownRole, ownAcct, "true"}, {ownUser, ownRole, "", "true"},
+		{ownUser, "arn:aws:iam::111122223333:role/a\nb", ownAcct, "true"}, {ownUser, "arn:aws:iam::1111222233334:role/x", "", "true"},
+		{ownUser, "arn:aws:iam::１１１１２２２２３３３３:role/x", "", "true"}, {ownUser, otherRole + "->" + otherRole, ownAcct, "TRUE"},
+		{"arn:aws:iam::111122223333:user/x", otherRole, otherAcct, "true"}, {ownUser, "arn:aws:iam::111122223333:role/ReadOnly", ownAcct, "true\n"}, {"", "", "", ""},
+	} {
+		for i := range kinds {
+			f.Add(s[0], uint8(i), s[1], s[2], s[3])
+		}
+	}
+	al, err := allowlist.Parse([]byte("assume_destinations:\n  - account: \"111122223333\"\n    roles: [\"partner-*\", ReadOnly]\n    note: 受託\n  - account: \"111111111111\"\n    note: 受託\n"))
+	if err != nil {
+		f.Fatal(err)
+	}
+	listed := map[string]bool{"111122223333": true, "111111111111": true}
+	f.Fuzz(func(t *testing.T, caller string, k uint8, role, recipient, mfa string) {
+		p := newAssumeParties(caller, kinds[int(k)%len(kinds)], role, recipient)
+		e, st := destinationOf(al, p, now)
+		if (e == nil) != (st == allowlist.StatusUnknown) || st == allowlist.StatusExpired {
+			t.Fatalf("状態と項目が合わない: %s %+v", st, e)
+		}
+		if st == allowlist.StatusApproved {
+			if p.direction != dirOutbound || !listed[p.roleAccount] || e.Account != p.roleAccount || p.callerAccount == p.roleAccount {
+				t.Fatalf("外向きでない・書いていないアカウントを既知にした: caller %q role %q recipient %q → %+v", caller, role, recipient, p)
+			}
+			if !strings.Contains(role, ":iam::"+p.roleAccount+":role/") {
+				t.Fatalf("ロールの ARN のアカウントと合わない: %q %+v", role, p)
+			}
+			if p.roleAccount == "111122223333" && p.roleLabel != "ReadOnly" && !strings.HasPrefix(p.roleLabel, "partner-") {
+				t.Fatalf("絞ったロールの外を既知にした: %q", p.roleLabel)
+			}
+		}
+		data := map[string]any{"direction": p.direction, "mfa": mfa, "role_arn": role, "role_account": p.roleAccount}
+		de, ok := KnownDestinationOf(al, data, now)
+		if ok != (st == allowlist.StatusApproved && mfa == "true") || (ok && de != e) {
+			t.Fatalf("data からの判定が合わない: ok %v (行き先 %s、mfa %q)", ok, st, mfa)
+		}
+		// data の role_account が食い違う・向きが外向きでないなら、満たさない
+		data["role_account"] = "999999999999"
+		if _, ok := KnownDestinationOf(al, data, now); ok {
+			t.Fatal("role_account が role_arn と食い違うのに満たした")
+		}
+		data["role_account"], data["direction"] = p.roleAccount, dirInbound
+		if _, ok := KnownDestinationOf(al, data, now); ok {
+			t.Fatal("内向きなのに満たした")
 		}
 	})
 }

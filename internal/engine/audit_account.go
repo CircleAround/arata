@@ -76,3 +76,38 @@ func (d *doctor) auditAccount(ctx context.Context, l *allowlist.List) {
 		row(DoctorWarn, "", "監査対象のアカウントを確かめられない (sts:GetCallerIdentity): "+err.Error())
 	}
 }
+
+// assumeDestinations は、既知リストの assume_destinations (外向きの引き受けで行き先として既知のアカウント) に、監査対象のアカウントそのものが
+// 書かれていないことを確かめる。
+//
+// 決定 (ADR 0047): 行き先は「別のアカウント」。監査対象の ID を書いても効かない (同じアカウントのロールの引き受けは内部で、報告され続ける) が、
+// 書いた人は「自アカウントの中のスイッチロールが止まる」と期待している。オフライン (config check) では監査対象の ID が分からないので、
+// doctor が sts:GetCallerIdentity (権限不要) で比べる。行き先が無ければ問い合わせない。
+func (d *doctor) assumeDestinations(ctx context.Context, l *allowlist.List) {
+	if l == nil || len(l.AssumeDestinations) == 0 {
+		return
+	}
+	row := func(status, code, detail string) {
+		d.res.Rows = append(d.res.Rows, DoctorRow{Source: "-", Kind: "-", Item: "assume_destinations", Status: status, Code: code, Detail: detail})
+	}
+	cl, err := d.deps.Account(ctx, d.cfg, config.Source{ID: "-", Kind: "-"}, d.cfg.AWS.Region)
+	var out *sts.GetCallerIdentityOutput
+	if err == nil {
+		out, err = cl.STS.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
+	}
+	if err != nil || out.Account == nil {
+		if err == nil {
+			err = fmt.Errorf("no account in the response")
+		}
+		row(DoctorWarn, "", "監査対象のアカウントを確かめられない (sts:GetCallerIdentity): "+err.Error())
+		return
+	}
+	for i := range l.AssumeDestinations {
+		if l.AssumeDestinations[i].Account == *out.Account {
+			row(DoctorNG, CodeConfigInvalid, fmt.Sprintf("assume_destinations[%d] の account %s は監査対象のアカウントそのもの。行き先は別のアカウントを書く (同じアカウントのロールの引き受けは内部で、"+
+				"この項目では止まらない)。項目を消し、止めたいなら呼び出し元を principals に書く", i, *out.Account))
+			return
+		}
+	}
+	row(DoctorOK, "", fmt.Sprintf("assume_destinations %d 件 (監査対象のアカウントは含まない)", len(l.AssumeDestinations)))
+}

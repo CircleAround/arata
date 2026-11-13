@@ -31,6 +31,16 @@ source_ips:
   - cidr: 203.0.113.0/24
     note: 本社オフィス
 admin_users: []                  # アプリ層の管理者 ID (後続 Step)
+# 外向きの引き受け (自アカウントの主体が、別のアカウントのロールを引き受ける) で、行き先として既知のアカウント (ADR 0047)。
+# unknown_assume_role は、外向き・ここに期限内で載っている・MFA あり、の全部を満たす引き受けだけを報告しない (info の 1 行に件数を残す)。
+# MFA なし・不明の引き受けと、ここに無いアカウントへの引き受けは high のまま。principals の account: (呼び出し元の承認) とは別で、主体は承認されない
+assume_destinations:
+  - account: "111122223333"      # 行き先のアカウント。12 桁を文字列で書く
+    note: 運用を受託しているアカウント (社員が MFA 付きでスイッチロールする)   # 必須
+    approved_by: alice
+    approved_at: 2026-11-13
+    expires: 2027-03-31          # 契約の終わりに合わせる。過ぎたら再び報告される (config check が warn にする)
+    # roles: ["ReadOnly", "ops-*"]   # 書けばこのロールだけ (ロール名の glob。ARN の role/ より後ろ)
 # 主体 × 秘匿値 (名前・パスの glob)。secret_access が「初めて読む秘匿値」に数えない (一括読み出しには数える。ADR 0027)
 secrets_access:
   - principal: arn:aws:iam::123456789012:role/example-app-task

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strings"
+	"time"
 
 	"github.com/CircleAround/arata/internal/allowlist"
 	"github.com/CircleAround/arata/internal/collect"
@@ -12,6 +14,8 @@ import (
 )
 
 // UnknownAssumeRole は呼び出し元 ARN が allowlist に無い AssumeRole を報告する (high)。
+// 決定 (ADR 0047): 外向きで、行き先のアカウントが既知リストの assume_destinations に期限内で載っていて、MFA ありの引き受けは報告しない。
+// 報告しなかった分は、行き先のアカウントごとに info で 1 行残す (Key は known-destination:<アカウント>)。
 // 決定: AWS サービス主体 (EC2 / Lambda などがインスタンスロールを引き受けるもの) は対象外。
 // 決定 (設計書 6 章): 引き受けの向き (外向き / 内向き / 内部) と MFA の有無を規則で決め、見出しと data に出す。
 // 決められないときは書かない (向き)・「不明」と書く (MFA)。Key と Fingerprint は変えない。
@@ -124,10 +128,77 @@ var (
 	mfaLabels = map[string]string{mfaYes: "MFA あり", mfaNo: "MFA なし", mfaUnknown: "MFA 不明", mfaMixed: "MFA の有無が混在"}
 )
 
+// KnownDestinationKeyPrefix は、報告しなかった引き受けをまとめた info の行の Key の先頭 (後ろに行き先のアカウント)。
+const KnownDestinationKeyPrefix = "known-destination:"
+
+// maxKnownDestinationList は info の行の data.callers / data.roles に出す数の上限 (総数は callers_total / roles_total)。
+const maxKnownDestinationList = 20
+
+// destinationOf は、引き受け p の行き先 (ロールのアカウントとロール名) が既知リストの assume_destinations に載っているかを返す。
+// 外向きでなければ unknown (内向き・内部・向きが決まらない引き受けに、行き先の既知は効かない)。
+func destinationOf(al *allowlist.List, p assumeParties, at time.Time) (*allowlist.DestinationEntry, allowlist.Status) {
+	if al == nil || p.direction != dirOutbound {
+		return nil, allowlist.StatusUnknown
+	}
+	return al.AssumeDestination(p.roleAccount, p.roleLabel, at)
+}
+
+// OutboundTargetOf は、unknown_assume_role の finding の data から、外向きの引き受けの行き先 (ロールのアカウントと、ARN の role/ より後ろ) を返す。
+// 外向きでない・role_arn がロールの ARN として読めない・role_account と食い違うときは ok が false。
+// data はストアから読み戻した値 (元はログ由来) なので、決まった形のときだけ返す (approve が既知リストに書く値になる)。
+func OutboundTargetOf(data map[string]any) (account, role string, ok bool) {
+	if dataStr(data, "direction") != dirOutbound {
+		return "", "", false
+	}
+	r := assumeRoleRe.FindStringSubmatch(dataStr(data, "role_arn"))
+	if r == nil || len(r[2]) > maxAssumeLabel || r[1] != dataStr(data, "role_account") {
+		return "", "", false
+	}
+	return r[1], r[2], true
+}
+
+// AssumedWithMFA は、finding の data の mfa が「あり」(全イベントで) か。
+func AssumedWithMFA(data map[string]any) bool { return dataStr(data, "mfa") == mfaYes }
+
+// KnownDestinationOf は、unknown_assume_role の finding の data が「報告しない条件」(ADR 0047) を at 時点で満たすかを返す。
+// 満たすのは、direction が outbound・mfa が true・role_arn のアカウントとロール名が assume_destinations の期限内の項目に一致、の全部。
+// approve の後と、人が既知リストを直した後の解消 (engine) が使う。
+func KnownDestinationOf(al *allowlist.List, data map[string]any, at time.Time) (*allowlist.DestinationEntry, bool) {
+	account, role, ok := OutboundTargetOf(data)
+	if !ok || !AssumedWithMFA(data) {
+		return nil, false
+	}
+	e, st := destinationOf(al, assumeParties{direction: dirOutbound, roleAccount: account, roleLabel: role}, at)
+	return e, st == allowlist.StatusApproved
+}
+
+// IsKnownDestinationLine は、finding が「報告しなかった引き受けをまとめた info の行」か。行き先のアカウントも返す。
+func IsKnownDestinationLine(key string, data map[string]any) (account string, ok bool) {
+	if v, _ := data["known_destination"].(bool); !v || !strings.HasPrefix(key, KnownDestinationKeyPrefix) {
+		return "", false
+	}
+	return strings.TrimPrefix(key, KnownDestinationKeyPrefix), true
+}
+
+// destinationNotes は、行き先が既知リストにあるのに報告するときに、見出しの括弧の中へ足す理由。
+var destinationNotes = map[allowlist.Status]string{
+	allowlist.StatusApproved: "。行き先は既知だが、MFA ありと確かめられないので報告",
+	allowlist.StatusExpired:  "。行き先の承認は期限切れ",
+}
+
+// knownDestAgg は、報告しなかった引き受けの、行き先のアカウントごとの集計。
+type knownDestAgg struct {
+	*eventAgg
+	callers, roles, subjects map[string]bool
+}
+
 // assumeSummary は見出し。向きが決まれば「自アカウントの … / 外部アカウント NNN の …」と向きを書き、決まらなければ従来の形 (ARN のまま) にする。
 // 決定 (設計書 6 章): accountOnly (呼び出し元がアカウントしか分からない) なら、呼び出し元を record.AccountOnlyLabel の文で書く。
 // ARN の末尾の `root` を表記に使わない (ルートユーザーと読める)。向きが決まらないときの caller も、呼ぶ側が同じ文にして渡す。
-func assumeSummary(p assumeParties, accountOnly bool, caller, role string, count int, mfa string) string {
+//
+// 決定 (ADR 0047): dest (行き先の既知リストでの状態。外向きのときだけ unknown 以外になる) が approved / expired なら、括弧の中に報告する理由を足す。
+// 既知にした行き先なのに報告が続く理由 (MFA が無い・不明、期限切れ) を、読む人が見出しだけで分かるようにする。
+func assumeSummary(p assumeParties, accountOnly bool, caller, role string, count int, mfa string, dest allowlist.Status) string {
 	if p.direction == "" {
 		return fmt.Sprintf("既知リストに無い %s が %s を %d 回引き受け (%s)", caller, role, count, mfaLabels[mfa])
 	}
@@ -144,7 +215,7 @@ func assumeSummary(p assumeParties, accountOnly bool, caller, role string, count
 	if p.direction == dirOutbound {
 		target = "外部アカウント " + p.roleAccount + " のロール " + p.roleLabel
 	}
-	return fmt.Sprintf("既知リストに無い%s が%s を %d 回引き受け (%s、%s)", who, target, count, dirLabels[p.direction], mfaLabels[mfa])
+	return fmt.Sprintf("既知リストに無い%s が%s を %d 回引き受け (%s、%s%s)", who, target, count, dirLabels[p.direction], mfaLabels[mfa], destinationNotes[dest])
 }
 
 // assumeAgg は Key ごとの集計に、向きと MFA の判定に要る値を足したもの。
@@ -200,6 +271,7 @@ func (c UnknownAssumeRole) Evaluate(ctx context.Context, q store.Query, w collec
 		}
 	}
 	obs := map[string]Observation{}
+	known := map[string]*knownDestAgg{}
 	for k, a := range aggs {
 		// 受け取ったアカウントがイベントによって違うなら向きを決めない (1 つの証跡なら同じ値になる)
 		var p assumeParties
@@ -222,6 +294,25 @@ func (c UnknownAssumeRole) Evaluate(ctx context.Context, q store.Query, w collec
 			}
 		}
 		a.extra["mfa"] = mfa
+		// 決定 (ADR 0047): 外向き・行き先が既知 (期限内)・MFA あり (全イベントで) の全部を満たすときだけ報告しない。
+		// 1 件でも MFA なし・不明が混ざれば (mixed) 全体を今までどおり報告する
+		dest, destStatus := destinationOf(al, p, w.To)
+		if destStatus == allowlist.StatusApproved && mfa == mfaYes {
+			kd, ok := known[p.roleAccount]
+			if !ok {
+				kd = &knownDestAgg{eventAgg: newEventAgg(), callers: map[string]bool{}, roles: map[string]bool{}, subjects: map[string]bool{}}
+				known[p.roleAccount] = kd
+			}
+			kd.merge(a.eventAgg)
+			kd.callers[a.caller], kd.roles[a.role], kd.subjects[dest.Subject()] = true, true, true
+			if a.extra["has_errors"] == true {
+				kd.extra["has_errors"] = true
+			}
+			continue
+		}
+		if destStatus != allowlist.StatusUnknown {
+			a.extra["destination_status"] = string(destStatus)
+		}
 		// 決定: 送信元の IP が無いとき (コンソールのスイッチロールなど、送信元が AWS のサービス名の記録) は、どのサービス経由かを出す (root_usage と同じ)
 		if len(a.ips) == 0 && len(a.services) > 0 {
 			a.extra["invoked_by"] = capList(sortedKeys(a.services), maxInvokedBy)
@@ -235,10 +326,33 @@ func (c UnknownAssumeRole) Evaluate(ctx context.Context, q store.Query, w collec
 			Check:    c.Name(),
 			Key:      k,
 			Severity: High,
-			Summary:  assumeSummary(p, accountOnly, caller, a.role, a.count, mfa),
+			Summary:  assumeSummary(p, accountOnly, caller, a.role, a.count, mfa, destStatus),
 			// 決定: Fingerprint は変えない (向きは Key から決まる。MFA を足すと既存の finding が一斉に changed になる)
 			Fingerprint: fingerprint(High, a.ips, a.extra["allowlist_status"]),
 			Data:        a.data(),
+		}
+	}
+	// 決定 (ADR 0047): 報告しなかった分を黙って消さない。行き先のアカウントごとに info で 1 行出す (件数・通知には数えない)。
+	// Fingerprint は固定する: 呼び出し元やロールの顔ぶれは毎時の窓で変わるので、入れると毎回 changed になる。
+	// caller / role_arn は持たせない (approve が主体として読む項目。この行を主体の承認の対象にしない)
+	for acct, kd := range known {
+		kd.extra["known_destination"] = true
+		kd.extra["role_account"] = acct
+		kd.extra["direction"] = dirOutbound
+		kd.extra["mfa"] = mfaYes
+		kd.extra["callers"] = capList(sortedKeys(kd.callers), maxKnownDestinationList)
+		kd.extra["callers_total"] = len(kd.callers)
+		kd.extra["roles"] = capList(sortedKeys(kd.roles), maxKnownDestinationList)
+		kd.extra["roles_total"] = len(kd.roles)
+		kd.extra["allowlist_subjects"] = sortedKeys(kd.subjects)
+		k := KnownDestinationKeyPrefix + acct
+		obs[k] = Observation{
+			Check:       c.Name(),
+			Key:         k,
+			Severity:    Info,
+			Summary:     fmt.Sprintf("既知の行き先 (外部アカウント %s) への MFA ありの引き受け %d 回は報告していない (呼び出し元 %d、ロール %d)", acct, kd.count, len(kd.callers), len(kd.roles)),
+			Fingerprint: fingerprint(Info, nil, "known-destination"),
+			Data:        kd.data(),
 		}
 	}
 	return sortedObs(obs), nil
