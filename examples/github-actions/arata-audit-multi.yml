@@ -25,6 +25,17 @@ on:
         type: choice
         options: [daily, weekly]
         default: daily
+      # 試しの実行 (arata run --dry-run)。定時の前に、いま流したら何が出るかだけを見る。
+      # ストアに何も書かないので、出た指摘は報告済みにならず、次の定時の実行でも通知される。通知はしない。
+      # ARATA_VERSION が v0.11.0 より後の版であること (それより前は --dry-run を知らず、終了コード 2 で止まる。何も書かれない)。
+      dry_run:
+        description: 試しの実行 (ストアに書かず、通知もしない。結果は件数だけをログに出す)
+        type: boolean
+        default: false
+      window:
+        description: 試しの実行で見る期間 (例 1h。空ならプロファイルの window。dry_run のときだけ使う)
+        type: string
+        default: ''
 
 permissions: {}
 
@@ -50,7 +61,8 @@ jobs:
     # 止めきれなくても、後から終わったほうが STORE_CONFLICT で失敗するだけで、ストアは壊れない (ADR 0034)。
     # ストアはアカウントごとなので、group もアカウントごとにする。
     concurrency:
-      group: arata-audit-${{ matrix.account }}
+      # 試しの実行はストアに書かないので group を分ける (同じ group だと、待っている定時の実行を取り消し得る)。
+      group: arata-audit-${{ matrix.account }}${{ inputs.dry_run && '-dry-run' || '' }}
       cancel-in-progress: false
     permissions:
       id-token: write   # OIDC で実行用ロールを引き受ける
@@ -135,13 +147,56 @@ jobs:
       - id: audit
         name: arata run
         timeout-minutes: 50
+        env:
+          # 手動実行の入力。定時の実行では空。値は引数として渡すだけで、妥当かは arata が確かめる
+          DRY_RUN: ${{ inputs.dry_run }}
+          DRY_RUN_WINDOW: ${{ inputs.window }}
         run: |
           log="$RUNNER_TEMP/arata.log"
           status=0
-          arata run -c "$ARATA_CONFIG_DIR/arata.yaml" --profile "$PROFILE" --out "$RUNNER_TEMP/arata-out" >"$log" 2>&1 || status=$?
+          args=(run -c "$ARATA_CONFIG_DIR/arata.yaml" --profile "$PROFILE" --out "$RUNNER_TEMP/arata-out")
+          if [ "${DRY_RUN:-}" = "true" ]; then
+            args+=(--dry-run)
+            if [ -n "${DRY_RUN_WINDOW:-}" ]; then
+              args+=(--window "$DRY_RUN_WINDOW")
+            fi
+          fi
+          arata "${args[@]}" >"$log" 2>&1 || status=$?
           jq -Rc 'fromjson? | objects | select(.level != "INFO") | {level, code, source}' "$log" || true
           echo "arata exit=$status"
           exit "$status"
+
+      # 試しの実行 (手動実行の dry_run) の結果。通知はしないので、件数と重大度だけをここに出す。
+      # ログの方針は上と同じ: 個々の指摘の中身 (主体・IP・要約) と注記の文は出さない。
+      # 数と、決まった語彙の値 (重大度) と、時刻の形の値だけを選んで出す。中身を読むときは、手元で同じ arata run --dry-run を流す。
+      - id: dry-run-summary
+        name: 試しの実行の結果 (件数だけ)
+        if: always() && inputs.dry_run
+        timeout-minutes: 5
+        run: |
+          file="$RUNNER_TEMP/arata-out/report.json"
+          if [ ! -f "$file" ]; then
+            echo "試しの実行の報告がありません (arata run の終了コードと code を見てください)"
+            exit 0
+          fi
+          jq -c '
+            def sev: ["critical", "high", "medium", "low"];
+            def count: if type == "number" then . else null end;
+            def stamp: if type == "string" and test("^[0-9T:Z.+-]{1,40}$") then . else null end;
+            {
+              dry_run: (.dry_run == true),
+              window: {from: (.window.from | stamp), to: (.window.to | stamp)},
+              summary: {
+                new: (.summary.new | count), changed: (.summary.changed | count), recurred: (.summary.recurred | count),
+                resolved: (.summary.resolved | count), still_open: (.summary.still_open | count),
+                max_severity: (.summary.max_severity as $s | if (sev | index($s)) then $s else null end)
+              },
+              by_severity: ([.findings.new[]?, .findings.changed[]?, .findings.recurred[]?]
+                | map(.severity as $s | select(sev | index($s)) | $s) | group_by(.) | map({key: .[0], value: length}) | from_entries),
+              sources_failed: (.coverage.sources_failed | length),
+              checks_skipped: (.coverage.checks_skipped | length),
+              notes: (.coverage.notes | length)
+            }' "$file" 2>/dev/null || echo "試しの実行の報告を読めませんでした"
 
       # arata が失敗しても aratam は必ず動かす (バイナリが取れていれば)。
       # 実行環境は毎回消えるので、STORE_CONFLICT・INTERRUPTED・設定の誤り・OIDC の失敗のどれでも report.json が無く、
@@ -151,7 +206,8 @@ jobs:
       # どちらもジョブは失敗 (赤) のままにする。
       - id: notify
         name: aratam notify
-        if: always() && steps.install.outcome == 'success'
+        # 試しの実行では通知しない (aratam も dry_run の報告は送らない。ここで呼ばないのは、arata が失敗したときに「実行されていない」を送らないため)
+        if: always() && steps.install.outcome == 'success' && !inputs.dry_run
         timeout-minutes: 5
         env:
           ARATAM_SLACK_WEBHOOK: ${{ secrets.ARATAM_SLACK_WEBHOOK }}
@@ -172,7 +228,7 @@ jobs:
       # Actions の artifacts はリポジトリを読める人に見えるので使わない。
       - id: save-proposals
         name: WAF の提案の全文をストアへ置く
-        if: always() && steps.aws.outcome == 'success'
+        if: always() && steps.aws.outcome == 'success' && !inputs.dry_run
         timeout-minutes: 5
         run: |
           file="$RUNNER_TEMP/arata-out/waf-proposals.md"

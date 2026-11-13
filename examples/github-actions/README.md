@@ -227,6 +227,7 @@ aratam test-notify -c arata/aratam.yaml --urgent    # 実際に送る。緊急�
 - secrets に入れた値そのものは、[arata-notify-test.yml](arata-notify-test.yml) を Actions の画面から実行して確かめられます (監査は回りません。下の「Slack への送信だけを確かめる」)。
   最初の `workflow_dispatch` の実行 (手順 5 の最後) でも確かめられます。`on_quiet: short` なら、新規が無くても 1 行届きます。
   決定: 監査のワークフローに test-notify 用の入力は足しません。入力を増やすと監査のワークフローの分岐が増えるためです。送信だけを確かめる手段は、別の見本にしました
+  (試しの実行の入力 `dry_run` は監査のワークフローに足しています。監査と同じ認証・設定・版で動かす必要があり、別の見本にすると同じ step を二重に持つためです。下の「定時の前に試す」)
 
 #### bot トークンで送る (secret は 1 つ)
 
@@ -467,6 +468,7 @@ Settings → Actions → General で設定します。
 - secrets か OIDC を使う見本は `schedule` と `workflow_dispatch` でだけ動き、`pull_request_target`・`workflow_run`・`environment:` を使わない
 - action は 2 つだけで、どちらも commit SHA で固定。checkout は `persist-credentials: false`
 - `run:` に式を埋め込まず、secrets は使う step にだけ渡す
+- 手動実行の `dry_run` では、通知せず、ストアのバケットに何も置かず、結果は件数と重大度だけをログに出す
 
 ## 複数のアカウントを 1 つのリポジトリで監査する
 
@@ -595,6 +597,28 @@ AI には `arata approve` を実行させません。手元で形を確かめる
 - `config check` を含む版 (v0.6.0 以降) が要ります。監査のワークフローも v0.6.0 以降に上げたら、`ARATA_VERSION` を同じ版に揃えます (版が違うと、検査を通った設定が監査で読めないことがあります。新しい版で足されたキーなど)
 - main のブランチ保護で必須のチェックにすると、形の誤った allowlist.yaml はマージできなくなります
 
+## 定時の前に試す (手動実行の `dry_run`)
+
+設定や allowlist.yaml を直した後など、定時の実行の前に「いま流したら何が出るか」を見たいときは、監査のワークフローを Actions の画面から手動で実行し、`dry_run` にチェックを入れます
+(`arata run --dry-run`。arata の ADR 0049)。
+
+| 入力 | 意味 |
+|---|---|
+| `dry_run` | 試しの実行。**ストアのバケットに何も書かず、Slack にも送りません** |
+| `window` | 試しの実行で見る期間 (例 `1h`)。空ならプロファイルの `window`。`dry_run` のときだけ使います |
+
+- ストアは読むだけです。出た指摘は報告済みにならず、窓も進まないので、**次の定時の実行は、試さなかったときと同じ通知を出します**
+- `window` を短くすると、CloudTrail の読み取りの時間と Logs Insights のスキャン量 (費用) が減ります。前回の実行からの追いつきはしません
+- 結果は Actions のログの「試しの実行の結果 (件数だけ)」に、**件数と重大度だけ**が出ます (新規・変化・再発・解消・未対応の数、最大の重大度、重大度ごとの数、
+  取れなかったソースとスキップしたチェックの数、注記の数、見た範囲の時刻)。個々の指摘の中身 (主体・IP・要約) は、ほかの step と同じ理由でログに出しません。
+  中身を読むときは、手元で同じ認証で `arata run -c arata/arata.yaml --profile daily --dry-run --window 1h --out "$(mktemp -d)"` を流して report.md を見ます
+  (手元の試しの実行もストアに書きません)
+- `notes` が 1 以上なら、見た範囲が定時の実行より狭く、入っていない期間があります (report.md のカバレッジの「注意」)。日次集計を使うチェックは、短い窓では前日を評価しません
+- `aratam notify` は呼びません。arata が失敗しても「実行されていない」は届きません (ジョブは失敗で終わります)。aratam 自身も、試しの実行の報告 (`dry_run: true`) は送りません
+- 排他の group は定時の実行と別です。試しの実行はストアに書かないので、定時の実行と重なってもかまいません
+- `ARATA_VERSION` は `--dry-run` のある版 (v0.11.0 より後) にします。それより前の版は `--dry-run` を知らず、終了コード 2 で止まります (何も書かれません)
+- 導入時の「最初の run」(手順 6) には使いません。あれは溜まっていた指摘を報告済みにするための実行です
+
 ## Slack への送信だけを確かめる
 
 [arata-notify-test.yml](arata-notify-test.yml) を `.github/workflows/` に置くと、Actions の画面から `aratam test-notify` を実行できます。
@@ -646,6 +670,7 @@ AI には `arata approve` を実行させません。手元で形を確かめる
 | 一部のソースが取れない (arata の終了コード 3) | 取れた分の報告を緊急用に | 失敗 |
 | `STORE_CONFLICT`・`INTERRUPTED`・設定の誤り・OIDC の失敗など | 「arata の出力が無いか古い」を緊急用に | 失敗 |
 | バイナリの取得の失敗、checkout の失敗 | 届かない | 失敗 |
+| 手動実行の `dry_run` (成功でも失敗でも) | 届かない (試しの実行は通知しない) | arata の終了コードのとおり |
 
 `STORE_CONFLICT` は再実行で解消します (手元の `arata ack` と重なったときなど)。走らなかった窓は次の run が引き直します。
 
