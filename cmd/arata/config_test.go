@@ -12,30 +12,31 @@ import (
 	"github.com/CircleAround/arata/internal/collect/account"
 	"github.com/CircleAround/arata/internal/collect/account/accounttest"
 	"github.com/CircleAround/arata/internal/collect/cloudtrail/cloudtrailtest"
+	"github.com/CircleAround/arata/internal/config"
 	"github.com/CircleAround/arata/internal/scaffold"
 )
 
 // TestConfigInitThenRun は「はじめての手順」(config init → doctor → init → run) を雛形のまま通す。
 func TestConfigInitThenRun(t *testing.T) {
 	c := newCLI(t)
-	if code := c.run("config", "init", "--out", "-"); code != 0 || c.stdout.String() != string(scaffold.Generate(checks.NewRegistry())) {
+	if code := c.run("config", "init", "--audit-account", "none", "--out", "-"); code != 0 || c.stdout.String() != string(scaffold.Generate(checks.NewRegistry(), config.AuditAccountNone)) {
 		t.Fatalf("stdout must be the template: exit %d", code)
 	}
 	cfg := filepath.Join(c.dir, "new", "config.yaml")
-	if code := c.run("config", "init", "--out", cfg); code != 0 || !strings.Contains(c.stdout.String(), "arata doctor -c "+cfg) {
+	if code := c.run("config", "init", "--audit-account", "none", "--out", cfg); code != 0 || !strings.Contains(c.stdout.String(), "arata doctor -c "+cfg) {
 		t.Fatalf("exit %d: %s%s", code, c.stdout, c.stderr)
 	}
 	// 既存ファイルは --force が無ければ上書きしない
 	if err := os.WriteFile(cfg, []byte("name: kept\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if code := c.run("config", "init", "--out", cfg); code != 2 || strings.Join(c.codes(), ",") != "CONFIG_INVALID" {
+	if code := c.run("config", "init", "--audit-account", "none", "--out", cfg); code != 2 || strings.Join(c.codes(), ",") != "CONFIG_INVALID" {
 		t.Fatalf("must refuse to overwrite: exit %d %v", code, c.codes())
 	}
 	if b, _ := os.ReadFile(cfg); string(b) != "name: kept\n" {
 		t.Fatalf("overwritten: %s", b)
 	}
-	if code := c.run("config", "init", "--out", cfg, "--force"); code != 0 {
+	if code := c.run("config", "init", "--audit-account", "none", "--out", cfg, "--force"); code != 0 {
 		t.Fatalf("--force exit %d", code)
 	}
 	b, err := os.ReadFile(cfg)
@@ -156,7 +157,7 @@ func TestProfilesCmd(t *testing.T) {
 // TestDoctorAccountSources は読み取りロールに無い権限があれば doctor が action を ng で示し、必要な action を列挙することを確かめる。
 func TestDoctorAccountSources(t *testing.T) {
 	c := newCLI(t)
-	if code := c.run("config", "init", "--out", c.cfg, "--force"); code != 0 {
+	if code := c.run("config", "init", "--audit-account", "none", "--out", c.cfg, "--force"); code != 0 {
 		t.Fatal(code)
 	}
 	b, _ := os.ReadFile(c.cfg)

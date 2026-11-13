@@ -39,7 +39,7 @@ const DoctorSampleLines = 100
 type DoctorRow struct {
 	Source string `json:"source"`
 	Kind   string `json:"kind"`
-	Item   string `json:"item"` // config / permission / log_group / match_rate / queries / check
+	Item   string `json:"item"` // config / audit_account / permission / log_group / match_rate / queries / check
 	Status string `json:"status"`
 	Code   string `json:"code,omitempty"`
 	Detail string `json:"detail"`
@@ -77,7 +77,7 @@ func Doctor(ctx context.Context, cfg *config.Config, deps Deps, window time.Dura
 	if len(opts) > 0 {
 		d.opts = opts[0]
 	}
-	d.allowlist()
+	d.auditAccount(ctx, d.allowlist())
 	d.store(ctx)
 	actions := map[string]bool{}
 	for _, src := range cfg.Sources {
@@ -155,10 +155,13 @@ func (d *doctor) addErr(src config.Source, item string, err error) {
 	d.add(src, item, DoctorNG, ce.Code, detail)
 }
 
-func (d *doctor) allowlist() {
-	if _, err := allowlist.Load(d.cfg.Allowlist); err != nil {
+func (d *doctor) allowlist() *allowlist.List {
+	l, err := allowlist.Load(d.cfg.Allowlist)
+	if err != nil {
 		d.res.Rows = append(d.res.Rows, DoctorRow{Source: "-", Kind: "-", Item: "config", Status: DoctorNG, Code: CodeConfigInvalid, Detail: err.Error()})
+		return nil
 	}
+	return l
 }
 
 func (d *doctor) cloudtrail(ctx context.Context, src config.Source) {

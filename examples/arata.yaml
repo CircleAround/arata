@@ -10,6 +10,11 @@ store: dir:///var/lib/arata/example
 # 既知リスト。相対パスはこの設定ファイルからの相対。無ければ空として扱う。
 allowlist: allowlist.yaml
 
+# 監査する側のアカウント (arata config init --audit-account の選択。ADR 0045)。none = 外から監査しない (同じアカウントの中・手元から直接)。
+# 別のアカウントのロールが読み取り専用ロールを引き受けて監査するなら "111122223333" のように 12 桁の ID を書き、
+# allowlist.yaml の principals にも account: で書く (arata config check が食い違いを確かめる)。
+audit_account: none
+
 aws:
   region: ap-northeast-1
   # profile: example-audit   # AWS SDK の標準認証チェーン (profile / 環境変数 / ロール) に従う

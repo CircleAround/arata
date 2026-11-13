@@ -11,6 +11,9 @@ store: dir:///var/lib/arata/my-service           # ストア (JSONL 原本 + SQL
 # store_profile: my-service-store                # s3:// のバケットの認証。省略時は SDK の標準の連鎖 (aws.profile は使わない)
 # store_region: ap-northeast-1                   # s3:// のバケットのリージョン。省略時は aws.region
 allowlist: allowlist.yaml                        # 既知リスト。相対パスはこの設定ファイルから。無ければ空として扱う
+audit_account: "111122223333"                    # 監査する側のアカウント (このアカウントのロールが監査対象の読み取り専用ロールを引き受ける)。監査対象と同じアカウントなら none
+# 既知リストの principals に同じ ID が account: で要る (arata config init が書いた。無いと unknown_assume_role が監査そのものを high で報告する)。
+# arata config check / arata doctor が食い違いを確かめる
 
 aws:
   region: ap-northeast-1

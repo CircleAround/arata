@@ -70,6 +70,7 @@ profiles:
   weekly:
     window: 7d
     checks: [default-weekly]
+audit_account: none
 `, dir))
 	if err := os.WriteFile(filepath.Join(dir, "allowlist.yaml"), []byte("principals:\n  - arn: arn:aws:iam::"+acct+":role/Deploy\n    note: GitHub Actions のデプロイロール\n    tags: [deploy]\n"), 0o600); err != nil {
 		t.Fatal(err)

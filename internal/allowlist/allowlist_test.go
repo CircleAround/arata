@@ -316,3 +316,35 @@ func TestArnPatternMustFixTheAccount(t *testing.T) {
 		}
 	}
 }
+
+// TestAccount は account: の項目だけでアカウントの承認を引くことを確かめる (config check / doctor の audit_account の突き合わせ)。
+func TestAccount(t *testing.T) {
+	l, err := Parse([]byte(`principals:
+  - account: "111122223333"
+    expires: 2026-10-31
+  - arn: arn:aws:iam::444455556666:root
+  - arn_pattern: arn:aws:iam::111111111111:*
+  - account: "999999999999"
+    expires: 2026-10-01
+  - account: "999999999999"
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)
+	for id, want := range map[string]Status{
+		"111122223333": StatusApproved,
+		"999999999999": StatusApproved, // 期限内の項目が 1 つでもあれば承認
+		"444455556666": StatusUnknown,  // arn / arn_pattern の項目はアカウントの承認ではない
+		"111111111111": StatusUnknown,
+		"123456789012": StatusUnknown,
+		"":             StatusUnknown,
+	} {
+		if got := l.Account(id, at); got != want {
+			t.Errorf("Account(%q) = %s, want %s", id, got, want)
+		}
+	}
+	if got := l.Account("111122223333", at.AddDate(0, 1, 0)); got != StatusExpired {
+		t.Errorf("after expires: %s", got)
+	}
+}

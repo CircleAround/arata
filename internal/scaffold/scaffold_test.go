@@ -1,14 +1,18 @@
 package scaffold
 
 import (
+	"errors"
 	"flag"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/CircleAround/arata/internal/allowlist"
 
 	"github.com/CircleAround/arata/internal/checks"
 	"github.com/CircleAround/arata/internal/config"
@@ -18,7 +22,7 @@ var update = flag.Bool("update", false, "ゴールデンファイルを更新す
 
 // TestGenerateGolden は雛形の YAML を固定する。チェックや既定値を変えたら差分を確かめて -update する。
 func TestGenerateGolden(t *testing.T) {
-	got := Generate(checks.NewRegistry())
+	got := Generate(checks.NewRegistry(), "111122223333")
 	p := filepath.Join("testdata", "config.yaml")
 	if *update {
 		if err := os.WriteFile(p, got, 0o644); err != nil {
@@ -38,7 +42,7 @@ func TestGenerateGolden(t *testing.T) {
 func TestGenerateLoads(t *testing.T) {
 	reg := checks.NewRegistry()
 	p := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(p, Generate(reg), 0o600); err != nil {
+	if err := os.WriteFile(p, Generate(reg, config.AuditAccountNone), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := config.Load(p)
@@ -75,7 +79,7 @@ func TestGenerateMatchesDefaults(t *testing.T) {
 		Checks    map[string]map[string]any `yaml:"checks"`
 		Retention map[string]string         `yaml:"retention"`
 	}
-	b := Generate(checks.NewRegistry())
+	b := Generate(checks.NewRegistry(), config.AuditAccountNone)
 	if err := yaml.Unmarshal(b, &doc); err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +130,7 @@ func TestDescriptions(t *testing.T) {
 
 func TestDiff(t *testing.T) {
 	reg := checks.NewRegistry()
-	if items, err := Diff(Generate(reg), reg); err != nil || len(items) != 0 {
+	if items, err := Diff(Generate(reg, config.AuditAccountNone), reg); err != nil || len(items) != 0 {
 		t.Fatalf("template vs itself: %v %+v", err, items)
 	}
 	cur := `
@@ -171,6 +175,7 @@ checks:
 		"missing_profile profiles.hourly |root_usage, unknown_assume_role",
 		"missing_profile profiles.weekly |credential_hygiene, guardduty_findings, posture, access_analyzer, waf_review",
 		"param_changed checks.login_bruteforce.min_count 30|20",
+		"missing_key audit_account |\"<12 桁のアカウント ID>\" か none",
 		"unknown_key profiles.daily.overide |",
 		"unknown_key checks.probe_paths.bogus |",
 	}
@@ -180,5 +185,102 @@ checks:
 	var b strings.Builder
 	if err := WriteDiff(&b, items); err != nil || !strings.Contains(b.String(), "[param_changed] checks.login_bruteforce.min_count: 設定 30 / 雛形 20") {
 		t.Fatalf("%v\n%s", err, b.String())
+	}
+}
+
+// TestGenerateAuditAccount は雛形に「監査する側のアカウント」の選択が残ることを確かめる (ADR 0045)。
+func TestGenerateAuditAccount(t *testing.T) {
+	reg := checks.NewRegistry()
+	for _, tc := range []struct{ in, line string }{
+		{"111122223333", `audit_account: "111122223333"`},
+		{config.AuditAccountNone, "audit_account: none"},
+	} {
+		b := Generate(reg, tc.in)
+		if n := strings.Count(string(b), "\n"+tc.line+" "); n != 1 {
+			t.Fatalf("%s: want 1 line %q, got %d", tc.in, tc.line, n)
+		}
+		p := filepath.Join(t.TempDir(), "arata.yaml")
+		if err := os.WriteFile(p, b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := config.Load(p)
+		if err != nil || cfg.AuditAccount != tc.in {
+			t.Fatalf("%s: loaded %q, %v", tc.in, cfg.AuditAccount, err)
+		}
+		if items, err := Diff(b, reg); err != nil || len(items) != 0 {
+			t.Fatalf("%s: template vs itself: %v %+v", tc.in, err, items)
+		}
+	}
+}
+
+// TestDiffAuditAccount は audit_account の無い設定 (この項目より前の版) が差分に出て、直し方が読めることを確かめる。
+func TestDiffAuditAccount(t *testing.T) {
+	reg := checks.NewRegistry()
+	b := Generate(reg, config.AuditAccountNone)
+	old := strings.Replace(string(b), "\naudit_account: none", "\n# audit_account: none", 1)
+	if old == string(b) {
+		t.Fatal("template has no audit_account line")
+	}
+	items, err := Diff([]byte(old), reg)
+	if err != nil || len(items) != 1 || items[0].Kind != DiffMissingKey || items[0].Path != "audit_account" {
+		t.Fatalf("%v %+v", err, items)
+	}
+	for _, w := range []string{"audit_account: none", "allowlist", "account:"} {
+		if !strings.Contains(items[0].Detail, w) {
+			t.Errorf("detail lacks %q: %s", w, items[0].Detail)
+		}
+	}
+	// 値が誤っていても「無い」とは言わない (誤りは config check / Load が止める)
+	if items, err := Diff([]byte(strings.Replace(string(b), "audit_account: none", "audit_account: self", 1)), reg); err != nil || len(items) != 0 {
+		t.Fatalf("%v %+v", err, items)
+	}
+}
+
+// TestAuditAllowlist は init が既知リストに書く「監査する側のアカウント」の項目を固定する。
+func TestAuditAllowlist(t *testing.T) {
+	day := time.Date(2026, 11, 13, 23, 30, 0, 0, time.UTC)
+	out, added, err := AuditAllowlist(nil, "111122223333", "", day)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantEntry := `  - account: "111122223333"
+    note: 監査する側のアカウント。このアカウントの実行用ロールが、監査対象の読み取り専用ロールを引き受けて arata を動かす (arata config init --audit-account が記入)
+    approved_at: 2026-11-13
+`
+	if added != wantEntry {
+		t.Fatalf("added:\n%s", added)
+	}
+	if !strings.HasPrefix(string(out), "# 既知リスト") || !strings.HasSuffix(string(out), "principals:\n"+wantEntry) {
+		t.Fatalf("new file:\n%s", out)
+	}
+	l, err := allowlist.Parse(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := l.Account("111122223333", day); st != allowlist.StatusApproved {
+		t.Fatalf("status %s", st)
+	}
+	// dynamic_source は書かない: 外部アカウントそのものは principal_new_source の対象 (IAM ユーザーとロール) でない
+	if l.Principals[0].DynamicSource || l.Principals[0].ApprovedBy != "" || len(l.Principals[0].Tags) != 0 {
+		t.Fatalf("%+v", l.Principals[0])
+	}
+	// --by を付けたときだけ approved_by を書く
+	if _, added, err := AuditAllowlist(nil, "111122223333", "alice", day); err != nil || !strings.Contains(added, "    approved_by: alice\n    approved_at: 2026-11-13\n") {
+		t.Fatalf("%v\n%s", err, added)
+	}
+	// 既にある既知リストには末尾に足し、ほかの行は変えない
+	src := "# 手で書いた既知リスト\nprincipals:\n  - arn: arn:aws:iam::123456789012:role/Deploy   # デプロイ\n    tags: [deploy]\nsource_ips:\n  - cidr: 203.0.113.0/24\n"
+	out, _, err = AuditAllowlist([]byte(src), "111122223333", "", day)
+	want := "# 手で書いた既知リスト\nprincipals:\n  - arn: arn:aws:iam::123456789012:role/Deploy   # デプロイ\n    tags: [deploy]\n" + wantEntry + "source_ips:\n  - cidr: 203.0.113.0/24\n"
+	if err != nil || string(out) != want {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	// 同じアカウントが既に書いてあれば足さない
+	if _, _, err := AuditAllowlist(out, "111122223333", "", day); !errors.Is(err, allowlist.ErrAlreadyListed) {
+		t.Fatalf("err = %v", err)
+	}
+	// 壊れた既知リストは書き換えない
+	if _, _, err := AuditAllowlist([]byte("principals:\n  - note: x\n"), "111122223333", "", day); err == nil || errors.Is(err, allowlist.ErrAlreadyListed) {
+		t.Fatalf("err = %v", err)
 	}
 }

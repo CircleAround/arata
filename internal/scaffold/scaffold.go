@@ -12,6 +12,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/CircleAround/arata/internal/allowlist"
 	"github.com/CircleAround/arata/internal/checks"
 	"github.com/CircleAround/arata/internal/config"
 	"github.com/CircleAround/arata/internal/record"
@@ -150,7 +151,9 @@ func ProfileChecks(reg *checks.Registry, p Profile) []string {
 }
 
 // Generate は雛形の YAML を返す。全プロファイル・全チェック・各チェックの既定パラメータを明示し、`default-*` は使わない。
-func Generate(reg *checks.Registry) []byte {
+// auditAccount は監査する側のアカウント (12 桁の ID か none。config.ParseAuditAccount を通した値) で、audit_account に書く。
+// 決定 (ADR 0045): 既定を持たず、呼び出し側 (config init) が必ず選ばせる。
+func Generate(reg *checks.Registry, auditAccount string) []byte {
 	var b strings.Builder
 	w := func(format string, a ...any) { fmt.Fprintf(&b, format, a...) }
 	cm := func(text, comment string) { w("%-48s # %s\n", text, comment) }
@@ -169,6 +172,15 @@ func Generate(reg *checks.Registry) []byte {
 	cm("# store_profile: my-service-store", "s3:// のバケットの認証。省略時は SDK の標準の連鎖 (aws.profile は使わない)")
 	cm("# store_region: "+config.DefaultRegion, "s3:// のバケットのリージョン。省略時は aws.region")
 	cm("allowlist: allowlist.yaml", "既知リスト。相対パスはこの設定ファイルから。無ければ空として扱う")
+	if auditAccount == config.AuditAccountNone {
+		cm("audit_account: "+auditAccount, "監査する側のアカウント。none = 外から監査しない (監査対象と同じアカウントの中で動かす・手元の認証で直接動かす)")
+		w("# 別のアカウントのロールが読み取り専用ロールを引き受けて監査する構成に変えたら、audit_account: \"<そのアカウントの 12 桁の ID>\" にして\n")
+		w("# 既知リストの principals に account: で足す (足さないと unknown_assume_role が監査そのものを high で報告する。arata config check が確かめる)\n")
+	} else {
+		cm(fmt.Sprintf("audit_account: %q", auditAccount), "監査する側のアカウント (このアカウントのロールが監査対象の読み取り専用ロールを引き受ける)。監査対象と同じアカウントなら none")
+		w("# 既知リストの principals に同じ ID が account: で要る (arata config init が書いた。無いと unknown_assume_role が監査そのものを high で報告する)。\n")
+		w("# arata config check / arata doctor が食い違いを確かめる\n")
+	}
 	w("\naws:\n")
 	w("  region: %s\n", config.DefaultRegion)
 	cm("  # profile: my-service-audit", "AWS SDK の標準認証チェーン (profile / 環境変数 / ロール) に従う")
@@ -275,6 +287,32 @@ func Generate(reg *checks.Registry) []byte {
 	cm("  findings: "+r.FindingsRaw, "resolved から")
 	w("  runs: %s\n", r.RunsRaw)
 	return []byte(b.String())
+}
+
+// AuditAccountNote は config init が既知リストに書く「監査する側のアカウント」の項目の note。
+const AuditAccountNote = "監査する側のアカウント。このアカウントの実行用ロールが、監査対象の読み取り専用ロールを引き受けて arata を動かす (arata config init --audit-account が記入)"
+
+// allowlistHeader は config init が既知リストを新しく作るときの先頭。
+const allowlistHeader = `# 既知リスト (arata config init が書き出した雛形)。人が承認したものだけを書く。arata.yaml と一緒に git 管理する。
+# 主体の指定は arn (完全一致) / account (そのアカウントの全主体) / arn_pattern (glob) のどれか 1 つ。
+# 書き方と承認の手順: arata help ai approve
+principals:
+`
+
+// AuditAllowlist は既知リスト (src。無い・空なら雛形から) に、監査する側のアカウント id を account: で足した結果と、足した部分を返す。
+// 同じアカウントの項目が既にあれば allowlist.ErrAlreadyListed (書き換えない)。
+//
+// 決定 (ADR 0045):
+//   - account: で書く。別のアカウントからの AssumeRole は、ロール側 (監査対象) の CloudTrail に呼び出し元のアカウント ID しか残らない
+//   - approved_by は by が空なら書かない (init は承認者を知らない。OS のユーザー名を既定にしない: 雛形を作る人と承認する人は別でよい)
+//   - approved_at は today (UTC) の日付。期限 (expires) は付けない (監査が続く限り要る)
+//   - dynamic_source は書かない。principal_new_source が見るのは IAM ユーザーとロールで、外部アカウントそのものは対象でない
+//   - 既にある既知リストは、approve と同じ差し込み (ADR 0010) で末尾に足す。ほかの行は変えない
+func AuditAllowlist(src []byte, id, by string, today time.Time) ([]byte, string, error) {
+	if len(strings.TrimSpace(string(src))) == 0 {
+		src = []byte(allowlistHeader)
+	}
+	return allowlist.AppendBytes(src, allowlist.NewEntry{Account: id, Note: AuditAccountNote, ApprovedBy: by, ApprovedAt: today.UTC().Format("2006-01-02")})
 }
 
 // flow は値を 1 行の YAML (配列は [a, b]) にする。

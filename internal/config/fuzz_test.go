@@ -127,3 +127,39 @@ func FuzzLoad(f *testing.F) {
 		cfg.AuditLogGroups()
 	})
 }
+
+// FuzzParseAuditAccount は --audit-account / audit_account の値 (利用者の入力) の解釈を確かめる。
+// 守る規則: 受け付けるのは「ASCII の数字ちょうど 12 桁」か「none」だけ。受け付けた ID は入力そのもので、none と同時には成り立たない。
+// 受け付けた値は allowlist の account: と設定の YAML に引用符付きでそのまま書くので、数字以外 (改行・引用符・空白) を 1 文字も通さない。
+func FuzzParseAuditAccount(f *testing.F) {
+	for _, s := range []string{"111122223333", "999999999999", "none", "", "None", " none", "none\n", "11112222333", "1111222233334", "111122223333\n", "１１１１２２２２３３３３",
+		"1111 2222 3333", "0x1111222233", "1e11", "-11122223333", "+11122223333", "111122223333\"\nprincipals: []", "\x00", "nonenone"} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		id, none, err := ParseAuditAccount(s)
+		if err != nil {
+			if id != "" || none {
+				t.Fatalf("ParseAuditAccount(%q) がエラーなのに %q, %v を返した", s, id, none)
+			}
+			if s == AuditAccountNone {
+				t.Fatalf("none を拒否した: %v", err)
+			}
+			return
+		}
+		if none {
+			if s != AuditAccountNone || id != "" {
+				t.Fatalf("ParseAuditAccount(%q) = %q, none", s, id)
+			}
+			return
+		}
+		if id != s || len(id) != 12 {
+			t.Fatalf("ParseAuditAccount(%q) = %q: 入力そのものの 12 桁でない", s, id)
+		}
+		for i := 0; i < len(id); i++ {
+			if id[i] < '0' || id[i] > '9' {
+				t.Fatalf("ParseAuditAccount(%q) が数字以外を通した", s)
+			}
+		}
+	})
+}

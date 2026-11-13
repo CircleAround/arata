@@ -21,9 +21,13 @@ type Config struct {
 	StoreURL string `yaml:"store"`
 	// StoreProfile / StoreRegion は s3:// のストアのバケットに使う認証とリージョン (監査対象の aws: とは別。ADR 0034)。
 	// StoreProfile の省略時は SDK の標準の連鎖、StoreRegion の省略時は aws.region。dir:// では書けない。
-	StoreProfile string             `yaml:"store_profile"`
-	StoreRegion  string             `yaml:"store_region"`
-	Allowlist    string             `yaml:"allowlist"`
+	StoreProfile string `yaml:"store_profile"`
+	StoreRegion  string `yaml:"store_region"`
+	Allowlist    string `yaml:"allowlist"`
+	// AuditAccount は監査する側のアカウント: 12 桁の ID (別のアカウントのロールが監査対象の読み取り専用ロールを引き受ける) か
+	// none (外から監査しない)。`arata config init --audit-account` が書く。空は「選んでいない」(この項目より前の版の設定)。
+	// 決定 (ADR 0045): 判定には使わない (承認は allowlist だけが持つ)。config check / doctor が allowlist との食い違いを確かめる材料。
+	AuditAccount string             `yaml:"audit_account"`
 	AWS          AWS                `yaml:"aws"`
 	Sources      []Source           `yaml:"sources"`
 	Profiles     map[string]Profile `yaml:"profiles"`
@@ -313,6 +317,11 @@ func (c *Config) MaxIngestDelay() time.Duration {
 func (c *Config) Validate() error {
 	if c.Name == "" {
 		return fmt.Errorf("config: name is required")
+	}
+	if c.AuditAccount != "" {
+		if _, _, err := ParseAuditAccount(c.AuditAccount); err != nil {
+			return fmt.Errorf("config: audit_account: %w", err)
+		}
 	}
 	st, err := parseStore(c.StoreURL)
 	if err != nil {

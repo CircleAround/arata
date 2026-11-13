@@ -9,6 +9,10 @@
 #
 # - 監査対象と同じアカウントでも別のアカウントでも使える。監査対象には ../iam/readonly-role.yaml を置き、
 #   その TrustedPrincipalArn にこのスタックの出力 RunnerRoleArn を渡す (先にこのスタック、次に読み取り専用ロール)
+# - 実行用ロールが読み取り専用ロールを引き受けた記録は、監査対象の CloudTrail に毎回残る。監査対象の既知リストに書かないと
+#   unknown_assume_role が監査そのものを high で報告する。監査対象の設定を作るときに選ぶ (ADR 0045):
+#     別のアカウントに置いた → arata config init --audit-account <このスタックのアカウントの 12 桁の ID> (既知リストに account: で書く)
+#     同じアカウントに置いた → arata config init --audit-account none (実行用ロールを arn: で既知リストに足す)
 # - CDK を使わずに置けるよう素の CloudFormation にしている (cdk bootstrap が要らない。ADR 0040)
 # - 守り (信頼の条件・権限の範囲・Retain・公開ブロック) は internal/engine/runner_template_test.go が固定する
 # - 手順は examples/github-actions/README.md。例の値はすべて架空

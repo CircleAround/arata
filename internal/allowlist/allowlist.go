@@ -343,6 +343,26 @@ func (l *List) Principal(arn string, at time.Time) (*PrincipalEntry, Status) {
 	return nil, StatusUnknown
 }
 
+// Account は、アカウント id を承認する account: の項目が at 時点であるか。期限内の項目が 1 つでもあれば approved、
+// 期限切れだけなら expired、無ければ unknown。
+//
+// 決定 (ADR 0045): arn / arn_pattern の項目は数えない。別のアカウントからの AssumeRole は、ロール側の CloudTrail には呼び出し元の
+// アカウント ID しか残らない (どの IAM 主体かは残らない) ので、止められるのは account: の項目だけ。
+func (l *List) Account(id string, at time.Time) Status {
+	st := StatusUnknown
+	for i := range l.Principals {
+		e := &l.Principals[i]
+		if id == "" || e.Account != id {
+			continue
+		}
+		if e.active(at) {
+			return StatusApproved
+		}
+		st = StatusExpired
+	}
+	return st
+}
+
 // DeniedExpected は、arn の api (「サービス:操作」) の拒否が、at 時点で期限内の項目の expected_denied に一致するか。
 //
 // 決定: 主体に一致する期限内の項目すべての expected_denied の和で判定する。Principal は同じ arn の重複項目を後勝ちで 1 つだけ見るが、

@@ -19,6 +19,7 @@ const (
 	DiffParamChanged   = "param_changed"   // checks: に書いた値がこの版の既定値と違う
 	DiffUnknownKey     = "unknown_key"     // arata が知らないキー (綴りの誤り、廃止されたキー)
 	DiffMissingProfile = "missing_profile" // 雛形にあって設定に無いプロファイル
+	DiffMissingKey     = "missing_key"     // 雛形が必ず書くのに設定に無いキー (audit_account。ADR 0045)
 )
 
 // DiffItem は差分 1 件。
@@ -35,7 +36,8 @@ type rawConfig struct {
 	Profiles map[string]struct {
 		Checks []string `yaml:"checks"`
 	} `yaml:"profiles"`
-	Checks map[string]map[string]any `yaml:"checks"`
+	Checks       map[string]map[string]any `yaml:"checks"`
+	AuditAccount yaml.Node                 `yaml:"audit_account"`
 }
 
 // Diff は現在の設定 (YAML) とこの版の雛形の差分を返す。設定が Load で失敗する状態 (未知のキーなど) でも動く。
@@ -91,6 +93,14 @@ func Diff(current []byte, reg *checks.Registry) ([]DiffItem, error) {
 		if c, t := flow(v), flow(p.Value); c != t {
 			out = append(out, DiffItem{Kind: DiffParamChanged, Path: "checks." + p.Check + "." + p.Key, Current: c, Template: t, Detail: "この版の既定値と違う"})
 		}
+	}
+	// 決定 (ADR 0045): audit_account は雛形が必ず書く (config init が選ばせる)。この項目より前の版で作った設定には無いので、
+	// 無いことを差分に出して選ばせる。run は止めない。値の誤りはここでは見ない (Load / config check が止める)
+	if cur.AuditAccount.Kind == 0 || cur.AuditAccount.Tag == "!!null" {
+		out = append(out, DiffItem{Kind: DiffMissingKey, Path: "audit_account", Template: `"<12 桁のアカウント ID>" か none`,
+			Detail: "監査する側のアカウントを選んでいない。別のアカウントのロールが読み取り専用ロールを引き受けて監査するなら audit_account: \"<そのアカウントの ID>\" を書き、" +
+				"allowlist の principals に account: \"<同じ ID>\" を足す (無いと unknown_assume_role が監査そのものを high で報告する)。" +
+				"同じアカウントの中・手元から直接なら audit_account: none を書く"})
 	}
 	unknown, err := config.UnknownKeys(current)
 	if err != nil {

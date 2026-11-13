@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/CircleAround/arata/internal/checks"
+	"github.com/CircleAround/arata/internal/config"
 	"github.com/CircleAround/arata/internal/scaffold"
 )
 
@@ -89,11 +90,11 @@ func TestConfigInitDefaultOut(t *testing.T) {
 	c := newCLI(t)
 	dir := t.TempDir()
 	t.Chdir(dir)
-	if code := c.run("config", "init"); code != 0 {
+	if code := c.run("config", "init", "--audit-account", "none"); code != 0 {
 		t.Fatalf("exit %d %s", code, c.stderr)
 	}
 	b, err := os.ReadFile(filepath.Join(dir, "arata.yaml"))
-	if err != nil || string(b) != string(scaffold.Generate(checks.NewRegistry())) {
+	if err != nil || string(b) != string(scaffold.Generate(checks.NewRegistry(), config.AuditAccountNone)) {
 		t.Fatalf("./arata.yaml must be the template: %v", err)
 	}
 	// 既定の場所なら -c なしで次の手順を案内する
@@ -103,13 +104,13 @@ func TestConfigInitDefaultOut(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "arata.yaml"), []byte("name: kept\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if code := c.run("config", "init"); code != 2 || !strings.Contains(c.stderr.String(), "or --diff to compare") {
+	if code := c.run("config", "init", "--audit-account", "none"); code != 2 || !strings.Contains(c.stderr.String(), "or --diff to compare") {
 		t.Fatalf("must refuse to overwrite ./arata.yaml: exit %d %s", code, c.stderr)
 	}
 	if b, _ := os.ReadFile(filepath.Join(dir, "arata.yaml")); string(b) != "name: kept\n" {
 		t.Fatalf("overwritten: %s", b)
 	}
-	if code := c.run("config", "init", "--out", "-"); code != 0 || c.stdout.String() != string(scaffold.Generate(checks.NewRegistry())) {
+	if code := c.run("config", "init", "--audit-account", "none", "--out", "-"); code != 0 || c.stdout.String() != string(scaffold.Generate(checks.NewRegistry(), config.AuditAccountNone)) {
 		t.Fatalf("--out - must print the template: exit %d", code)
 	}
 }

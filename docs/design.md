@@ -332,8 +332,19 @@ profiles:
 - `default-<cadence>` の省略記法は手書きの設定のために残す (後方互換)。ただし版が上がって増えたチェックが黙って入るので、雛形では使わない。
 - `arata config init --diff` は現在の設定と最新の雛形の差分を出す: どのプロファイルにも入っていないチェック (`unused_check`)、
   プロファイルに書かれているがこの版に無いチェック (`unknown_check`)、雛形にあって設定に無いプロファイル (`missing_profile`)、
-  `checks:` に書いた値がこの版の既定値と違うパラメータ (`param_changed`)、arata が知らないキー (`unknown_key`)。設定は Load せずに緩く読む (未知のキーで読めない設定にも使える)。
+  `checks:` に書いた値がこの版の既定値と違うパラメータ (`param_changed`)、雛形が必ず書くのに設定に無いキー (`missing_key`。`audit_account`。ADR 0045)、arata が知らないキー (`unknown_key`)。設定は Load せずに緩く読む (未知のキーで読めない設定にも使える)。
   `checks:` に書いていないパラメータは実行時にこの版の既定値が効くので差分にしない。overrides は意図した上書きなので比べない。
+- 決定 (ADR 0045): `arata config init` は **監査する側のアカウント** を `--audit-account` で必ず選ばせる (既定は無い。無ければ 2 つの選択肢を示して `CONFIG_INVALID`)。
+  - `--audit-account <12 桁の ID>`: 別のアカウントのロールが、監査対象の読み取り専用ロールを引き受けて監査する。設定に `audit_account: "<ID>"` を書き、
+    既知リスト (`--out` と同じ場所の `allowlist.yaml`) の `principals` に `account: "<ID>"` を note つきで書く。ロール側の CloudTrail には呼び出し元の
+    アカウント ID しか残らないので `account:` で書く。既にある既知リストには approve と同じ差し込み (ADR 0010) で末尾に足し、同じ項目があれば足さない。
+    `approved_at` は今日 (UTC)。`approved_by` は `--by` を付けたときだけ (init は承認者を知らない。OS のユーザー名を既定にしない)。
+    `dynamic_source` は書かない (principal_new_source が見るのは IAM ユーザーとロールで、外部アカウントそのものは対象でない)。`--out -` では既知リストを書かず、足す項目を標準エラーに出す
+  - `--audit-account none`: 外から監査しない (同じアカウントの中で動かす・手元の認証で直接動かす)。設定に `audit_account: none` を書き、既知リストには書かない
+  - `audit_account` は判定に使わない。承認は既知リストだけが持つ。`config check` と `doctor` が食い違いを確かめる: ID を書いたのに期限内の `account:` の項目が
+    既知リストに無ければ ng。`doctor` はさらに、その ID が監査対象のアカウントそのもの (`sts:GetCallerIdentity`) なら ng (`account:` が自アカウントの全主体を承認してしまう)
+  - この項目より前の版で作った設定 (`audit_account` が無い) は `run` / `doctor` を止めない。`config check` は warn、`config init --diff` は `missing_key` で知らせる。
+    `config check` の規則は run / doctor の起動時の検証と同じ、という ADR 0042 の原則の例外 (run は止めず、PR の時点で止める)
 - 決定 (ADR 0042): `arata config check` は、設定とそれが指す allowlist.yaml の形を **オフラインで** 検査する (AWS にもストアにも繋がず、認証も要らない)。
   PR の CI で allowlist.yaml の書き間違いをマージの前に止めるためのもの。規則は run / doctor が起動時にする検証そのもの
   (`config.Load`、`allowlist.Parse`、profiles のチェック名は `engine.UnknownChecks`) で、check のための規則は足さない。check が通した設定は run でも読め、逆も同じ。
@@ -900,7 +911,8 @@ arata は LLM を使わず候補だけを作り、aratam の LLM は候補を文
 ## 8. CLI
 
 ```
-arata config init [--out FILE|-] [--force] | --diff   # 推奨設定の雛形を書き出す (既定 ./arata.yaml) / 雛形との差分 (3 章、ADR 0014)
+arata config init --audit-account <12 桁の ID>|none [--by NAME] [--out FILE|-] [--force] | --diff
+                               # 推奨設定の雛形を書き出す (既定 ./arata.yaml。監査する側のアカウントは必須。ID なら既知リストにも書く。ADR 0045) / 雛形との差分 (3 章、ADR 0014)
 arata config check             # 設定と allowlist.yaml の形をオフラインで検査 (AWS・ストアに繋がない。問題があれば終了コード 2。3 章、ADR 0042)
 arata profiles  [--format table|json]   # プロファイルごとに実際に効いているチェックとパラメータ、その由来
 arata init      [--window 7d | --resume]   # ストア作成、設定検証、ベースライン収集 (findings は出さない)
