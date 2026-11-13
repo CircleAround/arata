@@ -31,7 +31,7 @@ LLM がこの流れを手伝うときも、run と review を読んで材料を�
 | アプリの起動時に、実行用のロールが秘匿値をまとめて読む (一括読み出し。high) | secret_access | 正規の読み手なら、平常帯がそろう日まで snooze (下の注)。ack しない |
 | 導入作業の IAM 変更 (読み取り専用ロールを作る・ポリシーを付ける) | iam_changes | 作業として確認できたら ack。IaC のデプロイ主体なら approve (`--tag deploy`) |
 | 監査の仕組みや社員によるロールの引き受け | unknown_assume_role / new_principal | 説明できる主体は approve。受託先などへのスイッチロールは行き先を `assume_destinations` に |
-| 設定していない守り (証跡・GuardDuty・パスワードポリシーなど) | posture | 直す日を決めて snooze。意図して外しているなら理由を残して ack |
+| 設定していない守り (証跡・GuardDuty・パスワードポリシー・ALB の WAF など) | posture | 直す日を決めて snooze。意図して外しているなら理由を残して ack |
 | 古いアクセスキー・MFA の無いユーザー | credential_hygiene | 直す日を決めて snooze |
 | 監査の主体や調査用のロールの、想定内の拒否 | access_denied | 設定で直す (`expected_denied`) |
 

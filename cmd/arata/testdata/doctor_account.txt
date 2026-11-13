@@ -15,6 +15,8 @@ posture               posture                    permission  ok      -          
 posture               posture                    permission  ok      -              iam:GetAccountSummary
 posture               posture                    permission  ok      -              iam:GetAccountPasswordPolicy
 posture               posture                    permission  ng      ACCESS_DENIED  s3:GetAccountPublicAccessBlock が拒否された: AccessDeniedException
+posture               posture                    permission  ok      -              elasticloadbalancing:DescribeLoadBalancers
+posture               posture                    permission  ok      -              wafv2:GetWebACLForResource (インターネット向けの ALB が無いため未確認)
 -                     -                          check       warn    -              cost_anomaly は skip される: no cost_anomaly source (profile daily)
 -                     -                          check       warn    -              endpoint_abuse は skip される: no http_access source (profile daily)
 -                     -                          check       warn    -              login_bruteforce は skip される: no http_access source (profile daily)
@@ -23,6 +25,6 @@ posture               posture                    permission  ng      ACCESS_DENI
 -                     -                          check       warn    -              waf_review は skip される: no waf_action source (profile weekly)
   記録の集め方: arata help ai logs (「チェックと記録の対応」)
 
-必要な IAM action: access-analyzer:ListAnalyzers, access-analyzer:ListFindings, account:ListRegions, cloudtrail:DescribeTrails, cloudtrail:GetTrailStatus, cloudtrail:LookupEvents, guardduty:GetDetector, guardduty:GetFindings, guardduty:ListDetectors, guardduty:ListFindings, iam:GenerateCredentialReport, iam:GetAccountPasswordPolicy, iam:GetAccountSummary, iam:GetCredentialReport, s3:GetAccountPublicAccessBlock
+必要な IAM action: access-analyzer:ListAnalyzers, access-analyzer:ListFindings, account:ListRegions, cloudtrail:DescribeTrails, cloudtrail:GetTrailStatus, cloudtrail:LookupEvents, elasticloadbalancing:DescribeLoadBalancers, guardduty:GetDetector, guardduty:GetFindings, guardduty:ListDetectors, guardduty:ListFindings, iam:GenerateCredentialReport, iam:GetAccountPasswordPolicy, iam:GetAccountSummary, iam:GetCredentialReport, s3:GetAccountPublicAccessBlock, wafv2:GetWebACLForResource
   (iam:GenerateCredentialReport だけは書き込み系: 認証情報レポートの生成のみ。拒否されても 4 時間以内に生成済みのレポートがあれば使う)
 結果: ng 2 / warn 6

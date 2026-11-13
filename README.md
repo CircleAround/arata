@@ -336,7 +336,7 @@ arata resolve <finding-id>
 | `iam-credential-report` | `iam:GenerateCredentialReport` (**書き込み系**: レポートの生成のみ)、`iam:GetCredentialReport` |
 | `guardduty` | `guardduty:ListDetectors`, `guardduty:ListFindings`, `guardduty:GetFindings` |
 | `access-analyzer` | `access-analyzer:ListAnalyzers`, `access-analyzer:ListFindings` |
-| `posture` | `cloudtrail:DescribeTrails`, `cloudtrail:GetTrailStatus`, `guardduty:ListDetectors`, `guardduty:GetDetector`, `iam:GetAccountSummary`, `iam:GetAccountPasswordPolicy`, `s3:GetAccountPublicAccessBlock` |
+| `posture` | `cloudtrail:DescribeTrails`, `cloudtrail:GetTrailStatus`, `guardduty:ListDetectors`, `guardduty:GetDetector`, `iam:GetAccountSummary`, `iam:GetAccountPasswordPolicy`, `s3:GetAccountPublicAccessBlock`, `elasticloadbalancing:DescribeLoadBalancers`, `wafv2:GetWebACLForResource` |
 | `waf-config` | `wafv2:ListWebACLs`, `wafv2:GetWebACL`, `wafv2:GetLoggingConfiguration`, `wafv2:ListResourcesForWebACL` (REGIONAL は `regions`、CLOUDFRONT は us-east-1) |
 
 daily のソースのうち、追加の権限が要るもの:
@@ -355,6 +355,9 @@ daily のソースのうち、追加の権限が要るもの:
 - `waf_review` (WAF の修正提案の候補) は `waf-config` と wafv2 の `cloudwatch-logs` ソースの両方が要る。daily が貯めた wafv2 の日次集計を読むだけで、
   weekly の run は WAF のログを引かない。候補は report.json の `proposals` に出る (適用は人が判断する。`arata help ai report`)。
   既に配ったロールには wafv2 の 4 つの action を足す必要がある (無ければ waf-config だけが ACCESS_DENIED になり、waf_review が skip される)
+- posture は、インターネット向けの ALB に WAF (WAFv2 の WebACL) が付いていなければ ALB ごとに medium で報告する (`alb_waf|<region>|<ALB>`。WebACL を付ければ次の weekly で解消)。
+  既に配ったロールには `elasticloadbalancing:DescribeLoadBalancers` と `wafv2:GetWebACLForResource` を足す必要がある (`deploy/iam/readonly-role.yaml` でスタックを更新する。
+  無ければこの項目だけが取れず、coverage に `partial: true` と不足の action が出て終了コード 3。他の項目は評価される)
 - 監査ロールや AI 用の主体を allowlist で `tags: [ai]` にすると、`ai_path_usage` (daily) が利用を主体 × 送信元 IP で毎回 info に 1 行出す (自己監査)
 
 ```sh

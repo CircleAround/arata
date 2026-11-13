@@ -21,6 +21,7 @@ const (
 	PostureKeyRootMFA         = "root_mfa"
 	PostureKeyS3PublicAccess  = "s3_public_access_block"
 	PostureKeyPasswordPolicy  = "password_policy"
+	PostureKeyALBWAF          = "alb_waf" // + "|<region>|<ALB の名前>"
 )
 
 // Posture はアカウントの姿勢を項目ごとに 1 finding で報告する (週次、state)。問題が直れば resolved。
@@ -30,6 +31,7 @@ const (
 //   - root_mfa: ルートユーザーに MFA が無い (high)
 //   - s3_public_access_block: アカウント単位の S3 Public Access Block が未設定、または 4 項目のどれかが無効 (high)
 //   - password_policy: IAM パスワードポリシーが未設定、または最小文字数が min_password_length (既定 14) 未満 (medium)
+//   - alb_waf|<region>|<ALB>: インターネット向けの ALB に WAFv2 の WebACL が付いていない (medium。ADR 0048)
 //
 // 決定 (ADR 0015): 権限不足などで取れなかった項目 (unknown) は、前回の finding (open / acked / snoozed) をそのまま観測し直して維持する
 // (resolved にしない)。権限を外されたことを「直った」と誤認しないため。
@@ -61,6 +63,15 @@ func (c Posture) Evaluate(ctx context.Context, q store.Query, _ collect.Window, 
 	}
 	for _, it := range items {
 		if account.IsUnknown(it) {
+			if region, ok := strings.CutPrefix(it.Key, account.PostureALBWAF+"|"); ok {
+				// ALB ごとの finding なので、そのリージョンの前回の finding を全部維持する
+				for _, f := range prev {
+					if strings.HasPrefix(f.Key, PostureKeyALBWAF+"|"+region+"|") {
+						obs = append(obs, Observation{Check: c.Name(), Key: f.Key, Severity: Severity(f.Severity), Summary: f.Summary, Fingerprint: f.Fingerprint, Data: f.Data})
+					}
+				}
+				continue
+			}
 			for _, key := range postureKeys(it.Key) {
 				if f, ok := prevByKey[key]; ok {
 					obs = append(obs, Observation{Check: c.Name(), Key: key, Severity: Severity(f.Severity), Summary: f.Summary, Fingerprint: f.Fingerprint, Data: f.Data})
@@ -102,6 +113,12 @@ func (c Posture) Evaluate(ctx context.Context, q store.Query, _ collect.Window, 
 				ng(PostureKeyS3PublicAccess, High, "S3 のアカウント単位の Public Access Block に無効な項目がある: "+strings.Join(off, ", "),
 					map[string]any{"configured": true, "disabled": off}, strings.Join(off, ","))
 			}
+		case strings.HasPrefix(it.Key, account.PostureALBWAF+"|"):
+			region := strings.TrimPrefix(it.Key, account.PostureALBWAF+"|")
+			for _, alb := range albsWithoutWAF(it.Data["without_waf"]) {
+				ng(PostureKeyALBWAF+"|"+region+"|"+alb.name, Medium, "インターネット向けの ALB に WAF (WAFv2 の WebACL) が付いていない: "+alb.name+" ("+region+")",
+					map[string]any{"region": region, "name": alb.name, "arn": alb.arn})
+			}
 		case it.Key == account.PosturePasswordPolicy:
 			min := int(it.Number("minimum_length"))
 			switch {
@@ -125,6 +142,36 @@ func postureKeys(item string) []string {
 		return []string{PostureKeyGuardDuty + "|" + strings.TrimPrefix(item, account.PostureGuardDuty+"|")}
 	}
 	return []string{item} // root_mfa / s3_public_access_block / password_policy は同じ名前
+}
+
+type albRef struct{ name, arn string }
+
+// albsWithoutWAF は posture_item の without_waf (名前と ARN の一覧) を読む。名前が空か、key の区切り (|) を含むものは捨てる
+// (ALB の名前は英数字とハイフンだけ。key を壊さないための守り)。
+func albsWithoutWAF(v any) []albRef {
+	var list []any
+	switch x := v.(type) {
+	case []any:
+		list = x
+	case []map[string]any:
+		for _, m := range x {
+			list = append(list, m)
+		}
+	}
+	var out []albRef
+	for _, e := range list {
+		m, ok := e.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _ := m["name"].(string)
+		arn, _ := m["arn"].(string)
+		if name == "" || strings.Contains(name, "|") {
+			continue
+		}
+		out = append(out, albRef{name, arn})
+	}
+	return out
 }
 
 // strs は []string か JSON から戻した []any を []string にする。

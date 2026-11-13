@@ -26,6 +26,7 @@ import (
 	ct "github.com/aws/aws-sdk-go-v2/service/cloudtrail"
 	cwl "github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/costexplorer"
+	elbv2 "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2"
 	"github.com/aws/aws-sdk-go-v2/service/guardduty"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -170,7 +171,7 @@ func NewAccountClients(ctx context.Context, cfg *config.Config, _ config.Source,
 	}
 	return account.Clients{Region: region, IAM: iam.NewFromConfig(ac), GuardDuty: guardduty.NewFromConfig(ac), AccessAnalyzer: accessanalyzer.NewFromConfig(ac),
 		CloudTrail: ct.NewFromConfig(ac), S3Control: s3control.NewFromConfig(ac), STS: sts.NewFromConfig(ac), WAFV2: wafv2.NewFromConfig(ac),
-		Account: acc.NewFromConfig(ac), CostExplorer: costexplorer.NewFromConfig(ac)}, nil
+		ELBV2: elbv2.NewFromConfig(ac), Account: acc.NewFromConfig(ac), CostExplorer: costexplorer.NewFromConfig(ac)}, nil
 }
 
 // NewS3StoreClient はストアのバケットのクライアントを作る。store_profile を省略すると SDK の標準の連鎖 (aws.profile は使わない)。

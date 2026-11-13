@@ -43,7 +43,7 @@ sources:
   - id: access_analyzer
     kind: access-analyzer                        # → access_analyzer。アナライザーが無ければ skip
   - id: posture
-    kind: posture                                # → posture (CloudTrail・GuardDuty・ルート MFA・S3・パスワードポリシー)
+    kind: posture                                # → posture (CloudTrail・GuardDuty・ルート MFA・S3・パスワードポリシー・ALB の WAF)
   # - id: waf_config
   #   kind: waf-config                           # WebACL の設定 → waf_review (下の wafv2 のソースも要る)。REGIONAL は regions、CLOUDFRONT は us-east-1
 
@@ -90,7 +90,7 @@ sources:
 #   ai_path_usage           daily   event  principal_seen  allowlist で tags: [ai] の主体の利用を主体 × 送信元 IP で毎回 1 行 (info。自己監査)
 #   credential_hygiene      weekly  state  iam_credential_report  未使用のアクセスキー・MFA 無しのコンソールユーザー・ルートのアクセスキー (medium / high)
 #   guardduty_findings      weekly  state  guardduty       GuardDuty の findings。新規と件数の増加 (重大度は GuardDuty 準拠)
-#   posture                 weekly  state  posture_item    CloudTrail 証跡と検証・GuardDuty 有効・ルート MFA・S3 Public Access Block・パスワードポリシー (high / medium)
+#   posture                 weekly  state  posture_item    CloudTrail 証跡と検証・GuardDuty 有効・ルート MFA・S3 Public Access Block・パスワードポリシー・インターネット向けの ALB の WAF (high / medium)
 #   access_analyzer         weekly  state  access_analyzer  IAM Access Analyzer の外部アクセス findings (公開は high、他は medium)
 #   waf_review              weekly  state  waf_config      WAF の修正提案の候補を report.json の proposals に (正規の画面での大量 BLOCK は low の finding にも)
 # 必要なレコードを出すソースが無いチェックは skip される (coverage に理由が出る)。http_access / waf_action は cloudwatch-logs が出す。
@@ -129,7 +129,7 @@ profiles:
     checks:
       - credential_hygiene      # 未使用のアクセスキー・MFA 無しのコンソールユーザー・ルートのアクセスキー (medium / high)
       - guardduty_findings      # GuardDuty の findings。新規と件数の増加 (重大度は GuardDuty 準拠)
-      - posture                 # CloudTrail 証跡と検証・GuardDuty 有効・ルート MFA・S3 Public Access Block・パスワードポリシー (high / medium)
+      - posture                 # CloudTrail 証跡と検証・GuardDuty 有効・ルート MFA・S3 Public Access Block・パスワードポリシー・インターネット向けの ALB の WAF (high / medium)
       - access_analyzer         # IAM Access Analyzer の外部アクセス findings (公開は high、他は medium)
       - waf_review              # WAF の修正提案の候補を report.json の proposals に (正規の画面での大量 BLOCK は low の finding にも)
 

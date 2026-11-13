@@ -8,6 +8,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	cttypes "github.com/aws/aws-sdk-go-v2/service/cloudtrail/types"
+	elbtypes "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2/types"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3control/types"
 
@@ -148,6 +149,46 @@ func TestWeeklyUnavailableAndDenied(t *testing.T) {
 	}
 	got := classes(res.Report)
 	if got["posture/guardduty_enabled|ap-northeast-1"] != "new" || got["guardduty_findings/g1"] != "" {
+		t.Fatalf("%v", got)
+	}
+
+	// インターネット向けの ALB に WebACL が無い → posture が ALB ごとに報告 (medium)。権限が外れても finding は消えない (partial と action)
+	h.now = h.now.Add(7 * 24 * time.Hour)
+	h.acct.Detectors = map[string]bool{"d1": true}
+	h.acct.LoadBalancers = map[string][]elbtypes.LoadBalancer{"ap-northeast-1": {accounttest.ALB("ap-northeast-1", "prod-web", elbtypes.LoadBalancerSchemeEnumInternetFacing)}}
+	res, err = e.Run(ctx, "weekly")
+	if err != nil || res.Exit != ExitOK {
+		t.Fatalf("%v %+v", err, res)
+	}
+	if got = classes(res.Report); got["posture/alb_waf|ap-northeast-1|prod-web"] != "new" {
+		t.Fatalf("%v", got)
+	}
+	for _, f := range res.Report.Findings.New {
+		if f.Key == "alb_waf|ap-northeast-1|prod-web" && f.Severity != "medium" {
+			t.Fatalf("%+v", f)
+		}
+	}
+	h.now = h.now.Add(7 * 24 * time.Hour)
+	h.acct.Errs = map[string]error{account.ActionGetWebACLForResource: accounttest.Denied}
+	res, err = e.Run(ctx, "weekly")
+	if err != nil || res.Exit != ExitPartial {
+		t.Fatalf("%v %+v", err, res)
+	}
+	if f := res.Report.Coverage.SourcesFailed; len(f) != 1 || !f[0].Partial || f[0].Action != account.ActionGetWebACLForResource || f[0].Code != "ACCESS_DENIED" {
+		t.Fatalf("sources_failed: %+v", f)
+	}
+	if got = classes(res.Report); got["posture/alb_waf|ap-northeast-1|prod-web"] != "still_open" {
+		t.Fatalf("%v", got)
+	}
+	// WebACL を付けた → 解消
+	h.now = h.now.Add(7 * 24 * time.Hour)
+	h.acct.Errs = nil
+	h.acct.ALBWebACLs = map[string]string{aws.ToString(h.acct.LoadBalancers["ap-northeast-1"][0].LoadBalancerArn): "arn:aws:wafv2:ap-northeast-1:" + acct + ":regional/webacl/prod/a1"}
+	res, err = e.Run(ctx, "weekly")
+	if err != nil || res.Exit != ExitOK {
+		t.Fatalf("%v %+v", err, res)
+	}
+	if got = classes(res.Report); got["posture/alb_waf|ap-northeast-1|prod-web"] != "resolved" {
 		t.Fatalf("%v", got)
 	}
 

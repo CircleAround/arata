@@ -1,5 +1,6 @@
 // Package account はアカウント単位の状態 (スナップショット) を取る collector を持つ: IAM 認証情報レポート、GuardDuty の findings、
-// IAM Access Analyzer の findings、姿勢 (CloudTrail 証跡・GuardDuty 有効・ルート MFA・S3 Public Access Block・パスワードポリシー)、
+// IAM Access Analyzer の findings、姿勢 (CloudTrail 証跡・GuardDuty 有効・ルート MFA・S3 Public Access Block・パスワードポリシー・
+// インターネット向けの ALB の WebACL)、
 // WAFv2 の WebACL の設定。
 //
 // 決定 (ADR 0015): 窓に依らない「今の状態」なので Window は使わず、record.SnapshotItem を出す。engine は収集が成功したときだけ
@@ -17,6 +18,7 @@ import (
 	acc "github.com/aws/aws-sdk-go-v2/service/account"
 	ct "github.com/aws/aws-sdk-go-v2/service/cloudtrail"
 	ce "github.com/aws/aws-sdk-go-v2/service/costexplorer"
+	elbv2 "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2"
 	gd "github.com/aws/aws-sdk-go-v2/service/guardduty"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/s3control"
@@ -46,6 +48,8 @@ const (
 	ActionGetWebACL                = "wafv2:GetWebACL"
 	ActionGetLoggingConfiguration  = "wafv2:GetLoggingConfiguration"
 	ActionListResourcesForWebACL   = "wafv2:ListResourcesForWebACL"
+	ActionDescribeLoadBalancers    = "elasticloadbalancing:DescribeLoadBalancers"
+	ActionGetWebACLForResource     = "wafv2:GetWebACLForResource"
 	ActionListRegions              = "account:ListRegions"
 	ActionLookupEvents             = "cloudtrail:LookupEvents"
 	ActionGetAnomalyMonitors       = "ce:GetAnomalyMonitors"
@@ -57,8 +61,9 @@ var RequiredActions = map[string][]string{
 	KindCredentialReport: {ActionGenerateCredentialReport, ActionGetCredentialReport},
 	KindGuardDuty:        {ActionListDetectors, ActionListGDFindings, ActionGetGDFindings},
 	KindAccessAnalyzer:   {ActionListAnalyzers, ActionListAAFindings},
-	KindPosture:          {ActionDescribeTrails, ActionGetTrailStatus, ActionListDetectors, ActionGetDetector, ActionGetAccountSummary, ActionGetPasswordPolicy, ActionGetPublicAccessBlock},
-	KindWAFConfig:        {ActionListWebACLs, ActionGetWebACL, ActionGetLoggingConfiguration, ActionListResourcesForWebACL},
+	KindPosture: {ActionDescribeTrails, ActionGetTrailStatus, ActionListDetectors, ActionGetDetector, ActionGetAccountSummary, ActionGetPasswordPolicy, ActionGetPublicAccessBlock,
+		ActionDescribeLoadBalancers, ActionGetWebACLForResource},
+	KindWAFConfig: {ActionListWebACLs, ActionGetWebACL, ActionGetLoggingConfiguration, ActionListResourcesForWebACL},
 	// cloudtrail-unused-regions の collector は internal/collect/cloudtrail にあるが、action はここにまとめる (doctor と読み取りロールの突き合わせ)
 	KindUnusedRegions: {ActionListRegions, ActionLookupEvents},
 	KindCostAnomaly:   {ActionGetAnomalyMonitors, ActionGetAnomalies},
@@ -119,6 +124,12 @@ type WAFV2API interface {
 	GetWebACL(ctx context.Context, in *wafv2.GetWebACLInput, optFns ...func(*wafv2.Options)) (*wafv2.GetWebACLOutput, error)
 	GetLoggingConfiguration(ctx context.Context, in *wafv2.GetLoggingConfigurationInput, optFns ...func(*wafv2.Options)) (*wafv2.GetLoggingConfigurationOutput, error)
 	ListResourcesForWebACL(ctx context.Context, in *wafv2.ListResourcesForWebACLInput, optFns ...func(*wafv2.Options)) (*wafv2.ListResourcesForWebACLOutput, error)
+	GetWebACLForResource(ctx context.Context, in *wafv2.GetWebACLForResourceInput, optFns ...func(*wafv2.Options)) (*wafv2.GetWebACLForResourceOutput, error)
+}
+
+// ELBV2API は Elastic Load Balancing v2 のうち使う部分 (ALB の一覧だけ。posture の alb_waf。ADR 0048)。
+type ELBV2API interface {
+	DescribeLoadBalancers(ctx context.Context, in *elbv2.DescribeLoadBalancersInput, optFns ...func(*elbv2.Options)) (*elbv2.DescribeLoadBalancersOutput, error)
 }
 
 // AccountAPI は Account Management のうち使う部分 (有効なリージョンの一覧。cloudtrail-unused-regions)。
@@ -142,6 +153,7 @@ type Clients struct {
 	S3Control      S3ControlAPI
 	STS            STSAPI
 	WAFV2          WAFV2API
+	ELBV2          ELBV2API
 	Account        AccountAPI
 	CostExplorer   CostExplorerAPI
 }
