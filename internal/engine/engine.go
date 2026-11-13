@@ -204,6 +204,10 @@ type Engine struct {
 	log  *slog.Logger
 	// runID / runProfile は実行中の run (finding_events に残す)。
 	runID, runProfile string
+	// scratch はストアの複製を開いている (試しの実行。ADR 0049)。書き込みは複製に対してだけで、Close で捨てる。
+	scratch bool
+	// diffFrom は差分判定 (再発と「報告済み」) の境界。ゼロなら窓の始まり。試しの実行が定時の実行の境界に合わせるのに使う。
+	diffFrom time.Time
 }
 
 func (d *Deps) fill(cfg *config.Config) {
@@ -254,17 +258,37 @@ func Open(cfg *config.Config, deps Deps) (*Engine, error) {
 // 決定: S3 に raw があるのに SQLite が無ければ STORE_CORRUPT で止める (ADR 0034)。続けると空の SQLite を Commit して findings・承認・ack の状態を
 // 空で上書きし、次からは気づけない。止まれば aratam が「実行されていない」と知らせる。読むだけなら OpenForRead。
 func OpenContext(ctx context.Context, cfg *config.Config, deps Deps) (*Engine, error) {
-	return open(ctx, cfg, deps, false)
+	return open(ctx, cfg, deps, openWrite)
 }
 
 // OpenForRead は Commit しないコマンド (report / review) 用。S3 に SQLite が無く raw があっても止めず、警告する。
 func OpenForRead(ctx context.Context, cfg *config.Config, deps Deps) (*Engine, error) {
-	return open(ctx, cfg, deps, true)
+	return open(ctx, cfg, deps, openRead)
 }
 
-func open(ctx context.Context, cfg *config.Config, deps Deps, readOnly bool) (*Engine, error) {
+// OpenDryRun は試しの実行 (`arata run --dry-run`) 用。ストアを一時ディレクトリへ複製して開き、元のストアには何も書かない (ADR 0049)。
+// 返したエンジンは RunWithOptions の DryRun だけを受ける。Commit は何もしない。
+//
+// 決定: dir:// は複製する間だけロックを取る (書き込み中の実行がいれば STORE_LOCKED。途中の状態を読まない)。複製の後は放すので、
+// 試しの収集の間も定時の実行は動ける。s3:// はロックが無く、SQLite を 1 回取得するだけで整合した状態を読める。
+// S3 に SQLite が無く raw があるときは OpenForRead と同じく警告して空の状態で進む (何も書かないので上書きの心配が無い)。
+func OpenDryRun(ctx context.Context, cfg *config.Config, deps Deps) (*Engine, error) {
+	return open(ctx, cfg, deps, openScratch)
+}
+
+// openMode はストアの開き方。
+type openMode int
+
+const (
+	openWrite   openMode = iota // 書き込み系のコマンド
+	openRead                    // Commit しないコマンド (report / review)
+	openScratch                 // 試しの実行 (複製)
+)
+
+func open(ctx context.Context, cfg *config.Config, deps Deps, mode openMode) (*Engine, error) {
 	deps.fill(cfg)
-	st, err := openStore(ctx, cfg, deps)
+	readOnly := mode != openWrite
+	st, err := openStore(ctx, cfg, deps, mode == openScratch)
 	if err != nil {
 		// 中断はここでは分類しない (CLI が INTERRUPTED にする)
 		if errors.Is(err, context.Canceled) {
@@ -295,20 +319,26 @@ func open(ctx context.Context, cfg *config.Config, deps Deps, readOnly bool) (*E
 		deps.Logger.Error("invalid allowlist", "code", CodeConfigInvalid, "path", cfg.Allowlist, "error", err.Error())
 		return nil, &ExitError{Code: CodeConfigInvalid, Exit: ExitConfig, Err: err}
 	}
-	return &Engine{cfg: cfg, deps: deps, st: st, al: al, log: deps.Logger}, nil
+	return &Engine{cfg: cfg, deps: deps, st: st, al: al, log: deps.Logger, scratch: mode == openScratch}, nil
 }
 
 const lostDatabaseAction = "arata rebuild --from-scratch builds it from raw, or restore the previous version if the bucket has versioning"
 
 var errLostDatabase = errors.New("the S3 store has raw files but no database")
 
-func openStore(ctx context.Context, cfg *config.Config, deps Deps) (store.Store, error) {
+func openStore(ctx context.Context, cfg *config.Config, deps Deps, scratch bool) (store.Store, error) {
 	if cfg.Store.Scheme != "s3" {
+		if scratch {
+			return store.OpenScratch(cfg.Store.Dir)
+		}
 		return store.Open(cfg.Store.Dir)
 	}
 	api, err := deps.S3Store(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", store.ErrS3Unavailable, err)
+	}
+	if scratch {
+		return store.OpenS3Scratch(ctx, api, s3Location(cfg))
 	}
 	return store.OpenS3(ctx, api, s3Location(cfg))
 }
@@ -782,7 +812,11 @@ func (e *Engine) Evaluate(ctx context.Context, profileName string, w collect.Win
 		if err != nil {
 			return EvalResult{}, fmt.Errorf("check %s: %w", name, err)
 		}
-		diff, err := checks.Diff(ctx, e.st, checks.DiffParams{Check: name, Mode: c.Mode(), Window: w, Now: e.deps.Now(), NewID: e.deps.NewID}, obs)
+		dw := w
+		if !e.diffFrom.IsZero() {
+			dw.From = e.diffFrom
+		}
+		diff, err := checks.Diff(ctx, e.st, checks.DiffParams{Check: name, Mode: c.Mode(), Window: dw, Now: e.deps.Now(), NewID: e.deps.NewID}, obs)
 		if err != nil {
 			return EvalResult{}, err
 		}
@@ -1034,20 +1068,59 @@ func (e *Engine) Run(ctx context.Context, profileName string) (*RunResult, error
 // S3 の Commit は 1 回だけで、未確定の結果を通知しない (ADR 0034) ので、「公開してから印を付ける」はできない。
 // 準備で失敗の多くを先に出し、残る失敗の窓は公開の rename と標準出力だけにする。
 func (e *Engine) RunWith(ctx context.Context, profileName string, prepare func(*report.Report) error) (*RunResult, error) {
+	return e.RunWithOptions(ctx, profileName, RunOptions{Prepare: prepare})
+}
+
+// RunOptions は RunWithOptions の指定。
+type RunOptions struct {
+	// Prepare は RunWith の prepare。
+	Prepare func(*report.Report) error
+	// DryRun は試しの実行 (ADR 0049)。OpenDryRun で開いたエンジンでだけ使える。
+	DryRun bool
+	// Window は試しの実行の窓の長さ (ゼロならプロファイルの window)。DryRun のときだけ使える。
+	Window time.Duration
+}
+
+// RunWithOptions は run の本体。
+//
+// 決定 (試しの実行。ADR 0049): DryRun では窓を [now - Window, now) にし、前回の window_to からの追いつきと、失敗したソースの追いつき
+// (ADR 0038) をしない (短く試すのが目的で、追いつきは定時の実行が行う)。ingest_delay の再走査は同じ。収集と評価はストアの複製の上で
+// ふだんと同じ手順で行い、複製は捨てる。差分判定の境界は定時の実行の窓の始まりに合わせる (dryRunWindow)。
+// 決定: 取り違えを両側で止める。複製でないエンジンは DryRun を断り (本番のストアに書かせない)、複製のエンジンは DryRun 以外を断る
+// (結果が捨てられるのに成功に見える)。
+func (e *Engine) RunWithOptions(ctx context.Context, profileName string, o RunOptions) (*RunResult, error) {
 	prof, ok := e.cfg.Profiles[profileName]
 	if !ok {
 		return nil, e.configErr(fmt.Errorf("profile %q is not defined", profileName))
 	}
+	switch {
+	case o.DryRun != e.scratch:
+		return nil, e.configErr(errors.New("a dry run needs an engine opened with OpenDryRun, and such an engine runs nothing else"))
+	case o.Window != 0 && !o.DryRun:
+		return nil, e.configErr(errors.New("--window can be used only with --dry-run (a scheduled run continues from the previous window end)"))
+	case o.Window < 0:
+		return nil, e.configErr(errors.New("--window must be positive"))
+	}
 	e.warnUnusedChecks()
 	now := e.deps.Now()
-	w, err := e.window(ctx, profileName, prof, now)
-	if err != nil {
+	var w collect.Window
+	var dry *dryRunInfo
+	cu := &catchup{covered: map[string]time.Time{}, from: map[string]time.Time{}}
+	var err error
+	if o.DryRun {
+		if w, dry, err = e.dryRunWindow(ctx, profileName, prof, o.Window, now); err != nil {
+			return nil, err
+		}
+		e.diffFrom = dry.diffFrom
+		defer func() { e.diffFrom = time.Time{} }()
+	} else if w, err = e.window(ctx, profileName, prof, now, true); err != nil {
 		return nil, err
 	}
 	base := w.From
-	cu, err := e.planCatchup(ctx, profileName, prof, base, now)
-	if err != nil {
-		return nil, err
+	if !o.DryRun {
+		if cu, err = e.planCatchup(ctx, profileName, prof, base, now); err != nil {
+			return nil, err
+		}
 	}
 	// 集計のソースが遅れていれば、チェックの窓も広げる (日次集計は窓の中の日だけを見るため)
 	if cu.metricsFrom.Before(w.From) && !cu.metricsFrom.IsZero() {
@@ -1072,8 +1145,12 @@ func (e *Engine) RunWith(ctx context.Context, profileName string, prepare func(*
 		return nil, err
 	}
 	rep := e.buildReport(profileName, runID, w, now, cr, ev)
-	if prepare != nil {
-		if err := prepare(rep); err != nil {
+	if dry != nil {
+		rep.DryRun = true
+		rep.Coverage.Notes = e.dryRunNotes(prof, w, dry, ev)
+	}
+	if o.Prepare != nil {
+		if err := o.Prepare(rep); err != nil {
 			_ = e.st.FinishRun(ctx, runID, "failed", map[string]any{"error": err.Error()})
 			return nil, err
 		}
@@ -1107,6 +1184,11 @@ func (e *Engine) RunWith(ctx context.Context, profileName string, prepare func(*
 	}
 	if err := e.st.FinishRun(ctx, runID, status, stats); err != nil {
 		return nil, err
+	}
+	if dry != nil {
+		e.log.Info("dry run finished; nothing was written to the store", "profile", profileName, "run_id", runID, "status", status, "new", rep.Summary.New, "max_severity", rep.Summary.MaxSeverity,
+			"from", w.From.UTC().Format(time.RFC3339), "to", w.To.UTC().Format(time.RFC3339))
+		return &RunResult{Report: rep, Exit: exit}, nil
 	}
 	e.log.Info("run finished", "profile", profileName, "run_id", runID, "status", status, "new", rep.Summary.New, "max_severity", rep.Summary.MaxSeverity)
 	return &RunResult{Report: rep, Exit: exit}, nil
@@ -1245,7 +1327,9 @@ func (e *Engine) lastCollect(ctx context.Context) (CollectResult, error) {
 //   - ただし追いつきは max_catchup (既定 7d) まで。超えた分は諦めて From = now - max_catchup とし、RUN_MISSED に gap と covered_from を添える。
 //   - 前回の実行から周期の 2 倍以上空いていれば (追いつけた場合も) RUN_MISSED を警告する。
 //   - 窓の終わりは now のまま。記録の遅れは収集側の再走査 [From - ingest_delay, To) で拾う (ADR 0013)。
-func (e *Engine) window(ctx context.Context, profileName string, prof config.Profile, now time.Time) (collect.Window, error) {
+//
+// warn が false なら RUN_MISSED を出さない (試しの実行が定時の実行の窓を知るためだけに呼ぶ)。
+func (e *Engine) window(ctx context.Context, profileName string, prof config.Profile, now time.Time, warn bool) (collect.Window, error) {
 	w := collect.Window{From: now.Add(-prof.Window), To: now}
 	last, err := e.st.LastRun(ctx, profileName, []string{"ok", "partial"})
 	if err != nil {
@@ -1262,7 +1346,7 @@ func (e *Engine) window(ctx context.Context, profileName string, prof config.Pro
 			truncated = true
 		}
 	}
-	if gap := now.Sub(last.StartedAt); gap >= 2*prof.Window || truncated {
+	if gap := now.Sub(last.StartedAt); warn && (gap >= 2*prof.Window || truncated) {
 		attrs := []any{"code", CodeRunMissed, "profile", profileName,
 			"last_started_at", last.StartedAt.UTC().Format(time.RFC3339), "last_window_to", last.WindowTo.UTC().Format(time.RFC3339),
 			"gap", gap.String(), "covered_from", w.From.UTC().Format(time.RFC3339), "truncated", truncated}
@@ -1277,7 +1361,7 @@ func (e *Engine) window(ctx context.Context, profileName string, prof config.Pro
 
 func (e *Engine) buildReport(profileName, runID string, w collect.Window, now time.Time, cr CollectResult, ev EvalResult) *report.Report {
 	return report.Build(report.Input{
-		Profile: profileName, Name: e.cfg.Name, RunID: runID, Window: w, Now: now,
+		Profile: profileName, Name: e.cfg.Name, RunID: runID, Window: w, Now: now, DiffFrom: e.diffFrom,
 		Results: ev.Results, CollectErrors: cr.Errors, SourcesOK: cr.SourcesOK, Formats: cr.Formats,
 		ChecksRun: ev.ChecksRun, ChecksSkipped: ev.ChecksSkipped, Proposals: ev.Proposals,
 	})

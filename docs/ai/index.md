@@ -40,6 +40,7 @@ LLM の役割は「危険の判定を代行する」ことではなく「人が�
 | `arata doctor` | 権限・ロググループ・形式の解釈率を検査 | よい (読み取りのみ) |
 | `arata init [--window 7d] [--resume]` | ベースライン収集 (findings は出さない) | 人の指示があれば |
 | `arata run --profile daily --out DIR` | 収集 → 評価 → レポート | 組み込み側が定期実行する |
+| `arata run --profile daily --dry-run [--window 1h] --out DIR` | 試しの実行。ストアに何も書かず、いま定時の実行を流したら出るものを見る (指摘は報告済みにならず、次の定時の実行でも出る)。`--window` で見る期間を短くできる。レポートは `dry_run: true` で、aratam は送らない | よい (ストアは読むだけ。AWS の読み取りは行い、Logs Insights の費用は期間に応じてかかる) |
 | `arata report --profile daily [--format md]` | 最後のレポートを再表示 | よい |
 | `arata report --month 2026-10` / `--from D --to D` | ストアだけから期間レポート (収集しない) | よい |
 | `arata review [--format json]` | 未対応 (open / acked) の一覧と approve の対象 | よい |
@@ -68,7 +69,7 @@ LLM の役割は「危険の判定を代行する」ことではなく「人が�
 | `FORMAT_DRIFT` | 解釈率が直近平均から急落 (警告) | アプリのデプロイでログ形式が変わっていないか確認する |
 | `QUERY_LIMIT` | Insights の同時実行・スキャン上限、LookupEvents のスロットル | 時間を置いて再実行。`max_scan_gb` を見直す |
 | `QUERY_INVALID` | クエリ / 設定の不備 (Insights の構文エラーなど) | `arata doctor` の `queries` 行を見る |
-| `STORE_LOCKED` | 同じストアを別プロセスが使用中 | 前の実行が終わるのを待つ |
+| `STORE_LOCKED` | 同じストアを別プロセスが使用中 (`run --dry-run` は、ストアを複製する間に書き込み中の実行がいるとき) | 前の実行が終わるのを待つ |
 | `STORE_CORRUPT` | SQLite を開けない (`arata rebuild` で既存の SQLite が無い・読めないときも)。`s3://` のストアで raw があるのに SQLite が無いときも、書き込み系のコマンドはこれで止まる (`report` / `review` は警告して続く) | 人に知らせる。`arata rebuild` で raw から作り直せる。SQLite が読めなければ `--from-scratch` (findings が空になり次の run で全部が再報告されるので、人の判断を仰ぐ) |
 | `STORE_CONFLICT` | `s3://` のストアを別の実行が先に書いた (終了コード 2。何も上書きしていない。この実行の結果は保存されず、report も出ない) | 同じコマンドをもう一度実行する。繰り返すなら同時に走っている実行を止める |
 | `STORE_UNAVAILABLE` | `s3://` のストアに問い合わせられない (権限・通信。終了コード 2) | `arata doctor` の `store_read` を見る。破損ではないので `rebuild` はしない |

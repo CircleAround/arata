@@ -357,6 +357,20 @@ From = min(now - window, 前回の window_to) として、cron の遅延・欠�
 失敗した run (status=failed) は前回として数えない。前回から周期の 2 倍以上空いた場合も `RUN_MISSED` を警告する (追いつけた場合は `truncated: false`)。
 `init` のベースライン収集の窓は `init --window` (既定 7d)。
 
+決定 (試しの実行。ADR 0049): `run --dry-run [--window <期間>]` は、定時の前に「いま流したら何が出るか」を見るための実行。**ストアに何も書かない。**
+
+- ストアを一時ディレクトリへ複製し (dir:// は SQLite と残っていれば `-wal` を写す。s3:// は SQLite だけを取得する)、その上でふだんと同じ収集と評価を行い、複製を捨てる。
+  raw・SQLite (findings / principals / metrics / runs)・S3 への Commit のどれも行わない。出た finding は報告済みにならず、`window_to` も進まない。
+  次の定時の実行は、試しの実行が無かったときと同じ報告を出す (テストで、実行の前後のストアの全ファイル・S3 の全オブジェクトが同じことを固定)
+- 窓は `[now - window, now)` (`--window` を省くとプロファイルの `window`)。上の「前回の window_to からの追いつき」も、失敗したソースの追いつき (ADR 0038) もせず、
+  `RUN_MISSED` も出さない。`ingest_delay` の再走査は同じ。`--window` は `--dry-run` のときだけ使える (無しで渡すと `CONFIG_INVALID`。ストアを開く前に止まる)
+- 判定はストアの今の状態に対して行う (定時の実行の結果の先取り)。再発と「本日報告済み」の境界は、試しの窓の始まりと、いま定時の実行を流したときの窓の始まりの早いほう
+  (試しの窓の始まりを境界にすると、続いている事象が「再発」と出る)
+- dir:// のロックは複製する間だけ取る (書き込み中の実行がいれば `STORE_LOCKED`)。複製の後は放すので、試しの収集の間も定時の実行は動ける。s3:// は取らない (5-5)
+- レポートは `dry_run: true` と、見た範囲が定時の実行より狭いときの `coverage.notes` を持つ (8 章)。aratam はこの報告を送らない (`docs/aratam.md` 2 章)
+- 日次集計を使うチェックは窓に重なる UTC の日だけを評価するので、短い窓では定時の実行なら評価する日 (前日など) が抜ける。当日の集計は日の頭から引き直すので欠けない。
+  抜けた日は `coverage.notes` に出す
+
 決定 (記録の遅延と再走査。ADR 0013): CloudTrail はイベントの記録まで通常 5〜15 分、CloudWatch Logs は取り込みに数分遅れる。
 窓の終わり To は now のまま記録し (次回の From になる)、**各ソースの収集範囲は `[From - ingest_delay, To)`** とする (前回の窓の末尾を遅延分だけ再走査する)。
 `sources[].ingest_delay` は ParseDuration 形式で、既定は cloudtrail-lookup = 15m、cloudwatch-logs = 5m (`0` で再走査しない)。
@@ -604,6 +618,9 @@ retention:
 - 決定: `rebuild` は raw を全部取得して作り直し、SQLite だけを条件付きで置き換える。`.bak` は残さない (世代はバケットのバージョニング)
 - 決定: バケットの認証は `store_profile` (省略時は SDK の標準の連鎖) と `store_region` (省略時は `aws.region`) で監査対象の `aws:` と分ける
 - 決定: 「読み取り専用」は監査対象のアカウントへの約束で、ストアのバケットは別 (8 章)。必要な権限は `s3:GetObject`・`s3:PutObject`・`s3:ListBucket` で、prefix に限定する
+- 決定 (ADR 0049): 試しの実行 (`run --dry-run`) は `audit.sqlite.gz` だけを取得し、何も書き戻さない (raw と `reports/` は取得もしない)。
+  S3 のストアにロックは無く (排他は上の条件付きの書き込み)、読むだけの実行は 1 回の取得で整合した SQLite を得るので、何も取らない。
+  S3 に SQLite が無く raw があるときは `report` / `review` と同じく警告して続ける (何も書かないので、空の SQLite で上書きする心配が無い)
 
 ## 6. 既知リスト (allowlist) と承認フロー (質問 8 への回答)
 
@@ -1021,6 +1038,7 @@ arata profiles  [--format table|json]   # プロファイルごとに実際に�
 arata init      [--window 7d | --resume]   # ストア作成、設定検証、ベースライン収集 (findings は出さない)
 arata doctor                   # 権限・ロググループ・形式プロファイルの解釈率を検査
 arata run       --profile daily [--out dir]   # collect → evaluate → report → prune
+arata run       --profile daily --dry-run [--window 1h] [--out dir]   # 試しの実行。ストアに何も書かない (3 章、ADR 0049)
 arata collect   --window 24h [--source id]
 arata evaluate  --profile daily
 arata report    --from 2026-10-01 --to 2026-10-31 --format md|json [--template monthly]
@@ -1096,6 +1114,11 @@ arata rebuild   [--from-scratch [--baseline]] [--format text|json]   # raw JSONL
 - 決定 (ADR 0023): `proposals` (WAF の修正提案の候補と observation。waf_review が走った run だけ。無ければ節ごと出さない) を足す。1 件は `kind` / `stage` / `web_acl` / `scope` / `region` /
   `rule` / `rule_in_group` / `method` / `path` / `summary` / `evidence` (根拠の数字と提案する値) / `finding_key` (low の finding にもした候補)、observation は `about` / `reason`。
   aratam は未知のフィールドを無視するので、古い aratam でも止まらない (テストで固定)。`coverage.formats[].truncated` (行の上限に当たった集計) も足す。report.md には「WAF の修正提案の候補」の節を出す
+
+- 決定 (ADR 0049): 試しの実行 (`run --dry-run`) の報告には `"dry_run": true` を足す。`window` は実際に見た範囲。`coverage.notes` (人が読む文の配列) に、
+  見た範囲が定時の実行より狭いこと (入っていない期間) と、日次集計を使うチェックが評価しなかった UTC の日を書く。どちらも定時の実行の報告には出さない (`omitempty`。
+  既存の報告は 1 バイトも変わらない)。新規の finding の id は複製の中で振ったもので、ストアには無い (定時の実行で付け直される)。
+  report.md は冒頭に試しの実行であることを、カバレッジに注記 (改行は空白にする) を出す
 
 決定 (期間レポート。ADR 0016): `report --from --to` (`--month`) は `"kind": "period"` の別の形を出す。
 決定 (ADR 0041): 期間レポートの report.md でも、summary と主体の表示 (ログ由来) の改行は空白にする (run の report.md と同じ。抜けていて、改行で偽の見出しや指摘の行を作れた)。

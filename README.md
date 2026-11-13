@@ -66,6 +66,7 @@ arata を呼ばず、AWS の監査ロールもストアも使わない (出力�
    AI (LLM) に下書きさせるなら `arata help ai runtime` を読ませ、読み取り専用ロールで読める構成から書かせて、人が事実を確かめる。事実が変わったら直す
 4. **最初の run は通知せずに中身を見る**。`init` は finding を出さないが、その後の最初の run は長く溜まっていた設定や主体が一度に出て、通知が多くなり得る。
    手元で `arata run --out <dir>` → `aratam notify --in <dir> --dry-run` で見て、approve・ack・resolve で片付けてから定期実行につなぐ
+   (ここは `arata run --dry-run` ではなく、ふつうの run にする。試しの実行はストアに書かないので、指摘が報告済みにならない)
    (run はストアに確定するので、以後の定期実行は新しく起きたことだけを報せる。daily と weekly の両方で行う)。
    片付ける順番と ack / snooze の選び方は `arata help ai onboarding`
 
@@ -213,6 +214,7 @@ arata config init --audit-account none   # 雛形を ./arata.yaml に書き出�
 arata doctor                      # 権限・ロググループ・解釈率を検査 (問題があれば終了コード 2。足りない記録の出し方は arata help ai logs)
 arata init --window 7d            # ベースライン収集 (findings は出さない)。終わると次の手順を表示する
 arata run --profile daily --out /tmp/arata-out   # 最初の run は通知をつながずに流し、arata review で 1 件ずつ片付ける (流れは arata help ai onboarding)
+arata run --profile daily --dry-run --window 1h --out /tmp/arata-try   # 試しの実行: ストアに何も書かず、いま流したら何が出るかを見る (下の「試しの実行」)
 
 arata profiles                    # プロファイルごとに実際に走るチェックとパラメータ、その由来 (overrides / checks: / 既定値)
 arata config init --diff          # 版を上げたら: 入っていないチェック・既定値と違う値・未知のキー・選んでいない audit_account
@@ -273,6 +275,7 @@ arata init     --window 7d                    # ストア作成 + ベースラ�
 arata run      --profile daily --out /tmp/arata-out
 cat /tmp/arata-out/report.md                  # 人向け。report.json は機械向け
 arata report   --profile daily --format md    # 最後の run のレポートを再表示
+arata run      --profile daily --dry-run --window 1h --out /tmp/arata-try   # 試しの実行 (ストアに何も書かない)
 arata collect  --window 2h                    # 収集だけ
 arata evaluate --profile daily                # 収集せずに評価だけ
 arata rebuild                                 # raw JSONL から audit.sqlite を作り直す (findings・runs・主体の状態は引き継ぐ)
@@ -283,6 +286,15 @@ arata rebuild                                 # raw JSONL から audit.sqlite �
 - エンジン自身のログは標準エラーに JSON 行で出る。`code` は設計書 2-2 の固定語彙 (`ACCESS_DENIED`, `STORE_LOCKED`, `RUN_MISSED`, `CONFIG_INVALID` など)
 - `cloudtrail-lookup` は既定で `aws.region` と `us-east-1` の両方を引く (IAM / ConsoleLogin / STS の一部は us-east-1 にしか記録されない)
 - `run` は前回の run の窓の終わりから追いつく (上限 `max_catchup`、既定 7d)。cron が遅れても取りこぼさないが、上限を超えた分は `RUN_MISSED` で知らせる
+- **試しの実行** (`run --dry-run`。ADR 0049): 定時の前に、いま流したら何が出るかだけを見る。ストアに何も書かない (raw・SQLite・S3 のどれも変えない) ので、
+  出た指摘は報告済みにならず、窓も進まず、次の定時の実行でもう一度出る。ストアは読むだけで、今の状態 (平常帯・既知の主体・指摘の状態) に対して判定する
+  - `--window 1h` のように見る期間を短くできる (`--dry-run` のときだけ。省くとプロファイルの `window`)。前回からの追いつきはしない。
+    CloudTrail の読み取りの時間と Logs Insights のスキャン量 (費用) が、期間に応じて減る
+  - レポートには `"dry_run": true` が付き、`aratam notify` は送らない (文面は `aratam notify --dry-run` で見られる)。
+    見た範囲が定時の実行より狭いときは、入っていない期間と、日次集計を使うチェックが評価しなかった日が `coverage.notes` (report.md のカバレッジ) に出る
+  - 新規の指摘の id は試しの実行の中だけのもので、`arata review` / `approve` では引けない (定時の実行で付け直される)
+  - AWS の読み取りは実際に行う。dir:// のストアは、複製する間だけロックを取る (書き込み中の実行がいれば `STORE_LOCKED`)
+  - 導入時の「最初の run」には使わない。あれは溜まっていた指摘を報告済みにするための実行で、試しの実行では報告済みにならない
 - CloudTrail は記録まで 5〜15 分、CloudWatch Logs は取り込みに数分遅れるので、`run` は各ソースの `ingest_delay` (既定 cloudtrail-lookup 15m、cloudwatch-logs 5m) だけ
   窓の前を引き直す。前回の窓の末尾に起きて遅れて記録されたイベントは次の run が拾う (前回までに収集済みのイベントは再報告しない)。
   レポートの窓 (`window.from`) は変わらないので、窓より少し前の時刻の事象が載ることがある

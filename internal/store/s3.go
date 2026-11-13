@@ -94,6 +94,8 @@ type S3 struct {
 	done    bool
 	// rawOrphaned は S3 に SQLite が無いのに raw があった。
 	rawOrphaned bool
+	// scratch は試しの実行用の複製 (ADR 0049)。Commit しても S3 へ何も送らない。
+	scratch bool
 }
 
 var _ Store = (*S3)(nil)
@@ -105,7 +107,7 @@ func OpenS3(ctx context.Context, api S3API, loc S3Location) (*S3, error) {
 	if err != nil {
 		return nil, fmt.Errorf("store: %w", err)
 	}
-	s, err := openS3(ctx, api, loc, work)
+	s, err := openS3(ctx, api, loc, work, false)
 	if err != nil {
 		os.RemoveAll(work)
 		return nil, err
@@ -113,7 +115,8 @@ func OpenS3(ctx context.Context, api S3API, loc S3Location) (*S3, error) {
 	return s, nil
 }
 
-func openS3(ctx context.Context, api S3API, loc S3Location, work string) (*S3, error) {
+// scratch なら試しの実行用の複製 (OpenS3Scratch): reports/ と raw を取得せず、Commit は何も送らない。
+func openS3(ctx context.Context, api S3API, loc S3Location, work string, scratch bool) (*S3, error) {
 	dir := filepath.Join(work, "store")
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, fmt.Errorf("store: %w", err)
@@ -128,10 +131,12 @@ func openS3(ctx context.Context, api S3API, loc S3Location, work string) (*S3, e
 			return nil, fmt.Errorf("store: %s: %w", loc.URL(S3DatabaseObject), err)
 		}
 	}
-	s := &S3{api: api, loc: loc, work: work, objects: map[string]s3Object{}, dbETag: obj.etag}
-	reports, err := listObjects(ctx, api, loc, "reports/")
-	if err != nil {
-		return nil, err
+	s := &S3{api: api, loc: loc, work: work, objects: map[string]s3Object{}, dbETag: obj.etag, scratch: scratch}
+	var reports []string
+	if !scratch {
+		if reports, err = listObjects(ctx, api, loc, "reports/"); err != nil {
+			return nil, err
+		}
 	}
 	for _, rel := range reports {
 		o, err := download(ctx, api, loc, rel, filepath.Join(dir, rel))
@@ -143,7 +148,9 @@ func openS3(ctx context.Context, api S3API, loc S3Location, work string) (*S3, e
 	if s.Dir, err = Open(dir); err != nil {
 		return nil, err
 	}
-	s.Dir.beforeAppend = s.fetchRaw
+	if !scratch {
+		s.Dir.beforeAppend = s.fetchRaw
+	}
 	if obj.etag == "" {
 		prefix := loc.Key("raw/")
 		out, err := api.ListObjectsV2(ctx, &s3.ListObjectsV2Input{Bucket: &loc.Bucket, Prefix: &prefix, MaxKeys: aws.Int32(1)})
@@ -181,7 +188,7 @@ func (s *S3) fetchRaw(ctx context.Context, rel string) error {
 // raw も条件付きにするのは、S3 が追記できず日のファイルを丸ごと置き換えるため (無条件だと先に終わった実行の行を消す)。
 // SQLite の前で失敗すると raw だけが先に進むが、次の run は古い SQLite から同じ窓を引き直すので SQLite では二重に数えない (ADR 0034)。
 func (s *S3) Commit(ctx context.Context) error {
-	if s.done {
+	if s.done || s.scratch {
 		return nil
 	}
 	if err := ctx.Err(); err != nil {

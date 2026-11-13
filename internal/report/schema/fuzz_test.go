@@ -25,6 +25,7 @@ func seedFiles(f *testing.F) {
 	for _, s := range []string{
 		`{"findings":{"new":[{"id":"f1","check":"c","severity":"high","summary":"s","data":{"date":"2026-10-21","n":1,"l":[1,"a",null],"m":{"k":"v"}}}]},"proposals":[{"kind":"observation","evidence":{"a":null}},{"kind":"x","evidence":{"b":[1]}}],"coverage":{"formats":[{"match_rate":0.5,"recent_average":null,"truncated":["a"]}],"sources_failed":[{}],"checks_skipped":[{}]},"summary":{"collect_errors":[{"partial":true},{"covered_from":"x"},{}]}}`,
 		`{"kind":"period","summary":{"by_severity":{"high":1,"x":-1}},"events":{"new":[{}],"resolved":[{"profile":"daily"}]},"new_principals":[{}],"open":[{}],"metrics":{"metrics":["a","b"],"rows":[{"date":"d","values":[1,1e308,-0]},{"values":null}]},"profiles":[{}],"runs_missing":[{"until":"u","detail":"d"}],"notes":["n"]}`,
+		`{"dry_run":true,"coverage":{"notes":["a\n## b",""]}}`, `{"dry_run":"yes"}`, `{"coverage":{"notes":[1,null]}}`,
 		`{"findings":null,"coverage":null}`, `{"findings":{"new":[null]}}`, `[]`, `null`, `{`, ``,
 	} {
 		f.Add([]byte(s))
@@ -74,6 +75,8 @@ func FuzzMarkdownLogValues(f *testing.F) {
 		r.Findings.New, r.Findings.StillOpen, r.Info = []Finding{fd}, []Finding{fd}, []Finding{fd}
 		r.Proposals = []Proposal{{Kind: "false_positive", Stage: "count_first", Path: v, Summary: v, Evidence: map[string]any{"path_group": v, "paths": []any{v}}},
 			{Kind: "observation", About: "false_positive", Reason: "below_threshold", Summary: v, Evidence: map[string]any{"p": v}}}
+		// 試しの実行の注記 (ADR 0049)。arata が書く文だが、aratam は report.json をファイルから読むので信用しない
+		r.DryRun, r.Coverage.Notes = true, []string{v, v}
 		return r.Markdown()
 	}
 	period := func(v string) string {
