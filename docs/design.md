@@ -261,18 +261,36 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
   `json` の対応表で元と正規化名が同じ (`path: path`) ときは別名を付けない。doctor の `queries` 検査は集計クエリに加えてサンプル用と doctor 自身のクエリも対象にする。
 - report.json の `coverage.formats` に各 cloudwatch-logs ソースの `total` / `matched` / `match_rate` / `expected` / `recent_average` / `bytes_scanned` / `code` を必ず出す。
 
-### 2-3. S3 に出る ALB のアクセスログを読む (提案。未実装)
+### 2-3. ALB のアクセスログから http_access を取る (提案。未実装・未確認)
 
-**ここは提案で、まだ実装していない。** 案の比較 (Athena、CloudWatch Logs への配信、S3 Select)・費用の見積もり・出典は ADR 0046 (状態: 提案)。採用を決めたらこの節を仕様に書き直す。
+**ここは提案。** 案の比較 (S3 を直接読む、Athena、S3 Select)・費用の見積もり・出典は ADR 0046 (状態: 提案)。実際のログで確かめて採用を決めたら、この節を仕様に書き直す。
 
 目的: nginx のログを CloudWatch Logs に送っていない利用者でも、`http_access` を使うチェック (`login_bruteforce`・`probe_paths`・`endpoint_abuse`) を動かす。
-ALB のアクセスログは 1 リクエスト 1 行で ip・method・path・status・ua・処理時間が揃い、アプリにもサーバーにも手を入れずに有効にできるが、
-従来のアクセスログ (ALB の属性で有効にするもの) の出力先は S3 だけである。
+ALB のアクセスログは 1 リクエスト 1 行で ip・method・path・status・ua・処理時間が揃い、アプリにもサーバーにも手を入れずに有効にできる。
 
-今の `alb_access` の前提: cloudwatch-logs のソースの形式プロファイルで、ロググループの `@message` が ALB のログの 1 行そのままであることを前提に
-Insights の `parse` で解釈する。S3 は読まない。S3 のファイルを誰かが CloudWatch Logs に流し直している構成でしか使えない。
+今の `alb_access` の前提: cloudwatch-logs のソースの形式プロファイルで、ロググループの `@message` が ALB の従来のアクセスログ (S3 に出るもの) の 1 行そのままであることを前提に
+Insights の `parse` で先頭 14 項目を解釈する。S3 は読まない。
 
-推奨する案: ソースの種類を 1 つ足し、arata が S3 の gzip のファイルを直接読んで Go で解釈・集計する。名前はどれも仮。
+**第 1 段 (推奨): ALB から CloudWatch Logs へ配信し、既存のソースで読む。** arata の変更は無いか最小。
+
+```yaml
+sources:
+  - id: alb_prod
+    kind: cloudwatch-logs
+    log_group: prod-alb-access      # ALB の配信先に選んだロググループ
+    format: alb_access
+```
+
+- 利用者の準備: ALB の Integrations タブ (CloudWatch Logs の配信の仕組み。従来のアクセスログの設定とは別) で、アクセスログを CloudWatch Logs へ配信する。
+  **形式は plain、項目は既定 (全部)、区切りは空白**にする。項目を選ぶ・区切りを変えると `alb_access` が合わない
+- 配信の既定の項目の並びは、従来のログの先頭 34 項目と同じ (API で確認)。ただし plain の行が従来の行と文字の単位で同じか (引用符、`client_port` の形) は**未確認**で、
+  実際のログで doctor の解釈率を見て確かめる。違っていたら `alb_access` の `parse` を両方に合うように直す
+- json 形式は今の `format: json` では読めない (メソッドとパスが `request_line` の 1 項目にまとまっていて、対応表では分けられない)。json 用の組み込みのプロファイルは今は作らない
+- 読み取り専用ロールは変えない。解釈率・`FORMAT_MISMATCH`・doctor・`max_scan_gb` は今のまま効く
+- 費用: 利用者側に CloudWatch Logs の取り込み料金 (量に比例) と保管料が出る。量が小さければ小さい (ADR 0046 の見積もり。推測を含む)
+- 対象外: ALB の前に CloudFront などのプロキシがある構成 (ログの送信元がプロキシの IP になり、IP ごとの判定ができない)。WebSocket は接続が閉じたときの 1 行だけ
+
+**第 2 段 (取り込み料金を避けたい利用者・量が多い利用者向け): S3 の従来のアクセスログを直接読む。** ソースの種類を 1 つ足し、arata が gzip のファイルを読んで Go で解釈・集計する。名前はどれも仮。
 
 ```yaml
 sources:
@@ -308,7 +326,6 @@ sources:
   CDK なら `ApplicationLoadBalancer` の `logAccessLogs(bucket, prefix)` (スタックにリージョンの指定が要る)、Copilot なら environment の manifest の `http.public.access_logs`
   (`true` ならバケットも作られる。Copilot 自体はサポート終了が告知されている)。そのうえで読み取り専用ロールのスタックにバケットを渡して更新する
 - **対象外**: ALB の前に CloudFront などのプロキシがある構成 (ALB のログの送信元がプロキシの IP になり、IP ごとの判定ができない)。WebSocket は接続が閉じたときの 1 行だけ
-- **代わりの道**: ALB の新しい配信の仕組みで CloudWatch Logs に送れば、既存の cloudwatch-logs のソースで読める見込み (ロググループに入る行の形は未確認。利用者側に取り込み料金が出る。ADR 0046 の (c1))
 
 ## 3. 周期と「重視するデータ」 (複数周期の整理)
 

@@ -69,4 +69,4 @@
 | [0043](0043-vulnerability-fix-exempt-from-cooldown.md) | 脆弱性の修正版は、条件を満たせば 7 日の待機の対象外にする | 採用 |
 | [0044](0044-aratam-secrets-via-environment.md) | aratam は秘密を環境変数で受け取り、置き場所と取り出し方は実行環境に任せる | 採用 |
 | [0045](0045-init-requires-audit-account.md) | `config init` は監査する側のアカウントを必ず選ばせ、選んだ結果を設定と既知リストに残す | 採用 |
-| [0046](0046-alb-access-logs-from-s3.md) | S3 に出る ALB のアクセスログは、arata が直接読んで Go で集計する (Athena・CloudWatch Logs への配信・S3 Select との比較) | 提案 |
+| [0046](0046-alb-access-logs.md) | ALB のアクセスログは CloudWatch Logs への配信 (plain) を既存の `alb_access` で読み、S3 を直接読む案は次の段にする (Athena・S3 Select との比較) | 提案 |

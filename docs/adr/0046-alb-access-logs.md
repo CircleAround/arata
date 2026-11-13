@@ -1,4 +1,4 @@
-# 0046. S3 に出る ALB のアクセスログは、arata が直接読んで Go で集計する
+# 0046. ALB のアクセスログは CloudWatch Logs への配信 (plain) を既存の `alb_access` で読み、S3 を直接読む案は次の段にする
 
 - 日付: 2026-11-13
 - 状態: 提案
@@ -40,31 +40,66 @@ IP とステータスが同じ行に無いことがあり (Rails の標準のロ
 `alb_access` は **cloudwatch-logs のソースの形式プロファイル**で、S3 は読まない (`internal/collect/cwlogs/profile.go` の `albParse`)。
 ロググループの `@message` が従来のログの 1 行そのままであることを前提に、Insights の `parse` で先頭 14 項目から
 `ip` (`client:port` の IP)・`duration` (`target_processing_time`)・`status` (`elb_status_code`)・`method`・`path` (URL からクエリを除いたパス)・`ua` を取り出す。
-つまり「誰かが S3 のファイルの行を CloudWatch Logs に流し直している」構成でしか使えない。ALB から CloudWatch Logs への配信の仕組みは、
-このプロファイルを作った時点では想定していなかった (その仕組みは選択肢 (c1))。
+つまり「誰かが S3 のファイルの行を CloudWatch Logs に流し直している」構成でしか使えない。ALB から CloudWatch Logs への配信の仕組み (下) は、このプロファイルを作った時点では想定していなかった。
+
+### 確かめた事実 (ALB から CloudWatch Logs への配信)
+
+ALB は、従来のログとは別の仕組みで、アクセスログを CloudWatch Logs・Data Firehose・S3 に配信できる
+(CloudWatch Logs の「vended logs」。コンソールでは ALB の Integrations タブ。従来のログは Attributes タブ) [1][3]。
+公式の文書には行の形が書かれていない [3] ので、配信の設定のひな形を返す API を実際に呼んで確かめた
+(2026-11-13。`aws logs describe-configuration-templates --service elasticloadbalancing --log-types ALB_ACCESS_LOGS --delivery-destination-types CWL`。AWS が公開している仕様で、特定のアカウントの値は含まない):
+
+- 出力の形式は、CloudWatch Logs 宛てでは `plain` と `json` (Firehose 宛ては plain / json / raw、S3 宛ては plain / json / w3c / parquet)
+- 項目は選べる。既定は全部で、並びは `type, time, elb, client_port, target_port, request_processing_time, target_processing_time, response_processing_time, elb_status_code, target_status_code, received_bytes, sent_bytes, request_line, user_agent, ssl_cipher, ssl_protocol, target_group_arn, trace_id, domain_name, chosen_cert_arn, matched_rule_priority, request_creation_time, actions_executed, redirect_url, error_reason, target_port_list, target_status_code_list, classification, classification_reason, conn_trace_id, transformed_host, transformed_uri, request_transform_status, ip_address`。
+  従来のログの先頭 34 項目と同じ並びで、名前だけ `client:port` → `client_port`、`target:port` → `target_port` のように変わっている
+- plain の区切りは、タブ・空白・カンマから選べる
+
+未確認 (実際のログで確かめる): plain・既定の項目・空白区切りの行が、従来のログの行と**文字の単位で同じ**か (引用符の付き方、`client_port` が `IP:ポート` の形か、末尾の `ip_address` との関係)。
+配信の設定に要る権限、従来のログとの併用の可否、配信の遅れも文書に無く未確認 [3]。
 
 ## 決定 (提案)
 
-**(a) を推奨する。** S3 のアクセスログを読む新しいソースの種類 (`s3-access-logs`。名前は仮) を足し、arata が gzip のファイルを直接読み、
-Go で解釈して、今の cloudwatch-logs のソースと**同じ日次集計**を作る。生の行は保存しない。
-(c1) の CloudWatch Logs への配信は、arata を変えずに使える見込みの代わりの道として、sandbox で確かめてから README に書く。
+**(c1) を推奨する。** 利用者が ALB のアクセスログを CloudWatch Logs へ **plain・既定の項目 (全部)・空白区切り**で配信し、
+arata は既存の cloudwatch-logs のソースと `alb_access` でそのまま読む。arata のコードの変更は無いか、最小にとどまる見込み。
+
+```yaml
+sources:
+  - id: alb_prod
+    kind: cloudwatch-logs
+    log_group: prod-alb-access        # ALB の配信先に選んだロググループ
+    format: alb_access
+```
+
+(a) の「S3 を直接読む」は、CloudWatch Logs の取り込み料金を避けたい利用者・量が多い利用者のための**次の段**として残す。
 (b) の Athena は今は採らない。
 
 理由:
 
-1. **読み取り専用を、例外を足さずに守れる。** 要るのは `s3:ListBucket` と `s3:GetObject` だけで、問い合わせの実行・結果の書き込み・表の定義が無い
-2. **利用者の準備が最も少なく、利用者側の費用が増えない。** ALB の従来のログを有効にするだけ (S3 の保管料のみ [1])。
-   (b) は Glue の表とワークグループ、(c1) は CloudWatch Logs の取り込み料金が要る
-3. **新しい依存が無い。** S3 の SDK は S3 ストア (ADR 0034) で既に使っている。(b) は Athena の SDK と、Insights とは別の SQL の集計テンプレートが要る
-4. **「集計だけ持ち帰る」方針と矛盾しない。** 持ち帰る先は実行中のメモリで、ストアに残すのは今と同じ日次集計だけ。
-   Insights の結果の行数の上限 (10000) による数え漏れ (`truncated`) も、このソースでは起きない
-5. 引き受ける弱点は「AWS の外で動かすと転送料が出る」「量が増えると時間がかかる」の 2 つで、どちらも doctor で事前に測れ、上限 (`max_download_gb`) で止められる。
-   1 日に圧縮後で数 GB を超える利用者には、AWS の中で動かすか (b) を足すかを、その時に決める
+1. **arata のコード・読み取り専用ロール・依存を変えずに済む。** 既にある `logs:*` の読み取りだけで動き、解釈率・`FORMAT_MISMATCH`・doctor・`max_scan_gb` がそのまま効く
+2. **読み取り専用ロールに S3 のオブジェクトの読み取りを入れずに済む。** (a) は絞るとはいえ、監査用のロールが初めて S3 の中身を読むことになる
+3. **利用者の作業は ALB の設定だけ。** アプリにもサーバーにも触れない
+4. **量が小さい利用者では取り込み料金も小さい。** 1 行を 0.5〜1 KB と置くと (推測)、1 日 5,000 リクエストで月に 75〜150 MB。
+   バージニア北部の単価 (1 GB あたり 0.50 USD。要約経由で読んだ値で未確認。東京の単価も未確認) [13] なら月に 0.1 USD 未満、数十円以下の見込み (推測)
+5. 引き受ける弱点は「取り込み料金が量に比例する」こと。非圧縮で 1 日 3 GB なら月に約 45 USD + 保管 + Insights のスキャン (推測: 取り込みは非圧縮の量で数える)。
+   こういう利用者には (a) を用意する
+
+### 注意点
+
+- **利用者向けの手順では「plain・既定の項目・空白区切り」を指定する。** 項目を選んだり、区切りをタブ・カンマにしたりすると、行の並びが変わって `alb_access` の `parse` が合わない
+  (解釈率が落ち、`FORMAT_MISMATCH` で気づける)
+- **plain の行が従来の行と同じかは、実際のログで doctor の解釈率を見るまで未確認。** 違っていたら `alb_access` の `parse` を両方に合うように直す (これが「最小の変更」の中身)
+- **json 形式は今の `format: json` では読めない。** メソッドとパスが `request_line` の 1 項目 (`メソッド URL HTTP の版`) にまとまっていて、
+  `json` の対応表 (項目名 → 正規化の名前) では分けられない。`client_port` もポートを含む見込み。json を使うなら、`request_line` を分ける新しい組み込みのプロファイルが要る。
+  今は plain を案内し、json 用のプロファイルは作らない
+- 取り込み料金は doctor の既存の仕組みでは見積もれない (doctor が出すのは Insights のスキャンの費用)。手順に量と料金の目安を書く
+
+## 次の段: (a) の仕様の案 (要点。設計書 2-3 章)
+
+S3 のアクセスログを読む新しいソースの種類 (`s3-access-logs`。名前は仮) を足し、arata が gzip のファイルを直接読み、
+Go で解釈して、cloudwatch-logs のソースと**同じ日次集計**を作る。生の行は保存しない。
 
 ADR 0006 は「生ログをダウンロードしてエンジン内でパースする」案を、転送量と処理時間を理由に却下している。その判断は
-「Insights で集計できる CloudWatch Logs のログ」についてのもので、変えない。この ADR は、Insights が使えない S3 のログに限って直接読む、という追加である。
-
-### 仕様の案 (要点。詳しくは設計書 2-3 章)
+「Insights で集計できる CloudWatch Logs のログ」についてのもので、変えない。(a) は、Insights が使えない S3 のログに限って直接読む、という追加である。
 
 - 読む範囲は、今の cloudwatch-logs と同じ「窓に重なる UTC の日の 0 時から窓の終わりまで」で、日次集計を置き換えで保存する (ADR 0009)。
   **「どのファイルまで読んだか」の位置は持たない。** 遅れて届いたファイルは、その日を読み直すたびに自然に入る
@@ -84,7 +119,7 @@ ADR 0006 は「生ログをダウンロードしてエンジン内でパース�
 量の前提: 1 日のログが非圧縮で 3 GB。gzip で 10 分の 1 前後になると置く (推測。ログの中身で変わる。doctor は一覧から圧縮後の実際の量を測る)。
 すると圧縮後は 1 日 0.3 GB、30 日で 9 GB。ファイル数は 1 日 288 個 × ノード数 (2〜3 ノードで 600〜900 個。通信が多いともっと増える [1])。
 
-### (a) S3 のファイルを arata が直接読み、Go で集計する (推奨)
+### (a) S3 のファイルを arata が直接読み、Go で集計する (次の段)
 
 | 観点 | 評価 |
 |---|---|
@@ -125,21 +160,22 @@ ADR 0006 は「生ログをダウンロードしてエンジン内でパース�
 「利用者が管理された結果を設定していること」という条件が付き、設定が違うと書き込みが要る。
 得られるのは量への強さだが、想定する量 (1 日数 GB) では (a) で足りる。量が 1 桁大きい利用者が出たら、この ADR を新しい ADR で置き換えて足す。
 
-### (c1) ALB から CloudWatch Logs に配信してもらい、既存の cloudwatch-logs のソースで読む (代わりの道として文書に書く)
+### (c1) ALB から CloudWatch Logs に配信してもらい、既存の cloudwatch-logs のソースで読む (推奨)
 
-ALB は、従来のログとは別の仕組みで、アクセスログを CloudWatch Logs・Data Firehose・S3 に配信できるようになっている
-(CloudWatch Logs の「vended logs」。コンソールでは ALB の Integrations タブ) [1][3]。
+| 観点 | 評価 |
+|---|---|
+| 読み取り専用 | 守れる。今と同じ Logs Insights の問い合わせだけ |
+| IAM | 追加なし (読み取り専用ロールの既存の `logs:DescribeLogGroups`・`StartQuery`・`GetQueryResults`・`StopQuery`) |
+| 費用 | 利用者側に CloudWatch Logs の取り込み料金 (量に比例。上の理由 4・5) と保管。arata の読み取りは Insights のスキャン (今の http_access のソースと同じ 2〜3 本)。データ転送は集計の結果だけ |
+| 量・実行時間 | 今の cloudwatch-logs のソースと同じ。arata 側の時間はほぼ量に依らない。結果の行数の上限 (10000) も今と同じ |
+| 差分・遅れ | 今と同じ (UTC の日の頭から集計し直す。`ingest_delay`)。配信の遅れは未確認 [3] で、実際のログで見て `ingest_delay` の案内を決める |
+| KMS | ロググループを利用者の鍵で暗号化している場合に読み取りに要る権限は未確認 (今の cloudwatch-logs のソースと同じ扱いになる) |
+| `alb_access` との関係 | そのまま使う。plain・既定の項目・空白区切りが前提。json は読めない (注意点) |
+| doctor | 今のまま (`log_group`・`queries`・`match_rate`)。解釈率が、行の形が合っているかの確認になる |
+| 利用者の準備 | ALB の Integrations タブ (または CloudWatch Logs の配信の API) で、アクセスログを CloudWatch Logs のロググループへ配信する。形式は plain、項目は既定、区切りは空白。ロググループの保持期間を決める |
+| 新しい依存 | 無い |
 
-- arata の変更は不要か、わずか。ロググループに入る行が従来のログと同じ空白区切りなら `alb_access` がそのまま、JSON なら `json` プロファイルで読める。
-  **どちらの形で入るかは公式の文書に書かれておらず、未確認** [3]。sandbox で実際に配信して確かめる
-- 読み取り専用ロールの変更も不要 (既にある `logs:*` の読み取りだけ)
-- 利用者側に CloudWatch Logs の取り込み料金が出る。料金ページの値は、バージニア北部で最初の 10 TB が 1 GB あたり 0.50 USD
-  (要約経由で読んだ値。未確認。東京の単価も未確認) [13]。前提の量 (非圧縮で 30 日 90 GB) なら約 45 USD/月 + 保管 + Insights のスキャン (推測: 取り込みは非圧縮の量で数える)。
-  (a) の利用者側の追加費用はほぼ 0 なので、差は大きい
-- 利用者の作業は ALB の設定だけ (アプリ・サーバーには触れない)。配信の設定に要る権限、従来のログとの併用の可否、配信の遅れは未確認 [3]
-
-位置づけ: 「CloudWatch Logs にお金を払ってよく、arata のロールに S3 の読み取りを足したくない」利用者の道。(a) と排他ではない。
-確かめた後、README とロードマップに書く。`alb_access` をこの配信の形に合わせる必要があるかも、その時に決める。
+弱点: 取り込み料金が量に比例する。行の形が未確認。利用者が形式や項目を変えると合わなくなる (解釈率で気づける)。
 
 ### (c2) S3 Select (採らない)
 
@@ -161,23 +197,29 @@ Lambda・CodeBuild などで動かせば転送料が消える。Lambda ハンド
 
 良い点:
 - nginx のログを CloudWatch Logs に送っていない利用者でも、ALB の設定だけで `login_bruteforce`・`probe_paths`・`endpoint_abuse` が動く
-- 読み取り専用の例外を増やさない。利用者側の追加費用がほぼ無い。新しい依存が無い
-- Go で数えるので、Insights の行数の上限による数え漏れが無く、パスの正規化 (ロードマップ 6 章「パスの照合が生の文字列」) も 1 か所で直せる
+- arata のコード・読み取り専用ロール・依存を変えない (か、`alb_access` の `parse` の小さな直しで済む)。すぐに試せる
+- 量が多い利用者・取り込み料金を避けたい利用者には、(a) という次の段がある
 
 引き受けるコスト:
+- 利用者側に CloudWatch Logs の取り込み料金と保管料が出る。量が多いと (a) より高い
+- 行の形が合うことを、実際のログで確かめるまで約束できない。利用者が配信の形式・項目・区切りを変えると読めなくなる
+- ALB の前に CloudFront などのプロキシがある構成では、送信元がプロキシの IP になり [1]、IP ごとの判定 (`login_bruteforce` など) が意味を持たない。
+  この構成は対象外と文書に書く ((a) でも同じ)
+- 記録はベストエフォート [1] なので、件数は下限として扱う
+
+(a) を実装するときに引き受けるコスト:
 - 読み取り専用ロールに、初めて S3 のオブジェクトの読み取りが入る。バケットと接頭辞で必ず絞り、パラメータが空なら付けない。
   `internal/engine/readonly_role_test.go` の突き合わせも、資源を絞った文を扱えるように直す
 - 集計の実装が Insights (クエリ) と Go の 2 つになる。同じログから同じ日次集計になることを、ゴールデンで固定する
 - AWS の外で動かすと、量に比例して転送料と時間がかかる。doctor の `cost` と `max_download_gb` で見えるようにし、止められるようにする
-- ALB の前に CloudFront などのプロキシがある構成では、`client:port` がプロキシの IP になり [1]、IP ごとの判定 (`login_bruteforce` など) が意味を持たない。
-  この構成は対象外と文書に書き、doctor で気づけるか (送信元の IP が少数に偏る、など) は実装時に検討する
-- 記録はベストエフォート [1] なので、件数は下限として扱う (今の Insights の集計も同じ性質)
-- S3 のデータイベントを CloudTrail で記録している利用者では、arata の GET がその記録を増やす (推測: 設定による)。doctor の案内に書く
+- S3 のデータイベントを CloudTrail で記録している利用者では、arata の GET がその記録を増やす (推測: 設定による)
 
 採用までに確かめること:
-- sandbox で ALB の従来のログを有効にし、実際のファイルで解釈・量・時間を測る (圧縮率、1 日のファイル数、GitHub Actions からの実行時間)
-- (c1) の配信を sandbox で有効にし、ロググループに入る行の形と料金を確かめる
-- 設定の名前 (`s3-access-logs`、`max_download_gb`)、エラーの `code` (バケットが無い・上限を超えた) を既存の語彙に合わせて決める
+- 実際の ALB で CloudWatch Logs への配信 (plain・既定の項目・空白区切り) を有効にし、doctor の解釈率で `alb_access` が合うことを確かめる。
+  合わなければ `parse` を直す。あわせて配信の遅れ、配信の設定に要る権限、取り込み料金の実際の額を見る
+- 確かめた手順を README と `examples/` に書く (ALB の設定、ソースの書き方、料金の目安、対象外の構成)
+- (a) は、必要とする利用者が出た時に、sandbox で従来のログを有効にして量・圧縮率・GitHub Actions からの実行時間を測り、
+  設定の名前 (`s3-access-logs`、`max_download_gb`) とエラーの `code` を決めてから実装する
 
 ## 出典
 
