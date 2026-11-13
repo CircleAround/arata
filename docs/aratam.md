@@ -57,6 +57,11 @@ aratam notify --in /var/lib/arata/out/daily
   ログと通知の code は `INPUT_MISSING` (無い・読めない) / `INPUT_INVALID` (解釈できない) / `INPUT_STALE` (古い)。未知のフィールドは無視する (arata が足したフィールドで止まらないように)。
 - 入力: 期間レポートの `report.md` が無ければ `report.json` から arata と同じ関数 (`internal/report/schema` の `Markdown`) で作る。
 - 入力: 設定の `name` と report.json の `name` が違えば、標準エラーに `NAME_MISMATCH` を出し、通知の冒頭にも警告の行を足す (別の監査対象の出力を送っている取り違えに気付けるように)。
+- 入力 (ADR 0049): report.json に `"dry_run": true` があれば (arata の試しの実行 `run --dry-run` の報告)、**送らない**。標準エラーに `DRY_RUN_REPORT` の WARN を出して終了コード 0。
+  規則で止める: LLM を呼ばず、`.aratam-notified` も書かず、`--force` でも送らない。試しの実行の出力を誤って定時の経路に流しても、通知は飛ばない。
+  入力の問題 (終了コード 4) にはしない (試しただけで緊急用に「実行されていない」が届いてしまう)。
+  `aratam notify --dry-run` (標準出力に出すだけ) では、冒頭に「arata の試しの実行の報告」の注記を足して文面を表示する。
+  `dry_run` を知らない古い aratam は通常どおり送るので、試しの実行を使うなら arata と aratam を同じ版にそろえる。
 - 二重送信の防止: `.aratam-notified` の中身は直近の 1 件の識別子だけ (入力ディレクトリは監査対象・プロファイルごとに分かれ、arata が毎回上書きするため)。
   識別子は run の `run_id`。期間レポートは run_id を持たないので `period:<from>/<to>@<generated_at>` にする (作り直したら別の報告として送る)。
   入力の問題 (終了コード 4) は記録しない (次の cron でもう一度知らせる)。`on_quiet: silent` で送らなかったときは記録する。
@@ -536,7 +541,7 @@ aratam test-notify [-c aratam.yaml] # Slack に試験メッセージを 1 通送
     (notify が前提なしで続けるのと同じ扱い。ADR 0024)。`provider: none` では使わないので `skip`
   - 出力と終了コードは arata の `config check` と同じ形 (`ok` / `warn` / `ng` / `skip`、`ng` があれば 2)
 - プロバイダ名は呼び方を表す (`claude-cli` / `openai-api`)。同じモデルを別の経路で呼ぶプロバイダを足しても名前が衝突しない。
-- 終了コード: 0 = 送った (または on_quiet=silent / 通知済みで送らなかった)、2 = 設定エラー、
+- 終了コード: 0 = 送った (または on_quiet=silent / 通知済み / arata の試しの実行の報告で送らなかった)、2 = 設定エラー、
   3 = LLM が使えず report.md で送った、4 = 入力が無い・古い (その旨は送った)、5 = 送信に失敗した。
 - 送信に失敗したら標準エラーに出して終了コード 5。cron 側の MAILTO などで拾える。
 - 決定: CLI は arata と同じ標準 `flag` の上のコマンド層 (`internal/subcmd`) を共有する。ヘルプの書式・フラグのエラー文言・未知のコマンドで終了コード 2 も arata と同じ。
