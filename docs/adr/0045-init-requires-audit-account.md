@@ -70,7 +70,10 @@ arata を GitHub Actions などで動かす構成では、実行用ロール (`d
 - 監査対象を足すたびに init を使えば、監査そのものの AssumeRole の誤報は起きない。書き忘れは PR の `config check` で止まる
 - 選択が設定に残るので、「別のアカウントから監査している」ことが設定から読める。LLM が finding を調べるときの手がかりにもなる (`arata help ai approve`)
 - **init の互換性が壊れる**: `--audit-account` の無い `arata config init` はエラーになる。手順書・スクリプトは `--audit-account none` か ID を足す
-- `config check` の規則は run / doctor の起動時の検証と同じ、という ADR 0042 の原則に例外が 1 つできる (既知リストとの食い違いは check と doctor だけが止め、run は止めない)
+- `config check` の規則は run / doctor の起動時の検証と同じ、という ADR 0042 の原則に例外が 1 つできる (既知リストとの食い違いは check と doctor だけが止め、run は止めない)。
+  理由: ADR 0042 の原則は「check が通した設定は run でも読め、逆も同じ」ことを守るためのもので、設定と既知リストの **形** の規則は今も同じ (`config.Load`・`allowlist.Parse`)。
+  ここで足したのは形ではなく 2 つのファイルの間の食い違いの検査で、run でも止めると、版を上げた・期限が切れただけで監査が止まる (選択肢 5・6)。
+  食い違いのある run は `unknown_assume_role` (high) で知らせるので黙っては進まず、check は同じ問題をマージの前に止める。例外はこの 1 つに限る
 - `account:` はそのアカウントの全主体を承認する。ロール側の記録の限界で、これより狭くは書けない。読み取り専用ロールを引き受けられる主体は、
   信頼ポリシー (`TrustedPrincipalArn`) で実行用ロールだけに絞る
 - 同じアカウントの中の実行用ロール (`none` の構成) は、今までどおり `arn:` で手で足す。init はそれを書かない (init の出力と手順書で案内する)。
