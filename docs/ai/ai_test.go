@@ -14,7 +14,7 @@ func TestSections(t *testing.T) {
 		"ai approve": {"原則", "allowlist.yaml を PR で直す運用", "承認してよい主体の目安", "SaaS 連携は account で承認する", "行き先を既知にする (assume_destinations)", "監査する側のアカウント (audit_account)", "外部アカウント root の見方", "arn_pattern の使いどころ",
 			"期限付き承認の使いどころ", "tags の語彙", "access_denied が鳴ったとき", "principal_new_source・secret_access が鳴ったとき", "approve ではなく ack / snooze / resolve にするもの"},
 		"ai runtime":       {"使い方", "リポジトリと fork", "ワークフローのトリガー", "OIDC の信頼", "main の保護と書き込み権限", "secrets", "Actions の設定", "ワークフローの形", "監査対象の前提 (context_file) の下書き", "報告の書き方"},
-		"ai onboarding":    {"流れ", "最初の run で出るもの", "1 件ずつ片付ける", "ack・snooze・resolve の使い分け", "導入作業の記録を拾う", "定時の通知を始める"},
+		"ai onboarding":    {"流れ", "最初の run で出るもの", "1 件ずつ片付ける", "ack・snooze・resolve の使い分け", "導入作業の記録を拾う", "定時の通知を始める", "チェックやソースを後から足すとき", "設定の値は、推測せずに実データとアプリのコードで決める"},
 		"ai logs":          {"使い方", "チェックと記録の対応", "記録ごとの集め方", "保存期間と費用", "設定の書き方", "確かめ方", "よく詰まる点", "外部の拠り所"},
 		"ai request_lines": {"使い方", "見本 (Rails の既定のログ)", "書き方の決まり", "鍵 (request.id) の書き方", "ステータスの行が複数あるリクエスト (Devise のログインの失敗)", "確かめ方", "送る側が選べる値", "数え方"},
 		"ai playbook":      {"使い方", "一覧"},
@@ -259,7 +259,32 @@ func TestOnboarding(t *testing.T) {
 			t.Errorf("導入作業の記録を拾う lacks %q", want)
 		}
 	}
-	// 顧客の情報を書かない: アカウント ID は架空の値だけ、メールアドレスは書かない
+	// 理由: 通知が雑音ばかりだと読まれなくなる。だから通知の前に片付ける
+	if !strings.Contains(sec["流れ"], "雑音") {
+		t.Errorf("流れ must say why the findings are settled before notifying")
+	}
+	// 後から足すとき: 最初の導入と同じ順 (手元の設定で doctor → 試しの実行 → 定時の実行が読む設定に入れる → 通知なしのふつうの run → 片付け → 定時)。
+	// 落とし穴 (足した後の最初の定時の実行が通知つきだと、溜まっていた指摘がそのまま出る) と、足す時機を書く
+	pos = -1
+	for _, want := range []string{"arata config check", "arata doctor", "--dry-run --window", "定時の実行が読む設定に入れる", "通知をつながずに", "arata review", "定時の実行に任せる"} {
+		i := strings.Index(sec["チェックやソースを後から足すとき"][pos+1:], want)
+		if i < 0 {
+			t.Fatalf("チェックやソースを後から足すとき lacks %q (or it is out of order)", want)
+		}
+		pos += 1 + i
+	}
+	for _, want := range []string{"落とし穴", "定時の実行の直後", "examples/github-actions", "`dry_run`"} {
+		if !strings.Contains(sec["チェックやソースを後から足すとき"], want) {
+			t.Errorf("チェックやソースを後から足すとき lacks %q", want)
+		}
+	}
+	// 設定の値: 実データとアプリのコードで決める。詳しい内容は request_lines と logs に任せ、ここには書き写さない
+	for _, want := range []string{"failure_statuses", "request_id", "実際のステータスと見比べる", "arata help ai request_lines", "arata help ai logs", "request.id", "取り違え", "param_fields", "filter_parameters", "ライブラリの版"} {
+		if !strings.Contains(sec["設定の値は、推測せずに実データとアプリのコードで決める"], want) {
+			t.Errorf("設定の値は、推測せずに実データとアプリのコードで決める lacks %q", want)
+		}
+	}
+	// 顧客の情報を書かない: アカウント ID は架空の値だけ、メールアドレスも IP アドレスも書かない
 	for _, id := range regexp.MustCompile(`\b\d{12}\b`).FindAllString(body, -1) {
 		if id != "123456789012" && id != "111122223333" {
 			t.Errorf("account id %s (use 123456789012 / 111122223333)", id)
@@ -268,11 +293,49 @@ func TestOnboarding(t *testing.T) {
 	if m := regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`).FindString(body); m != "" {
 		t.Errorf("email address %q", m)
 	}
+	if m := regexp.MustCompile(`\b\d{1,3}(\.\d{1,3}){3}\b`).FindString(body); m != "" {
+		t.Errorf("ip address %q", m)
+	}
 	// 入口と、状態を変える判断の文書から案内している
 	for _, sub := range []string{"", "approve"} {
 		other, _ := Lookup(sub)
 		if !strings.Contains(other.Markdown(), "arata help ai onboarding") {
 			t.Errorf("help %s must point to arata help ai onboarding", other.Name)
+		}
+	}
+}
+
+// TestDeviseStatus は Devise のログの 401 を、版と条件を付けた事実として書いていることを固定する。
+// 決定: 「HTTP の 401 ではない」と言い切らない (API や XHR のログインでは本当の 401 を返す)。確かめ方を必ず添える。
+func TestDeviseStatus(t *testing.T) {
+	for _, sub := range []string{"request_lines", "logs", "onboarding"} {
+		tp, err := Lookup(sub)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, bad := range []string{"HTTP の 401 ではない", "`[401]` は書かない"} {
+			if strings.Contains(tp.Markdown(), bad) {
+				t.Errorf("help %s must not state %q unconditionally", tp.Name, bad)
+			}
+		}
+	}
+	tp, _ := Lookup("request_lines")
+	var body string
+	for _, s := range tp.Parse().Sections {
+		if s.Title == "ステータスの行が複数あるリクエスト (Devise のログインの失敗)" {
+			body = s.Body
+		}
+	}
+	for _, want := range []string{
+		"devise 4.9.4", "違うことがある", "throw :warden", // 版と、ログの 401 が入る仕組み
+		"recall", "redirect", "http_auth", "本当の 401", "XHR", // failure app の場合分け
+		"error_status", "navigational_formats", "http_authenticatable", "failure app や strategy", // 変わり得る設定
+		"見比べる", "ALB", // 確かめ方
+		"recall と分かった場合", "`[200]`", "`[422]`", // failure_statuses の勧めは条件付き
+		"確かめたアプリでは", // 401 だけで終わる場合も条件付き
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("request_lines (Devise) lacks %q", want)
 		}
 	}
 }
@@ -297,7 +360,7 @@ func TestLogs(t *testing.T) {
 		"設定の書き方":  {"kind: cloudwatch-logs", "prod-nginx-access", "format: json", "fields:", "expected_match_rate", "stream_prefix"},
 		"確かめ方":    {"arata doctor", "match_rate", "FORMAT_MISMATCH", "LOG_GROUP_MISSING", "skip", "coverage.formats"},
 		// 一般化した詰まりやすい点: Devise の 200、配信先のロググループ名、複数行のログ、証跡が無くても動くこと
-		"よく詰まる点": {"Devise", "failure_statuses: [200]", "HTTP の 401 ではない", "最後の値", "`[422]`", "error_status", "/aws/vendedlogs/", "複数行", "LookupEvents", "X-Forwarded-For"},
+		"よく詰まる点": {"Devise", "failure_statuses: [200]", "devise 4.9.4", "実際の応答と違うことがある", "本当の 401", "見比べ", "最後の値", "`[422]`", "error_status", "/aws/vendedlogs/", "複数行", "LookupEvents", "X-Forwarded-For"},
 		"外部の拠り所": {"Well-Architected", "CIS AWS Foundations Benchmark"},
 	} {
 		for _, want := range wants {

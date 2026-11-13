@@ -77,14 +77,21 @@ I, [2026-11-01T01:02:03.214000 #1]  INFO -- : [5b0c1d2e-7a3f-4c1b-9e2d-0a1b2c3d4
 I, [2026-11-01T01:02:03.230000 #1]  INFO -- : [5b0c1d2e-7a3f-4c1b-9e2d-0a1b2c3d4e5f] Completed 200 OK in 16ms
 ```
 
-- **ログの `Completed 401` は HTTP の 401 ではない**。認証に失敗してアクションが `throw :warden` で打ち切られたときに、Devise がログ用に入れる値。実際の応答は、そのあとで作られる
-- **パスワードの誤り・該当者なし**: 上の形。ログイン画面を描き直し (recall)、最後の `Completed` が応答のステータスになる。
-  responder の `error_status` がライブラリの既定 (`:ok`) なら 200、`:unprocessable_entity` (4.9 以降に生成した initializer) なら 422
-- **`Completed 401` だけで終わる**: パスワードは合っているが、アカウントが有効でない場合 (confirmable の未確認など)。HTTP ではログイン画面への 302 で、パスワードの誤りではない
+- **ログの `Completed 401` は、実際の応答と違うことがある** (devise 4.9.4 / warden 1.2.9 / Rails 7.1 の実装を読み、動かして確かめた)。
+  アクションの途中で `throw :warden` されると、Devise は応答が決まる前に、ログ用のステータスを 401 にする。実際の応答は、そのあと failure app が作り、場合によって違う
+  - **recall** (ログイン画面を描き直す。上の形。パスワードの誤り・該当者なし): 最後の `Completed` が応答のステータスになる。
+    responder の `error_status` がライブラリの既定 (`:ok`) なら 200、`:unprocessable_entity` (4.9 以降に生成した initializer) なら 422
+  - **redirect**: 応答は 302 で、ログは `Completed 401` だけで終わる。確かめたアプリでは、パスワードは合っているがアカウントが有効でない場合 (confirmable の未確認など) だった
+  - **http_auth**: 本当の 401 (ログの `Completed 401` がそのまま応答)。XHR (`http_authenticatable_on_xhr` は既定で true)、
+    `navigational_formats` に入らない format (JSON の API など)、`http_authenticatable` を有効にした場合
+- つまり、HTML のフォームのログインでは、ログの 401 と実際の応答が違うことがある。API や XHR のログインでは、ログの 401 が実際の 401
 - 成功は `Completed 302` (設定によっては 303) が 1 回
-- そこで `checks.login_bruteforce` は、`error_status` が既定なら `failure_statuses: [200]`、`:unprocessable_entity` なら `[422]` と書く (`methods: [POST]` のまま。POST の 200 は失敗だけ)。
-  **`[401]` は書かない**: 401 で数えると、パスワードの誤り (最後は 200 / 422) は 1 件も入らず、正しいパスワードでの未確認ログインだけが入る
-- どちらの設定のアプリかは、ログインの失敗を 1 回起こし、その request_id の行を Logs Insights で見て確かめる
+- **自分のアプリで確かめる**: 版や設定 (`error_status`・`navigational_formats`・`http_authenticatable`・独自の failure app や strategy) で変わり得る。
+  ログインの失敗を 1 回起こし、その request_id の行を Logs Insights で見て、ブラウザや ALB のログに出る実際のステータスと見比べる
+- `checks.login_bruteforce` の `failure_statuses` は、HTML のフォームのログインで、上の確かめ方で recall と分かった場合は、最後の値に合わせて
+  `[200]` (`error_status` が `:unprocessable_entity` なら `[422]`) と書く (`methods: [POST]` のまま。成功が 302 / 303 なら、POST の 200 は失敗だけ)。
+  この場合に `[401]` と書くと、パスワードの誤り (最後は 200 / 422) は 1 件も入らず、`Completed 401` だけで終わるリクエストだけが入る。
+  API や XHR のログインで、本当の 401 を返すと確かめた場合は `[401]`
 
 ## 確かめ方
 

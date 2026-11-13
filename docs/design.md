@@ -309,10 +309,16 @@ Rails の既定のログは、送信元とパスが最初の行 (`Started …`)�
   経路の無いリクエストの RoutingError の行もこの形で、そのリクエストには最後の行 (`Completed`) が出ない
 - 1 つの request_id に `Completed` が 2 回出るリクエストがある。Rails はアクションごとに `Completed` を出す。Devise のログインでパスワードが違うとき (該当者なしも同じ) は
   `Processing by …SessionsController#create` → `Completed 401 Unauthorized` → `Processing by …SessionsController#new` → `Completed 200 OK` になる。
-  **この 401 は HTTP の 401 ではない**: アクションが `throw :warden` で打ち切られ、ステータスが決まらないままのときに、Devise がログ用に入れる値 (Devise の実装を読んで確認)。
-  実際の応答は、そのあと failure app が作る。recall (ログイン画面の描き直し) なら responder の `error_status` (ライブラリの既定は 200、`:unprocessable_entity` なら 422) で、
-  **最後の `Completed` がクライアントに返したステータス**になる。recall の無い失敗 (パスワードは合っているが、アカウントが有効でない。confirmable の未確認など) は
-  ログイン画面へのリダイレクト (HTTP では 302) で、ログには `Completed 401` だけが出る。CSRF の検証の失敗は `Completed 422` のあと例外の画面で `Completed 500` になる例がある
+  **この 401 は、実際の応答と違うことがある** (devise 4.9.4 / warden 1.2.9 / Rails 7.1 の実装を読み、1 つのアプリで動かして確かめた)。
+  アクションの途中で `throw :warden` されると、Devise は応答が決まる前に、ログ用のステータスを 401 にする (`lib/devise/controllers/helpers.rb` の `payload[:status] ||= 401 unless payload[:exception]`)。
+  実際の応答は、そのあと failure app (`lib/devise/failure_app.rb`) が作り、場合によって違う。
+  - recall (ログイン画面の描き直し): responder の `error_status` (ライブラリの既定は 200、`:unprocessable_entity` なら 422)。**最後の `Completed` がクライアントに返したステータス**になる
+  - redirect: 302。ログには `Completed 401` だけが出る。確かめたアプリでは、パスワードは合っているがアカウントが有効でない場合 (confirmable の未確認など) だった
+  - http_auth: 本当の 401。XHR (`http_authenticatable_on_xhr` が既定で true)、`navigational_formats` に入らない format (JSON の API など)、`http_authenticatable` を有効にした場合
+  - つまり、HTML のフォームのログインでは、ログの 401 と実際の応答が違うことがあり、API や XHR のログインでは、ログの 401 がそのまま実際の 401
+  - 決定 (書き方): 文書では「HTTP の 401 ではない」と言い切らず、版と条件を付けた事実として書く。版や設定 (`error_status`・`navigational_formats`・`http_authenticatable`・独自の failure app や strategy) で変わり得るので、
+    「ログインの失敗を 1 回起こし、その request_id の行と、ブラウザや ALB のログに出る実際のステータスを見比べる」という確かめ方を必ず添える (`docs/ai` の `TestDeviseStatus` が固定する)
+  - CSRF の検証の失敗は `Completed 422` のあと例外の画面で `Completed 500` になる例がある
 - `count_distinct` は概数で、実際の数より数 % 多く出た例がある (この形式では使っていない。request_id の数は 2 段目の `count(*)` で正確に数える)
 - 一時フィールドは同じ名前を 2 度定義できない
 - Rails は `X-Request-Id` ヘッダーの値から英数字・`_`・`-`・`@` 以外を除き、255 文字までを request_id に使う。除いた結果が空になる値 (記号だけ) を送ると、
@@ -347,10 +353,11 @@ Rails の既定のログは、送信元とパスが最初の行 (`Started …`)�
   (スキャン量は変わらない)。`lines_total` / `lines_matched` は、日の境目の余白の分だけ概数になる
 - **本数は 1 行のログと同じ 3 本** (解釈率 + `probe_paths`、`sign_in_failures` + `probe_hits`、endpoint_abuse)。パスの印 (探索パス・画面の glob) は最初の行のパスから 1 段目の前に作る
 - 日次の metric を 3 つ足す (key なし): `requests_total`・`requests_complete`・`request_id_reused`
-- **status は最後の `Completed` (recall の後の値) を使う** (`latest`。今の動きのまま。取り方を選ぶ設定は足さない)。最初の値は、正しいパスワードでの未確認ログイン
-  (`Completed 401` だけで終わる) も含むので使わない。最初の値で数えると、パスワードの誤りとアカウントの状態による拒否が混ざり、総当たりの数にならない。
+- **status は最後の `Completed` (recall の後の値) を使う** (`latest`。今の動きのまま。取り方を選ぶ設定は足さない)。最初の値は、recall にならない失敗 (`Completed 401` だけで終わる redirect。確かめたアプリでは、正しいパスワードでの未確認ログイン)
+  も含むので使わない。最初の値で数えると、パスワードの誤りとアカウントの状態による拒否が混ざり、総当たりの数にならない。
   最後の値は 1 行のログ (ALB・nginx) が持つステータスと同じ意味になり、`checks.login_bruteforce` の `failure_statuses` を同じ考え方で書ける
-  (Devise なら `error_status` が既定のとき `[200]`、`:unprocessable_entity` のとき `[422]`。POST の成功は 302 / 303 なので、POST の 200 は失敗だけ)。
+  (Devise の HTML のフォームのログインで、recall と確かめた場合は、`error_status` が既定のとき `[200]`、`:unprocessable_entity` のとき `[422]`。POST の成功が 302 / 303 なら、POST の 200 は失敗だけ。
+  API や XHR のログインで本当の 401 を返す場合は、`Completed` は 1 回で、最後の値は 401 のまま)。
   却下した案: `request.status_from: first | last` を足して最初の値を選べるようにする (上の理由で、選べても勧められる場面が無い)。duration も最後の値のまま
 - `set` は「その行の種類があり、status がほかの行から取れなかったリクエスト」にだけ効く。クエリは `coalesce(<取れた status>, if(<その行の数> > 0, "<値>", ""))` の形で、
   どちらも無いリクエストの status は空の文字列になる (空はステータスなしとして扱う)。偽の Insights (`cwlogstest.Sim`) は、else に項目を置く `if()` のクエリを受け付けない (同じ誤りをテストで止める)
@@ -1364,6 +1371,10 @@ approve は人の判断を経て実行する。
   報告が来なくなると困るものを ack にしない。規則 (6 章の状態遷移) は変えず、使い方の基準だけを書く
 - 却下: init が run まで続けて行う (init が finding を出さない前提が崩れ、通知をつないだ実行と区別できない)。
   「最初の run は通知しない」を arata の機能にする (arata は通知を知らない。ADR 0018)。README だけに書く (版とずれる。ADR 0012)
+- 決定 (同じ文書に、理由・後から足すときの流れ・設定の値の決め方を足す): 手順だけでは「なぜ通知の前に片付けるか」が伝わらないので、冒頭に理由 (通知が雑音ばかりだと読まれなくなる) を書く。
+  チェックやソースを後から足すときも、足した後の最初の run は溜まっていた指摘を一度に出すので、最初の導入と同じ順 (doctor → 試しの実行 → 定時の実行が読む設定に入れる → 通知なしのふつうの run → 片付け → 定時) を書く。
+  設定の値 (`failure_statuses`・`request.id`・`param_fields`) は実データとアプリのコードで決めると書き、読み方の詳細は `arata help ai request_lines` / `logs` に任せて書き写さない (二重に持つとずれる。Devise のログの 401 も、onboarding からは案内するだけにする)。
+  見本のワークフローの入力は `dry_run` と `window` だけで、通知を止めたふつうの run の入力は無いので、記録の run は手元で流すと書く (入力を足すかは別に決める)
 
 決定 (記録の集め方を arata から引けるようにする): どの記録があればどのチェックが動くか、その記録をどう出すかは 2 章と ADR (0006・0028・0046 など) に散らばり、
 利用者が読む場所が無かった。`arata help ai logs` (docs/ai/logs.md) にまとめる。
