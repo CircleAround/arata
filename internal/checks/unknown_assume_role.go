@@ -125,16 +125,20 @@ var (
 )
 
 // assumeSummary は見出し。向きが決まれば「自アカウントの … / 外部アカウント NNN の …」と向きを書き、決まらなければ従来の形 (ARN のまま) にする。
-func assumeSummary(p assumeParties, caller, role string, count int, mfa string) string {
+// 決定 (設計書 6 章): accountOnly (呼び出し元がアカウントしか分からない) なら、呼び出し元を record.AccountOnlyLabel の文で書く。
+// ARN の末尾の `root` を表記に使わない (ルートユーザーと読める)。向きが決まらないときの caller も、呼ぶ側が同じ文にして渡す。
+func assumeSummary(p assumeParties, accountOnly bool, caller, role string, count int, mfa string) string {
 	if p.direction == "" {
 		return fmt.Sprintf("既知リストに無い %s が %s を %d 回引き受け (%s)", caller, role, count, mfaLabels[mfa])
 	}
 	who := "自アカウントの " + p.callerLabel
-	if p.direction == dirInbound {
-		who = "外部アカウント " + p.callerAccount
-		if p.callerLabel != "root" {
-			who += " の " + p.callerLabel
-		}
+	switch {
+	case accountOnly && p.direction == dirInternal:
+		who = "自アカウント (呼び出した主体は記録に無い)" // 自アカウントの ID しか無い記録。「外部」とも root とも書かない
+	case accountOnly:
+		who = record.AccountOnlyLabel(p.callerAccount)
+	case p.direction == dirInbound:
+		who = "外部アカウント " + p.callerAccount + " の " + p.callerLabel
 	}
 	target := "自アカウントのロール " + p.roleLabel
 	if p.direction == dirOutbound {
@@ -180,9 +184,9 @@ func (c UnknownAssumeRole) Evaluate(ctx context.Context, q store.Query, w collec
 			a.extra["caller_kind"] = string(e.PrincipalKind)
 			a.extra["role_arn"] = role
 			a.extra["allowlist_status"] = string(status)
-			if acct, ok := record.ExternalAccount(e.PrincipalARN, e.PrincipalKind); ok {
-				a.extra["external_account"] = acct
-			}
+			// 決定 (設計書 6 章): 呼び出し元がアカウントしか分からないとき (ロール側の記録) は caller_identity: account_only を足す。
+			// caller と Key は ARN (`...:root`) のまま。caller_kind は主体の種類の語彙のまま (approve が種類として読む)
+			markAccountOnly(a.extra, "caller_identity", e.PrincipalARN, e.PrincipalKind)
 			aggs[k] = a
 		}
 		a.add(e.Time, e.Name, e.IP)
@@ -223,14 +227,15 @@ func (c UnknownAssumeRole) Evaluate(ctx context.Context, q store.Query, w collec
 			a.extra["invoked_by"] = capList(sortedKeys(a.services), maxInvokedBy)
 		}
 		caller := a.caller
-		if acct, ok := a.extra["external_account"].(string); ok {
-			caller = "外部アカウント " + acct
+		acct, accountOnly := record.ExternalAccount(a.caller, a.kind)
+		if accountOnly {
+			caller = record.AccountOnlyLabel(acct)
 		}
 		obs[k] = Observation{
 			Check:    c.Name(),
 			Key:      k,
 			Severity: High,
-			Summary:  assumeSummary(p, caller, a.role, a.count, mfa),
+			Summary:  assumeSummary(p, accountOnly, caller, a.role, a.count, mfa),
 			// 決定: Fingerprint は変えない (向きは Key から決まる。MFA を足すと既存の finding が一斉に changed になる)
 			Fingerprint: fingerprint(High, a.ips, a.extra["allowlist_status"]),
 			Data:        a.data(),

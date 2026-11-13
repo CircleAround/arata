@@ -3,7 +3,17 @@
 ## この指摘の意味
 
 allowlist に無い主体 (呼び出し元) が IAM ロールを引き受けた、または引き受けようとした (hourly、high)。
-AWS のサービス主体 (EC2・Lambda などのインスタンスロール) は対象外。外部アカウントからのクロスアカウントの引き受けは「外部アカウント NNN」と表示される。
+AWS のサービス主体 (EC2・Lambda などのインスタンスロール) は対象外。
+
+### 呼び出し元がアカウントしか分からないとき (`caller_identity: account_only`)
+
+引き受けられた側 (ロールのあるアカウント) の CloudTrail には、呼び出し元のアカウント ID しか残らない。相手のどの主体 (IAM ユーザー・ロール・CI) かは記録に無い。
+
+- 見出しは「既知リストに無い外部アカウント 111122223333 (呼び出した主体は記録に無い) が自アカウントのロール Admin を 3 回引き受け (内向き、MFA 不明)」
+- `caller` と Key の `arn:aws:iam::111122223333:root` は**アカウントそのもの**を指す ARN (承認・ack との一致のため変えていない)。
+  **相手のルートユーザーが使われたことを表さない**。正規の CI や SaaS のロールの引き受けも同じ形になる
+- 「外部アカウント 111122223333」と書く。「111122223333 の root」「ルートユーザーから」と書かず、ルートユーザーの利用を理由に緊急度を上げない
+- どの主体だったかは相手のアカウントの CloudTrail にある。相手の管理者に時刻 (`first_time`〜`last_time`) とロール (`role_arn`) を伝えて確かめてもらう
 
 見出しの末尾の括弧に、引き受けの**向き**と **MFA** が規則で書かれる。向きを自分で推測しない・書き換えない。
 
@@ -16,7 +26,7 @@ AWS のサービス主体 (EC2・Lambda などのインスタンスロール) �
 - **MFA** (`mfa`): `true` (あり)・`false` (なし)・`unknown` (不明。記録に MFA の項目が無い。**「なし」ではない**)・`mixed` (イベントによって違う)
 
 - Key は `<呼び出し元 ARN>-><引き受けたロール ARN>`
-- data: `caller`、`caller_kind`、`role_arn`、`direction`・`caller_account`・`role_account` (向きが決まったとき)、`mfa`、`external_account` (外部アカウントのとき)、`allowlist_status` (unknown / expired)、`count`、`ips`、`event_names` (AssumeRole / AssumeRoleWithWebIdentity / AssumeRoleWithSAML など)、
+- data: `caller`、`caller_kind`、`caller_identity` (`account_only` のときだけ)、`role_arn`、`direction`・`caller_account`・`role_account` (向きが決まったとき)、`mfa`、`external_account` (そのときのアカウント ID)、`allowlist_status` (unknown / expired)、`count`、`ips`、`event_names` (AssumeRole / AssumeRoleWithWebIdentity / AssumeRoleWithSAML など)、
   `has_errors` (失敗した引き受けを含む)、`invoked_by` (送信元の IP が無く、AWS のサービス経由のとき。コンソールのスイッチロールなど)
 - `ips` が無いのは、記録の送信元が AWS のサービス名で IP が無いとき (収集で落としているのではない)
 
@@ -65,7 +75,7 @@ AWS のサービス主体 (EC2・Lambda などのインスタンスロール) �
 1. **封じ込め** (侵害の疑い): ロールの信頼ポリシーから不審な主体を外す。発行済みのセッションは IAM > ロール > 対象の `Revoke sessions` で失効できる
    (`AWSRevokeOlderSessions` のインラインポリシーが付き、それより前に発行されたセッションを拒否する)
    外向きのときは、自アカウントで止められるのは呼び出し元だけ (呼び出し元のアクセスキーの無効化、`sts:AssumeRole` の権限を絞る)。外部アカウントのロールのセッションは相手の管理者が失効する
-2. **承認**: 正規なら `arata approve <id> --note "<理由>"` を人に提案する。外部アカウントの root は `account:` で承認される。期限付きの委託は `--expires`。基準は `arata help ai approve`
+2. **承認**: 正規なら `arata approve <id> --note "<理由>"` を人に提案する。`caller_identity: account_only` の finding は `account:` で承認される。期限付きの委託は `--expires`。基準は `arata help ai approve`
 3. **expected_denied**: 対象外 (access_denied のための設定)
 4. **ack / snooze**: 承認したくないが当面続くもの (移行期間など) は ack、終わりが決まっているものは snooze
 5. **設定の修正**: SaaS 連携の信頼ポリシーに `sts:ExternalId` の条件を付ける、Principal をアカウント全体ではなく特定のロールにする
@@ -75,5 +85,6 @@ AWS のサービス主体 (EC2・Lambda などのインスタンスロール) �
 - 外部アカウント ID を確かめずに `account:` で承認を提案しない (そのアカウントの全主体を通すことになる)
 - 信頼ポリシーの変更やセッションの失効を LLM が実行しない
 - 「外部アカウント NNN」を自アカウントのルートユーザーの利用 (root_usage) と混同しない
+- `caller_identity: account_only` の呼び出し元を「NNN の root」「ルートユーザー」と書かない (その証拠は記録に無い)
 - 向きを逆に書かない。外向き (自アカウントの主体が外部のロールを引き受けた) を「外部の主体が自アカウントのロールを引き受けた」と要約しない。見出しの括弧と `direction` のとおりに書く
 - `mfa: unknown` を「MFA なし」と書かない

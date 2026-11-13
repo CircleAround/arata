@@ -79,6 +79,20 @@ func PrincipalLabel(arn string, kind PrincipalKind) string {
 	return arn
 }
 
+// IdentityAccountOnly は finding の data (`caller_identity`・`principal_identity`) に書く値。
+// 主体がアカウントしか分からない (ExternalAccount) ことを表す。主体の種類 (PrincipalKind。`caller_kind` など) とは別の項目にする。
+//
+// 決定 (設計書 6 章): `arn:aws:iam::NNN:root` はアカウントそのものを指す ARN で、そのアカウントのルートユーザーが使われたことを表さない。
+// Key と data の ARN は変えない (既存の ack・既知リスト・approve との一致が外れる) ので、読む側 (人・LLM) が取り違えないよう、
+// この値と AccountOnlyLabel の文で「呼び出した主体は記録に無い」ことを明示する。
+const IdentityAccountOnly = "account_only"
+
+// AccountOnlyLabel は、アカウントしか分からない主体を見出しに書くときの表記。root・ルートの語を含めない。
+// report/schema の AccountOnlyLabel (report.md と通知の表記) と同じ文 (internal/report のテストが確かめる)。
+func AccountOnlyLabel(account string) string {
+	return "外部アカウント " + account + " (呼び出した主体は記録に無い)"
+}
+
 // serviceDomain は AWS のサービス名の形 (`<名前>.amazonaws.com`。小文字の英数字・`.`・`-`)。長さは ServiceName が見る。
 const serviceDomain = `[a-z0-9][a-z0-9.-]*\.amazonaws\.com`
 

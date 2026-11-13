@@ -6,7 +6,7 @@ allowlist にもベースライン (`arata init` の時点で見えた主体) �
 承認されるまで毎回観測され、still_open として残る。承認の期限が切れた主体も `allowlist_status: expired` で出る。
 
 - Key は主体の ARN (ロールのセッションはロールの ARN にまとめる)。ルートは root_usage が扱うので対象外
-- data: `kind` (user / role / assumed-role / unknown)、`external_account`、`first_seen` / `last_seen`、`count`、`ips`、`allowlist_status`
+- data: `kind` (user / role / assumed-role / unknown)、`external_account`・`principal_identity` (`account_only`。主体がアカウントしか分からない。ルートユーザーの利用ではない)、`first_seen` / `last_seen`、`count`、`ips`、`allowlist_status`
 
 ## まず確かめること
 

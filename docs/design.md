@@ -574,6 +574,19 @@ secrets_access:
 - 複数のエントリに一致するときは、有効な (expires 前の) 承認が 1 つでもあれば approved。返すエントリ (タグの判定に使う) は有効なもののうち最も具体的なもの (arn > arn_pattern > account)。一致したものが全部期限切れなら expired。
 - CloudTrail の `userIdentity.type` が `AWSAccount` (他アカウントからのクロスアカウント AssumeRole) の主体は `arn:aws:iam::<アカウント>:root` (kind は unknown) に正規化される。
   レポートの文面ではこれを「外部アカウント NNN」と書き、Data に `external_account` を添える。自アカウントの Root (kind=root、root_usage が扱う) とは区別する。
+- 決定 (呼び出し元がアカウントしか分からない主体): 上の `arn:aws:iam::NNN:root` はアカウントそのものを指す ARN で、そのアカウントのルートユーザーが使われたことを表さない
+  (引き受けられた側の CloudTrail には呼び出し元のアカウント ID しか残らない。正規の CI や SaaS のロールも同じ形)。
+  内向きの unknown_assume_role で、読む人と LLM が「NNN の root から引き受けられた」と読み、ルートユーザーの利用として緊急に扱ったことがあったため、次のとおり区別する。
+  - finding の data に、`external_account` と並べて `caller_identity: account_only` (unknown_assume_role) / `principal_identity: account_only`
+    (new_principal・access_denied・secret_access・principal_new_source) を足す (`checks.markAccountOnly`)。
+    `caller_kind` などの主体の種類 (user / role / assumed-role / root / service / unknown) は変えない。種類の語彙に「分からない範囲」を混ぜず、approve が種類として読む値を保つため
+  - unknown_assume_role の見出しは「既知リストに無い外部アカウント 111122223333 (呼び出した主体は記録に無い) が自アカウントのロール Admin を 3 回引き受け (内向き、MFA 不明)」。
+    ARN の末尾の `root` を表記に使わない (呼び出し元もロールも自アカウントなら「自アカウント (呼び出した主体は記録に無い)」)
+  - report.md は、その finding の data の値がその ARN そのものなら「外部アカウント NNN (呼び出した主体は記録に無い)」と書く (`schema.Finding.AccountOnlyText`)。
+    見分けるのは `external_account` (この決定より前の版が作った finding にもある。still_open は data を書き換えない)
+  - Key・Fingerprint・data の `caller` / `principal`・report.json の値は ARN のまま。変えると既存の ack / snooze・既知リスト (`account:`)・approve の対象との一致が外れ、
+    open の finding が一斉に解消 + 新規になる。却下: Key を `account:NNN->...` に変える (移行が要り、得るものは表記だけ)、`caller_kind` を `account_only` にする (上の理由)
+  - LLM の要約の側の守りは aratam (aratam 設計書 3 章。プロンプトと、出力の置換・検査)
 - 決定: `userIdentity.type` も `arn` も無い記録は、`invokedBy` があればそのサービス、`sourceIPAddress` か `userAgent` が `AWS Internal` なら `eventSource` のサービスを主体 (kind=service) にする。
   監査対象アカウントの accountId だけが入った ECR の `PolicyExecutionEvent` などが、自アカウントの `:root` (unknown) として new_principal に出るのを避けるため。
   サービスの主体は principal_seen にも new_principal にも出ない。本物の root は `type=Root` で root_usage が扱う。`type=AWSAccount` の外部アカウントは従来どおり `外部アカウント NNN`。
@@ -736,7 +749,7 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 - 決定 (ADR 0027 で見直し、変えない): 平常帯を使うかは「拒否のある過去日」で数えたまま (principal_new_source / secret_access の「収集し終えた日」にしない)。拒否の少ない主体は収集済みの日で数えても中央値 0 で同じ閾値になり、拒否の多い主体は拒否のある日が min_baseline_days に届くので結果は実質変わらない (足りない間は平常帯 0 = 絶対の閾値で、鳴りやすい側に倒れる)
 - 決定 (ADR 0022): 想定済みの拒否 (allowlist の `expected_denied`。窓の終わりの時点で期限内の項目) は数える前に除く。窓にも平常帯の過去分にも同じく適用する (平常帯に残すと、ふだんの想定内の拒否で平常帯が膨らみ想定外の拒否を吸収するため)。窓で除いた件数は Data の `expected_denied_excluded`
 - 決定: サービスリンクロール (主体の ARN が `:role/aws-service-role/` を含む。AWS のサービスだけが引き受け、権限は利用者が変えられない) の拒否は窓にも平常帯にも数えない。仕様由来のノイズ (例: AWS Config のロールが毎日多数の API で拒否される) で、盗んだ認証情報による権限の探索に当たらないため。どの利用者でも同じなので設定にせず固定の規則とする (ADR 0021 の延長)。events への保存は変えない
-- サービス主体と root は対象外。allowlist で承認済みでも対象 (想定内の拒否は `expected_denied` で除く。主体ごと止めるなら ack / snooze だが、重大度が上がれば再報告される)。Data: principal, principal_kind, allowlist_status, external_account, count, distinct_apis, expected_denied_excluded, apis (件数の多い順に最大 10 個、`iam:ListUsers × 3`), error_codes, ips, first_time, last_time, baseline_median_count, baseline_median_distinct, threshold (`breadth` / `volume`)
+- サービス主体と root は対象外。allowlist で承認済みでも対象 (想定内の拒否は `expected_denied` で除く。主体ごと止めるなら ack / snooze だが、重大度が上がれば再報告される)。Data: principal, principal_kind, allowlist_status, external_account, principal_identity (`account_only`。主体がアカウントしか分からないときだけ), count, distinct_apis, expected_denied_excluded, apis (件数の多い順に最大 10 個、`iam:ListUsers × 3`), error_codes, ips, first_time, last_time, baseline_median_count, baseline_median_distinct, threshold (`breadth` / `volume`)
 
 決定 (defense_evasion / public_exposure。ADR 0026):
 

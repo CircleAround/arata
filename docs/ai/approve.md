@@ -41,9 +41,9 @@ PR は提案で、承認するのは差分を見てマージする人 (上の原
 ## SaaS 連携は account で承認する
 
 監視 SaaS などの SaaS は、自社の AWS アカウントからクロスアカウントで AssumeRole してくる。
-CloudTrail ではその主体が「外部アカウント NNN」(`arn:aws:iam::NNN:root`) に見える。
+引き受けられた側の CloudTrail には呼び出し元のアカウント ID しか残らないので、その主体は「外部アカウント NNN」(`arn:aws:iam::NNN:root`。アカウントそのものを指す ARN) に見える。
 
-- 外部アカウントの root の finding を approve すると、`account: "NNN"` (そのアカウントの全主体) で承認される
+- この形の主体 (data に `external_account`。unknown_assume_role は `caller_identity: account_only`、ほかのチェックは `principal_identity: account_only`) の finding を approve すると、`account: "NNN"` (そのアカウントの全主体) で承認される
 - アカウント ID が SaaS の公式ドキュメントに載っているものと一致するかを確かめてから提案する
 - 自社の別アカウント (本番 / 検証) も同じ扱い。`--account` で ARN の主体のアカウント全体を承認できる
 
@@ -63,6 +63,8 @@ CloudTrail ではその主体が「外部アカウント NNN」(`arn:aws:iam::NN
 
 - 「外部アカウント NNN」は、そのアカウントの誰か (どの IAM 主体かは CloudTrail に残らない) が操作したことを表す。
   自社アカウントのルートユーザーの利用 (root_usage、critical) とは別物
+- ARN の末尾の `root` は「アカウントそのもの」の意味で、**そのアカウントのルートユーザーが使われたことを表さない**。
+  data の `caller_identity` / `principal_identity` が `account_only` なら、見出しのとおり「外部アカウント NNN (呼び出した主体は記録に無い)」と書き、「NNN の root」「ルートユーザー」と書かない
 - 知らないアカウント ID からの AssumeRole は、ロールの信頼ポリシーが広すぎる可能性がある。承認より先に信頼ポリシーの確認を提案する
 
 ## arn_pattern の使いどころ

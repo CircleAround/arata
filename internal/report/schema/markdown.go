@@ -147,6 +147,10 @@ func section(b *strings.Builder, title string, l []Finding, empty string) {
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
+			if v, ok := f.Data[k].(string); ok && k != "date" {
+				fmt.Fprintf(b, "  - %s: %s\n", k, inline(f.AccountOnlyText(v)))
+				continue
+			}
 			if k == "date" {
 				// 決定: 日次集計の日は UTC (設計書 3 章)。日本の顧客が JST の日と取り違えないよう明示する
 				fmt.Fprintf(b, "  - %s: %s (UTC)\n", k, inline(fmt.Sprint(f.Data[k])))
