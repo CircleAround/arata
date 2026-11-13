@@ -261,6 +261,72 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
   `json` の対応表で元と正規化名が同じ (`path: path`) ときは別名を付けない。doctor の `queries` 検査は集計クエリに加えてサンプル用と doctor 自身のクエリも対象にする。
 - report.json の `coverage.formats` に各 cloudwatch-logs ソースの `total` / `matched` / `match_rate` / `expected` / `recent_average` / `bytes_scanned` / `code` を必ず出す。
 
+### 2-3. ALB のアクセスログから http_access を取る (提案。未実装・未確認)
+
+**ここは提案。** 案の比較 (S3 を直接読む、Athena、S3 Select)・費用の見積もり・出典は ADR 0046 (状態: 提案)。実際のログで確かめて採用を決めたら、この節を仕様に書き直す。
+
+目的: nginx のログを CloudWatch Logs に送っていない利用者でも、`http_access` を使うチェック (`login_bruteforce`・`probe_paths`・`endpoint_abuse`) を動かす。
+ALB のアクセスログは 1 リクエスト 1 行で ip・method・path・status・ua・処理時間が揃い、アプリにもサーバーにも手を入れずに有効にできる。
+
+今の `alb_access` の前提: cloudwatch-logs のソースの形式プロファイルで、ロググループの `@message` が ALB の従来のアクセスログ (S3 に出るもの) の 1 行そのままであることを前提に
+Insights の `parse` で先頭 14 項目を解釈する。S3 は読まない。
+
+**第 1 段 (推奨): ALB から CloudWatch Logs へ配信し、既存のソースで読む。** arata の変更は無いか最小。
+
+```yaml
+sources:
+  - id: alb_prod
+    kind: cloudwatch-logs
+    log_group: prod-alb-access      # ALB の配信先に選んだロググループ
+    format: alb_access
+```
+
+- 利用者の準備: ALB の Integrations タブ (CloudWatch Logs の配信の仕組み。従来のアクセスログの設定とは別) で、アクセスログを CloudWatch Logs へ配信する。
+  **形式は plain、項目は既定 (全部)、区切りは空白**にする。項目を選ぶ・区切りを変えると `alb_access` が合わない
+- 配信の既定の項目の並びは、従来のログの先頭 34 項目と同じ (API で確認)。ただし plain の行が従来の行と文字の単位で同じか (引用符、`client_port` の形) は**未確認**で、
+  実際のログで doctor の解釈率を見て確かめる。違っていたら `alb_access` の `parse` を両方に合うように直す
+- json 形式は今の `format: json` では読めない (メソッドとパスが `request_line` の 1 項目にまとまっていて、対応表では分けられない)。json 用の組み込みのプロファイルは今は作らない
+- 読み取り専用ロールは変えない。解釈率・`FORMAT_MISMATCH`・doctor・`max_scan_gb` は今のまま効く
+- 費用: 利用者側に CloudWatch Logs の取り込み料金 (量に比例) と保管料が出る。量が小さければ小さい (ADR 0046 の見積もり。推測を含む)
+- 対象外: ALB の前に CloudFront などのプロキシがある構成 (ログの送信元がプロキシの IP になり、IP ごとの判定ができない)。WebSocket は接続が閉じたときの 1 行だけ
+
+**第 2 段 (取り込み料金を避けたい利用者・量が多い利用者向け): S3 の従来のアクセスログを直接読む。** ソースの種類を 1 つ足し、arata が gzip のファイルを読んで Go で解釈・集計する。名前はどれも仮。
+
+```yaml
+sources:
+  - id: alb_prod
+    kind: s3-access-logs            # 新しい種類 (仮)
+    bucket: prod-alb-logs
+    prefix: alb                     # ALB のログの設定に書いた接頭辞。無ければ省く
+    format: alb_access              # 今ある形式の名前を使う。yields は http_access
+    # account_id: "123456789012"    # キーの AWSLogs/<ここ>/。既定は監査対象のアカウント
+    # region: ap-northeast-1        # 既定 aws.region
+    # load_balancers: ["app.prod-alb.*"]   # 同じ接頭辞に複数の ALB が出るとき、ファイル名の ALB の ID で絞る
+    max_download_gb: 2              # 1 回の収集で読んでよい量 (圧縮後。既定 0 = 無制限)。目安は doctor の cost
+    # ingest_delay: 10m             # 既定の案。ALB は 5 分おきに配信し、遅れることがある
+```
+
+- **保存するもの**: 今の cloudwatch-logs の `http_access` のソースと同じ日次集計 (`sign_in_failures`・`probe_hits`・`probe_paths`・endpoint_abuse の集計・`lines_total`・`lines_matched`) だけ。
+  生の行はストアにもディスクにも残さない。User-Agent は読んだ直後にハッシュにし、パスの正規化と伏せ字は今と同じ規則
+- **読む範囲**: 窓に重なる UTC の日の 0 時から窓の終わり (+ `ingest_delay` の再走査) まで読み、日次集計を置き換える (ADR 0009・0013 と同じ)。
+  「どのファイルまで読んだか」の位置は持たない。遅れて届いたファイルは、その日を読み直すときに入る
+- **一覧**: キーは `.../AWSLogs/<アカウント ID>/elasticloadbalancing/<region>/<yyyy>/<mm>/<dd>/` の下にあり、日付は配信日。日 D の行のために D と D+1 のディレクトリを ListObjectsV2 で一覧する。
+  行は、ファイル名ではなく行の `time` で UTC の日に振り分け、範囲の外の行は捨てる
+- **解釈**: 先頭 14 項目 (`"user_agent"` まで) だけを読む。新しい項目は行の末尾に足されるので、後ろは読まない。対応は今の `alb_access` と同じ
+  (`ip` = `client:port` の IP、`status` = `elb_status_code`、`duration` = `target_processing_time`、`method`・`path` = `"request"` の URL からクエリを除いたパス、`ua`)。
+  Insights の `parse` と Go の解釈が同じ結果になることをテストで固定する。ログの行は信用できない入力なので、ファズテストを足し、1 行の長さと 1 ファイルの展開後の大きさに上限を置く (ADR 0041)
+- **形式の検証**: 解釈率・`FORMAT_MISMATCH`・`FORMAT_DRIFT` は 2-2 と同じ規則。範囲にファイルが 1 つも無いときは `match_rate: null` と WARN
+- **上限**: 一覧でサイズが分かるので、読む前に `max_download_gb` と比べる。超えるならそのソースは読まずに失敗とし (code は既存の語彙に合わせて決める)、次回に追いつく (ADR 0038)。
+  認証は 1 時間で切れる構成があるので (GitHub Actions、読み取り専用ロールの `MaxSessionDuration`)、時間の上限も置く
+- **権限**: `s3:ListBucket` と `s3:GetObject` だけ (読み取り専用。8 章の例外を増やさない)。`deploy/iam/readonly-role.yaml` に、バケットと接頭辞のパラメータを足し、
+  その範囲だけを許す文を条件つきで作る (空なら作らない。`Resource: '*'` にしない)。ALB のログのバケットは SSE-S3 だけが使えるので、`kms:Decrypt` は足さない
+- **doctor**: `permission` (一覧 1 件と、最新のファイル 1 つの読み取り)、`match_rate` (最新のファイルの先頭 100 行)、`freshness` (最新のファイルが古ければ warn)、
+  `cost` (直近 24 時間の一覧からファイル数と圧縮後の量を読まずに測り、GET とデータ転送の概算と `max_download_gb` の推奨値を出す。AWS の外で動かすと転送料が出ることを書く)
+- **利用者の準備**: ALB のアクセスログを有効にする (同じリージョンのバケット、`logdelivery.elasticloadbalancing.amazonaws.com` に `s3:PutObject` を許すバケットポリシー、暗号化は SSE-S3)。
+  CDK なら `ApplicationLoadBalancer` の `logAccessLogs(bucket, prefix)` (スタックにリージョンの指定が要る)、Copilot なら environment の manifest の `http.public.access_logs`
+  (`true` ならバケットも作られる。Copilot 自体はサポート終了が告知されている)。そのうえで読み取り専用ロールのスタックにバケットを渡して更新する
+- **対象外**: ALB の前に CloudFront などのプロキシがある構成 (ALB のログの送信元がプロキシの IP になり、IP ごとの判定ができない)。WebSocket は接続が閉じたときの 1 行だけ
+
 ## 3. 周期と「重視するデータ」 (複数周期の整理)
 
 複数の周期を持つ、という感覚は同じ。ただし **収集の周期・評価の周期・レポートの周期は別物**として扱う。
