@@ -370,7 +370,7 @@ func TestProfileOverrides(t *testing.T) {
 }
 
 func TestParamChecks(t *testing.T) {
-	if got := strings.Join(ParamChecks(), ","); got != "login_bruteforce,probe_paths,waf_block_trend,waf_review,access_denied,defense_evasion,public_exposure,principal_new_source,secret_access,endpoint_abuse,unused_region_activity,cost_anomaly,credential_hygiene,posture" {
+	if got := strings.Join(ParamChecks(), ","); got != "login_bruteforce,probe_paths,waf_block_trend,waf_review,access_denied,defense_evasion,public_exposure,principal_new_source,secret_access,endpoint_abuse,unused_region_activity,cost_anomaly,credential_hygiene,posture,log_hygiene" {
 		t.Fatalf("got %s", got)
 	}
 }

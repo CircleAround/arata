@@ -372,6 +372,9 @@ func (c *Config) Validate() error {
 	if err := c.validateEndpointSources(); err != nil {
 		return fmt.Errorf("config: checks: endpoint_abuse: %w", err)
 	}
+	if err := c.validateLogHygiene(); err != nil {
+		return fmt.Errorf("config: checks: log_hygiene: %w", err)
+	}
 	if len(c.Profiles) == 0 {
 		return fmt.Errorf("config: at least one profile is required (profiles:)")
 	}

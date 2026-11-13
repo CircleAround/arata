@@ -100,7 +100,8 @@ func NewRegistryFor(c config.Checks) *Registry {
 		LoginBruteforce{Config: c.LoginBruteforce}, ProbePaths{Config: c.ProbePaths}, EndpointAbuse{Config: c.EndpointAbuse},
 		UnusedRegionActivity{Config: c.UnusedRegionActivity}, CostAnomaly{Config: c.CostAnomaly}, WAFBlockTrend{Config: c.WAFBlockTrend}, AIPathUsage{},
 		CredentialHygiene{Config: c.CredentialHygiene}, GuardDutyFindings{}, Posture{Config: c.Posture}, AccessAnalyzer{},
-		WAFReview{Config: c.WAFReview, SignInPaths: c.LoginBruteforce.Paths, ProbePaths: c.ProbePaths.Paths}} {
+		WAFReview{Config: c.WAFReview, SignInPaths: c.LoginBruteforce.Paths, ProbePaths: c.ProbePaths.Paths},
+		LogHygiene{Config: c.LogHygiene}} {
 		r.Register(ch)
 	}
 	return r

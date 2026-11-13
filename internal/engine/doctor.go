@@ -333,15 +333,28 @@ func (d *doctor) logs(ctx context.Context, src config.Source) {
 	d.add(src, "log_group", DoctorOK, "", src.LogGroup+" ("+src.Regions[0]+")")
 
 	prof := c.Profile()
+	hygiene := d.cfg.Checks.LogHygiene.Covers(src.ID)
 
-	// クエリのテンプレートが Insights に受け付けられるか。決定: 集計だけでなく、サンプル (FORMAT_MISMATCH 時) と doctor 自身のクエリも検査する
-	queries := map[string]string{
-		"lines":  cwlogs.LinesQuery(prof),
-		"sample": cwlogs.SampleQuery(prof, cwlogs.SampleLines),
-		"doctor": cwlogs.DoctorQuery(prof, DoctorSampleLines),
+	// クエリのテンプレートが Insights に受け付けられるか。決定: 集計だけでなく、サンプル (FORMAT_MISMATCH 時) と doctor 自身のクエリも検査する。
+	// 決定 (ADR 0050): format: text のソースは行を解釈しないので、解釈率とサンプルのクエリ (生の行を引く) は流さない。log_hygiene のクエリの構文だけを確かめる
+	queries := map[string]string{}
+	if prof.Yields != "" {
+		queries["lines"] = cwlogs.LinesQuery(prof)
+		queries["sample"] = cwlogs.SampleQuery(prof, cwlogs.SampleLines)
+		queries["doctor"] = cwlogs.DoctorQuery(prof, DoctorSampleLines)
 	}
 	for n, q := range c.Queries() {
 		queries[n] = q
+	}
+	if hygiene {
+		if _, _, err := cwlogs.HygieneQuery(src, d.cfg.Checks.LogHygiene); err != nil {
+			d.add(src, "queries", DoctorNG, collect.CodeQueryInvalid, err.Error())
+			return
+		}
+	}
+	if len(queries) == 0 {
+		d.add(src, "queries", DoctorWarn, "", "format: text のソースだが、checks.log_hygiene.sources に無い (か kinds が空): どのチェックにも読まれない")
+		return
 	}
 	names := make([]string, 0, len(queries))
 	for n := range queries {
@@ -361,16 +374,62 @@ func (d *doctor) logs(ctx context.Context, src config.Source) {
 	}
 
 	// 解釈率: 直近 100 行を形式プロファイルで解釈する
-	rows, err := c.Query(ctx, cwlogs.DoctorQuery(prof, DoctorSampleLines), d.now.Add(-d.window), d.now)
-	if err != nil {
-		d.addErr(src, "match_rate", err)
-	} else {
-		d.matchRate(src, prof, rows)
+	if prof.Yields != "" {
+		rows, err := c.Query(ctx, cwlogs.DoctorQuery(prof, DoctorSampleLines), d.now.Add(-d.window), d.now)
+		if err != nil {
+			d.addErr(src, "match_rate", err)
+		} else {
+			d.matchRate(src, prof, rows)
+		}
 	}
+	daily := 0.0
 	if prof.Yields == record.KindWAFAction {
-		d.wafCost(ctx, src, c)
+		daily = d.wafCost(ctx, src, c)
 		d.wafResources(ctx, src)
 	}
+	if hygiene {
+		d.hygieneCost(src, daily)
+	}
+}
+
+// hygieneCost は log_hygiene の読み取りの費用を出す (ADR 0050)。そのチェックを入れたプロファイルの run ごとに 1 本、範囲は run の窓。
+//
+// 決定: ロググループの量はここでは測らない (測るには 1 日分を読む費用がかかる)。wafv2 のソースは wafCost が測った 1 日の量 (daily。バイト) から見積もる。
+// それ以外は単価だけを示す。max_scan_gb が無ければ warn (上限なしで読むことを暗黙にしない)。
+func (d *doctor) hygieneCost(src config.Source, daily float64) {
+	var parts []string
+	perRunMax := 0.0
+	for _, name := range sortedProfiles(d.cfg) {
+		prof := d.cfg.Profiles[name]
+		if !d.profileNeeds(prof, record.KindLogHygiene) || prof.Window <= 0 {
+			continue
+		}
+		part := fmt.Sprintf("%s: run ごとに 1 本、範囲 %.0f 日", name, prof.Window.Hours()/24)
+		if daily > 0 {
+			gb := daily / 1e9 * prof.Window.Hours() / 24
+			perRunMax = math.Max(perRunMax, gb)
+			part += fmt.Sprintf(" (約 %.2f GB、約 %.2f USD)", gb, gb*InsightsUSDPerGB)
+		}
+		parts = append(parts, part)
+	}
+	detail := "log_hygiene: "
+	if len(parts) == 0 {
+		detail += "log_hygiene を入れたプロファイルが無い (読まれない)"
+	} else {
+		detail += strings.Join(parts, "、") + fmt.Sprintf("。範囲のログを 1 回読む (Logs Insights の東京の単価 %.4f USD/GB。1 GB で約 %.3f USD)。値は引かず、種類ごとの行数だけを受け取る", InsightsUSDPerGB, InsightsUSDPerGB)
+	}
+	status := DoctorOK
+	switch {
+	case src.MaxScanGB <= 0:
+		status = DoctorWarn
+		detail += "。max_scan_gb が未設定: 上限なしで読む。設定する"
+	case perRunMax > src.MaxScanGB:
+		status = DoctorWarn
+		detail += fmt.Sprintf("。max_scan_gb %.0f が 1 回の見積もり %.2f GB より小さい: QUERY_LIMIT で失敗し、前回の指摘が維持される", src.MaxScanGB, perRunMax)
+	default:
+		detail += fmt.Sprintf("。max_scan_gb %.0f (超えたら失敗にして前回の指摘を維持する)", src.MaxScanGB)
+	}
+	d.add(src, "cost", status, "", detail)
 }
 
 func (d *doctor) matchRate(src config.Source, prof cwlogs.Profile, rows []map[string]string) {
@@ -402,7 +461,7 @@ func (d *doctor) matchRate(src config.Source, prof cwlogs.Profile, rows []map[st
 func (d *doctor) checks() {
 	available := map[record.Kind]bool{}
 	for _, src := range d.cfg.Sources {
-		for _, k := range kindsOf(src) {
+		for _, k := range kindsOf(d.cfg, src) {
 			available[k] = true
 		}
 	}
@@ -417,10 +476,22 @@ func (d *doctor) checks() {
 		d.res.Rows = append(d.res.Rows, DoctorRow{Source: "-", Kind: "-", Item: "check", Status: DoctorNG, Code: CodeConfigInvalid, Detail: u})
 	}
 	for _, pname := range profiles {
+		// 設定が空で何も見ないチェック (log_hygiene。ADR 0050) は、設定の値で組んだチェックに理由を聞く (deps.Registry は既定値)
+		configured := checks.NewRegistryFor(d.cfg.ChecksFor(pname))
 		for _, name := range d.cfg.Profiles[pname].ExpandChecks(d.deps.Registry.Defaults()) {
 			c, ok := d.deps.Registry.Get(name)
 			if !ok {
 				continue
+			}
+			if cc, ok := configured.Get(name); ok {
+				if dis, ok := cc.(checks.Disabler); ok && dis.Disabled() != "" {
+					if missing[name] == nil {
+						missing[name] = map[string]bool{}
+					}
+					missing[name][pname] = true
+					reasons[name] = dis.Disabled()
+					continue
+				}
 			}
 			needs := c.Needs()
 			if sn, ok := c.(checks.StoredNeeder); ok {

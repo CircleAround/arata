@@ -76,7 +76,7 @@ func (e *Engine) dryRunNotes(prof config.Profile, w collect.Window, d *dryRunInf
 func (e *Engine) dailyMetricChecks(names []string) []string {
 	metricKinds := map[record.Kind]bool{}
 	for _, src := range e.cfg.Sources {
-		if src.Kind == config.KindCloudWatchLogs {
+		if src.Kind == config.KindCloudWatchLogs && src.Yields != "" {
 			metricKinds[record.Kind(src.Yields)] = true
 		}
 	}

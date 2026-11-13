@@ -57,6 +57,13 @@ sources:
     # region: ap-northeast-1         # 既定は aws.region (1 つだけ)
     # max_scan_gb: 5                 # 1 回の収集でスキャンしてよい量。超えたら QUERY_LIMIT (既定 0 = 無制限)
     # ingest_delay: 5m               # 取り込みの遅れの見込み。run は窓の前をこの分だけ引き直す (既定 5m)
+  # アプリのログの中身 → log_hygiene (ADR 0050)。行を解釈しない。下の checks.log_hygiene.sources に書いたソースだけを、
+  # weekly の run ごとに窓 (7 日) 分を 1 回読み、種類ごとの行数だけを数える (値は取り出さない)
+  - id: app_prod
+    kind: cloudwatch-logs
+    log_group: prod-app
+    format: text                     # 行を解釈しない (他の形式のソースも log_hygiene.sources に書ける)
+    max_scan_gb: 5
   # - id: ecs_web
   #   kind: cloudwatch-logs
   #   log_group: /ecs/my-app-production
@@ -89,7 +96,8 @@ sources:
 #           defense_evasion / public_exposure (daily), principal_new_source / secret_access (daily),
 #           unused_region_activity / cost_anomaly (daily),
 #           ai_path_usage (daily), login_bruteforce / probe_paths / endpoint_abuse (daily, http_access), waf_block_trend (daily, waf_action),
-#           credential_hygiene / guardduty_findings / posture / access_analyzer / waf_review (weekly)
+#           credential_hygiene / guardduty_findings / posture / access_analyzer / waf_review (weekly),
+#           log_hygiene (weekly。下の checks.log_hygiene に書いたソースだけを読む)
 # hourly に http_access / waf_action を使うチェックを入れなければ hourly では Logs Insights を回さない
 profiles:
   hourly:
@@ -101,7 +109,7 @@ profiles:
     checks: [default-daily, root_usage, unknown_assume_role]   # daily だけ運用する場合は hourly のチェックも入れる
   weekly:
     window: 7d
-    checks: [credential_hygiene, guardduty_findings, posture, access_analyzer, waf_review]   # waf_review は waf_config と wafv2 のソースが要る (無ければ skip)
+    checks: [credential_hygiene, guardduty_findings, posture, access_analyzer, waf_review, log_hygiene]   # waf_review は waf_config と wafv2 のソースが要る (無ければ skip)
 
 # アプリ層チェックのパス・閾値 (省略時の既定値)。平常帯 = その IP 自身の直近 baseline_days 日の中央値 × factor (下限 min_count)。
 checks:
@@ -163,6 +171,10 @@ checks:
     min_baseline_days: 7                       # 初出の判定に要る、収集し終えた過去日数
     factor: 3                                  # 一括読み出しの平常帯の倍率
     min_distinct: 10                           # 1 日に読んだ異なる秘匿値の数がこれを超えたら high
+  log_hygiene:                                 # アプリのログに残った「載せるべきでない値」の行数 (ADR 0050)。既定は 3 つとも空 (書いたものだけを見る)
+    sources: [app_prod]                        # 見る cloudwatch-logs のソース
+    kinds: [secret_aws_access_key, secret_slack_token, secret_private_key, presigned_url_long_term_key, presigned_url, unfiltered_param, debug_sql]
+    param_fields: [name, address, tel]         # unfiltered_param が見る送信項目の名前 (filter_parameters に入っているはずのもの)
 
 # 保持期間 (省略時の既定値)。prune は後続 Step。
 retention:

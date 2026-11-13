@@ -24,7 +24,9 @@ var CollectionParams = map[string]bool{"paths": true, "methods": true, "failure_
 	// endpoint_abuse の画面・時間幅・連鎖も日次集計の条件 (ADR 0030)
 	"endpoints": true, "window": true, "follow_ups": true,
 	// cost_anomaly の GetAnomalies の範囲と下限も問い合わせの条件 (スナップショットは全プロファイル共有。ADR 0032)
-	"lookback_days": true, "min_impact_usd": true}
+	"lookback_days": true, "min_impact_usd": true,
+	// log_hygiene の見るソース・種類・項目名も問い合わせの条件 (スナップショットは全プロファイル共有。ADR 0050)
+	"sources": true, "kinds": true, "param_fields": true}
 
 // Param はチェックのパラメータ 1 つ (checks.<Check>.<Key>)。
 type Param struct {

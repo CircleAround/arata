@@ -49,9 +49,15 @@ func (e *Engine) planCatchup(ctx context.Context, profile string, prof config.Pr
 		}
 	}
 	floor := now.Add(-prof.MaxCatchup)
+	needs := e.neededKinds(prof)
 	for _, src := range e.cfg.Sources {
 		t, ok := cu.covered[src.ID]
 		if !ok || !t.Before(base) {
+			continue
+		}
+		// 決定 (ADR 0050): このプロファイルが log_hygiene のためだけに読む cloudwatch-logs のソースは追いつかない。
+		// 状態を見るチェックで、範囲は常に run の窓 (読み取りを増やさず、窓も広げない)
+		if src.Kind == config.KindCloudWatchLogs && !anyNeeded(formatKinds(src), needs) {
 			continue
 		}
 		if t.Before(floor) {

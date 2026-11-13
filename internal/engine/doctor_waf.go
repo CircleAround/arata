@@ -38,14 +38,13 @@ const maxScanMargin = 1.5
 //     (UTC 0 時 + 窓 + ingest_delay + 余裕 15 分) と、その時の量を案内する。直近の run の時刻は保存したレポート (reports/<profile>.json の窓の終わり) から読み、
 //     あればその範囲も出す (doctor はストアを開かない。レポートのファイルを読むだけ)
 //   - プロファイルごとに、wafv2 を引くプロファイル (チェックが waf_action を必要とする) だけを、1 日の run 数 (24h / 窓) を掛けて足す
-func (d *doctor) wafCost(ctx context.Context, src config.Source, c *cwlogs.Collector) {
-	var daily float64
+func (d *doctor) wafCost(ctx context.Context, src config.Source, c *cwlogs.Collector) (daily float64) {
 	how := ""
 	if !d.opts.EstimateScan {
 		before := c.Scanned()
 		if _, err := c.Query(ctx, cwlogs.LinesQuery(c.Profile()), d.now.Add(-24*time.Hour), d.now); err != nil {
 			d.addErr(src, "cost", err)
-			return
+			return 0
 		}
 		daily = c.Scanned() - before
 		how = fmt.Sprintf("実測: 直近 24h (%s〜%s UTC) に解釈率の集計を流し、読み取り %.2f GB、その費用 約 %.2f USD", d.now.Add(-24*time.Hour).UTC().Format("01-02 15:04"),
@@ -101,6 +100,7 @@ func (d *doctor) wafCost(ctx context.Context, src config.Source, c *cwlogs.Colle
 	}
 	// 決定 (ADR 0038): 収集に失敗した期間は次の run で引き直すので、その分だけスキャン量が増える
 	d.add(src, "cost", status, "", detail+"。収集に失敗した期間は次の run で追いつくので、その分スキャン量が増える (max_scan_gb で止まり、coverage に出る)")
+	return daily
 }
 
 // scheduleMargin は範囲が最小になる実行時刻に足す余裕 (cron の揺れで範囲の始まりが 0 時の前に出ると、前日の 0 時からになり範囲が 24h 増える)。
