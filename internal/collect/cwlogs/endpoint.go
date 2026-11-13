@@ -169,7 +169,8 @@ func EndpointsQuery(p Profile, srcID string, ea config.EndpointAbuse) (MergedQue
 	if len(ea.ExcludePaths) > 0 {
 		exclude = "path not like /" + pathAlternation(p.StripPrefix, ea.ExcludePaths) + "/"
 	}
-	var conds, parses, metrics []string
+	var conds, metrics []string
+	var marks []mark
 	group := endpointGroupFields(p)
 	methods, statuses := false, false
 	var flags []string
@@ -178,7 +179,8 @@ func EndpointsQuery(p Profile, srcID string, ea config.EndpointAbuse) (MergedQue
 		for j, g := range s.ep.Paths {
 			re := EndpointPathRegex(p.StripPrefix, g)
 			paths = append(paths, "path like /"+re+"/")
-			parses = append(parses, "\n| parse path /"+flagRegex(s.flags[j], p.StripPrefix, g)+"/")
+			g := g
+			marks = append(marks, mark{s.flags[j], func(name string) string { return flagRegex(name, p.StripPrefix, g) }})
 		}
 		conds = append(conds, "("+and("("+strings.Join(paths, " or ")+")", inList("method", quoteAll(s.ep.Methods)), inList("status", intsToStrings(s.ep.Statuses)))+")")
 		methods = methods || len(s.ep.Methods) > 0
@@ -197,11 +199,16 @@ func EndpointsQuery(p Profile, srcID string, ea config.EndpointAbuse) (MergedQue
 	if exclude != "" {
 		cond = "(" + cond + ") and " + exclude
 	}
-	q := p.Prelude + "\n| filter " + cond + strings.Join(parses, "") +
-		"\n| stats count(*) as " + endpointHits + ", min(@timestamp) as first_seen, max(@timestamp) as last_seen by bin(" + bin + ") as t, " +
+	// request_lines では、リクエストの時刻は最初の行の時刻 (1 段目の rl_first)
+	seen := "@timestamp"
+	if p.req != nil {
+		seen = rlFirst
+	}
+	q := p.head(bin, "t", cond, marks, false, true) +
+		"\n| stats " + p.count() + " as " + endpointHits + ", min(" + seen + ") as first_seen, max(" + seen + ") as last_seen by " + p.binBy(bin, "t") + ", " +
 		strings.Join(group, ", ") +
 		"\n| sort " + endpointHits + " desc\n| limit " + strconv.Itoa(MaxRows)
-	return MergedQuery{Name: endpointAbuse, Query: q, Metrics: metrics}, true
+	return MergedQuery{Name: endpointAbuse, Query: q, Metrics: metrics, Bin: p.binName("t")}, true
 }
 
 // matches は結果の行がこの画面の条件 (glob のどれか・method・status) に当たるか。
@@ -300,7 +307,7 @@ func parseTime(s string) (time.Time, bool) {
 			return t.UTC(), true
 		}
 	}
-	return time.Time{}, false
+	return epochMillis(s)
 }
 
 func binKey(t time.Time) (day, hm string) {

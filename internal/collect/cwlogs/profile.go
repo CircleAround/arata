@@ -32,6 +32,8 @@ type Profile struct {
 	StripPrefix string
 	// fields は前処理が作る正規化フィールド (ip / path 以外の任意のもの。method, status, ua など)。
 	fields map[string]bool
+	// req は request_lines の 1 段目の材料 (request.go)。nil なら 1 行 = 1 リクエスト。
+	req *requestStage
 }
 
 // Has は前処理が正規化フィールド name を作るか。
@@ -77,6 +79,15 @@ func ProfileFor(src config.Source) (Profile, error) {
 		}
 		p.setFields(groups...)
 		body, p.MatchField = "parse @message /"+insightsRegex(src.Regex)+"/", "path"
+	case config.FormatRequestLines:
+		if src.Request == nil {
+			return Profile{}, fmt.Errorf("cwlogs: request is required for format %s", src.Format)
+		}
+		b, err := requestProfile(&p, src.Request)
+		if err != nil {
+			return Profile{}, err
+		}
+		body, p.MatchField = b, rlID
 	default:
 		return Profile{}, fmt.Errorf("cwlogs: unsupported format %q", src.Format)
 	}
@@ -133,7 +144,11 @@ func fieldRef(name string) string {
 
 // insightsRegex は Python 形式の名前付きキャプチャ (?P<name>) を Insights の (?<name>) に直し、`/` を `\/` にする。
 func insightsRegex(expr string) string {
-	expr = strings.ReplaceAll(expr, "(?P<", "(?<")
+	return escapeSlashes(strings.ReplaceAll(expr, "(?P<", "(?<"))
+}
+
+// escapeSlashes はエスケープされていない `/` を `\/` にする (Insights の /.../ を途中で閉じない)。
+func escapeSlashes(expr string) string {
 	var b strings.Builder
 	escaped := false
 	for _, r := range expr {

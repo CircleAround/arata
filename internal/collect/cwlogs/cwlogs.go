@@ -125,8 +125,8 @@ func (c *Collector) queries() []MergedQuery {
 		return WAFQueries(c.prof, c.checks)
 	case record.KindHTTPAccess:
 		qs := []MergedQuery{
-			{Name: httpLines, Query: HTTPLinesQuery(c.prof, c.checks), Metrics: []string{MetricProbePaths}},
-			{Name: httpHits, Query: HTTPHitsQuery(c.prof, c.checks), Metrics: []string{MetricSignInFailures, MetricProbeHits}},
+			{Name: httpLines, Query: HTTPLinesQuery(c.prof, c.checks), Metrics: []string{MetricProbePaths}, Bin: c.prof.binName("day")},
+			{Name: httpHits, Query: HTTPHitsQuery(c.prof, c.checks), Metrics: []string{MetricSignInFailures, MetricProbeHits}, Bin: c.prof.binName("day")},
 		}
 		if q, ok := EndpointsQuery(c.prof, c.src.ID, c.checks.EndpointAbuse); ok {
 			qs = append(qs, q)
@@ -233,9 +233,14 @@ func (c *Collector) Collect(ctx context.Context, w collect.Window, sink collect.
 		return nil
 	}
 	qs := c.queries()
-	linesRows, err := c.splitQuery(ctx, qs[0], from, to, time.Hour, false)
+	// request_lines の解釈率のクエリは 1 日ずつ流す (request_id の無い行の組が範囲の最初の日に寄らないように。request.go)
+	linesRows, err := c.splitQuery(ctx, qs[0], from, to, c.dayAlign(), c.prof.req != nil)
 	if err != nil {
 		return err
+	}
+	if c.prof.req != nil {
+		rs := requestStats(linesRows, c.src.ExpectedCompleteRate)
+		c.stats.Requests = &rs
 	}
 	lines := dayCounts{}
 	for _, r := range linesRows {
@@ -252,6 +257,15 @@ func (c *Collector) Collect(ctx context.Context, w collect.Window, sink collect.
 	if rate, ok := c.stats.Rate(); ok && rate < c.src.ExpectedMatchRate {
 		return c.mismatch(ctx, from, to, rate)
 	}
+	// request_lines: まとめられた割合と鍵の取り違えの検査。行の解釈率と同じく、通らなければ metrics を出さない (平常帯を汚さない)
+	if c.stats.Requests != nil {
+		if reason := RequestProblem(*c.stats.Requests); reason != "" {
+			return c.requestMismatch(reason)
+		}
+		if n := c.stats.Requests.StartsUntagged; n > 0 {
+			c.Logger.Warn("first lines without a request id are not counted as requests", "source", c.src.ID, "log_group", c.src.LogGroup, "lines", n)
+		}
+	}
 	if c.stats.Total == 0 {
 		c.Logger.Warn("no log lines in window; check log_group / stream_prefix", "source", c.src.ID, "log_group", c.src.LogGroup,
 			"from", from.Format(time.RFC3339), "to", to.Format(time.RFC3339))
@@ -265,6 +279,9 @@ func (c *Collector) Collect(ctx context.Context, w collect.Window, sink collect.
 	}
 	if c.stats.Total == 0 {
 		return nil
+	}
+	if err := c.emitRequests(ctx, linesRows, sink); err != nil {
+		return err
 	}
 	switch c.prof.Yields {
 	case record.KindWAFAction:
@@ -285,10 +302,10 @@ func (c *Collector) collectHTTP(ctx context.Context, qs []MergedQuery, linesRows
 			if !ok || r["probe_path"] == "" || !statusIn(r["status"], pp.Statuses) || hasPrefixAny(r["probe_path"], "", pp.ExcludePaths) {
 				continue
 			}
-			out[MetricProbePaths].add(day, Mask(r["probe_path"]), num(r[MetricLinesTotal]))
+			out[MetricProbePaths].add(day, Mask(r["probe_path"]), c.rowCount(r))
 		}
 	}
-	rows, err := c.splitQuery(ctx, qs[1], from, to, time.Hour, false)
+	rows, err := c.splitQuery(ctx, qs[1], from, to, c.dayAlign(), false)
 	if err != nil {
 		return err
 	}
@@ -371,16 +388,20 @@ func (c *Collector) splitQuery(ctx context.Context, q MergedQuery, from, to time
 }
 
 func (c *Collector) splitRange(ctx context.Context, q MergedQuery, from, to time.Time, align time.Duration) ([]map[string]string, error) {
-	rows, err := c.Query(ctx, q.Query, from, to)
+	rows, err := c.Query(ctx, q.Query, from, c.queryEnd(to))
 	c.stats.BytesScanned = c.scanned
 	if err != nil {
 		return nil, err
 	}
 	if len(rows) < MaxRows {
-		return rows, nil
+		return inRange(rows, q.Bin, to), nil
 	}
 	span := to.Sub(from)
 	mid := from.Add(span / 2).Truncate(align)
+	if c.prof.req != nil && !mid.After(from) {
+		// request_lines は区切りに揃う境目でしか分けられない (日次の集計は日)。半分の位置が最初の区切りの中なら、次の境目で分ける
+		mid = mid.Add(align)
+	}
 	if span > minSplit && mid.After(from) && mid.Before(to) {
 		c.Logger.Info("aggregate hit row limit; splitting the range", "source", c.src.ID, "query", q.Name,
 			"from", from.Format(time.RFC3339), "to", to.Format(time.RFC3339))
@@ -398,7 +419,53 @@ func (c *Collector) splitRange(ctx context.Context, q MergedQuery, from, to time
 	for _, m := range q.Metrics {
 		c.stats.AddTruncated(m)
 	}
-	return rows, nil
+	return inRange(rows, q.Bin, to), nil
+}
+
+// dayAlign は日次の集計の範囲を分ける境目の揃え方。request_lines では日 (request.go)。
+func (c *Collector) dayAlign() time.Duration {
+	if c.prof.req != nil {
+		return 24 * time.Hour
+	}
+	return time.Hour
+}
+
+// rowCount は解釈率のクエリの結果の 1 行の件数。request_lines では最初の行の数の和 (request_id の無い行の組は除く)。
+func (c *Collector) rowCount(r map[string]string) float64 {
+	if c.prof.req != nil {
+		return readRequestRow(r).Hits()
+	}
+	return num(r[MetricLinesTotal])
+}
+
+// emitRequests は request_lines のリクエスト単位の集計を日次の metric にする (それ以外の形式では何もしない)。
+func (c *Collector) emitRequests(ctx context.Context, rows []map[string]string, sink collect.RecordSink) error {
+	if c.prof.req == nil {
+		return nil
+	}
+	days := map[string]*collect.RequestStats{}
+	for _, r := range rows {
+		day, ok := parseDay(r["day"])
+		if !ok {
+			continue
+		}
+		if days[day] == nil {
+			days[day] = &collect.RequestStats{}
+		}
+		addRequestRow(days[day], readRequestRow(r))
+	}
+	for _, day := range sortedDays(days) {
+		st := days[day]
+		for _, m := range []struct {
+			name string
+			v    int64
+		}{{MetricRequestsTotal, st.Total}, {MetricRequestsComplete, st.Complete}, {MetricRequestIDReused, st.Reused}} {
+			if err := sink.Emit(ctx, c.metric(day, m.name, "", float64(m.v))); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (c *Collector) metric(day, name, key string, v float64) record.Metric {
@@ -554,6 +621,9 @@ func parseDay(s string) (string, bool) {
 		if t, err := time.Parse(layout, s); err == nil {
 			return t.UTC().Format(record.DateLayout), true
 		}
+	}
+	if t, ok := epochMillis(s); ok {
+		return t.Format(record.DateLayout), true
 	}
 	return "", false
 }
