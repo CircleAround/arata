@@ -38,7 +38,7 @@ var Descriptions = map[string]string{ // #nosec G101 -- 設定の説明文の表
 	"ai_path_usage":          "allowlist で tags: [ai] の主体の利用を主体 × 送信元 IP で毎回 1 行 (info。自己監査)",
 	"credential_hygiene":     "未使用のアクセスキー・MFA 無しのコンソールユーザー・ルートのアクセスキー (medium / high)",
 	"guardduty_findings":     "GuardDuty の findings。新規と件数の増加 (重大度は GuardDuty 準拠)",
-	"posture":                "CloudTrail 証跡と検証・GuardDuty 有効・ルート MFA・S3 Public Access Block・パスワードポリシー (high / medium)",
+	"posture":                "CloudTrail 証跡と検証・GuardDuty 有効・ルート MFA・S3 Public Access Block・パスワードポリシー・インターネット向けの ALB の WAF (high / medium)",
 	"access_analyzer":        "IAM Access Analyzer の外部アクセス findings (公開は high、他は medium)",
 	"waf_review":             "WAF の修正提案の候補を report.json の proposals に (正規の画面での大量 BLOCK は low の finding にも)",
 }
@@ -47,7 +47,7 @@ var Descriptions = map[string]string{ // #nosec G101 -- 設定の説明文の表
 var paramComments = map[string]string{ // #nosec G101 -- 設定の説明文の表で、秘密の値は含まない
 	"login_bruteforce.paths":                      "sign-in の送信先。前方一致ではなく完全一致 (クエリ文字列は除いて比べる)。Devise のスコープ付きパス (/admin/users/sign_in など) は実際のパスに合わせる。集計条件なので overrides では変えられない",
 	"login_bruteforce.methods":                    "sign-in 試行とみなす HTTP メソッド",
-	"login_bruteforce.failure_statuses":           "失敗とみなすステータス (Devise の再表示は 401 / 422、成功は 302 / 303)",
+	"login_bruteforce.failure_statuses":           "失敗とみなすステータス (Devise の再表示は、生成された initializer の既定なら 422、古い initializer のままなら 200。arata help ai logs の「よく詰まる点」。成功は 302 / 303)",
 	"login_bruteforce.baseline_days":              "平常帯 = その IP 自身の直近 baseline_days 日の中央値 × factor",
 	"login_bruteforce.factor":                     "平常帯の倍率",
 	"login_bruteforce.min_count":                  "平常帯の下限 (中央値 0 の IP もこの件数までは鳴らさない)",
@@ -210,7 +210,7 @@ func Generate(reg *checks.Registry, auditAccount string) []byte {
 	w("  - id: access_analyzer\n")
 	cm("    kind: "+config.KindAccessAnalyzer, "→ access_analyzer。アナライザーが無ければ skip")
 	w("  - id: posture\n")
-	cm("    kind: "+config.KindPosture, "→ posture (CloudTrail・GuardDuty・ルート MFA・S3・パスワードポリシー)")
+	cm("    kind: "+config.KindPosture, "→ posture (CloudTrail・GuardDuty・ルート MFA・S3・パスワードポリシー・ALB の WAF)")
 	w("  # - id: waf_config\n")
 	cm("  #   kind: "+config.KindWAFConfig, "WebACL の設定 → waf_review (下の wafv2 のソースも要る)。REGIONAL は regions、CLOUDFRONT は us-east-1")
 	w(`

@@ -117,6 +117,8 @@ func TestTriageAndCheckShareStepsWithAudit(t *testing.T) {
 	same(triageFile, "aws")
 	same(checkFile, "checkout")
 	same(checkFile, "install")
+	same(notifyTestFile, "checkout")
+	same(notifyTestFile, "install")
 }
 
 func TestTriageTriggerAndInputs(t *testing.T) {

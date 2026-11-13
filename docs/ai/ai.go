@@ -12,12 +12,12 @@ import (
 	"strings"
 )
 
-//go:embed index.md report.md approve.md runtime.md onboarding.md playbooks/*.md
+//go:embed index.md report.md approve.md runtime.md onboarding.md logs.md playbooks/*.md
 var files embed.FS
 
 // Topic は文書 1 つ。
 type Topic struct {
-	Name string // "ai" / "ai report" / "ai approve" / "ai runtime" / "ai onboarding" / "ai playbook" / "ai playbook <check>"
+	Name string // "ai" / "ai report" / "ai approve" / "ai runtime" / "ai onboarding" / "ai logs" / "ai playbook" / "ai playbook <check>"
 	File string // 空なら playbook の一覧 (埋め込んだ playbook から作る)
 }
 
@@ -28,6 +28,7 @@ var Topics = []Topic{
 	{Name: "ai approve", File: "approve.md"},
 	{Name: "ai runtime", File: "runtime.md"},
 	{Name: "ai onboarding", File: "onboarding.md"},
+	{Name: "ai logs", File: "logs.md"},
 	{Name: "ai playbook"},
 }
 
@@ -80,7 +81,7 @@ type Doc struct {
 	Sections []Section `json:"sections"`
 }
 
-// Lookup は sub ("" / "report" / "approve" / "runtime" / "onboarding" / "playbook" / "playbook <check>") の文書を返す。
+// Lookup は sub ("" / "report" / "approve" / "runtime" / "onboarding" / "logs" / "playbook" / "playbook <check>") の文書を返す。
 func Lookup(sub string) (Topic, error) {
 	if check, ok := strings.CutPrefix(strings.TrimSpace(sub), "playbook "); ok {
 		check = strings.TrimSpace(check)

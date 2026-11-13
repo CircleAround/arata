@@ -110,7 +110,7 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
   - id: access_analyzer
     kind: access-analyzer         # ACTIVE なアナライザーの ACTIVE な findings → access_analyzer
   - id: posture
-    kind: posture                 # CloudTrail 証跡・GuardDuty 有効・ルート MFA・S3 Public Access Block・パスワードポリシー → posture_item
+    kind: posture                 # CloudTrail 証跡・GuardDuty 有効・ルート MFA・S3 Public Access Block・パスワードポリシー・インターネット向けの ALB の WebACL → posture_item
 ```
 
 - 取ったものは `record.SnapshotItem` として `snapshot_items` に保存し、**収集が成功したときだけ (kind, source) 単位で丸ごと置き換える** (5-2)。
@@ -118,6 +118,10 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
 - GuardDuty が無効 (detector が無い / 停止中)、アナライザーが無いときは、収集は成功として「その種類は取れない」理由を返し、チェックを skip して
   `coverage.checks_skipped` に理由を出す。GuardDuty が無効であることは posture が finding として報告する。
 - posture は一部の API だけ拒否されても他の項目を取る。取れなかった項目は `unknown` で保存し、`coverage.sources_failed` に `partial: true` と `action`、終了コード 3。
+- 決定 (ADR 0048): posture は、ソースの `regions` の各リージョンで、インターネット向け (Scheme = internet-facing) の Application Load Balancer に
+  WAFv2 の WebACL が付いているかを見る (`elasticloadbalancing:DescribeLoadBalancers` と、ALB ごとの `wafv2:GetWebACLForResource`。どちらも読み取り)。
+  項目はリージョンごとに 1 つ (`alb_waf|<region>`。WebACL の無い ALB の名前と ARN だけを持つ)。internal の ALB、NLB・GWLB、CloudFront、API Gateway は見ない。
+  一覧か WebACL の確認が失敗したリージョンは取れなかったことにし、そのリージョンの前回の finding を維持する。
 - `iam:GenerateCredentialReport` は書き込み系 (レポートの生成のみ)。拒否されても 4 時間以内に生成済みのレポートがあれば使い、生成時刻を Data に残す。
 - `regions` の既定は aws.region だけ。`ingest_delay` は使わない (窓に依らないため)。
 
@@ -263,7 +267,7 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
 
 ### 2-3. ALB のアクセスログから http_access を取る (提案。未実装・未確認)
 
-**ここは提案。** 案の比較 (S3 を直接読む、Athena、S3 Select)・費用の見積もり・出典は ADR 0046 (状態: 提案)。実際のログで確かめて採用を決めたら、この節を仕様に書き直す。
+**ここは提案。** (第 1 段の plain・既定の項目は実環境で確かめた。9 章の「記録の集め方」の決定) 案の比較 (S3 を直接読む、Athena、S3 Select)・費用の見積もり・出典は ADR 0046 (状態: 提案)。実際のログで確かめて採用を決めたら、この節を仕様に書き直す。
 
 目的: nginx のログを CloudWatch Logs に送っていない利用者でも、`http_access` を使うチェック (`login_bruteforce`・`probe_paths`・`endpoint_abuse`) を動かす。
 ALB のアクセスログは 1 リクエスト 1 行で ip・method・path・status・ua・処理時間が揃い、アプリにもサーバーにも手を入れずに有効にできる。
@@ -463,7 +467,7 @@ internal/report/              JSON / Markdown 生成、期間集計 (period.go)�
 tools/agegate/                CI 用の依存の age-gate (エンジンには入らない小さな main。決定: internal/ ではなく tools/ に置く。ADR 0017)
 tools/actionsgate/            CI 用の Actions の検査 (SHA 固定・版の一致・7 日待機。ADR 0035)
 tools/wordscan/               CI 用の禁止語の検査 (語の一覧は secrets から読む。ADR 0036)
-docs/ai/*.md                  LLM 向けの使い方。embed でバイナリに入り `arata help ai [report|approve|runtime|onboarding|playbook <check>]` で出る (決定: skills/ の同梱は取りやめ。ADR 0012)
+docs/ai/*.md                  LLM 向けの使い方。embed でバイナリに入り `arata help ai [report|approve|runtime|onboarding|logs|playbook <check>]` で出る (決定: skills/ の同梱は取りやめ。ADR 0012)
 deploy/iam/readonly-role.yaml 顧客に配る読み取りロール + Roles Anywhere 用信頼ポリシーの CloudFormation (決定: 信頼先は AWS の主体と Roles Anywhere のトラストアンカーをパラメータで受ける。action は collector の一覧と Go のテストで一致させる。ADR 0020)
 deploy/sandbox/               試験環境 (sandbox = arata の試験用に条件を整えた開発用アカウント上の環境) の CDK (TypeScript)。Go モジュールとは独立。readonly-role.yaml を CfnInclude で取り込む (ADR 0020)
 deploy/lambda/                Lambda 配備用 CDK or SAM テンプレート (S3 ストア、別アカウント推奨)
@@ -797,7 +801,7 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 | ai_path_usage | daily | principal_seen (決定: trail_event ではなく主体 × IP の観測を使う) | allowlist の `tags: [ai]` を持つ主体の利用を主体 × IP で常に 1 行 (info) | info |
 | credential_hygiene | weekly | iam_credential_report | 未使用キー 90 日超、MFA 無し、ルートのアクセスキー の増減 (決定: 古いパスワードは後続) | medium (ルートのキーは high) |
 | access_analyzer | weekly | access_analyzer | ACTIVE な finding の増減 | medium (公開は high) |
-| posture (決定: posture_* ではなく 1 チェックで項目ごとに finding) | weekly | posture_item | CloudTrail 有効・検証 ON、GuardDuty 有効、ルート MFA、S3 Public Access Block、パスワードポリシー | high (検証とパスワードポリシーは medium) |
+| posture (決定: posture_* ではなく 1 チェックで項目ごとに finding) | weekly | posture_item | CloudTrail 有効・検証 ON、GuardDuty 有効、ルート MFA、S3 Public Access Block、パスワードポリシー、インターネット向けの ALB の WebACL | high (検証・パスワードポリシー・ALB の WebACL は medium) |
 | waf_review | weekly | waf_config (+ 保存済みの waf_action の日次集計) | WAF の修正提案の候補を report.json の `proposals` に (finding ではない)。決定: ADR 0023 | 正規の画面での多数の IP の BLOCK だけ low |
 | allowlist_stale | quarterly (report) | principals | 90 日未観測の approved 主体 | info |
 
@@ -955,7 +959,7 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 |---|---|---|---|---|
 | credential_hygiene | state | `unused_key\|<user>\|<n>` / `no_mfa\|<user>` / `root_access_key\|<n>` | 重大度 + ユーザー (+ キー番号) | 有効なアクセスキーの最終使用 (使われていなければ作成・ローテーション) から `checks.credential_hygiene.unused_days` (既定 90) 日超 / パスワード有効で MFA 無し / ルートに有効なキー。経過日数は Data |
 | guardduty_findings | state | finding ID | 重大度 + count | アーカイブされていない finding。GuardDuty の重大度 7 以上 → high、4 以上 → medium、他は low。count の増加は changed |
-| posture | state | `cloudtrail_logging` / `cloudtrail_log_validation` / `guardduty_enabled\|<region>` / `root_mfa` / `s3_public_access_block` / `password_policy` | 重大度 + 問題の中身 (無効な項目・最小文字数など) | 記録中のマルチリージョン証跡が無い (high)、ログファイル検証が無効な証跡 (medium)、GuardDuty 無効 (high)、ルート MFA 無し (high)、PAB 未設定 / 無効な項目 (high)、パスワードポリシー未設定 / 最小文字数 < `checks.posture.min_password_length` (既定 14) (medium)。取れなかった項目は前回の finding を維持 |
+| posture | state | `cloudtrail_logging` / `cloudtrail_log_validation` / `guardduty_enabled\|<region>` / `root_mfa` / `s3_public_access_block` / `password_policy` / `alb_waf\|<region>\|<ALB の名前>` | 重大度 + 問題の中身 (無効な項目・最小文字数など) | 記録中のマルチリージョン証跡が無い (high)、ログファイル検証が無効な証跡 (medium)、GuardDuty 無効 (high)、ルート MFA 無し (high)、PAB 未設定 / 無効な項目 (high)、パスワードポリシー未設定 / 最小文字数 < `checks.posture.min_password_length` (既定 14) (medium)、インターネット向けの ALB に WAFv2 の WebACL が付いていない (medium。ALB ごと。Data は region・name・arn。決定 (ADR 0048): 最低限の防御として推奨するが、無くても直ちに侵害の兆候ではないので medium)。取れなかった項目は前回の finding を維持 (ALB はリージョン単位) |
 | access_analyzer | state | finding ID | 重大度 + リソース + 許可先 + action | ACTIVE な外部アクセスのアナライザーの ACTIVE な finding。公開は high、他は medium |
 | ai_path_usage | event | `<ARN>\|<ip>` | info + IP | allowlist の `tags: [ai]` を持つ承認済みの主体で、principal_ips.last_seen が窓内の組を毎回 info に 1 行 (件数は累計) |
 
@@ -1026,7 +1030,7 @@ arata review    [--status open|acked]
 arata approve   <finding-id> --note "..." [--expires date] [--tag deploy] [--by name] [--commit] [--account | --arn-pattern glob]
 arata approve   <finding-id> --destination --note "..." [--destination-role glob] [--expires date] [--by name] [--commit]   # 行き先のアカウントを既知にする (ADR 0047)
 arata ack|snooze|resolve <finding-id>        # snooze は --until date
-arata help ai [report|approve|runtime|onboarding|playbook [check]] [--format json]   # LLM 向けの使い方 (arata ai と同じ)。playbook はチェックごとの対処手順
+arata help ai [report|approve|runtime|onboarding|logs|playbook [check]] [--format json]   # LLM 向けの使い方 (arata ai と同じ)。playbook はチェックごとの対処手順
 arata prune     [--dry-run]
 arata rebuild   [--from-scratch [--baseline]] [--format text|json]   # raw JSONL から SQLite を再構築 (5-4、ADR 0033)
 ```
@@ -1050,7 +1054,8 @@ arata rebuild   [--from-scratch [--baseline]] [--format text|json]   # raw JSONL
 - 決定 (Step 3): アカウント単位のソースは、collector の読み取り API を 1 回ずつ試して action ごとに permission 行を出す (拒否は ng / ACCESS_DENIED)。
   必要な action: iam-credential-report = `iam:GenerateCredentialReport` (書き込み系。doctor では試さない)・`iam:GetCredentialReport`、
   guardduty = `guardduty:ListDetectors`・`ListFindings`・`GetFindings`、access-analyzer = `access-analyzer:ListAnalyzers`・`ListFindings`、
-  posture = `cloudtrail:DescribeTrails`・`GetTrailStatus`、`guardduty:ListDetectors`・`GetDetector`、`iam:GetAccountSummary`・`GetAccountPasswordPolicy`、`s3:GetAccountPublicAccessBlock`、
+  posture = `cloudtrail:DescribeTrails`・`GetTrailStatus`、`guardduty:ListDetectors`・`GetDetector`、`iam:GetAccountSummary`・`GetAccountPasswordPolicy`、`s3:GetAccountPublicAccessBlock`、`elasticloadbalancing:DescribeLoadBalancers`・`wafv2:GetWebACLForResource`
+  (ADR 0048。インターネット向けの ALB が無ければ GetWebACLForResource は試せないので「未確認」と出す)、
   waf-config = `wafv2:ListWebACLs`・`GetWebACL`・`GetLoggingConfiguration`・`ListResourcesForWebACL` (決定: ADR 0023。WebACL があれば最初の 1 つで残りを試す)、
   cloudtrail-unused-regions = `account:ListRegions`・`cloudtrail:LookupEvents` (有効なリージョンの数と対象のリージョンを出し、対象の各リージョンで 1 件だけ引く。`cost` の行は「無料」)、
   cost-anomaly = `ce:GetAnomalyMonitors`・`ce:GetAnomalies` (モニターが無ければ warn。`cost` の行に Cost Explorer の API の 1 日・30 日の見込み。ADR 0032)。
@@ -1143,6 +1148,13 @@ Actions のログには arata / aratam の `level`・`code`・`source` と終了
   見本のワークフローに「通知しない」入力や test-notify の入力は足さない: 初回の収集で手元にストアを書ける認証が既にあり、Actions では中身を見る場所が無い
   (ログと Summary に finding の中身を出さない方針)。入力を増やすと、定時の監査と同じワークフローに分岐とテストが増える。
   Slack の疎通は手元の `aratam test-notify` (実際に送る。`doctor` は送らない) と、最初の `workflow_dispatch` (`on_quiet: short` の 1 行) で確かめる
+- 決定 (送信だけを確かめる見本): 監査のワークフローには入力を足さないまま、別の見本 `arata-notify-test.yml` (`workflow_dispatch` だけ) を足す。
+  通知先を足したとき・トークンを入れ替えたときに、Actions の secrets とリポジトリの `aratam.yaml` の組み合わせで届くかを、監査を回さずに確かめるため
+  (bot トークンを手元に持たない人は、手元の `test-notify` では確かめられない。監査の `workflow_dispatch` は収集に時間がかかり、finding を報告済みとして確定する)。
+  `test-notify` は設定を読んで Slack に送るだけで、AWS にも LLM にも繋がない。そのため OIDC を使わず、権限は `contents: read` だけにする。ストアに触れないので排他も置かない。
+  secrets の渡し方・バイナリの取得と照合・版は監査の見本と同じにし、テストで固定する。
+  ログは監査と同じ方針 (`level`・`code`・`source` だけ) に、bot トークンの方式の Slack の error コード (`not_in_channel` など) だけを足す。
+  このコードは aratam が形を確かめた値 (`[a-z0-9_]` で 64 字まで。`docs/aratam.md` 4-1 章) で、何を直せばよいかがこれで決まる。エラーの文・チャンネル ID・Webhook の応答の本文は出さない
 aratam は arata の失敗後も動かす (`if: always()`)。実行環境が毎回消えるので report.json が無く、`max_age` を待たずに緊急用に届く。`waf-proposals.md` は実行環境と一緒に消えるのでストアの `reports/` に置く。artifacts はリポジトリを読める人に見えるので使わない。
 
 LLM 要約は `arata help ai report` (バイナリに埋め込んだ手順) に従い、`report.json` を入力に「新規 / 変化 / 再発 / 解消 / 未対応 / 取れなかったもの」の順で書く。
@@ -1165,6 +1177,23 @@ approve は人の判断を経て実行する。
   報告が来なくなると困るものを ack にしない。規則 (6 章の状態遷移) は変えず、使い方の基準だけを書く
 - 却下: init が run まで続けて行う (init が finding を出さない前提が崩れ、通知をつないだ実行と区別できない)。
   「最初の run は通知しない」を arata の機能にする (arata は通知を知らない。ADR 0018)。README だけに書く (版とずれる。ADR 0012)
+
+決定 (記録の集め方を arata から引けるようにする): どの記録があればどのチェックが動くか、その記録をどう出すかは 2 章と ADR (0006・0028・0046 など) に散らばり、
+利用者が読む場所が無かった。`arata help ai logs` (docs/ai/logs.md) にまとめる。
+
+- 中身: チェックと記録の対応表、記録ごとの勧める出し方 (CloudTrail・ALB・WAF・nginx・アプリの JSON 行ログ・ECS)、保存期間と Logs Insights の費用の目安、設定の例、doctor の読み方、よく詰まる点、外部の基準への案内
+- 対応表は「要るソースの組」ごとに 1 行。Registry のチェックの `Needs` / `StoredNeeds` とソースの種類 (`kindsOf`) からテスト (`internal/engine` の `TestLogsGuideTable`) が同じ表を作り、
+  文書の表と一字一句比べる。チェックを足す・`Needs` を変える・ソースの種類や形式を足すと落ちる。却下: 表を実行時に作って埋め込む (playbook の一覧と違い、前後の説明と一緒に読む表なので、文書に置いてテストで縛る)
+- doctor は足りない記録の行 (`LOG_GROUP_MISSING`、`FORMAT_MISMATCH`、行が無い、ソースが無くチェックが skip) に、読む節を添える。
+  JSON では行の `hint` (`arata help ai logs (「<節>」)`)、表では後ろに「記録の集め方: ...」を節ごとに 1 行 (DETAIL は長くしない)。節の名前が文書に実在することをテストで固定する。
+  権限・クエリの不備・費用の行には付けない (記録の出し方の問題ではない)
+- よく詰まる点は一般化して書く (特定の利用者の構成は書かない)。Devise のログイン失敗のステータス (responder の `error_status` の既定は 200) のように、
+  既定の `failure_statuses` では数えられない構成があることを書く。既定値そのものは変えない (失敗を 200 で返すかはアプリの設定次第で、200 を既定に入れると正常な応答を失敗と数える)
+- ALB の CloudWatch Logs への配信は 2-3 の提案 (ADR 0046) の第 1 段を「動作を確かめた形」として案内する。
+  決定: 実環境 (2 つ) で確かめた。配信の形式を plain、項目を既定にしたログを既存の `alb_access` で読み、doctor の解釈率は約 0.96、Logs Insights の集計も合った (2026-11)。
+  ほかの形 (json、項目の変更) は未確認なので「doctor の解釈率で確かめる」と書く。2-3 の「未確認」のうち plain・既定の項目の行の形は、これで確かめたものとして扱う
+- 外部の文書の URL は実在を確かめたものだけを書く (確認日 2026-11-13)
+- 入口: ルートのヘルプ、`arata help ai` の表と「次に読むもの」、`arata help ai onboarding` の doctor の手順、README
 
 ### 9-1. report.json から通知までの LLM の仕事
 

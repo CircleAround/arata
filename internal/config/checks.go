@@ -59,7 +59,7 @@ type LoginBruteforce struct {
 	Paths []string `yaml:"paths"`
 	// Methods は sign-in 試行とみなす HTTP メソッド。
 	Methods []string `yaml:"methods"`
-	// FailureStatuses は失敗とみなすステータス (Devise の再表示は 401 / 422、成功は 302 / 303)。
+	// FailureStatuses は失敗とみなすステータス (Devise の再表示は、生成された initializer の既定なら 422、古い initializer のままなら 200。arata help ai logs の「よく詰まる点」。成功は 302 / 303)。
 	FailureStatuses []int    `yaml:"failure_statuses"`
 	Baseline        Baseline `yaml:",inline"`
 	// TopIPMinCount は「その日の Top IP が過去に無い」を報告する件数の下限。

@@ -9,6 +9,7 @@
 | [arata-audit.yml](arata-audit.yml) / [arata-audit-multi.yml](arata-audit-multi.yml) | 定時 (と手動) | 監査して Slack に通知する |
 | [arata-triage.yml](arata-triage.yml) | 手動 (Actions の画面) | finding を ack / snooze / resolve する (下の「finding を片付ける」) |
 | [arata-check.yml](arata-check.yml) | PR | 設定と allowlist.yaml の形を検査する (下の「PR で設定を検査する」) |
+| [arata-notify-test.yml](arata-notify-test.yml) | 手動 (Actions の画面) | 監査をせずに、Slack へ試験メッセージを 1 通送る (下の「Slack への送信だけを確かめる」) |
 
 ```
 schedule → OIDC で実行用ロール ┬→ 読み取り専用ロールへ連鎖 → 監査対象 (読むだけ)
@@ -223,8 +224,9 @@ aratam test-notify -c arata/aratam.yaml --urgent    # 実際に送る。緊急�
 ```
 
 - `doctor` は Slack に何も送りません (届くかは分かりません)。`test-notify` は本当に届くので、チャンネルの人に一言伝えてから実行します
-- secrets に入れた値そのものは、最初の `workflow_dispatch` の実行 (手順 5 の最後) で確かめられます。`on_quiet: short` なら、新規が無くても 1 行届きます。
-  決定: 見本のワークフローに test-notify 用の入力は足しません。手動の実行が同じことを確かめ、入力を増やすと監査のワークフローの分岐が増えるためです
+- secrets に入れた値そのものは、[arata-notify-test.yml](arata-notify-test.yml) を Actions の画面から実行して確かめられます (監査は回りません。下の「Slack への送信だけを確かめる」)。
+  最初の `workflow_dispatch` の実行 (手順 5 の最後) でも確かめられます。`on_quiet: short` なら、新規が無くても 1 行届きます。
+  決定: 監査のワークフローに test-notify 用の入力は足しません。入力を増やすと監査のワークフローの分岐が増えるためです。送信だけを確かめる手段は、別の見本にしました
 
 #### bot トークンで送る (secret は 1 つ)
 
@@ -254,6 +256,7 @@ aratam test-notify -c arata/aratam.yaml --urgent    # 実際に送る。緊急�
 
 - `doctor` は投稿しないので、bot がチャンネルにいるかは分かりません (`chat:write` だけでは調べられません)。`test-notify` が `not_in_channel` で失敗したら、
   そのチャンネルで `/invite @arata` を実行します。`channel_not_found` は、チャンネル ID の誤りか、招待していない非公開チャンネルです
+- トークンを手元に持たない人は、[arata-notify-test.yml](arata-notify-test.yml) で同じことを確かめられます (下の「Slack への送信だけを確かめる」)
 - 同じワークスペースの複数のチャンネルに送るなら、アプリもトークンも 1 つです。監査対象ごとに `aratam.yaml` のチャンネル ID を変えるだけです。
   別の組織と Slack Connect で共有するチャンネルも、招待すれば同じアプリで送れます
 - トークンのローテーションは有効にしません (manifest は無効にしてあります)。有効にするとトークンが 12 時間で切れますが、aratam は更新の仕組みを持ちません
@@ -460,7 +463,7 @@ Settings → Actions → General で設定します。
 
 見本をそのまま写せば、上の前提に合います (arata のリポジトリのテストが固定しています)。書き換えるときは崩さないでください。
 
-- ワークフローの先頭は `permissions: {}`。権限はジョブごとで、監査と片付けは `id-token: write` と `contents: read`、PR の検査は `contents: read` だけ
+- ワークフローの先頭は `permissions: {}`。権限はジョブごとで、監査と片付けは `id-token: write` と `contents: read`、PR の検査と送信のテストは `contents: read` だけ
 - secrets か OIDC を使う見本は `schedule` と `workflow_dispatch` でだけ動き、`pull_request_target`・`workflow_run`・`environment:` を使わない
 - action は 2 つだけで、どちらも commit SHA で固定。checkout は `persist-credentials: false`
 - `run:` に式を埋め込まず、secrets は使う step にだけ渡す
@@ -591,6 +594,49 @@ AI には `arata approve` を実行させません。手元で形を確かめる
 - 権限やロググループは見ません (AWS に問い合わせる `arata doctor` の仕事です)
 - `config check` を含む版 (v0.6.0 以降) が要ります。監査のワークフローも v0.6.0 以降に上げたら、`ARATA_VERSION` を同じ版に揃えます (版が違うと、検査を通った設定が監査で読めないことがあります。新しい版で足されたキーなど)
 - main のブランチ保護で必須のチェックにすると、形の誤った allowlist.yaml はマージできなくなります
+
+## Slack への送信だけを確かめる
+
+[arata-notify-test.yml](arata-notify-test.yml) を `.github/workflows/` に置くと、Actions の画面から `aratam test-notify` を実行できます。
+監査 (`arata run`) は回さず、試験メッセージを 1 通送るだけです。Actions の secrets と、リポジトリの `aratam.yaml` の組み合わせで届くかが分かります。
+
+使いどころ:
+
+- 新しい通知先を足したとき (アカウントを足して `aratam.yaml` にチャンネル ID を書いた、Webhook を足した)。bot がそのチャンネルに投稿できるかを、最初の定時の実行より前に確かめます
+- Webhook を作り直したとき、bot トークンを入れ替えたとき (secrets に入れた値が正しいか)
+- 通知が届かないとき (Slack の側か、監査の側かを切り分ける)
+
+1. GitHub の Actions → **arata-notify-test** → **Run workflow** を開き、次を選んで実行します
+
+   | 入力 | 中身 |
+   |---|---|
+   | account | アカウント (`aws/` の下のディレクトリの名前)。その `aratam.yaml` の通知先に送ります |
+   | route | `normal` = 通常用に 1 通 / `urgent` = 緊急用に 1 通 (`aratam test-notify --urgent`) |
+
+2. Slack に「aratam の試験通知です」が届けば、その通知先の設定は動いています。通常用と緊急用は別の経路なので、両方を 1 回ずつ確かめます
+
+- **本当に届きます**。`urgent` は緊急用のチャンネルに届き、緊急用を分けていなければ通常用に `urgent_mention` (`<!channel>` など) が付きます。チャンネルの人に一言伝えてから実行します
+- AWS には繋ぎません。`test-notify` は `aratam.yaml` を読んで Slack に送るだけで、LLM (Bedrock など) も呼びません。OIDC も実行用ロールも使わず、権限は `contents: read` だけです。
+  ストアにも触れないので、監査が走っている間でも実行できます (finding の状態は変わりません)
+- secrets の渡し方は監査の notify と同じです (Webhook の 2 行か、bot トークンの 1 行)。監査のワークフローを bot トークンの方式に替えたら、こちらも同じに替えます。
+  `ARATA_VERSION` も監査と同じ版にします (bot トークンの方式は v0.8.0 以降)
+- `account` の選択肢は、監査の `matrix.account` と同じ並びにします。アカウントを足したら、ここにも足します。
+  1 つのアカウントの形 ([arata-audit.yml](arata-audit.yml)) で使うときの変え方は、見本の先頭のコメントにあります
+- 選んだブランチの `aratam.yaml` を読みます。チャンネル ID を足す PR をマージする前に、そのブランチで確かめられます
+  (secrets は書き込み権限のある人ならどのブランチからも使えます。「実行するリポジトリと環境を堅くする」の 5)
+
+失敗したときは、ジョブが失敗 (赤) になり、ログに `code` と終了コードが出ます。
+
+| ログ | 意味 | すること |
+|---|---|---|
+| `CONFIG_INVALID` (終了コード 2) | `aratam.yaml` の誤りか、secret が空 | `aratam config check` (PR の [arata-check.yml](arata-check.yml))、secrets の名前と、ワークフローの `env` の行を確かめる |
+| `SEND_FAILED` + `slack error=not_in_channel` | bot がそのチャンネルにいない | そのチャンネルで `/invite @arata` |
+| `SEND_FAILED` + `slack error=channel_not_found` | チャンネル ID の誤りか、招待していない非公開チャンネル | `aratam.yaml` の `slack.channel` / `urgent_channel` を確かめ、bot を招待する |
+| `SEND_FAILED` + `slack error=invalid_auth` / `token_revoked` など | トークンが無効 | トークンを入れ直す (手順 4 の「bot トークンで送る」) |
+| `SEND_FAILED` だけ (終了コード 5) | Webhook が受け取らなかった、Slack に繋がらなかった | Webhook を作り直して secret に入れ直す。詳しい原因は手元で同じコマンドを実行する |
+| `URGENT_WEBHOOK_UNSET` (warn) | 緊急用の Webhook の secret が空 | 緊急用が通常用にメンション付きで届く。分けるなら secret を入れる |
+
+ログに足して出すのは、bot トークンの方式の Slack の error コードだけです (aratam が形を確かめた値です)。エラーの文・チャンネル ID・Webhook の応答の本文は、監査と同じく出しません。
 
 ## 失敗したとき
 

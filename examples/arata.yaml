@@ -108,7 +108,7 @@ checks:
   login_bruteforce:
     paths: [/users/sign_in, /login, /signin]   # sign-in の送信先 (完全一致、クエリ文字列は除く)
     methods: [POST]
-    failure_statuses: [401, 403, 422]          # 失敗とみなすステータス (Devise の再表示は 401 / 422)
+    failure_statuses: [401, 403, 422]          # 失敗とみなすステータス (Devise の再表示は、生成された initializer の既定なら 422、古いままなら 200。arata help ai logs)
     baseline_days: 14
     factor: 3
     min_count: 20

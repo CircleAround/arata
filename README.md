@@ -27,6 +27,7 @@ AWS のログと設定を定期的に改め、**前回から新しく発生し�
 
 `arata help ai` を最初に読ませる (report の読み方は `arata help ai report`、承認判断は `arata help ai approve`、チェックごとの対処手順は `arata help ai playbook <check>`、`--format json` も可)。
 内容はバイナリに埋め込まれていて、エンジンの版と常に揃う。
+チェックが skip される・解釈率が低いなど、記録が足りないときは `arata help ai logs` (チェックと記録の対応表、ログの出し方) を読ませる。
 GitHub Actions で動かす利用者の環境 (リポジトリの設定・OIDC の信頼・secrets) を作る・見直すときは `arata help ai runtime` を読ませる (チェックリスト。設定を変えるのは人)。
 
 ## 通知 (aratam)
@@ -105,6 +106,9 @@ aratam doctor                               # auth.test でトークンが有効
 aratam test-notify                          # 実際に 1 通送る。not_in_channel なら、そのチャンネルで /invite @arata
 aratam test-notify --urgent
 ```
+
+GitHub Actions で動かしているなら、同じ確認を Actions の画面から行える (見本の [arata-notify-test.yml](examples/github-actions/arata-notify-test.yml)。監査は回さない)。
+通知先のチャンネルを足したとき、トークンを入れ替えたときに使う。
 
 - 同じワークスペースの複数のチャンネルに送るなら、アプリもトークンも 1 つでよい。監査対象ごとの `aratam.yaml` でチャンネル ID を変える。
   別の組織と Slack Connect で共有するチャンネルも、招待すれば同じアプリで送れる
@@ -206,7 +210,7 @@ cd /path/to/target
 arata config init --audit-account none   # 雛形を ./arata.yaml に書き出す (既存ファイルは --force が無ければ上書きしない。標準出力へは --out -)
 #   --audit-account は必須 (下の「監査する側のアカウント」)。別のアカウントから監査するなら none の代わりにその 12 桁の ID
 # name / store / sources (cloudwatch-logs はコメントの例を外す) を編集する
-arata doctor                      # 権限・ロググループ・解釈率を検査 (問題があれば終了コード 2)
+arata doctor                      # 権限・ロググループ・解釈率を検査 (問題があれば終了コード 2。足りない記録の出し方は arata help ai logs)
 arata init --window 7d            # ベースライン収集 (findings は出さない)。終わると次の手順を表示する
 arata run --profile daily --out /tmp/arata-out   # 最初の run は通知をつながずに流し、arata review で 1 件ずつ片付ける (流れは arata help ai onboarding)
 
@@ -337,7 +341,7 @@ arata resolve <finding-id>
 | `iam-credential-report` | `iam:GenerateCredentialReport` (**書き込み系**: レポートの生成のみ)、`iam:GetCredentialReport` |
 | `guardduty` | `guardduty:ListDetectors`, `guardduty:ListFindings`, `guardduty:GetFindings` |
 | `access-analyzer` | `access-analyzer:ListAnalyzers`, `access-analyzer:ListFindings` |
-| `posture` | `cloudtrail:DescribeTrails`, `cloudtrail:GetTrailStatus`, `guardduty:ListDetectors`, `guardduty:GetDetector`, `iam:GetAccountSummary`, `iam:GetAccountPasswordPolicy`, `s3:GetAccountPublicAccessBlock` |
+| `posture` | `cloudtrail:DescribeTrails`, `cloudtrail:GetTrailStatus`, `guardduty:ListDetectors`, `guardduty:GetDetector`, `iam:GetAccountSummary`, `iam:GetAccountPasswordPolicy`, `s3:GetAccountPublicAccessBlock`, `elasticloadbalancing:DescribeLoadBalancers`, `wafv2:GetWebACLForResource` |
 | `waf-config` | `wafv2:ListWebACLs`, `wafv2:GetWebACL`, `wafv2:GetLoggingConfiguration`, `wafv2:ListResourcesForWebACL` (REGIONAL は `regions`、CLOUDFRONT は us-east-1) |
 
 daily のソースのうち、追加の権限が要るもの:
@@ -356,6 +360,9 @@ daily のソースのうち、追加の権限が要るもの:
 - `waf_review` (WAF の修正提案の候補) は `waf-config` と wafv2 の `cloudwatch-logs` ソースの両方が要る。daily が貯めた wafv2 の日次集計を読むだけで、
   weekly の run は WAF のログを引かない。候補は report.json の `proposals` に出る (適用は人が判断する。`arata help ai report`)。
   既に配ったロールには wafv2 の 4 つの action を足す必要がある (無ければ waf-config だけが ACCESS_DENIED になり、waf_review が skip される)
+- posture は、インターネット向けの ALB に WAF (WAFv2 の WebACL) が付いていなければ ALB ごとに medium で報告する (`alb_waf|<region>|<ALB>`。WebACL を付ければ次の weekly で解消)。
+  既に配ったロールには `elasticloadbalancing:DescribeLoadBalancers` と `wafv2:GetWebACLForResource` を足す必要がある (`deploy/iam/readonly-role.yaml` でスタックを更新する。
+  無ければこの項目だけが取れず、coverage に `partial: true` と不足の action が出て終了コード 3。他の項目は評価される)
 - 監査ロールや AI 用の主体を allowlist で `tags: [ai]` にすると、`ai_path_usage` (daily) が利用を主体 × 送信元 IP で毎回 info に 1 行出す (自己監査)
 
 ```sh
@@ -392,6 +399,8 @@ store: s3://example-arata-store/my-service
 `sources` に `kind: cloudwatch-logs` を足し、ロググループと形式プロファイルを紐付ける (examples/arata.yaml)。生ログは引かず、
 Logs Insights の集計クエリで日次集計 (IP 別の sign-in 失敗数など) だけを `metrics` に貯める。スキャン量課金なので次に注意する。
 
+- どの記録があればどのチェックが動くか、ALB・WAF・nginx・アプリのログの出し方、保存期間と費用の目安、よく詰まる点は `arata help ai logs` にまとめてある
+  (人が読んでもよい。doctor は足りない記録の行に、読む節を示す)。
 - まず `arata doctor` で、ロググループの有無・直近 100 行の解釈率・集計クエリが Insights に受理されるかを確かめる。
   解釈率が `expected_match_rate` (既定 0.8) 未満なら形式の指定 (`format` / `fields` / `regex` / `stream_prefix`) を見直す
 - 集計クエリは窓に重なる UTC 日の 0 時から引くので、1 回のスキャンは最大で窓 + 24h 分。`max_scan_gb` でソースごとに上限を付けられる (超えたら `QUERY_LIMIT`)

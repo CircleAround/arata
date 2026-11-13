@@ -5,21 +5,25 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	ct "github.com/aws/aws-sdk-go-v2/service/cloudtrail"
+	elbv2 "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2"
+	elbtypes "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2/types"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/s3control"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
+	"github.com/aws/aws-sdk-go-v2/service/wafv2"
 
 	"github.com/CircleAround/arata/internal/collect"
 	"github.com/CircleAround/arata/internal/record"
 )
 
-// 姿勢の項目 (posture_item の Key)。GuardDuty はリージョンごとに `guardduty|<region>`。
+// 姿勢の項目 (posture_item の Key)。GuardDuty はリージョンごとに `guardduty|<region>`、ALB の WAF もリージョンごとに `alb_waf|<region>`。
 const (
 	PostureCloudTrail     = "cloudtrail"
 	PostureGuardDuty      = "guardduty"
 	PostureRootMFA        = "root_mfa"
 	PostureS3PublicAccess = "s3_public_access_block"
 	PosturePasswordPolicy = "password_policy"
+	PostureALBWAF         = "alb_waf"
 )
 
 // Posture はアカウントの姿勢 (事実) を項目ごとに 1 つ出す collector (posture_item)。良し悪しの判定は posture チェックが行う。
@@ -29,6 +33,8 @@ const (
 type Posture struct {
 	base
 	problems []*collect.Error
+	// albChecked は直近の Collect で WebACL を確かめたインターネット向けの ALB の数 (Probe が「未確認」を出すのに使う)。
+	albChecked int
 }
 
 var (
@@ -47,6 +53,7 @@ func (c *Posture) Problems() []*collect.Error { return c.problems }
 
 func (c *Posture) Collect(ctx context.Context, w collect.Window, sink collect.RecordSink) error {
 	c.problems = nil
+	c.albChecked = 0
 	at := snapshotTime(w)
 	home := c.clients[0]
 	emit := func(key string, data map[string]any, action string, err error) error {
@@ -89,7 +96,56 @@ func (c *Posture) Collect(ctx context.Context, w collect.Window, sink collect.Re
 		return err
 	}
 	d, err = passwordPolicy(ctx, home.IAM)
-	return emit(PosturePasswordPolicy, d, ActionGetPasswordPolicy, err)
+	if err := emit(PosturePasswordPolicy, d, ActionGetPasswordPolicy, err); err != nil {
+		return err
+	}
+	for _, cl := range c.clients {
+		d, action, err = c.albWAF(ctx, cl)
+		if err := emit(PostureALBWAF+"|"+cl.Region, d, action, err); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// albWAF はリージョンのインターネット向けの Application Load Balancer と、WAFv2 の WebACL が付いていないものを返す (ADR 0048)。
+//
+// 決定:
+//   - internal の ALB と、ALB 以外 (NLB・GWLB。WAF を付けられない) は見ない
+//   - 一覧 (DescribeLoadBalancers) か WebACL の確認 (GetWebACLForResource) が 1 つでも失敗したら、そのリージョンは取れなかったことにする
+//     (一部の ALB だけで「付いている」と言わない)。一覧の後に消えた ALB (WAFNonexistentItemException) だけは数えずに続ける
+//   - 持つのは名前と ARN だけ (DNS 名・サブネット・セキュリティグループ・WebACL の中身は持たない)
+func (c *Posture) albWAF(ctx context.Context, cl Clients) (map[string]any, string, error) {
+	without := []any{}
+	facing := 0
+	var marker *string
+	for {
+		out, err := cl.ELBV2.DescribeLoadBalancers(ctx, &elbv2.DescribeLoadBalancersInput{Marker: marker})
+		if err != nil {
+			return nil, ActionDescribeLoadBalancers, err
+		}
+		for _, lb := range out.LoadBalancers {
+			if lb.Type != elbtypes.LoadBalancerTypeEnumApplication || lb.Scheme != elbtypes.LoadBalancerSchemeEnumInternetFacing {
+				continue
+			}
+			acl, err := cl.WAFV2.GetWebACLForResource(ctx, &wafv2.GetWebACLForResourceInput{ResourceArn: lb.LoadBalancerArn})
+			if collect.APICode(err) == "WAFNonexistentItemException" {
+				continue
+			}
+			if err != nil {
+				return nil, ActionGetWebACLForResource, err
+			}
+			c.albChecked++
+			facing++
+			if acl.WebACL == nil {
+				without = append(without, map[string]any{"name": aws.ToString(lb.LoadBalancerName), "arn": aws.ToString(lb.LoadBalancerArn)})
+			}
+		}
+		if marker = out.NextMarker; aws.ToString(marker) == "" {
+			break
+		}
+	}
+	return map[string]any{"region": cl.Region, "internet_facing": facing, "without_waf": without}, "", nil
 }
 
 func (c *Posture) cloudTrail(ctx context.Context, cl Clients) (map[string]any, string, error) {
@@ -162,12 +218,14 @@ func (c *Posture) Probe(ctx context.Context) []collect.ProbeResult {
 		denied[p.Action] = p
 	}
 	// 前段が拒否されると後段は呼ばれないので「未確認」とする
-	after := map[string]string{ActionGetTrailStatus: ActionDescribeTrails, ActionGetDetector: ActionListDetectors}
+	after := map[string]string{ActionGetTrailStatus: ActionDescribeTrails, ActionGetDetector: ActionListDetectors, ActionGetWebACLForResource: ActionDescribeLoadBalancers}
 	var out []collect.ProbeResult
 	for _, a := range RequiredActions[KindPosture] {
 		r := collect.ProbeResult{Action: a, Err: denied[a]}
 		if pre := after[a]; pre != "" && denied[pre] != nil && r.Err == nil {
 			r.Detail = pre + " が拒否されたため未確認"
+		} else if a == ActionGetWebACLForResource && r.Err == nil && c.albChecked == 0 {
+			r.Detail = "インターネット向けの ALB が無いため未確認"
 		}
 		out = append(out, r)
 	}
