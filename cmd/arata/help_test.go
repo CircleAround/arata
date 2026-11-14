@@ -48,6 +48,8 @@ func TestHelpAI(t *testing.T) {
 		{[]string{"ai", "playbook"}, "playbook"},
 		{[]string{"help", "ai", "playbook", "root_usage"}, "playbook root_usage"},
 		{[]string{"ai", "playbook", "access_denied"}, "playbook access_denied"},
+		{[]string{"help", "ai", "threats"}, "threats"},
+		{[]string{"ai", "threats", "wfx-loot-2026-11"}, "threats wfx-loot-2026-11"},
 	} {
 		if code := c.run(tc.args...); code != 0 {
 			t.Fatalf("%v: exit %d %s", tc.args, code, c.stderr)

@@ -81,3 +81,4 @@
 | [0055](0055-oidc-assume-role.md) | OIDC でのロールの引き受けを、(プロバイダ, sub, ロール) の組で既知リストと比べる (`oidc_assume_role`) | 採用 |
 | [0056](0056-deploy-principal-not-lowered.md) | 既知デプロイ主体でも、アクセスキーの作成と、信頼ポリシーを外へ広げる変更は下げない。ロールの作成も信頼ポリシーを読んで報告する (`iam_changes`) | 採用 |
 | [0057](0057-runner-github-environment.md) | 実行の仕組みを GitHub の environment に対応させ、見本は秘密を environment に置く (`sub` は environment、ブランチは `ref` で絞る) | 採用 |
+| [0058](0058-threat-coverage-table.md) | 公開された攻撃の事例ごとに、arata で見える段階と見えない段階を、出典の URL 付きの対応表として持つ | 採用 |

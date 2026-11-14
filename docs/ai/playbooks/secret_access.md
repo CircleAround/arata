@@ -48,3 +48,9 @@
 - 「値は CloudTrail に残らないから漏れていない」と考えない。読み取りが成功していれば値は相手に渡っている
 - 承認済みの主体だからと軽く扱わない。調べる前に `secrets_access` の追加や ack を提案しない
 - 指摘や要約に秘匿値の値を書かない・取りに行かない (調査で `get-secret-value` を実行しない)。LLM が approve / ack / ローテーションを実行しない
+
+## 関連する事例
+
+公開の事例で、このチェックが当たる段階 (一覧と読み方は `arata help ai threats`)。指摘がその攻撃だと断定する材料ではない。
+
+- `arata help ai threats lucr-3-2023-09`: CloudShell から Secrets Manager の秘匿値をまとめて読む段階

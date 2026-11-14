@@ -56,3 +56,10 @@ CloudTrail・GuardDuty・Access Analyzer・CloudWatch Logs・VPC フローログ
 - 「今は戻っている」ことを確かめずに ack しない。止まっていた間の操作を調べずに閉じない
 - LLM が証跡・GuardDuty・ログの設定を変えない。元に戻す操作も提案まで
 - 削除されたロググループ・止められた間のログが残っていると書かない (戻せないものは戻せないと伝える)
+
+## 関連する事例
+
+公開の事例で、このチェックが当たる段階 (一覧と読み方は `arata help ai threats`)。指摘がその攻撃だと断定する材料ではない。
+
+- `arata help ai threats scarleteel-2023-02`: CloudTrail の記録を止めた段階 (`StopLogging`)
+- `arata help ai threats lucr-3-2023-09`: GuardDuty の detector を消し、CloudTrail を止める・消す段階

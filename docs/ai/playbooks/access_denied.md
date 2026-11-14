@@ -47,3 +47,11 @@ allowlist で承認済みの主体でも出る (承認は「居ること」を�
 - 承認済みの主体 (`allowlist_status: approved`) だからと軽く扱わない
 - 拒否されたので被害は無いと断定しない。拒否の前後の成功した操作を確かめる
 - 列挙を隠すほど広い `expected_denied` を提案しない。LLM が approve / ack を実行しない
+
+## 関連する事例
+
+公開の事例で、このチェックが当たる段階 (一覧と読み方は `arata help ai threats`)。指摘がその攻撃だと断定する材料ではない。
+
+- `arata help ai threats ghostaction-2026-10`: 盗んだアクセスキーで権限を列挙する段階 (出典には無い想定)
+- `arata help ai threats env-extortion-2024-08`: EC2 での採掘の準備が拒否された段階
+- `arata help ai threats scarleteel-2023-02`: 永続化の試行と、別アカウントへの移動が拒否された段階

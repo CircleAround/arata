@@ -53,3 +53,13 @@
 - 承認済みの主体 (`allowlist_status: approved`) だからと軽く扱わない。承認済みの主体の悪用を見るためのチェック
 - 「送信元が AWS の IP だから正規」と決めつけない (攻撃者もクラウドの VPS を使う)。国・事業者だけで判断しない
 - 調べる前に `dynamic_source: true` や広い `source_ips` を提案しない (漏洩を隠す)。LLM が approve / ack / キーの無効化を実行しない
+
+## 関連する事例
+
+公開の事例で、このチェックが当たる段階 (一覧と読み方は `arata help ai threats`)。指摘がその攻撃だと断定する材料ではない。
+
+- `arata help ai threats wfx-loot-2026-11`: 作られたアクセスキーが、後で攻撃者の環境から使われる段階 (出典には無い想定)
+- `arata help ai threats ghostaction-2026-10`: 盗んだアクセスキーが攻撃者の環境から使われる段階 (出典には無い想定)
+- `arata help ai threats env-extortion-2024-08`: 漏れたキーが Tor・VPN から使われ、新しいリージョンに Lambda 関数を作った段階
+- `arata help ai threats scarleteel-2023-02`: 盗んだロールの認証情報と、Lambda で見つけた IAM ユーザーのキーが外から使われた段階
+- `arata help ai threats lucr-3-2023-09`: 乗っ取った人の主体が、攻撃者の送信元から使われる段階

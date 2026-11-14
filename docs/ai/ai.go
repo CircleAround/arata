@@ -12,16 +12,17 @@ import (
 	"strings"
 )
 
-//go:embed index.md report.md approve.md runtime.md onboarding.md logs.md request_lines.md user_id.md playbooks/*.md
+//go:embed index.md report.md approve.md runtime.md onboarding.md logs.md request_lines.md user_id.md playbooks/*.md threats/*.md
 var files embed.FS
 
 // Topic は文書 1 つ。
 type Topic struct {
-	Name string // "ai" / "ai report" / "ai approve" / "ai runtime" / "ai onboarding" / "ai logs" / "ai request_lines" / "ai user_id" / "ai playbook" / "ai playbook <check>"
-	File string // 空なら playbook の一覧 (埋め込んだ playbook から作る)
+	Name string // "ai" / "ai report" / "ai approve" / "ai runtime" / "ai onboarding" / "ai logs" / "ai request_lines" / "ai user_id" / "ai playbook" / "ai playbook <check>" / "ai threats" / "ai threats <id>"
+	File string // 空なら埋め込んだ文書から作る一覧 (gen)
+	gen  func() string
 }
 
-// Topics は `arata help ai [topic]` の一覧 (個々の playbook は含まない。`ai playbook <check>` で引く)。
+// Topics は `arata help ai [topic]` の一覧 (個々の playbook・事例は含まない。`ai playbook <check>`・`ai threats <id>` で引く)。
 var Topics = []Topic{
 	{Name: "ai", File: "index.md"},
 	{Name: "ai report", File: "report.md"},
@@ -31,14 +32,16 @@ var Topics = []Topic{
 	{Name: "ai logs", File: "logs.md"},
 	{Name: "ai request_lines", File: "request_lines.md"},
 	{Name: "ai user_id", File: "user_id.md"},
-	{Name: "ai playbook"},
+	{Name: "ai playbook", gen: playbookIndex},
+	{Name: "ai threats", gen: threatIndex},
 }
 
 const playbookDir = "playbooks"
 
 // PlaybookSections は playbook の見出し (## ) で、この順に必ず持つ。
 // aratam などが LLM の system に埋め込むときの約束でもあるので、変えるときは読む側も見直す。
-var PlaybookSections = []string{"この指摘の意味", "まず確かめること", "判断の分かれ目", "対処の選択肢", "やってはいけないこと"}
+// 決定 (ADR 0058): 最後の「関連する事例」には、公開の事例 (`arata help ai threats <id>`) か「対応する公開の事例はまだ無い」を書く。
+var PlaybookSections = []string{"この指摘の意味", "まず確かめること", "判断の分かれ目", "対処の選択肢", "やってはいけないこと", "関連する事例"}
 
 // PlaybookNames は playbook のあるチェック名 (名前順)。
 func PlaybookNames() []string {
@@ -70,6 +73,20 @@ func Playbook(check string) (string, bool) {
 	return string(b), true
 }
 
+// PlaybookProcedure は、playbook から最後の節「関連する事例」を除いた本文 (対処手順だけ) を返す。無ければ false。
+// 決定 (ADR 0058): aratam が LLM の system に入れるのはこちら。事例への案内は、手を動かせない LLM には使えず (help を引けない)、
+// 入れると上限 (notify.MaxPlaybookBytes) の中に入る playbook の数が減る。指摘を特定の攻撃と結び付けて書かせないためでもある。
+func PlaybookProcedure(check string) (string, bool) {
+	body, ok := Playbook(check)
+	if !ok {
+		return "", false
+	}
+	if i := strings.Index(body, "\n## "+PlaybookSections[len(PlaybookSections)-1]+"\n"); i >= 0 {
+		body = strings.TrimRight(body[:i], "\n") + "\n"
+	}
+	return body, true
+}
+
 // Section は見出し (##) 1 つ分。
 type Section struct {
 	Title string `json:"title"`
@@ -92,8 +109,15 @@ type Doc struct {
 	Sections      []Section `json:"sections"`
 }
 
-// Lookup は sub ("" / "report" / "approve" / "runtime" / "onboarding" / "logs" / "request_lines" / "user_id" / "playbook" / "playbook <check>") の文書を返す。
+// Lookup は sub ("" / "report" / "approve" / "runtime" / "onboarding" / "logs" / "request_lines" / "user_id" / "playbook" / "playbook <check>" / "threats" / "threats <id>") の文書を返す。
 func Lookup(sub string) (Topic, error) {
+	if id, ok := strings.CutPrefix(strings.TrimSpace(sub), "threats "); ok {
+		id = strings.TrimSpace(id)
+		if _, ok := Threat(id); !ok {
+			return Topic{}, fmt.Errorf("no threat named %q (%s)", id, strings.Join(ThreatNames(), ", "))
+		}
+		return Topic{Name: "ai threats " + id, File: path.Join(threatDir, id+".md")}, nil
+	}
 	if check, ok := strings.CutPrefix(strings.TrimSpace(sub), "playbook "); ok {
 		check = strings.TrimSpace(check)
 		if _, ok := Playbook(check); !ok {
@@ -111,14 +135,14 @@ func Lookup(sub string) (Topic, error) {
 	for _, t := range Topics {
 		names = append(names, "arata help "+t.Name)
 	}
-	names = append(names, "arata help ai playbook <check>")
+	names = append(names, "arata help ai playbook <check>", "arata help ai threats <id>")
 	return Topic{}, fmt.Errorf("unknown topic %q (%s)", sub, strings.Join(names, ", "))
 }
 
 // Markdown は文書の本文。
 func (t Topic) Markdown() string {
-	if t.File == "" {
-		return playbookIndex()
+	if t.gen != nil {
+		return t.gen()
 	}
 	b, err := files.ReadFile(t.File)
 	if err != nil {
@@ -175,6 +199,7 @@ LLM はこの手順に沿って、根拠 (finding の ` + "`data`" + `) と利�
 - arata は読み取り専用。手順の中の AWS の操作も、LLM が自分で行ってよいのは読み取り (` + "`describe` / `get` / `list` / `lookup`" + `) だけ。` + "`approve` / `ack` / `snooze` / `resolve`" + ` は人が行う
 - aratam の要約のように手を動かせない LLM は、「まず確かめること」を人への確認事項として書く (自分で確かめたことにしない)
 - 重大度は規則が決める。playbook を理由に critical / high を軽く扱わない
+- 「関連する事例」は、そのチェックが公開の事例のどの段階に当たるかの案内 (` + "`arata help ai threats`" + `)。指摘がその攻撃だと断定する材料ではない
 
 ## 一覧
 
