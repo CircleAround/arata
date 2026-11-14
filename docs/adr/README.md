@@ -77,3 +77,4 @@
 | [0051](0051-request-records-and-field-tiers.md) | 複数行のアプリのログは request_id でリクエスト単位にまとめて集計し、取れる項目の段ごとに動かせるチェックを決める | 採用 (段 0 とユーザー ID の読み取りまで実装) |
 | [0052](0052-actor-and-auth-lines.md) | アプリに足してもらう行は actor と auth の 2 種類にし、行末まで固定した正規表現で読んで、値の形を規則で絞る | 採用 |
 | [0053](0053-readonly-role-denied-log-groups.md) | 読み取り専用ロールに、読ませないロググループの名前を受けるパラメータを足し、中身を読む操作を明示の Deny で止める | 採用 |
+| [0054](0054-machine-readable-output-schemas.md) | 機械が読む出力は `--format json` で出し、Go の型から作った JSON Schema とテストで固定する (人向けの出力を機械で読ませない) | 採用 |
