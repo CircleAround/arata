@@ -1268,7 +1268,7 @@ arata は LLM を使わず候補だけを作り、aratam の LLM は候補を文
 ```
 arata config init --audit-account <12 桁の ID>|none [--by NAME] [--out FILE|-] [--force] | --diff
                                # 推奨設定の雛形を書き出す (既定 ./arata.yaml。監査する側のアカウントは必須。ID なら既知リストにも書く。ADR 0045) / 雛形との差分 (3 章、ADR 0014)
-arata config check             # 設定と allowlist.yaml の形をオフラインで検査 (AWS・ストアに繋がない。問題があれば終了コード 2。3 章、ADR 0042)
+arata config check [--format text|json]   # 設定と allowlist.yaml の形をオフラインで検査 (AWS・ストアに繋がない。問題があれば終了コード 2。3 章、ADR 0042)
 arata profiles  [--format table|json]   # プロファイルごとに実際に効いているチェックとパラメータ、その由来
 arata init      [--window 7d | --resume]   # ストア作成、設定検証、ベースライン収集 (findings は出さない)
 arata doctor                   # 権限・ロググループ・形式プロファイルの解釈率を検査
@@ -1297,9 +1297,13 @@ arata rebuild   [--from-scratch [--baseline]] [--format text|json]   # raw JSONL
   - 最上位に `schema` (名前) と `schema_version` (整数) を出す。項目を足すのは互換 (版はそのまま)。消す・名前や型や意味を変える・閉じた語彙 (`enum`) に値を足すときは
     版を上げ、Release の本文に書く。スキーマは開いた形 (`additionalProperties` を縛らない) で、古いスキーマで新しい出力を確かめても足した項目では落ちない
   - 読む側の決まり: 知らない項目は無視する。`enum` のある項目で知らない値を見たら止める。`schema_version` が知る版より大きければ止める
-  - 今スキーマで固定しているのは `report`・`report-period` (report.json)、`doctor`・`profiles`・`rebuild`・`help-ai` (それぞれの `--format json`)、`log` (ログの行)、
-    `aratam-config-check`。残りの `--format json` (review・config init --diff。最上位が配列) と、新設する `arata config check`・`aratam doctor` の JSON、
-    `aratam notify --dry-run --format json` は、次に足す (ADR 0054 の 7 節)。それまでは、今の形を変えないことだけを約束する
+  - スキーマで固定している出力 (`arata schema` の一覧): `report`・`report-period` (report.json)、`doctor`・`profiles`・`rebuild`・`help-ai`・`arata-config-check`・
+    `review`・`config-diff` (arata のそれぞれの `--format json`)、`aratam-config-check`・`aratam-doctor`・`aratam-dry-run` (aratam)、`log` (ログの行)。
+    `--format json` を持つ出力は、これで全部
+  - **`review` と `config init --diff` は、最上位が配列のまま版 1 として固定した** (`schema` / `schema_version` の項目は無い)。オブジェクトで包むのは互換を壊す変更で、
+    `review --format json` は playbook が LLM に読ませている。包むのは、ほかの理由でその出力の版を上げるときに一緒に行う。これから足す出力は、最上位を必ずオブジェクトにする
+  - `arata config check --format json` (`arata-config-check`): text と同じ行を `rows` (`status`・`item`・`path`・`line`・`message`) に出す。text の「ファイル:行」は `path` と `line` に分かれる。
+    ng の行が無ければ `ok: true`。終了コードと標準エラーの code は text と同じ。text の出力は変えていない
   - `doctor` の `rows[].status` (ok / warn / ng / skip) は閉じた語彙。`rows[].item`・`rows[].code`・`rows[].kind`、`profiles` の `cadence`・`mode`・`via`・`origin` は開いた語彙。
     `rows[].detail`・`rows[].hint`・`warnings`・`sections[].body` は人向けの文で、文言は固定しない。`rows[].samples` はログ由来の値 (マスク済み) なので、公開されるログに出さない
   - 必須の項目は `null` で出さない (配列は `[]`、対応表は `{}`)。`doctor` の `required_actions` は、最初から `[]` で持つようにした (ソースが無い設定でも `null` にならない)

@@ -431,26 +431,79 @@ func (t targets) label(route notify.Route) string {
 	return "normal webhook"
 }
 
-// stdoutSender は --dry-run の送り先。送り先の種類を添えて標準出力に出す。
-// 決定 (ADR 0029): format が text なら人が読む簡易表示 (Block Kit は見出し・区切りを記号にしたもの)、json なら Slack に送る payload そのもの
-// (bot の方式では、これに channel を足して送る)。
+// notify --dry-run --format json のスキーマの名前と版 (ADR 0054)。名前は `aratam schema <名前>` の名前。
+const (
+	dryRunSchema        = "aratam-dry-run"
+	dryRunSchemaVersion = 1
+)
+
+// dryRunOutput は notify --dry-run --format json の出力。全体が 1 つの JSON。
+//
+// 決定 (ADR 0054): 以前は「--- route: … ---」の行と payload が交互に並び、全体としては JSON ではなかった (jq に渡せない)。
+// 機械が読む出力として成り立たせるために、送るはずだった通知を messages に順に並べる。互換を壊す変更で、版 1 はこの形から始める。
+// payload は Slack に送る中身そのもの (bot の方式では、これに channel を足して送る)。形は Slack の仕様に従うので、スキーマでは縛らない。
+type dryRunOutput struct {
+	Schema        string          `json:"schema" jsonschema:"const=aratam-dry-run"`
+	SchemaVersion int             `json:"schema_version" jsonschema:"const=1"`
+	Messages      []dryRunMessage `json:"messages" desc:"送るはずだった通知 (送る順)。送るものが無ければ空"`
+}
+
+type dryRunMessage struct {
+	Route       string            `json:"route" jsonschema:"enum=normal|urgent" desc:"規則で決まった送り先の種類 (通常用 / 緊急用)"`
+	Destination dryRunDestination `json:"destination"`
+	Payload     any               `json:"payload" desc:"Slack に送る中身そのもの (text と、slack.format: blocks なら blocks)"`
+}
+
+type dryRunDestination struct {
+	Kind    string `json:"kind" jsonschema:"enum=webhook|channel" desc:"webhook = Incoming Webhook、channel = bot トークンの方式のチャンネル"`
+	Target  string `json:"target" jsonschema:"enum=normal|urgent" desc:"実際に送る先。緊急用の通知でも、緊急用の送り先が無ければ normal (通常用に送る)"`
+	Channel string `json:"channel,omitempty" desc:"チャンネル ID (bot トークンの方式だけ。秘密ではない)。Webhook の URL は秘密なので出さない"`
+}
+
+// destination は route の送り先を、機械が読む形で返す (label の JSON 版)。
+func (t targets) destination(route notify.Route) dryRunDestination {
+	d := dryRunDestination{Kind: "webhook", Target: string(notify.RouteNormal)}
+	if route == notify.RouteUrgent && t.urgent != "" {
+		d.Target = string(notify.RouteUrgent)
+	}
+	if t.bot {
+		d.Kind, d.Channel = "channel", t.dest(route)
+	}
+	return d
+}
+
+// stdoutSender は --dry-run の送り先。送らずに標準出力に出す。
+// 決定 (ADR 0029): format が text なら人が読む簡易表示 (Block Kit は見出し・区切りを記号にしたもの) を、送り先の種類を添えて 1 通ずつ出す。
+// json なら通知をためておき、最後に 1 つの JSON として出す (flush。ADR 0054)。
 type stdoutSender struct {
-	w      io.Writer
-	t      targets
-	format string
+	w        io.Writer
+	t        targets
+	format   string
+	messages []dryRunMessage
 }
 
 func (s *stdoutSender) Send(_ context.Context, route notify.Route, m notify.Message) error {
-	body := notify.PlainText(m)
 	if s.format == dryRunJSON {
-		b, err := json.MarshalIndent(m, "", "  ")
-		if err != nil {
-			return err
-		}
-		body = string(b)
+		s.messages = append(s.messages, dryRunMessage{Route: string(route), Destination: s.t.destination(route), Payload: m})
+		return nil
 	}
-	_, err := fmt.Fprintf(s.w, "--- route: %s → %s ---\n%s\n", route, s.t.label(route), body)
+	_, err := fmt.Fprintf(s.w, "--- route: %s → %s ---\n%s\n", route, s.t.label(route), notify.PlainText(m))
 	return err
+}
+
+// flush は json のときに、ためた通知を 1 つの JSON として書く (送るものが無くても、空の messages を書く)。
+func (s *stdoutSender) flush() error {
+	if s.format != dryRunJSON {
+		return nil
+	}
+	out := dryRunOutput{Schema: dryRunSchema, SchemaVersion: dryRunSchemaVersion, Messages: s.messages}
+	if out.Messages == nil {
+		out.Messages = []dryRunMessage{}
+	}
+	enc := json.NewEncoder(s.w)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	return enc.Encode(out)
 }
 
 func newNotifyCmd(d *Deps, g *globalFlags) *subcmd.Command {
@@ -473,7 +526,8 @@ func newNotifyCmd(d *Deps, g *globalFlags) *subcmd.Command {
 4 = 入力が無い・古い (その旨は送った)、5 = 送信に失敗した。
 
 書式は slack.format (blocks = Block Kit / text = mrkdwn の本文)。--dry-run の出力は --format text (既定。人が読む簡易表示) か
---format json (Slack に送る payload そのもの)。`,
+--format json (全体が 1 つの JSON。送るはずだった通知が messages に並び、Slack に送る payload そのものは messages[].payload。
+スキーマは aratam schema aratam-dry-run)。`,
 		Args: subcmd.NoArgs,
 		Run: func(ctx context.Context, _ []string) error {
 			if format != dryRunText && format != dryRunJSON {
@@ -510,7 +564,8 @@ func newNotifyCmd(d *Deps, g *globalFlags) *subcmd.Command {
 				}
 				contextText = text
 			}
-			var sender notify.Sender = &stdoutSender{w: d.Stdout, t: hooks, format: format}
+			dry := &stdoutSender{w: d.Stdout, t: hooks, format: format}
+			var sender notify.Sender = dry
 			if !dryRun {
 				sender = newSlackSender(d, hooks)
 			}
@@ -519,6 +574,12 @@ func newNotifyCmd(d *Deps, g *globalFlags) *subcmd.Command {
 				Force: force, DryRun: dryRun, Sender: sender, Logger: d.Logger,
 				Summarizer: summarizer, LLMTimeout: timeout, Context: contextText, Format: cfg.Slack.Format,
 			})
+			if dryRun {
+				// 入力が無い・LLM が使えないときも、送るはずだった通知は出す (終了コードは notify のまま)
+				if err := dry.flush(); err != nil {
+					return err
+				}
+			}
 			if res.Exit != notify.ExitOK {
 				return &exitError{code: res.Exit}
 			}
@@ -530,7 +591,7 @@ func newNotifyCmd(d *Deps, g *globalFlags) *subcmd.Command {
 	cmd.BoolVar(&dryRun, "dry-run", false, "送らずに標準出力へ出す (.aratam-notified も書かない)")
 	cmd.BoolVar(&force, "force", false, "通知済みの run でも送る")
 	cmd.StringVar(&llmFlag, "llm", "", "llm.provider を上書きする (none で LLM を呼ばない)")
-	cmd.StringVar(&format, "format", dryRunText, "--dry-run の出力: text (人が読む簡易表示) | json (送る payload)")
+	cmd.StringVar(&format, "format", dryRunText, "--dry-run の出力: text (人が読む簡易表示) | json (機械が読む形。全体が 1 つの JSON で、送る payload は messages[].payload。aratam schema aratam-dry-run)")
 	return cmd
 }
 

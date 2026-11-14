@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/CircleAround/arata/internal/collect/cloudtrail/cloudtrailtest"
+	"github.com/CircleAround/arata/internal/engine"
+	"github.com/CircleAround/arata/internal/jsonschema/schematest"
 )
 
 const saas = "111122223333"
@@ -48,6 +50,8 @@ func review(t *testing.T, c *cli, args ...string) map[string]reviewItem {
 	if code := c.run(append([]string{"review", "--config", c.cfg, "--format", "json"}, args...)...); code != 0 {
 		t.Fatalf("review exit %d: %s", code, c.stderr)
 	}
+	// 実際の出力が review スキーマ (版 1。最上位は配列) に合い、型に無い項目を持たない (ADR 0054)
+	schematest.Conforms(t, engine.ReviewSchema, c.stdout.Bytes(), &[]engine.ReviewItem{})
 	var items []reviewItem
 	if err := json.Unmarshal(c.stdout.Bytes(), &items); err != nil {
 		t.Fatalf("%v\n%s", err, c.stdout)

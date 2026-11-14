@@ -16,6 +16,7 @@ import (
 
 	"github.com/CircleAround/arata/internal/checks"
 	"github.com/CircleAround/arata/internal/config"
+	"github.com/CircleAround/arata/internal/jsonschema/schematest"
 )
 
 var update = flag.Bool("update", false, "ゴールデンファイルを更新する")
@@ -284,4 +285,11 @@ func TestAuditAllowlist(t *testing.T) {
 	if _, _, err := AuditAllowlist([]byte("principals:\n  - note: x\n"), "111122223333", "", day); err == nil || errors.Is(err, allowlist.ErrAlreadyListed) {
 		t.Fatalf("err = %v", err)
 	}
+}
+
+// config init --diff --format json の型から作ったスキーマを、schemas/ のファイルで固定する (ADR 0054)。
+// 最上位は配列のまま、版 1 として固定する (schema / schema_version の項目は持てない)。
+func TestDiffSchemaIsFixed(t *testing.T) {
+	schematest.Golden(t, schematest.Spec{Name: DiffSchema, Version: DiffSchemaVersion, Type: []DiffItem{},
+		Description: "arata config init --diff --format json の出力。設定とこの版の雛形の差分の配列 (最上位が配列。schema の項目は無い)"}, *update)
 }

@@ -1,0 +1,26 @@
+{
+  "schema": "arata-config-check",
+  "schema_version": 1,
+  "ok": true,
+  "rows": [
+    {
+      "status": "ok",
+      "item": "config",
+      "path": "<dir>/config.yaml",
+      "message": "name acme, sources 1, profiles 3"
+    },
+    {
+      "status": "warn",
+      "item": "allowlist",
+      "path": "<dir>/allowlist.yaml",
+      "line": 7,
+      "message": "principals[2]: duplicate of principals[0] (line 2): arn:aws:iam::123456789012:role/Deploy (expires, tags and dynamic_source are taken from only one of them; merge the entries)"
+    },
+    {
+      "status": "ok",
+      "item": "allowlist",
+      "path": "<dir>/allowlist.yaml",
+      "message": "principals 3, source_ips 1, admin_users 0, secrets_access 0, assume_destinations 0"
+    }
+  ]
+}

@@ -23,6 +23,13 @@ const (
 )
 
 // DiffItem は差分 1 件。
+// config init --diff --format json のスキーマの名前と版 (ADR 0054)。名前は `arata schema <名前>` の名前。
+// 決定 (ADR 0054): 出力の最上位は DiffItem の配列のまま、版 1 として固定する (review と同じ理由)。
+const (
+	DiffSchema        = "config-diff"
+	DiffSchemaVersion = 1
+)
+
 type DiffItem struct {
 	Kind     string `json:"kind"`
 	Path     string `json:"path"`

@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:arata:schema:review:1",
+  "title": "review",
+  "description": "arata review --format json の出力。未対応の finding の配列 (最上位が配列。schema の項目は無い)。data の中身はチェックごとで、このスキーマでは縛らない",
+  "type": "array",
+  "items": {
+    "$ref": "#/$defs/ReviewItem"
+  },
+  "$defs": {
+    "ApproveTarget": {
+      "type": "object",
+      "properties": {
+        "arn": {
+          "type": "string"
+        },
+        "account": {
+          "type": "string"
+        },
+        "arn_pattern": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "label"
+      ]
+    },
+    "ReviewItem": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "check": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "critical",
+            "high",
+            "medium",
+            "low",
+            "info"
+          ]
+        },
+        "status": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "first_seen": {
+          "type": "string"
+        },
+        "last_seen": {
+          "type": "string"
+        },
+        "snooze_until": {
+          "type": "string"
+        },
+        "data": {
+          "type": "object"
+        },
+        "approve": {
+          "$ref": "#/$defs/ApproveTarget"
+        },
+        "approve_destination": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "check",
+        "key",
+        "severity",
+        "status",
+        "summary",
+        "first_seen",
+        "last_seen",
+        "data"
+      ]
+    }
+  }
+}

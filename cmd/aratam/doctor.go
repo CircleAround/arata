@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -31,8 +32,30 @@ type doctorRow struct {
 	status, item, detail, code string
 }
 
+// doctor --format json のスキーマの名前と版 (ADR 0054)。名前は `aratam schema <名前>` の名前。
+const (
+	doctorSchema        = "aratam-doctor"
+	doctorSchemaVersion = 1
+)
+
+// doctorOutput は doctor --format json の出力。行は table の行と同じ内容。秘密 (Webhook の URL・トークン) は出さない。
+type doctorOutput struct {
+	Schema        string          `json:"schema" jsonschema:"const=aratam-doctor"`
+	SchemaVersion int             `json:"schema_version" jsonschema:"const=1"`
+	OK            bool            `json:"ok" desc:"ng の行が無い (終了コード 0)。warn だけなら true"`
+	Rows          []doctorJSONRow `json:"rows"`
+}
+
+type doctorJSONRow struct {
+	Status string `json:"status" jsonschema:"enum=ok|warn|ng|skip" desc:"ng が 1 つでもあれば終了コード 2"`
+	Item   string `json:"item" desc:"検査した項目 (config / webhook / slack / llm / context)。開いた語彙"`
+	Code   string `json:"code,omitempty" desc:"ログと同じ固定語彙の code (warn・ng の行)"`
+	Detail string `json:"detail" desc:"人向けの文。文言は固定しない (機械で読まない)"`
+}
+
 func newDoctorCmd(d *Deps, g *globalFlags) *subcmd.Command {
-	return &subcmd.Command{
+	var format string
+	cmd := &subcmd.Command{
 		Use:   "doctor",
 		Short: "Slack の環境変数 (bot トークンなら auth.test も) と LLM の疎通を確かめる (送信はしない。問題があれば終了コード 2)",
 		Long: `設定を読み、次を確かめて表で出す。Slack には送らない (送って確かめるのは aratam test-notify)。
@@ -44,9 +67,15 @@ func newDoctorCmd(d *Deps, g *globalFlags) *subcmd.Command {
   - llm      LLM に短い問い合わせを 1 回送り、応答があるか (provider: none なら skip)
   - context  llm.context_file を書いたとき、読めるか (読めない・16 KiB を超えるなら warn。notify は前提なしで続ける)
 
-ng が 1 つでもあれば終了コード 2。ng の行は標準エラーにも固定語彙の code 付きで出す。`,
+ng が 1 つでもあれば終了コード 2。ng の行は標準エラーにも固定語彙の code 付きで出す。
+
+機械で読むときは --format json (スキーマは aratam schema aratam-doctor)。行は同じ内容。設定を読めないときは、何も出さずに終了コード 2
+(標準エラーに CONFIG_INVALID)。table の出力は人向けで、文言と並びは版をまたいで変わるので、機械で読まない。`,
 		Args: subcmd.NoArgs,
 		Run: func(ctx context.Context, _ []string) error {
+			if format != "table" && format != "json" {
+				return configErr(d, fmt.Errorf("unknown format %q (table|json)", format))
+			}
 			path, err := configPath(d, g)
 			if err != nil {
 				return err
@@ -69,8 +98,10 @@ ng が 1 つでもあれば終了コード 2。ng の行は標準エラーにも
 			tw := tabwriter.NewWriter(d.Stdout, 0, 0, 2, ' ', 0)
 			fmt.Fprintln(tw, "STATUS\tITEM\tDETAIL")
 			ng := false
+			out := doctorOutput{Schema: doctorSchema, SchemaVersion: doctorSchemaVersion, Rows: []doctorJSONRow{}}
 			for _, r := range rows {
 				fmt.Fprintf(tw, "%s\t%s\t%s\n", r.status, r.item, r.detail)
+				out.Rows = append(out.Rows, doctorJSONRow{Status: r.status, Item: r.item, Code: r.code, Detail: r.detail})
 				switch r.status {
 				case "ng":
 					ng = true
@@ -79,7 +110,16 @@ ng が 1 つでもあれば終了コード 2。ng の行は標準エラーにも
 					d.Logger.Warn(r.detail, "code", r.code, "item", r.item)
 				}
 			}
-			if err := tw.Flush(); err != nil {
+			out.OK = !ng
+			if format == "json" {
+				enc := json.NewEncoder(d.Stdout)
+				enc.SetEscapeHTML(false)
+				enc.SetIndent("", "  ")
+				err = enc.Encode(out)
+			} else {
+				err = tw.Flush()
+			}
+			if err != nil {
 				return err
 			}
 			if ng {
@@ -88,6 +128,8 @@ ng が 1 つでもあれば終了コード 2。ng の行は標準エラーにも
 			return nil
 		},
 	}
+	cmd.StringVar(&format, "format", "table", "出力形式 (table|json)。json は機械が読む形 (aratam schema aratam-doctor)")
+	return cmd
 }
 
 // webhookRows は Webhook の環境変数の有無。URL そのものは出さない。

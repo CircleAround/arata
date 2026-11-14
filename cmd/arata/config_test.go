@@ -107,6 +107,7 @@ func TestConfigInitDiff(t *testing.T) {
 	if code := c.run("config", "init", "--diff", "-c", c.cfg, "--format", "json"); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
+	schematest.Conforms(t, scaffold.DiffSchema, c.stdout.Bytes(), &[]scaffold.DiffItem{})
 	var items []struct{ Kind, Path string }
 	if err := json.Unmarshal(c.stdout.Bytes(), &items); err != nil || len(items) != 2 {
 		t.Fatalf("json: %v %s", err, c.stdout)

@@ -164,8 +164,31 @@ func configDiff(d *Deps, g *globalFlags, reg *checks.Registry, format string) er
 	return configErr(d, fmt.Errorf("unknown format %q (text|json)", format))
 }
 
+// config check --format json のスキーマの名前と版 (ADR 0054)。名前は `arata schema <名前>` の名前。
+const (
+	configCheckSchema        = "arata-config-check"
+	configCheckSchemaVersion = 1
+)
+
+// configCheckOutput は config check --format json の出力。行は text の出力の行と同じ内容。
+type configCheckOutput struct {
+	Schema        string           `json:"schema" jsonschema:"const=arata-config-check"`
+	SchemaVersion int              `json:"schema_version" jsonschema:"const=1"`
+	OK            bool             `json:"ok" desc:"ng の行が無い (終了コード 0)。warn だけなら true"`
+	Rows          []configCheckRow `json:"rows"`
+}
+
+type configCheckRow struct {
+	Status  string `json:"status" jsonschema:"enum=ok|warn|ng|skip" desc:"ng が 1 つでもあれば終了コード 2"`
+	Item    string `json:"item" desc:"検査した項目 (config = 設定ファイル、allowlist = 既知リスト、audit_account = 監査する側のアカウントと既知リストの食い違い)。開いた語彙"`
+	Path    string `json:"path,omitempty" desc:"その行が指すファイル (カレントディレクトリの下なら相対パス)。検査していない行 (skip) には無い"`
+	Line    int    `json:"line,omitempty" desc:"ファイルの中の行 (分かるときだけ)"`
+	Message string `json:"message" desc:"人向けの文。文言は固定しない (機械で読まない)"`
+}
+
 func newConfigCheckCmd(d *Deps, g *globalFlags) *subcmd.Command {
-	return &subcmd.Command{
+	var format string
+	cmd := &subcmd.Command{
 		Use:   "check",
 		Short: "設定と allowlist.yaml の形をオフラインで検査する (AWS にもストアにも繋がない。問題があれば終了コード 2)",
 		Long: `設定 (-c、省略時は ARATA_CONFIG か ./arata.yaml) と、それが指す allowlist.yaml の形を検査する。
@@ -178,24 +201,54 @@ AWS にもストアにも繋がず、認証も要らない。PR の CI で allow
               (run / doctor と同じ規則)。同じ主体の項目の重複は warn (run は受け付けるが、expires や tags は片方しか使われない)
 
 行ごとに ok / warn / ng / skip を出す。分かるときは「ファイル:行」を添える。ng が 1 つでもあれば終了コード 2 (warn だけなら 0)。
-権限・ロググループ・ログの形式は見ない (arata doctor)。雛形との差分は見ない (arata config init --diff)。`,
+権限・ロググループ・ログの形式は見ない (arata doctor)。雛形との差分は見ない (arata config init --diff)。
+
+機械で読むときは --format json (スキーマは arata schema arata-config-check)。行は同じ内容で、ファイルと行は path / line に分かれる。
+text の出力は人向けで、文言と並びは版をまたいで変わるので、機械で読まない。`,
 		Args: subcmd.NoArgs,
 		Run: func(context.Context, []string) error {
+			if format != "text" && format != "json" {
+				return configErr(d, fmt.Errorf("unknown format %q (text|json)", format))
+			}
 			path, err := configPath(d, g)
 			if err != nil {
 				return err
 			}
-			ng := false
-			row := func(status, where, msg string) {
-				// 複数行の文言 (YAML の型の誤りの一覧) は字下げして続ける
-				fmt.Fprintf(d.Stdout, "%-4s  %s: %s\n", status, where, strings.ReplaceAll(msg, "\n", "\n      "))
+			out := configCheckOutput{Schema: configCheckSchema, SchemaVersion: configCheckSchemaVersion, OK: true, Rows: []configCheckRow{}}
+			// where は人向けの行の頭と、ログの path (「ファイル:行」。ファイルの無い行は項目の名前)
+			where := func(r configCheckRow) string {
+				switch {
+				case r.Path == "":
+					return r.Item
+				case r.Line > 0:
+					return fmt.Sprintf("%s:%d", r.Path, r.Line)
+				}
+				return r.Path
+			}
+			row := func(status, item, file string, line int, msg string) {
+				r := configCheckRow{Status: status, Item: item, Path: file, Line: line, Message: msg}
+				out.Rows = append(out.Rows, r)
 				if status == "ng" {
-					ng = true
-					d.Engine.Logger.Error(msg, "code", engine.CodeConfigInvalid, "path", where)
+					out.OK = false
+					d.Engine.Logger.Error(msg, "code", engine.CodeConfigInvalid, "path", where(r))
 				}
 			}
-			fail := func() error {
-				return &engine.ExitError{Exit: engine.ExitConfig, Err: errors.New("config check found problems")}
+			// finish は結果を書き出す。ng が 1 つでもあれば終了コード 2
+			finish := func() error {
+				if format == "json" {
+					if err := writeJSON(d, out); err != nil {
+						return err
+					}
+				} else {
+					for _, r := range out.Rows {
+						// 複数行の文言 (YAML の型の誤りの一覧) は字下げして続ける
+						fmt.Fprintf(d.Stdout, "%-4s  %s: %s\n", r.Status, where(r), strings.ReplaceAll(r.Message, "\n", "\n      "))
+					}
+				}
+				if !out.OK {
+					return &engine.ExitError{Exit: engine.ExitConfig, Err: errors.New("config check found problems")}
+				}
+				return nil
 			}
 			abs, err := filepath.Abs(path)
 			if err != nil {
@@ -204,17 +257,17 @@ AWS にもストアにも繋がず、認証も要らない。PR の CI で allow
 			abs = displayPath(abs)
 			cfg, err := config.Load(path)
 			if err != nil {
-				row("ng", abs, err.Error())
+				row("ng", "config", abs, 0, err.Error())
 				// 設定が読めなければ allowlist の場所 (allowlist:) が決まらない
-				fmt.Fprintln(d.Stdout, "skip  allowlist: 設定を読めないので検査していません (設定を直してからもう一度)")
-				return fail()
+				row("skip", "allowlist", "", 0, "設定を読めないので検査していません (設定を直してからもう一度)")
+				return finish()
 			}
 			if unknown := engine.UnknownChecks(cfg, checks.NewRegistryFor(cfg.Checks)); len(unknown) > 0 {
 				for _, u := range unknown {
-					row("ng", abs, u)
+					row("ng", "config", abs, 0, u)
 				}
 			} else {
-				row("ok", abs, fmt.Sprintf("name %s, sources %d, profiles %d", cfg.Name, len(cfg.Sources), len(cfg.Profiles)))
+				row("ok", "config", abs, 0, fmt.Sprintf("name %s, sources %d, profiles %d", cfg.Name, len(cfg.Sources), len(cfg.Profiles)))
 			}
 			b, err := os.ReadFile(cfg.Allowlist)
 			alPath := displayPath(cfg.Allowlist)
@@ -223,10 +276,10 @@ AWS にもストアにも繋がず、認証も要らない。PR の CI で allow
 			switch {
 			case errors.Is(err, fs.ErrNotExist):
 				// run は allowlist が無ければ空として動く (init の直後を許す) ので、エラーにはしない
-				row("warn", alPath, "file not found (arata treats it as an empty allowlist)")
+				row("warn", "allowlist", alPath, 0, "file not found (arata treats it as an empty allowlist)")
 			case err != nil:
 				alOK = false
-				row("ng", alPath, err.Error())
+				row("ng", "allowlist", alPath, 0, err.Error())
 			default:
 				checkNow := time.Now
 				if d.Engine.Now != nil {
@@ -234,18 +287,15 @@ AWS にもストアにも繋がず、認証も要らない。PR の CI で allow
 				}
 				l, problems := allowlist.Check(b, checkNow())
 				for _, p := range problems {
-					where, status := alPath, "ng"
-					if p.Line > 0 {
-						where = fmt.Sprintf("%s:%d", where, p.Line)
-					}
+					status := "ng"
 					if p.Warn {
 						status = "warn"
 					}
-					row(status, where, p.Msg)
+					row(status, "allowlist", alPath, p.Line, p.Msg)
 				}
 				list, alOK = l, l != nil
 				if l != nil {
-					row("ok", alPath, fmt.Sprintf("principals %d, source_ips %d, admin_users %d, secrets_access %d, assume_destinations %d", len(l.Principals), len(l.SourceIPs), len(l.AdminUsers), len(l.SecretsAccess), len(l.AssumeDestinations)))
+					row("ok", "allowlist", alPath, 0, fmt.Sprintf("principals %d, source_ips %d, admin_users %d, secrets_access %d, assume_destinations %d", len(l.Principals), len(l.SourceIPs), len(l.AdminUsers), len(l.SecretsAccess), len(l.AssumeDestinations)))
 				}
 			}
 			// 決定 (ADR 0045): 監査する側のアカウント (audit_account) と既知リストの食い違い。既知リストが読めないときは上の ng に任せる
@@ -255,15 +305,14 @@ AWS にもストアにも繋がず、認証も要らない。PR の CI で allow
 					now = d.Engine.Now
 				}
 				if status, msg := engine.CheckAuditAccount(cfg, list, now()); status != "" {
-					row(status, abs, msg)
+					row(status, "audit_account", abs, 0, msg)
 				}
 			}
-			if ng {
-				return fail()
-			}
-			return nil
+			return finish()
 		},
 	}
+	cmd.StringVar(&format, "format", "text", "出力形式 (text|json)。json は機械が読む形 (arata schema arata-config-check)")
+	return cmd
 }
 
 // displayPath は検査の出力に書くパス。カレントディレクトリの下なら相対にする (CI のログで「aws/prod/allowlist.yaml:12」と読める)。
