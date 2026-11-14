@@ -1301,8 +1301,8 @@ arata rebuild   [--from-scratch [--baseline]] [--format text|json]   # raw JSONL
   - 決定: ARN は名前ごとに `arn:*:logs:*:*:log-group:<名前>` と `…:<名前>:*` の 2 つ。リージョンは `*` にする (ロールはリージョンを持たず、ソースはリージョンごとに書けるので、
     どのリージョンの同じ名前も読ませない。止めすぎる側に倒す)。アカウントとパーティションも `*` (素の CloudFormation では、名前の並びに関数の値を含む接頭辞を付けられないため)。
     名前は完全一致で、ワイルドカード・空白・ARN は AllowedPattern で弾く。
-  - 複数のロググループを 1 回で問い合わせる StartQuery は、1 つでも Deny に当たれば問い合わせ全体が拒否される見込み (IAM は明示の Deny を優先する。
-    この場合の挙動を明記した AWS の文書は見つけられていないので、実環境で確かめる)。arata は 1 回の StartQuery に 1 つのロググループ (`logGroupName`) しか渡さないので、ほかのソースには影響しない。
+  - 複数のロググループを 1 回で問い合わせる StartQuery は、1 つでも Deny に当たれば問い合わせ全体が拒否される (IAM は明示の Deny を優先する。
+    この場合を明記した AWS の文書は見つけられなかったので、IAM のポリシーシミュレーターで確かめた。ADR 0053)。arata は 1 回の StartQuery に 1 つのロググループ (`logGroupName`) しか渡さないので、ほかのソースには影響しない。
   - 読ませないロググループは `sources` に書かない。書くと、run はそのソースだけを `ACCESS_DENIED` で失敗にして続ける。
   - 決定: doctor は、クエリの検査で StartQuery が拒否されたら、クエリごとの `queries` の行を並べず、`permission` の 1 行
     (`logs:StartQuery が拒否された (<ロググループ>): ロールに action が無いか、読ませない設定 (DeniedLogGroupNames)。後者なら sources から外す: <AWS のエラー>`) にまとめ、

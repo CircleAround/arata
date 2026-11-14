@@ -188,8 +188,8 @@ Resources:
               #   アカウントとパーティションが `*` なのは、名前の並びに接頭辞を付ける !Join の区切りに関数 (AWS::AccountId など) を書けないため
               # - 名前ごとに 2 つの ARN。`…:log-group:<名前>` はロググループそのもの (StartQuery・FilterLogEvents など)、
               #   `…:log-group:<名前>:*` はその下のログストリーム (GetLogEvents)。名前は完全一致で、`prod-mail` は `prod-mail-2` に当たらない
-              # - 複数のロググループを 1 回で問い合わせる StartQuery は、その中に 1 つでもここに当たるものがあれば、問い合わせ全体が拒否される見込み
-              #   (IAM は明示の Deny を優先する)。arata は 1 回に 1 つのロググループしか問い合わせないので、ほかのソースには影響しない
+              # - 複数のロググループを 1 回で問い合わせる StartQuery は、その中に 1 つでもここに当たるものがあれば、問い合わせ全体が拒否される
+              #   (IAM は明示の Deny を優先する。IAM のポリシーシミュレーターで確かめた)。arata は 1 回に 1 つのロググループしか問い合わせないので、ほかのソースには影響しない
               - !If
                 - HasDeniedLogGroups
                 - Sid: DenyLogGroupRead
