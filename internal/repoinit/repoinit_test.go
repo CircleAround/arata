@@ -806,3 +806,33 @@ func TestExampleIsTheOutput(t *testing.T) {
 		t.Errorf("examples/audit-repo/%s is missing (run this test with -update)", p)
 	}
 }
+
+// TestParseAssignmentList は、繰り返して渡した引数 (項目の並び) が、カンマ区切りの 1 つと同じに読めることと、
+// 空の項目・同じアカウントの 2 度目を、片方を選ばずに拒むことを固定する (黙って捨てない)。
+func TestParseAssignmentList(t *testing.T) {
+	a, err1 := ParseAssignments("--channel", "prod=C0123456789,staging=C0123456781")
+	b, err2 := ParseAssignmentList("--channel", []string{"prod=C0123456789", "staging=C0123456781"})
+	if err1 != nil || err2 != nil || len(a) != 2 || len(b) != 2 || a["prod"] != b["prod"] || a["staging"] != b["staging"] {
+		t.Fatalf("%v %v / %v %v", a, err1, b, err2)
+	}
+	if m, err := ParseAssignmentList("--channel", nil); m != nil || err != nil {
+		t.Fatalf("no items: %v %v", m, err)
+	}
+	for name, parts := range map[string][]string{
+		"twice":       {"prod=C0123456789", "prod=C0AAAAAAAAA"},
+		"same twice":  {"prod=C0123456789", "prod=C0123456789"},
+		"empty item":  {"prod=C0123456789", ""},
+		"only empty":  {""},
+		"no value":    {"prod="},
+		"no account":  {"=C0123456789"},
+		"no equal":    {"C0123456789"},
+		"two equals":  {"prod=a=b"},
+		"bad account": {"Prod=C0123456789"},
+	} {
+		if m, err := ParseAssignmentList("--channel", parts); err == nil || m != nil {
+			t.Errorf("%s: accepted %v", name, m)
+		} else if strings.Contains(err.Error(), "C0AAAAAAAAA") {
+			t.Errorf("%s: the error carries a value: %v", name, err)
+		}
+	}
+}

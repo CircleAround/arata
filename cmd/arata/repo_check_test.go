@@ -428,3 +428,61 @@ func TestRepoInitDoesNotRewriteTheChannelOfAnExistingAccount(t *testing.T) {
 		t.Errorf("an unchanged account must not be mentioned:\n%s", c.stdout)
 	}
 }
+
+// カンマ区切りの引数 (--accounts・--channel・--urgent-channel) は、繰り返して渡してもよい。繰り返しは、つなげて受け取る。
+// 最後の 1 つだけを残して、ほかを黙って捨てない (捨てると、「--channel prod が足りない」のような、打ったものと合わないエラーになる)。
+func TestRepoListFlagsMayBeRepeated(t *testing.T) {
+	withVersion(t, "v0.15.0")
+	base := []string{"--owner", "example-org", "--repo", "security-audit", "--audit-account", "111122223333",
+		"--store-bucket", "example-arata-store", "--region", "ap-northeast-1", "--alert-channel", "C0123456782"}
+	comma := []string{"--accounts", "prod,staging", "--channel", "prod=C0123456789,staging=C0123456781", "--urgent-channel", "prod=C0123456780,staging=same"}
+	forms := map[string][]string{
+		"repeated": {"--accounts", "prod", "--accounts", "staging", "--channel", "prod=C0123456789", "--channel", "staging=C0123456781",
+			"--urgent-channel", "prod=C0123456780", "--urgent-channel", "staging=same"},
+		"mixed": {"--accounts", "prod,staging", "--channel", "prod=C0123456789", "--urgent-channel", "prod=C0123456780,staging=same", "--channel", "staging=C0123456781"},
+		"equal sign": {"--accounts=prod", "--accounts=staging", "--channel=prod=C0123456789", "--channel=staging=C0123456781",
+			"--urgent-channel=prod=C0123456780", "--urgent-channel=staging=same"},
+	}
+	c := newCLI(t)
+	want := filepath.Join(c.dir, "comma")
+	if code := c.run(append(append([]string{"repo", "init"}, append(base, comma...)...), "--out", want)...); code != 0 {
+		t.Fatalf("exit %d: %s", code, c.stderr)
+	}
+	files := []string{"aws/prod/aratam.yaml", "aws/staging/aratam.yaml", ".github/workflows/arata-audit.yml", ".github/workflows/arata-check.yml", "README.md"}
+	for name, args := range forms {
+		out := filepath.Join(c.dir, strings.ReplaceAll(name, " ", "-"))
+		if code := c.run(append(append([]string{"repo", "init"}, append(base, args...)...), "--out", out)...); code != 0 {
+			t.Fatalf("%s: exit %d: %s", name, code, c.stderr)
+		}
+		for _, p := range files {
+			a, _ := os.ReadFile(filepath.Join(want, p))
+			b, err := os.ReadFile(filepath.Join(out, p))
+			if err != nil || string(a) != string(b) {
+				t.Errorf("%s: %s differs from the comma form (%v)", name, p, err)
+			}
+		}
+		// repo check と --diff も、同じ引数の形で通る
+		if code := c.run(append(append([]string{"repo", "check"}, append(base, args...)...), "--out", out)...); code != 0 {
+			t.Errorf("%s: repo check exit %d\n%s", name, code, c.stdout)
+		}
+		if code := c.run(append(append([]string{"repo", "init"}, append(base, args...)...), "--out", out, "--diff")...); code != 0 {
+			t.Errorf("%s: --diff exit %d\n%s", name, code, c.stdout)
+		}
+	}
+	// 繰り返しで同じアカウントを 2 度書いたら、片方を選ばずに止める (どちらの値かを決めつけない)。空の項目も止める
+	for name, args := range map[string][]string{
+		"account twice":        {"--accounts", "prod", "--accounts", "prod", "--channel", "prod=C0123456789", "--urgent-channel", "prod=same"},
+		"channel twice":        {"--accounts", "prod", "--channel", "prod=C0123456789", "--channel", "prod=C0AAAAAAAAA", "--urgent-channel", "prod=same"},
+		"urgent twice":         {"--accounts", "prod", "--channel", "prod=C0123456789", "--urgent-channel", "prod=same", "--urgent-channel", "prod=C0123456780"},
+		"empty repeated value": {"--accounts", "prod", "--accounts", "", "--channel", "prod=C0123456789", "--urgent-channel", "prod=same"},
+		"empty channel item":   {"--accounts", "prod", "--channel", "prod=C0123456789", "--channel", "", "--urgent-channel", "prod=same"},
+	} {
+		out := filepath.Join(c.dir, "bad-"+strings.ReplaceAll(name, " ", "-"))
+		if code := c.run(append(append([]string{"repo", "init"}, append(base, args...)...), "--out", out)...); code != 2 || strings.Join(c.codes(), ",") != "CONFIG_INVALID" {
+			t.Errorf("%s: exit %d %v", name, code, c.codes())
+		}
+		if _, err := os.Stat(out); err == nil {
+			t.Errorf("%s: nothing may be written", name)
+		}
+	}
+}

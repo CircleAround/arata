@@ -1511,6 +1511,10 @@ Actions のログには arata / aratam の `level`・`code`・`source` と終了
   通常用・緊急用 (`--channel`・`--urgent-channel`) は、`aratam.yaml` を新しく作るアカウントにだけ要り、書き出した後は `aratam.yaml` だけが持つ (README のコマンドにも、ワークフローにも入れない。
   変えるときは `aratam.yaml` の 1 行を直す。書き換えるコマンドは作らない)。空のまま書き出さない: 足りなければ、1 つも書かずに止まる。
   知らせのチャンネル (`--alert-channel`) はワークフローに入るので、README のコマンドに載る
+- 決定 (カンマ区切りの引数は、繰り返してもよい): `--accounts`・`--channel`・`--urgent-channel` は、繰り返して渡されたら、つなげて受け取る
+  (`--channel prod=C… --channel staging=C…` は `--channel prod=C…,staging=C…` と同じ)。文字列のフラグのままだと、最後の 1 つだけが残り、ほかは黙って捨てられる
+  (打ったものと合わない「足りない」のエラーになる。`--accounts` は、片方だけで書き出してしまう)。同じアカウントを 2 度書いたとき・空の項目は、片方を選ばずに `CONFIG_INVALID` で止める。
+  arata のほかのカンマ区切りの引数 (`review --status`) は、元から同じ受け取り方
 - 決定 (対話): 端末 (標準入力が文字デバイスで、`/dev/null` でない) から打って、チャンネル ID が足りないときだけ聞く。端末でなければ聞かずに `CONFIG_INVALID` (CI や LLM が、黙って既定で進まない)。
   判定は標準ライブラリだけ (依存を足さない)。聞き直しは 3 回までで、形の合う答えが無ければ何も書かない。問いは標準出力に出す (標準エラーは JSON のログだけ)。
   打った値は写さない。`--diff` と `repo check` は聞かない
@@ -1518,6 +1522,9 @@ Actions のログには arata / aratam の `level`・`code`・`source` と終了
   トークンは標準入力のヘッダーで渡し (引数に書かない)、応答の `ok` が `true` のときだけ届いたとみなす。`error` は形の合うコードだけをログに出す。
   送る部分は、監査の `alert` と、試しの通知の `route: alert` で同じ断片 (テストが一致を固定する)。`--alert-channel none` なら、段階ごと書き出さない。
   引き受けること: トークンそのものが使えないとき (未登録・失効) は、知らせも届かない (定時の前に `repo check --github` と `arata-notify-test` で確かめる)
+- 決定 (ADR 0060 の記述の訂正): ADR 0060 は「`github/` の fmt・validate・偽の API への apply は残す」と書いたが、**`github/` を偽の API に apply するテストは、元から無い**
+  (偽の GitHub API は、秘密の箱 `github/secrets/` のためだけのものだった)。秘密の箱をやめたので、Terraform のテストは fmt と validate だけで、plan も apply もしない。
+  `github/` の apply は、実際の GitHub で人が plan を読んで確かめる (書き出す README の 3)
 - 決定 (`arata repo check`。ADR 0060): 引数は `repo init` と同じ。何も書かない。出力は doctor と同じ ok / warn / ng / skip の行で、`--format json` のスキーマは `repo-check`
   (`missing_secrets` に、足りない秘密のコマンド・値の形・取得元)。ng があれば終了コード 2、warn だけなら 0。ng と warn の行は、標準エラーにも code 付きで出す
   - ファイルの検査 (いつも): この版の一式との差 (`--diff` と同じ比べ方。`github/` の下は `terraform` の項目)、ワークフローが参照する秘密 (YAML として読み、式 `${{ }}` の中の

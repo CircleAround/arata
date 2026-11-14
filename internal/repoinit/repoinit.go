@@ -380,7 +380,15 @@ func ParseAssignments(flag, s string) (map[string]string, error) {
 	if s == "" {
 		return nil, nil
 	}
-	parts := strings.Split(s, ",")
+	return ParseAssignmentList(flag, strings.Split(s, ","))
+}
+
+// ParseAssignmentList は、「<アカウント>=<値>」の項目の並びを読む。引数を繰り返して渡したとき (--channel a=… --channel b=…) は、
+// 全部の項目をつなげたものを渡す。空の項目・組の形でない項目・同じアカウントの 2 度目は、片方を選ばずにエラーにする (黙って捨てない)。
+func ParseAssignmentList(flag string, parts []string) (map[string]string, error) {
+	if len(parts) == 0 {
+		return nil, nil
+	}
 	if len(parts) > maxAccounts {
 		return nil, fmt.Errorf("%s: at most %d accounts", flag, maxAccounts)
 	}
