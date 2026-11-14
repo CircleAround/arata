@@ -159,14 +159,14 @@ func TestDoctor(t *testing.T) {
 	if string(stdin) != "ok" {
 		t.Fatalf("doctor must not send report data: %q", stdin)
 	}
-	// 緊急用が無い → warn (終了コード 0)、通常用が無い・LLM が失敗 → ng (終了コード 2)
+	// 緊急用が無い → warn (終了コード 0)、通常用が無い・LLM が失敗 → ng (終了コード 2)。Webhook の方式なので、非推奨の警告がいつも先に出る (ADR 0061)
 	delete(c.env, "ARATAM_SLACK_URGENT_WEBHOOK")
-	if code := c.run("doctor", "-c", c.cfg); code != 0 || strings.Join(c.codes(), ",") != "URGENT_WEBHOOK_UNSET" {
+	if code := c.run("doctor", "-c", c.cfg); code != 0 || strings.Join(c.codes(), ",") != "SLACK_WEBHOOK_DEPRECATED,URGENT_WEBHOOK_UNSET" {
 		t.Fatalf("urgent unset: exit %d %s", code, c.stderr)
 	}
 	delete(c.env, "ARATAM_SLACK_WEBHOOK")
 	c.fakeMode = "fail"
-	if code := c.run("doctor", "-c", c.cfg); code != 2 || strings.Join(c.codes(), ",") != "WEBHOOK_UNSET,URGENT_WEBHOOK_UNSET,LLM_UNAVAILABLE" {
+	if code := c.run("doctor", "-c", c.cfg); code != 2 || strings.Join(c.codes(), ",") != "SLACK_WEBHOOK_DEPRECATED,WEBHOOK_UNSET,URGENT_WEBHOOK_UNSET,LLM_UNAVAILABLE" {
 		t.Fatalf("ng: exit %d %s\n%s", code, c.stderr, c.stdout)
 	}
 	c.setConfig(`command: ""`, `command: /nonexistent/claude`)

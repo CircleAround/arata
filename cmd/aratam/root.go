@@ -107,8 +107,9 @@ arata とは出力ディレクトリだけで連携する (arata を呼ばず、
   4. aratam notify --in <dir> --dry-run    送らずに、送る内容を標準出力に出す
   5. cron で arata run --out <dir> の後に aratam notify --in <dir> をつなぐ
 
-Slack への送り方は Incoming Webhook (slack.webhook_env) か bot トークン (slack.bot_token_env と slack.channel) のどちらか 1 つ。
-Webhook の URL と bot トークンは設定ファイルに書かず、設定に書いた名前の環境変数で渡す (チャンネル ID は設定に書く)。`
+Slack への送り方は bot トークン (slack.bot_token_env と slack.channel)。トークンは設定ファイルに書かず、設定に書いた名前の環境変数で渡す
+(チャンネル ID は設定に書く)。Incoming Webhook の方式 (slack.webhook_env) は非推奨で、動き続けるが、config check と doctor が警告を出す
+(SLACK_WEBHOOK_DEPRECATED。移し方は docs/aratam.md 4-1 章)。`
 
 // NewRootCmd はルートコマンドを組み立てる。
 func NewRootCmd(d *Deps) *subcmd.Command {
@@ -202,7 +203,7 @@ func newConfigCmd(d *Deps, g *globalFlags) *subcmd.Command {
 			if out != defaultConfigFile && out != "./"+defaultConfigFile {
 				cfgFlag = " -c " + out
 			}
-			fmt.Fprintf(d.Stdout, "%s を書き出しました。name と slack の環境変数名を確認してから aratam notify%s --in <arata の出力ディレクトリ> --dry-run で試してください。\n", out, cfgFlag)
+			fmt.Fprintf(d.Stdout, "%s を書き出しました。name を確認し、slack.channel に通知先のチャンネル ID (C0123456789 の形) を書いてから aratam notify%s --in <arata の出力ディレクトリ> --dry-run で試してください。\n", out, cfgFlag)
 			return nil
 		},
 	}
@@ -265,7 +266,8 @@ func newConfigCheckCmd(d *Deps, g *globalFlags) *subcmd.Command {
 
   - Webhook・bot トークンの環境変数 (slack.webhook_env / slack.bot_token_env の名前の環境変数) があるかは見ない。
     PR の CI には秘密を渡さないため (aratam doctor が見る)
-  - Slack への送り方 (webhook か bot) は 1 つだけ。bot なら slack.channel / urgent_channel がチャンネル ID の形かを見る
+  - Slack への送り方 (bot か webhook) は 1 つだけ。bot なら slack.channel / urgent_channel がチャンネル ID の形かを見る
+  - Incoming Webhook の方式は非推奨 (動き続ける)。warn の行 (SLACK_WEBHOOK_DEPRECATED) を出す。終了コードは変えない
   - llm.context_file は、書いてあれば読めるかを見る (読めない・16 KiB を超えるなら warn。notify は前提なしで続ける)
 
 行ごとに ok / warn / ng / skip を出す。ng が 1 つでもあれば終了コード 2 (warn だけなら 0)。
@@ -303,6 +305,10 @@ func newConfigCheckCmd(d *Deps, g *globalFlags) *subcmd.Command {
 				out.Timezone = cfg.Rules(false).Zone.Name()
 				out.Rows = append(out.Rows, configCheckRow{Status: "ok", Item: "config",
 					Message: fmt.Sprintf("name %s, provider %s, format %s, slack %s, timezone %s", out.Name, out.LLM.Provider, out.Slack.Format, out.Slack.Method, out.Timezone)})
+				if out.Slack.Method == notify.SlackWebhook {
+					// 非推奨 (ADR 0061)。動き続けるので warn (終了コードは変えない)
+					out.Rows = append(out.Rows, configCheckRow{Status: "warn", Item: "slack", Code: codeWebhookDeprecated, Message: webhookDeprecated})
+				}
 				if r, ok := contextRow(cfg); ok {
 					out.Rows = append(out.Rows, configCheckRow{Status: r.status, Item: r.item, Code: r.code, Message: r.detail})
 				}
@@ -318,8 +324,11 @@ func newConfigCheckCmd(d *Deps, g *globalFlags) *subcmd.Command {
 				for _, r := range out.Rows {
 					// 人向けの行の頭は、設定の行ならファイル、context の行なら設定の項目名
 					where := abs
-					if r.Item == "context" {
+					switch r.Item {
+					case "context":
 						where = "llm.context_file"
+					case "slack":
+						where = "slack"
 					}
 					fmt.Fprintf(d.Stdout, "%-4s  %s: %s\n", r.Status, where, strings.ReplaceAll(r.Message, "\n", "\n      "))
 				}
@@ -519,7 +528,7 @@ func newNotifyCmd(d *Deps, g *globalFlags) *subcmd.Command {
   - report.json が無い・読めない・max_age より古い → 「arata が実行されていない / 失敗した」と緊急用に送る (終了コード 4)
   - max_severity が urgent_severity 以上、または取れなかったソースがある → 緊急用。それ以外は通常用
   - 新規・変化・再発が無く、取れなかったソースも無い → on_quiet (short = 1 行 / silent = 送らない)
-  - 送り方は Incoming Webhook か bot トークン (chat.postMessage。要る scope は chat:write だけ)。bot は、送り先のチャンネルに招待しておく
+  - 送り方は bot トークン (chat.postMessage。要る scope は chat:write だけ)。bot は、送り先のチャンネルに招待しておく。Incoming Webhook の方式 (非推奨) も、これまでどおり送る
   - 送ったら入力ディレクトリの .aratam-notified に run_id を書き、同じ run は二度送らない (--force で再送)
   - report.json に WAF の修正提案の候補 (proposals) があれば、「WAF の改善提案」を 2 通目として通常用に送る (on_quiet: silent でも送る)。
     slack.format: blocks では、提案の全文 (設定例を含む) を入力ディレクトリの waf-proposals.md に書く (--dry-run では書かない)

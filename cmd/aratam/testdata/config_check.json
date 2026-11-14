@@ -20,6 +20,12 @@
       "message": "name acme, provider claude-cli, format text, slack webhook, timezone Asia/Tokyo"
     },
     {
+      "status": "warn",
+      "item": "slack",
+      "code": "SLACK_WEBHOOK_DEPRECATED",
+      "message": "Incoming Webhook の方式 (slack.webhook_env) は非推奨です。これまでどおり送りますが、bot トークンの方式 (slack.bot_token_env と slack.channel) へ移してください。移し方は docs/aratam.md の 4-1 章「Webhook から bot トークンへ移す」"
+    },
+    {
       "status": "ok",
       "item": "context",
       "message": "<dir>/context.md (43 バイト)"

@@ -23,6 +23,7 @@ const (
 	codeSlackBotUnset      = codes.BotTokenUnset
 	codeSlackAuthFailed    = codes.SlackAuthFailed
 	codeSlackScopeMissing  = codes.SlackScopeMissing
+	codeWebhookDeprecated  = codes.SlackWebhookDeprecated
 )
 
 // doctorPrompt は LLM の疎通確認の問い合わせ。report のデータは渡さない。
@@ -61,7 +62,8 @@ func newDoctorCmd(d *Deps, g *globalFlags) *subcmd.Command {
 		Long: `設定を読み、次を確かめて表で出す。Slack には送らない (送って確かめるのは aratam test-notify)。
 
   - config   設定ファイルを読めて、検証を通るか。通知に出す時刻のタイムゾーン (timezone。書いていなければ UTC) も表示する
-  - webhook  (Webhook の方式) slack.webhook_env / urgent_webhook_env の環境変数があるか (URL は表示しない)
+  - webhook  (Webhook の方式。非推奨) slack.webhook_env / urgent_webhook_env の環境変数があるか (URL は表示しない)。
+             非推奨の警告 (slack の warn の行。SLACK_WEBHOOK_DEPRECATED) も出す。動き続けるので、ng にはしない
   - slack    (bot トークンの方式) slack.bot_token_env の環境変数があり、auth.test でトークンが有効か (トークンは表示しない)。
              投稿はしないので、bot がチャンネルにいるかは分からない (chat:write だけでは調べられない。aratam test-notify で確かめる)
   - llm      LLM に短い問い合わせを 1 回送り、応答があるか (provider: none なら skip)
@@ -132,9 +134,17 @@ ng が 1 つでもあれば終了コード 2。ng の行は標準エラーにも
 	return cmd
 }
 
-// webhookRows は Webhook の環境変数の有無。URL そのものは出さない。
+// webhookDeprecated は、Webhook の方式の設定に config check と doctor が添える警告の文 (ADR 0061)。
+//
+// 決定 (ADR 0061): Webhook の方式は非推奨だが、動き続ける。警告は設定を直すとき (config check) と点検のとき (doctor) にだけ出し、
+// notify と test-notify では出さない (定時の実行のたびに同じ行が出て、ほかの警告が埋もれる)。
+// Slack が Webhook を非推奨にしたのではない。送り先が固定で、投稿を後から指せない (消せない・更新できない) ための、arata の判断。
+const webhookDeprecated = "Incoming Webhook の方式 (slack.webhook_env) は非推奨です。これまでどおり送りますが、bot トークンの方式 (slack.bot_token_env と slack.channel) へ移してください。" +
+	"移し方は docs/aratam.md の 4-1 章「Webhook から bot トークンへ移す」"
+
+// webhookRows は Webhook の環境変数の有無。URL そのものは出さない。最初の行は、非推奨の警告 (ADR 0061)。
 func webhookRows(d *Deps, cfg *notify.Config) []doctorRow {
-	rows := []doctorRow{}
+	rows := []doctorRow{{"warn", "slack", webhookDeprecated, codeWebhookDeprecated}}
 	if d.Getenv(cfg.Slack.WebhookEnv) == "" {
 		rows = append(rows, doctorRow{"ng", "webhook", fmt.Sprintf("環境変数 %s (slack.webhook_env) がありません", cfg.Slack.WebhookEnv), codeWebhookUnset})
 	} else {

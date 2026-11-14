@@ -38,7 +38,7 @@ GitHub Actions で動かす利用者の環境 (リポジトリの設定・OIDC �
 
 ## 通知 (aratam)
 
-`aratam` は arata の出力ディレクトリ (`report.json` / `report.md`) を読み、LLM で要約して Slack (Incoming Webhook か、bot トークンとチャンネル ID) に送る別コマンド。
+`aratam` は arata の出力ディレクトリ (`report.json` / `report.md`) を読み、LLM で要約して Slack (bot トークンとチャンネル ID) に送る別コマンド。
 arata を呼ばず、AWS の監査ロールもストアも使わない (出力ディレクトリだけで連携する。設計は [docs/aratam.md](docs/aratam.md)、経緯は ADR 0018)。
 
 - 送り先と「静か」の判定は規則で固定する。`max_severity` が `urgent_severity` 以上か取れなかったソースがあれば緊急用、report.json が無い・古ければ「arata が実行されていない」と緊急用に送る
@@ -51,11 +51,12 @@ arata を呼ばず、AWS の監査ロールもストアも使わない (出力�
 - 通知の時刻は `timezone` (IANA 名。例 `timezone: Asia/Tokyo`) に書いたゾーンで出す。書かなければ UTC。変わるのは表示だけで、arata の集計は UTC のまま。
   日付だけの値 (日次集計の日、期間レポートの期間) は UTC の日なので直さず、`(UTC)` と書く。タイムゾーンのデータはバイナリに埋め込んである (docs/aratam.md 4-3 章)
 - LLM のプロバイダ: `bedrock` (Converse。`bedrock:InvokeModel` だけ要る) / `claude-cli` (`claude -p` をツール無し・ユーザー設定を読まず・空の一時ディレクトリで起動) / `none` (LLM を呼ばない)
-- Slack への送り方は 2 つのうち 1 つ (両方を書くと設定エラー。docs/aratam.md 4-1 章)。
-  - Incoming Webhook (`slack.webhook_env`): チャンネルごとに URL (秘密) が要る
-  - bot トークン (`slack.bot_token_env` と `slack.channel`): 秘密はトークン 1 つで、送り先はチャンネル ID (秘密ではない) を設定に書く。
-    監査対象ごとにチャンネルを分けても秘密が増えない。要る scope は `chat:write` だけで、bot を招待したチャンネルにだけ送れる (下の「bot トークンで送る」)
-- Webhook の URL と bot トークンは設定ファイルに書かず、設定に書いた名前の環境変数で渡す。秘密をどこに置き、どう環境変数に入れるかは実行環境が決める (ADR 0044)。
+- Slack への送り方は bot トークン (`slack.bot_token_env` と `slack.channel`。docs/aratam.md 4-1 章)。秘密はトークン 1 つで、送り先はチャンネル ID (秘密ではない) を設定に書く。
+  監査対象ごとにチャンネルを分けても秘密が増えない。要る scope は `chat:write` だけで、bot を招待したチャンネルにだけ送れる (下の「bot トークンで送る」)
+  - トークンは、bot が入っているどのチャンネルにも書ける (読めはしない)。会社 (監査を任される組織) ごとに Slack アプリを分け、bot を招待するのは通知に使うチャンネルだけにする
+  - Incoming Webhook の方式 (`slack.webhook_env`) は**非推奨** (ADR 0061)。今の設定は動き続けるが、`aratam config check` と `aratam doctor` が警告 (`SLACK_WEBHOOK_DEPRECATED`) を出す。
+    移し方は docs/aratam.md 4-1 章の「Webhook から bot トークンへ移す」。Slack が Webhook を非推奨にしたのではなく、送り先が固定で、投稿を後から消せない・更新できないための、arata の判断
+- bot トークンは設定ファイルに書かず、設定に書いた名前の環境変数で渡す。秘密をどこに置き、どう環境変数に入れるかは実行環境が決める (ADR 0044)。
   LLM に渡すデータは report.json (と下の提案の候補・前提) だけ
 - weekly の report.json に WAF の修正提案の候補 (`proposals`) があれば、「WAF の改善提案」を 2 通目として通常用に送る (ADR 0024)。
   種類・段階・根拠の数字は規則で書き、LLM は候補だけを受け取って「何を・なぜ・進め方・設定例」を書き起こす (候補に無い提案・BLOCK に強める提案は捨てる。observation は LLM に渡さない)。
@@ -65,7 +66,7 @@ arata を呼ばず、AWS の監査ロールもストアも使わない (出力�
 
 はじめての手順 (arata の `init` と最初の `run` が済んでから):
 
-1. `aratam config init` で雛形を書き出し、Webhook (か bot トークン) の環境変数を用意して `aratam doctor` → `aratam test-notify`
+1. `aratam config init` で雛形を書き出し、`slack.channel` にチャンネル ID を書き、bot トークンの環境変数を用意して (下の「bot トークンで送る」) `aratam doctor` → `aratam test-notify`
 2. LLM を使うなら `llm.provider` を `none` 以外にする
 3. **最初の通知の前に、`llm.context_file` (この監査対象の前提) を書く**。無くても動くが、無いと LLM はアプリの事情を知らず、正規の動作にも一般的で慎重な助言しか書けない。
    書くとよいのは、どのアプリが本番か、デプロイの流れ (どの主体が何を引き受けるか)、起動時に秘匿値をまとめて読むロール、正規の送信元、監査の仕組み自体を誰が置いたか。
@@ -78,11 +79,11 @@ arata を呼ばず、AWS の監査ロールもストアも使わない (出力�
    (チェックやソースを後から足すときも同じ順で進める。その流れと、設定の値を実データで決める方法も同じ文書)
 
 ```sh
-aratam config init                          # ./aratam.yaml (全項目を明示した雛形。provider は none)
-export ARATAM_SLACK_WEBHOOK='https://hooks.slack.com/services/...'
+aratam config init                          # ./aratam.yaml (全項目を明示した雛形。provider は none。slack.channel にチャンネル ID を書く)
+read -rs ARATAM_SLACK_BOT_TOKEN && export ARATAM_SLACK_BOT_TOKEN   # トークン (xoxb-…) を貼り付けて Enter (シェルの履歴に残さない)
 aratam config check                         # 設定の形だけを検査 (Slack・LLM に繋がない。PR の CI 向け)
 aratam config check --format json           # 同じ検査を機械が読む形で (Slack への送り方は .slack.method。スキーマは aratam schema aratam-config-check)
-aratam doctor                               # Webhook の環境変数 (bot トークンなら auth.test) と LLM の疎通 (送信はしない)
+aratam doctor                               # bot トークンの環境変数と auth.test、LLM の疎通 (送信はしない)
 aratam test-notify                          # Slack に試験メッセージを 1 通 (--urgent で緊急用)
 aratam notify --in /var/lib/arata/out/daily --dry-run   # 送らずに標準出力へ (LLM は呼ぶ。--llm none で呼ばない)
 aratam notify --in /var/lib/arata/out/daily --dry-run --format json   # 全体が 1 つの JSON。Slack に送る payload (blocks) そのものは .messages[].payload
@@ -102,11 +103,11 @@ Slack アプリは、利用する組織が manifest から自分で作る (Slack
 ```yaml
 # aratam.yaml (抜粋)
 slack:
-  webhook_env: ""                         # bot トークンを使うなら Webhook の 2 つは空にする
-  urgent_webhook_env: ""
   bot_token_env: ARATAM_SLACK_BOT_TOKEN   # 環境変数の名前 (トークンは書かない)
   channel: C0123456789                    # 通常用のチャンネル ID
   urgent_channel: C0123456780             # 緊急用。空なら channel に送り、冒頭に urgent_mention を付ける
+  webhook_env: ""                         # 非推奨の Webhook の 2 つは空のままにする
+  urgent_webhook_env: ""
 ```
 
 ```sh
@@ -194,8 +195,8 @@ CI は [.github/workflows/test.yml](.github/workflows/test.yml): `go mod verify`
 
 ### 環境変数 (.env)
 
-Slack の Webhook や bot トークンなど、値をリポジトリに書けないものは `.env` (git の管理外) に置く。書く項目は [.env.sample](.env.sample)。
-使うときは `set -a; . ./.env; set +a`。Webhook の URL や bot トークンは知っている人が誰でも投稿できるので、リポジトリ・PR・Issue に貼らない。
+Slack の bot トークンなど、値をリポジトリに書けないものは `.env` (git の管理外) に置く。書く項目は [.env.sample](.env.sample)。
+使うときは `set -a; . ./.env; set +a`。bot トークン (や Webhook の URL) は知っている人が誰でも投稿できるので、リポジトリ・PR・Issue に貼らない。
 
 サプライチェーン対策 (ADR 0017・0035。点検の結果と運用は [docs/supply-chain.md](docs/supply-chain.md)):
 
@@ -458,7 +459,7 @@ internal/allowlist/     既知リストの読み込みと approve の追記
 internal/report/        report.json / report.md (型は schema/ に置き、aratam と共有)
 internal/notify/        aratam の設定・入力の検査・振り分け・LLM 出力の検証と組み立て
 internal/llm/           aratam の LLM プロバイダ (claude-cli / bedrock)
-internal/slack/         Slack への送信 (Incoming Webhook、bot トークンの chat.postMessage)
+internal/slack/         Slack への送信 (bot トークンの chat.postMessage。非推奨の Incoming Webhook)
 internal/engine/        collect → evaluate → report の束ねと doctor (CLI と Lambda が共用)
 docs/ai/                arata help ai の文書 (embed でバイナリに入る)
 docs/threats.md         実際に起きた攻撃と、arata で見えるもの・見えないものの対応表の入口 (本文は docs/ai/threats/)

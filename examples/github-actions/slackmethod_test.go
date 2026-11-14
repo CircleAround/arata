@@ -169,7 +169,9 @@ func TestSlackMethodScriptWithTheRealAratam(t *testing.T) {
 		}
 		return s
 	}
-	webhook := string(scaffold)
+	// 雛形は bot トークンの方式 (ADR 0061)。Webhook の方式 (非推奨。動き続ける) の設定は、雛形を書き換えて作る
+	webhook := replace(string(scaffold), "bot_token_env: ARATAM_SLACK_BOT_TOKEN", `bot_token_env: ""`,
+		`webhook_env: "" `, "webhook_env: ARATAM_SLACK_WEBHOOK ", `urgent_webhook_env: "" `, "urgent_webhook_env: ARATAM_SLACK_URGENT_WEBHOOK ")
 	bot := replace(webhook, "webhook_env: ARATAM_SLACK_WEBHOOK ", `webhook_env: "" `, "urgent_webhook_env: ARATAM_SLACK_URGENT_WEBHOOK ", `urgent_webhook_env: "" `,
 		`bot_token_env: ""`, "bot_token_env: ARATAM_SLACK_BOT_TOKEN", `  channel: ""`, "  channel: C0123456789")
 	// timezone を書いた設定でも変わらない (人向けの行の末尾に timezone が足されて、判別が外れたことがある)
@@ -248,11 +250,13 @@ func TestSlackMethodScriptUrgentWebhookWithTheRealAratam(t *testing.T) {
 		}
 		return s
 	}
-	webhook := string(scaffold)
+	// 雛形は bot トークンの方式 (ADR 0061)。Webhook の方式 (非推奨。動き続ける) の設定は、雛形を書き換えて作る
+	webhook := replace(string(scaffold), "bot_token_env: ARATAM_SLACK_BOT_TOKEN", `bot_token_env: ""`,
+		`webhook_env: "" `, "webhook_env: ARATAM_SLACK_WEBHOOK ", `urgent_webhook_env: "" `, "urgent_webhook_env: ARATAM_SLACK_URGENT_WEBHOOK ")
 	noUrgent := replace(webhook, "urgent_webhook_env: ARATAM_SLACK_URGENT_WEBHOOK ", `urgent_webhook_env: "" `)
 	bot := replace(noUrgent, "webhook_env: ARATAM_SLACK_WEBHOOK ", `webhook_env: "" `, `bot_token_env: ""`, "bot_token_env: ARATAM_SLACK_BOT_TOKEN", `  channel: ""`, "  channel: C0123456789")
 	for _, tc := range []struct{ name, body, want string }{
-		{"scaffold", webhook, "true\n"},
+		{"webhook with the urgent webhook", webhook, "true\n"},
 		{"webhook without the urgent webhook", noUrgent, "false\n"},
 		{"bot", bot, "false\n"},
 	} {

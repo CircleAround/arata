@@ -80,6 +80,7 @@
             "BOT_TOKEN_UNSET",
             "SLACK_AUTH_FAILED",
             "SLACK_SCOPE_MISSING",
+            "SLACK_WEBHOOK_DEPRECATED",
             "LLM_UNAVAILABLE"
           ]
         },
