@@ -31,7 +31,7 @@
 | [0005](0005-event-vs-state-checks.md) | チェックをイベント型と状態型に分け、差分判定の挙動を変える | 採用 |
 | [0006](0006-format-profiles.md) | ロググループと形式プロファイルの紐付け、Logs Insights での集計取得 | 採用 |
 | [0007](0007-baseline-principals.md) | init のベースライン収集で初出した主体は `baseline` 状態にし、new_principal の対象外にする | 採用 |
-| [0008](0008-deploy-tag-in-allowlist.md) | 既知デプロイ主体は allowlist の principals に `tags: [deploy]` で表す | 採用 |
+| [0008](0008-deploy-tag-in-allowlist.md) | 既知デプロイ主体は allowlist の principals に `tags: [deploy]` で表す | 採用 (下げない変更は 0056 で置き換え) |
 | [0009](0009-insights-query-templates.md) | Logs Insights のクエリテンプレートは前処理・集計・後処理の 3 層で組み、UTC 日次の集計を置き換えで保存する | 採用 |
 | [0010](0010-approve-text-insertion.md) | approve は allowlist.yaml を構造として書き直さず、principals の末尾に行を差し込む | 採用 |
 | [0011](0011-init-daily-chunks.md) | init のベースライン収集は UTC の 1 日単位に分け、進捗を runs に記録して再開できるようにする | 採用 |
@@ -78,4 +78,6 @@
 | [0052](0052-actor-and-auth-lines.md) | アプリに足してもらう行は actor と auth の 2 種類にし、行末まで固定した正規表現で読んで、値の形を規則で絞る | 採用 |
 | [0053](0053-readonly-role-denied-log-groups.md) | 読み取り専用ロールに、読ませないロググループの名前を受けるパラメータを足し、中身を読む操作を明示の Deny で止める | 採用 |
 | [0054](0054-machine-readable-output-schemas.md) | 機械が読む出力は `--format json` で出し、Go の型から作った JSON Schema とテストで固定する (人向けの出力を機械で読ませない) | 採用 |
+| [0055](0055-oidc-assume-role.md) | OIDC でのロールの引き受けを、(プロバイダ, sub, ロール) の組で既知リストと比べる (`oidc_assume_role`) | 採用 |
+| [0056](0056-deploy-principal-not-lowered.md) | 既知デプロイ主体でも、アクセスキーの作成と、信頼ポリシーを外へ広げる変更は下げない。ロールの作成も信頼ポリシーを読んで報告する (`iam_changes`) | 採用 |
 | [0057](0057-threat-coverage-table.md) | 公開された攻撃の事例ごとに、arata で見える段階と見えない段階を、出典の URL 付きの対応表として持つ | 採用 |
