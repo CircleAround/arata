@@ -91,16 +91,15 @@ func TestNotifyTestNeedsNoAWSCredentials(t *testing.T) {
 func TestNotifyTestPassesSlackSecretsLikeTheAudit(t *testing.T) {
 	w, text := load(t, notifyTestFile)
 	for _, f := range workflowFiles {
-		audit, auditText := load(t, f)
+		audit, _ := load(t, f)
 		x, _ := yaml.Marshal(stepByID(t, audit, "notify").Env)
 		y, _ := yaml.Marshal(stepByID(t, w, "test-notify").Env)
 		if string(x) != string(y) {
 			t.Errorf("env of test-notify differs from notify of %s:\n%s\n---\n%s", f, y, x)
 		}
-		// bot トークンの方式に切り替えるコメントの行も同じ
-		bot := regexp.MustCompile(`(?m)^\s*# ARATAM_SLACK_BOT_TOKEN: \$\{\{ secrets\.ARATAM_SLACK_BOT_TOKEN \}\}$`)
-		if a, b := strings.TrimSpace(bot.FindString(auditText)), strings.TrimSpace(bot.FindString(text)); a == "" || a != b {
-			t.Errorf("the commented bot token line must be the one of %s: %q, %q", f, b, a)
+		// 送り方の判別も同じスクリプトを同じように呼ぶ (定時の通知と同じ判別で送って、初めて定時の通知の確認になる)
+		if a, b := stepByID(t, audit, "slack-method").Run, stepByID(t, w, "slack-method").Run; a != b {
+			t.Errorf("slack-method differs from %s:\n%s\n---\n%s", f, b, a)
 		}
 	}
 	// secrets は Slack のものだけで、送る step にだけ渡す

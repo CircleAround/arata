@@ -283,7 +283,7 @@ func testSecretsReachOnlyTheStepsThatNeedThem(t *testing.T, w *workflow, text st
 			if !strings.Contains(v, "secrets.") {
 				continue
 			}
-			want := map[string]string{"GH_TOKEN": "install", "AUDIT_ROLE_ARN": "aws-config", "AUDIT_ROLE_ARNS": "aws-config", "ARATAM_SLACK_WEBHOOK": "notify", "ARATAM_SLACK_URGENT_WEBHOOK": "notify", "ARATAM_SLACK_BOT_TOKEN": "notify"}[k]
+			want := map[string]string{"GH_TOKEN": "install", "AUDIT_ROLE_ARN": "aws-config", "AUDIT_ROLE_ARNS": "aws-config", "ARATAM_SLACK_WEBHOOK": "notify", "ARATAM_SLACK_URGENT_WEBHOOK": "notify", "ARATAM_SLACK_BOT_TOKEN": "notify", "ALERT_WEBHOOK": "alert"}[k]
 			if want != s.ID {
 				t.Errorf("secret %s must not be given to step %q", k, s.ID)
 			}
@@ -298,8 +298,8 @@ func testSecretsReachOnlyTheStepsThatNeedThem(t *testing.T, w *workflow, text st
 		}
 	}
 	n := stepByID(t, w, "notify")
-	if n.Env["ARATAM_SLACK_WEBHOOK"] == "" || n.Env["ARATAM_SLACK_URGENT_WEBHOOK"] == "" {
-		t.Errorf("notify needs both webhooks: %v", n.Env)
+	if n.Env["ARATAM_SLACK_WEBHOOK"] == "" || n.Env["ARATAM_SLACK_URGENT_WEBHOOK"] == "" || n.Env["ARATAM_SLACK_BOT_TOKEN"] == "" {
+		t.Errorf("notify needs both webhooks and the bot token (each only for its method): %v", n.Env)
 	}
 }
 
@@ -325,7 +325,8 @@ func testNotifyRunsWhenAuditFails(t *testing.T, w *workflow, text string) {
 		order[s.ID] = i
 	}
 	// バイナリは認証より先に取る (OIDC が失敗しても aratam で知らせるため)
-	if !(order["install"] < order["aws"] && order["aws"] < order["audit"] && order["audit"] < order["notify"] && order["notify"] < order["save-proposals"]) {
+	if !(order["install"] < order["aws"] && order["aws"] < order["audit"] && order["audit"] < order["slack-method"] && order["slack-method"] < order["notify"] &&
+		order["notify"] < order["save-proposals"] && order["save-proposals"] < order["alert"] && order["alert"] == len(order)-1) {
 		t.Errorf("step order: %v", order)
 	}
 	p := stepByID(t, w, "save-proposals")
@@ -369,7 +370,7 @@ func runStepIn(t *testing.T, dir, script, bin string, env ...string) (string, in
 	cmd.Dir = dir
 	cmd.Env = append([]string{"PATH=" + bin + ":" + os.Getenv("PATH"), "RUNNER_TEMP=" + tmp,
 		"GITHUB_PATH=" + filepath.Join(tmp, "github_path"), "GITHUB_ENV=" + filepath.Join(tmp, "github_env"),
-		"GITHUB_STEP_SUMMARY=" + filepath.Join(tmp, "summary"), "GITHUB_ACTOR=alice",
+		"GITHUB_STEP_SUMMARY=" + filepath.Join(tmp, "summary"), "GITHUB_OUTPUT=" + filepath.Join(tmp, "github_output"), "GITHUB_ACTOR=alice",
 		"PROFILE=daily", "ARATA_VERSION=v0.0.0", "ARATA_CONFIG_DIR=arata", "ARATA_STORE_URL=s3://example-arata-store/example"}, env...)
 	out, err := cmd.CombinedOutput()
 	code := 0

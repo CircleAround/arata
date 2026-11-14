@@ -27,6 +27,9 @@ AWS のログと設定を定期的に改め、**前回から新しく発生し�
 ## AI (LLM) から使う
 
 `arata help ai` を最初に読ませる (report の読み方は `arata help ai report`、承認判断は `arata help ai approve`、チェックごとの対処手順は `arata help ai playbook <check>`、`--format json` も可)。
+
+出力をスクリプトや CI で読むときは、`--format json` と report.json を読む。読んでよい項目は `arata schema <名前>` の JSON Schema にある (`arata schema` で一覧)。
+表や文 (table / text / md、ログの `msg`) は人向けで、版をまたいで変わるので機械で読まない (ADR 0054)。
 内容はバイナリに埋め込まれていて、エンジンの版と常に揃う。
 チェックが skip される・解釈率が低いなど、記録が足りないときは `arata help ai logs` (チェックと記録の対応表、ログの出し方) を読ませる。
 GitHub Actions で動かす利用者の環境 (リポジトリの設定・OIDC の信頼・secrets) を作る・見直すときは `arata help ai runtime` を読ませる (チェックリスト。設定を変えるのは人)。
@@ -76,6 +79,7 @@ arata を呼ばず、AWS の監査ロールもストアも使わない (出力�
 aratam config init                          # ./aratam.yaml (全項目を明示した雛形。provider は none)
 export ARATAM_SLACK_WEBHOOK='https://hooks.slack.com/services/...'
 aratam config check                         # 設定の形だけを検査 (Slack・LLM に繋がない。PR の CI 向け)
+aratam config check --format json           # 同じ検査を機械が読む形で (Slack への送り方は .slack.method。スキーマは aratam schema aratam-config-check)
 aratam doctor                               # Webhook の環境変数 (bot トークンなら auth.test) と LLM の疎通 (送信はしない)
 aratam test-notify                          # Slack に試験メッセージを 1 通 (--urgent で緊急用)
 aratam notify --in /var/lib/arata/out/daily --dry-run   # 送らずに標準出力へ (LLM は呼ぶ。--llm none で呼ばない)

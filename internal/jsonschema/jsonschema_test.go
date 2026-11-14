@@ -172,6 +172,8 @@ const sampleSchema = `{
 `
 
 func TestGenerate(t *testing.T) {
+	// 公開していない項目 (hidden) と json:"-" の項目は、スキーマに出ない
+	_ = sample{hidden: "x", Skipped: "x"}
 	got, err := Generate(sample{}, Options{ID: "urn:arata:schema:sample:1", Title: "sample", Description: "見本"})
 	if err != nil {
 		t.Fatal(err)

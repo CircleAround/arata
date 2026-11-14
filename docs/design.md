@@ -1272,10 +1272,22 @@ arata approve   <finding-id> --note "..." [--expires date] [--tag deploy] [--by 
 arata approve   <finding-id> --destination --note "..." [--destination-role glob] [--expires date] [--by name] [--commit]   # 行き先のアカウントを既知にする (ADR 0047)
 arata ack|snooze|resolve <finding-id>        # snooze は --until date
 arata help ai [report|approve|runtime|onboarding|logs|playbook [check]] [--format json]   # LLM 向けの使い方 (arata ai と同じ)。playbook はチェックごとの対処手順
+arata schema [名前]            # 機械が読む出力の JSON Schema (引数なしで名前の一覧。arata help schema も同じ。ADR 0054)
 arata prune     [--dry-run]
 arata rebuild   [--from-scratch [--baseline]] [--format text|json]   # raw JSONL から SQLite を再構築 (5-4、ADR 0033)
 ```
 
+- 決定 (ADR 0054): **機械が読む出力は `--format json` と report.json で、読んでよい項目は JSON Schema (`schemas/<名前>.schema.json`) に書いたものがすべて。**
+  人向けの出力 (table / text / md、ログの `msg` の文言) は版をまたいで変えてよく、機械で読ませない。
+  - スキーマは出力の Go の型から標準ライブラリで作り (`internal/jsonschema`)、ゴールデンとして `schemas/` に置いて埋め込む (`arata schema [名前]`)。手で編集しない。
+    型を変えるとテストが落ちる。実際の出力がスキーマに合い、型に無い項目を持たないことも、コマンドを通したテストで確かめる (`schematest`)
+  - 最上位に `schema` (名前) と `schema_version` (整数) を出す。項目を足すのは互換 (版はそのまま)。消す・名前や型や意味を変える・閉じた語彙 (`enum`) に値を足すときは
+    版を上げ、Release の本文に書く。スキーマは開いた形 (`additionalProperties` を縛らない) で、古いスキーマで新しい出力を確かめても足した項目では落ちない
+  - 読む側の決まり: 知らない項目は無視する。`enum` のある項目で知らない値を見たら止める。`schema_version` が知る版より大きければ止める
+  - 今スキーマで固定しているのは `report`・`report-period` (report.json) と `aratam-config-check`。ほかの `--format json` (doctor・profiles・rebuild・help ai・review・
+    config init --diff)、構造化ログの行と `code` の一覧は、順に足す (ADR 0054 の 7 節)。それまでは、今の形を変えないことだけを約束する
+  - report.json の `schema` / `schema_version` は、書き出すときに必ず今の版にする (`arata report` が保存済みの古い報告を読み直して出すときも)。
+    重大度 (`severity`・`summary.max_severity`) は閉じた語彙としてスキーマに書く。`status`・`check`・proposal の `kind`・`code` は開いた語彙
 - 決定: 設定ファイルのパスには既定を持たせる。解決順は `-c` (`--config`) > 環境変数 `ARATA_CONFIG` > カレントディレクトリの `./arata.yaml`。
   どれも無ければ探した場所を並べて `CONFIG_INVALID` (終了コード 2)。`-c` や `ARATA_CONFIG` で指したファイルが無いときは次へ落ちずに設定エラーにする
   (指定の打ち間違いで別の設定が黙って使われるのを防ぐ)。`config init` の `--out` の既定も `./arata.yaml` (既存ファイルは `--force` が無ければ上書きしない。

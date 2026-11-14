@@ -359,12 +359,17 @@ func TestCheckTriggerAndPermissions(t *testing.T) {
 func TestCheckRunsConfigCheckForEveryConfig(t *testing.T) {
 	w, _ := load(t, checkFile)
 	script := stepByID(t, w, "check").Run
-	// 偽の arata / aratam。引数を記録し、-c のファイルに bad と書いてあれば終了コード 2
+	// 偽の arata / aratam。引数を記録し、-c のファイルに bad と書いてあれば終了コード 2。
+	// --format json には、ファイルに書いた送り方 (bot / webhook / それ以外) を返す。人向けの出力には、わざと紛らわしい語を入れる
 	fake := `echo "$(basename "$0") $*" >>"$RUNNER_TEMP/calls"
 echo '{"level":"ERROR","msg":"stderr log"}' >&2
 cat >/dev/null # 標準入力 (ループのファイルの一覧) を読んでも、次のファイルが消えない
-echo "ok    $4: checked"
 if grep -q bad "$4"; then exit 2; fi
+if [ "${5:-}" = --format ]; then
+  echo "{\"ok\":true,\"slack\":{\"method\":\"$(grep -o 'method-[a-z]*' "$4" | cut -d- -f2)\"},\"rows\":[]}"
+else
+  echo "ok    $4: checked, slack webhook, slack bot"
+fi
 `
 	bin := t.TempDir()
 	for _, name := range []string{"arata", "aratam"} {
@@ -372,8 +377,19 @@ if grep -q bad "$4"; then exit 2; fi
 			t.Fatal(err)
 		}
 	}
+	methodScriptBody, err := os.ReadFile(methodScript)
+	if err != nil {
+		t.Fatal(err)
+	}
 	tree := func(files map[string]string) string {
 		dir := t.TempDir()
+		// 利用者のリポジトリに写した、送り方を判別するスクリプト
+		if err := os.MkdirAll(filepath.Join(dir, filepath.Dir(methodScriptPath)), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, methodScriptPath), methodScriptBody, 0o755); err != nil {
+			t.Fatal(err)
+		}
 		for name, body := range files {
 			p := filepath.Join(dir, name)
 			if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
@@ -390,12 +406,13 @@ if grep -q bad "$4"; then exit 2; fi
 		return string(b)
 	}
 	multi := map[string]string{
-		"aws/prod/arata.yaml": "ok", "aws/prod/aratam.yaml": "ok", "aws/prod/allowlist.yaml": "ok",
-		"aws/staging/arata.yaml": "ok", "aws/staging/aratam.yaml": "ok",
+		"aws/prod/arata.yaml": "ok", "aws/prod/aratam.yaml": "method-bot", "aws/prod/allowlist.yaml": "ok",
+		"aws/staging/arata.yaml": "ok", "aws/staging/aratam.yaml": "method-webhook",
 		".git/arata.yaml": "bad", "README.md": "ok",
 	}
-	wantMulti := "arata config check -c ./aws/prod/arata.yaml\naratam config check -c ./aws/prod/aratam.yaml\n" +
-		"arata config check -c ./aws/staging/arata.yaml\naratam config check -c ./aws/staging/aratam.yaml\n"
+	// aratam.yaml は、形の検査のあとに、送り方の判別 (--format json) をもう 1 回
+	wantMulti := "arata config check -c ./aws/prod/arata.yaml\naratam config check -c ./aws/prod/aratam.yaml\naratam config check -c ./aws/prod/aratam.yaml --format json\n" +
+		"arata config check -c ./aws/staging/arata.yaml\naratam config check -c ./aws/staging/aratam.yaml\naratam config check -c ./aws/staging/aratam.yaml --format json\n"
 
 	t.Run("multi", func(t *testing.T) {
 		out, code, tmp := runStepIn(t, tree(multi), script, bin)
@@ -405,10 +422,37 @@ if grep -q bad "$4"; then exit 2; fi
 		if !strings.Contains(out, "ok    ./aws/prod/arata.yaml: checked") || strings.Contains(out, "stderr log") {
 			t.Errorf("the result lines must be shown, without the duplicate JSON log:\n%s", out)
 		}
+		// 送り方は設定ごとに判別する (アカウントごとに違ってよい)
+		if strings.Count(out, "slack method: bot\n") != 1 || strings.Count(out, "slack method: webhook\n") != 1 {
+			t.Errorf("each aratam.yaml must show its method:\n%s", out)
+		}
+	})
+	// 送り方を判別できない設定 (知らない値) は、形の検査を通っても失敗にする。残りの設定も検査する
+	t.Run("unknown method", func(t *testing.T) {
+		files := map[string]string{}
+		for k, v := range multi {
+			files[k] = v
+		}
+		files["aws/prod/aratam.yaml"] = "method-email"
+		out, code, tmp := runStepIn(t, tree(files), script, bin)
+		if code != 1 || calls(tmp) != wantMulti || !strings.Contains(out, "::error::") || strings.Contains(out, "slack method: email") ||
+			!strings.Contains(out, "slack method: webhook\n") {
+			t.Errorf("exit %d, calls:\n%s\n%s", code, calls(tmp), out)
+		}
+	})
+	// スクリプトを写し忘れたリポジトリでは、通さない
+	t.Run("no script", func(t *testing.T) {
+		dir := tree(multi)
+		if err := os.Remove(filepath.Join(dir, methodScriptPath)); err != nil {
+			t.Fatal(err)
+		}
+		if _, code, _ := runStepIn(t, dir, script, bin); code != 1 {
+			t.Errorf("exit %d", code)
+		}
 	})
 	t.Run("single", func(t *testing.T) {
-		_, code, tmp := runStepIn(t, tree(map[string]string{"arata/arata.yaml": "ok", "arata/aratam.yaml": "ok"}), script, bin)
-		if code != 0 || calls(tmp) != "arata config check -c ./arata/arata.yaml\naratam config check -c ./arata/aratam.yaml\n" {
+		_, code, tmp := runStepIn(t, tree(map[string]string{"arata/arata.yaml": "ok", "arata/aratam.yaml": "method-webhook"}), script, bin)
+		if code != 0 || calls(tmp) != "arata config check -c ./arata/arata.yaml\naratam config check -c ./arata/aratam.yaml\naratam config check -c ./arata/aratam.yaml --format json\n" {
 			t.Errorf("exit %d, calls:\n%s", code, calls(tmp))
 		}
 	})

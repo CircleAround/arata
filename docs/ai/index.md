@@ -138,3 +138,10 @@ assume_destinations:              # 外向きの引き受けで、行き先と�
 - `arata help ai runtime`: 利用者の環境 (GitHub Actions で動かすリポジトリ) を作る・見直すときのチェックリスト。
   環境を作るときは、aratam の `llm.context_file` (監査対象の前提) の下書きまで行う (手順は同じ文書。マージは人)
 - `--format json` を付けると `{topic, sections: [{title, body}]}` で受け取れる
+
+## 出力を機械で読むとき
+
+- 読むのは `--format json` と report.json。読んでよい項目は `arata schema <名前>` の JSON Schema に書いてある (`arata schema` で名前の一覧。`report`・`report-period` など)
+- 表や文 (table / text / md、ログの `msg`) は人向けで、版をまたいで文言と並びが変わる。grep や行の位置で読まない
+- 知らない項目は無視する。`enum` のある項目で知らない値を見たら止める。`schema_version` が知っている版より大きければ止める
+  (項目が消える・意味が変わるときに上がり、Release の本文に書かれる)

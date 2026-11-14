@@ -34,7 +34,7 @@ defaults:
     shell: bash     # -eo pipefail で動く
 
 env:
-  ARATA_VERSION: v0.5.1        # arata-audit-multi.yml と同じ版にする (定時の通知と同じ aratam で確かめる)
+  ARATA_VERSION: v0.14.0       # arata-audit-multi.yml と同じ版にする (定時の通知と同じ aratam で確かめる。PR の検査 arata-check.yml が揃っていることを確かめる)
 
 jobs:
   notify-test:
@@ -86,6 +86,16 @@ jobs:
           done
           echo "$dir" >>"$GITHUB_PATH"
 
+      # 送り方の判別は、定時の監査と同じスクリプト (定時の通知と同じ判別で送って、初めて定時の通知の確認になる)。
+      # bot / webhook 以外なら、ここで止まる。
+      - id: slack-method
+        name: Slack への送り方を判別する
+        timeout-minutes: 2
+        run: |
+          method="$(.github/scripts/arata-slack-method.sh "$ARATA_CONFIG_DIR/aratam.yaml")"
+          echo "slack method=$method"
+          echo "method=$method" >>"$GITHUB_OUTPUT"
+
       # secrets の渡し方は監査の notify と同じにする (同じ secrets と同じ aratam.yaml で送って、初めて定時の通知の確認になる)。
       # ログの方針も監査と同じ: 出力は実行環境の一時ファイルに書き、Actions には INFO 以外の level / code / source だけを出す。
       # 失敗の見分け: CONFIG_INVALID = 設定の誤りか、secret が空 (終了コード 2) / SEND_FAILED = Slack が受け取らなかった (終了コード 5)。
@@ -95,11 +105,10 @@ jobs:
         name: aratam test-notify
         timeout-minutes: 3
         env:
-          ARATAM_SLACK_WEBHOOK: ${{ secrets.ARATAM_SLACK_WEBHOOK }}
-          ARATAM_SLACK_URGENT_WEBHOOK: ${{ secrets.ARATAM_SLACK_URGENT_WEBHOOK }}
-          # bot トークンの方式 (aratam.yaml の slack.bot_token_env と slack.channel。README の「bot トークンで送る」) なら、
-          # 上の 2 行の代わりに次の 1 行にする。secret は 1 つで、チャンネル ID は aratam.yaml に書く (秘密ではない)。
-          # ARATAM_SLACK_BOT_TOKEN: ${{ secrets.ARATAM_SLACK_BOT_TOKEN }}
+          # 判別した送り方の secret だけを渡す (使わないほうは空)。Webhook の方式なら上の 2 つ、bot トークンの方式なら下の 1 つ
+          ARATAM_SLACK_WEBHOOK: ${{ steps.slack-method.outputs.method == 'webhook' && secrets.ARATAM_SLACK_WEBHOOK || '' }}
+          ARATAM_SLACK_URGENT_WEBHOOK: ${{ steps.slack-method.outputs.method == 'webhook' && secrets.ARATAM_SLACK_URGENT_WEBHOOK || '' }}
+          ARATAM_SLACK_BOT_TOKEN: ${{ steps.slack-method.outputs.method == 'bot' && secrets.ARATAM_SLACK_BOT_TOKEN || '' }}
         run: |
           log="$RUNNER_TEMP/aratam.log"
           args=(test-notify -c "$ARATA_CONFIG_DIR/aratam.yaml")
