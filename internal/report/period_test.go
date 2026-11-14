@@ -5,7 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/CircleAround/arata/internal/jsonschema/schematest"
 	"github.com/CircleAround/arata/internal/record"
+	"github.com/CircleAround/arata/internal/report/schema"
 	"github.com/CircleAround/arata/internal/store"
 )
 
@@ -85,6 +87,12 @@ func TestBuildPeriod(t *testing.T) {
 		t.Fatal(err)
 	}
 	compareGolden(t, "period.json", j)
+	schematest.Conforms(t, schema.PeriodReportSchema, j, &schema.PeriodReport{})
+	if e, err := BuildPeriod(PeriodInput{Name: "acme", Now: time.Now()}).JSON(); err != nil {
+		t.Fatal(err)
+	} else {
+		schematest.Conforms(t, schema.PeriodReportSchema, e, &schema.PeriodReport{})
+	}
 	compareGolden(t, "period.md", []byte(r.Markdown()))
 
 	// 履歴が期間の前から始まっていれば注意書きは無い。run が一度も無ければその旨

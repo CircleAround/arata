@@ -4,7 +4,7 @@
 
 ```json
 {
-  "profile": "daily", "window": {"from": "...", "to": "..."}, "name": "acme", "run_id": "...",
+  "schema": "report", "schema_version": 1, "profile": "daily", "window": {"from": "...", "to": "..."}, "name": "acme", "run_id": "...",
   "summary": {"new": 3, "changed": 1, "recurred": 0, "resolved": 2, "still_open": 7, "max_severity": "high", "collect_errors": []},
   "findings": {"new": [], "changed": [], "recurred": [], "resolved": [], "still_open": []},
   "already_reported": [],

@@ -532,7 +532,9 @@ timezone: Asia/Tokyo    # IANA 名。書かなければ UTC
 
 ```
 aratam config init [--out aratam.yaml] [--force]
-aratam config check [-c aratam.yaml] # 設定の形をオフラインで検査 (Slack・LLM に繋がない。問題があれば終了コード 2)
+aratam config check [-c aratam.yaml] [--format text|json]
+               # 設定の形をオフラインで検査 (Slack・LLM に繋がない。問題があれば終了コード 2)。--format json は機械が読む形
+aratam schema [名前]                 # 機械が読む出力の JSON Schema (引数なしで名前の一覧。arata schema と同じものを出す)
 aratam notify  --in <dir> [-c aratam.yaml] [--dry-run [--format text|json]] [--force]
                # --dry-run は送らずに標準出力へ。LLM は呼ぶ (--llm none で呼ばない)。--format json は送る payload そのもの
 aratam doctor  [-c aratam.yaml]   # LLM に短い問い合わせを 1 回、Webhook の環境変数の有無 (bot トークンなら auth.test) を確認 (送信はしない)
@@ -547,6 +549,21 @@ aratam test-notify [-c aratam.yaml] # Slack に試験メッセージを 1 通送
   - `llm.context_file` は書いてあれば読めるかを見る。リポジトリの中のファイルなのでオフラインで確かめられる。読めない・16 KiB を超えるは `warn`
     (notify が前提なしで続けるのと同じ扱い。ADR 0024)。`provider: none` では使わないので `skip`
   - 出力と終了コードは arata の `config check` と同じ形 (`ok` / `warn` / `ng` / `skip`、`ng` があれば 2)
+- 決定 (arata の ADR 0054): **機械が読む値は `config check --format json` で出す。人向けの出力 (text) を機械で読ませない。**
+  text の ok の行に `timezone` を足したとき、行末の `slack bot` を grep して送り方を判別していた仕組みが判別を外し、定時の通知を送れなかった。
+  人向けの行は、これからも文言と並びを変える。
+  - 出すもの: `schema` / `schema_version`、`ok` (ng の行が無い)、`config` (検査したファイル)、`name`、`llm.provider`、`slack.method` (`bot` / `webhook`)、
+    `slack.format`、`timezone`、`rows` (`status`・`item`・`code`・`message`。text の行と同じ内容)。スキーマは `aratam schema aratam-config-check`
+    (`schemas/aratam-config-check.schema.json`。型から作り、テストで固定する)
+  - **設定を読めなかったときは、設定から決まる値 (`name`・`llm`・`slack`・`timezone`) を出さない** (`ok: false` と ng の行だけ。終了コードは 2 のまま)。
+    `jq -r .slack.method` は `null` になり、「bot / webhook 以外なら止める」と書いた側は止まる。読めない設定から送り方を推し量らない
+  - 閉じた語彙 (値を足すときは `schema_version` を上げる): `slack.method`、`rows[].status`。読む側は、知らない値を見たら止める。
+    開いた語彙 (版を上げずに値が足される): `llm.provider`、`slack.format`、`rows[].item`、`rows[].code`
+  - 秘密は出さない。秘密ではないが判別に要らない値 (チャンネル ID、環境変数の名前) も出さない (PR の CI のログに出る)
+  - text の出力は変えない (同じ行を、同じ内容から書く)
+- 決定 (arata の ADR 0054): aratam は、report.json の `schema_version` が自分の知る版より大きければ、中身を読まずに `INPUT_INVALID` として扱う
+  (「aratam を arata と同じ版に上げる」と緊急用に送る。終了コード 4)。版が上がるのは項目が消える・意味が変わるときで、古い aratam が読み違えたまま通知しないため。
+  項目の無い報告 (足す前の arata の出力) は版 1 として読む。知らない項目は今までどおり無視する
 - プロバイダ名は呼び方を表す (`claude-cli` / `openai-api`)。同じモデルを別の経路で呼ぶプロバイダを足しても名前が衝突しない。
 - 終了コード: 0 = 送った (または on_quiet=silent / 通知済み / arata の試しの実行の報告で送らなかった)、2 = 設定エラー、
   3 = LLM が使えず report.md で送った、4 = 入力が無い・古い (その旨は送った)、5 = 送信に失敗した。

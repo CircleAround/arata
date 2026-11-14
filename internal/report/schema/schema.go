@@ -11,8 +11,22 @@ import (
 	"strings"
 )
 
+// report.json のスキーマの名前と版 (ADR 0054)。名前は `arata schema <名前>` の名前。
+// 版は、項目を消す・名前や型や意味を変えるときだけ上げる (足すのは互換)。上げたら Release の本文に書く。
+const (
+	ReportSchema        = "report"
+	PeriodReportSchema  = "report-period"
+	ReportSchemaVersion = 1
+	// PeriodReportSchemaVersion は期間レポートの版。プロファイル実行の報告とは別に数える。
+	PeriodReportSchemaVersion = 1
+)
+
 // Report は report.json の骨子。
 type Report struct {
+	// Schema と SchemaVersion はスキーマの名前と版 (ADR 0054)。読む側は、知らない項目を無視し、版が知る版より大きければ止まる。
+	// 項目の無い報告 (この項目を足す前の arata が書いたもの) は版 1 として読む。
+	Schema          string    `json:"schema" jsonschema:"const=report"`
+	SchemaVersion   int       `json:"schema_version" jsonschema:"const=1"`
 	Profile         string    `json:"profile"`
 	Window          Window    `json:"window"`
 	Name            string    `json:"name"`
@@ -78,7 +92,7 @@ type Summary struct {
 	Recurred      int            `json:"recurred"`
 	Resolved      int            `json:"resolved"`
 	StillOpen     int            `json:"still_open"`
-	MaxSeverity   string         `json:"max_severity"`
+	MaxSeverity   string         `json:"max_severity" jsonschema:"enum=|critical|high|medium|low"`
 	CollectErrors []CollectError `json:"collect_errors"`
 }
 
@@ -120,7 +134,7 @@ type Finding struct {
 	ID          string         `json:"id"`
 	Check       string         `json:"check"`
 	Key         string         `json:"key"`
-	Severity    string         `json:"severity"`
+	Severity    string         `json:"severity" jsonschema:"enum=critical|high|medium|low|info"`
 	Summary     string         `json:"summary"`
 	Status      string         `json:"status"`
 	FirstSeen   string         `json:"first_seen"`
@@ -260,8 +274,11 @@ type SkippedCheck struct {
 }
 
 // JSON は整形済み JSON を返す。
+// schema / schema_version は、ここで必ず今の版にする (保存済みの古い報告を読み直して出すときも、出す形は今の版)。
 func (r *Report) JSON() ([]byte, error) {
-	b, err := json.MarshalIndent(r, "", "  ")
+	out := *r
+	out.Schema, out.SchemaVersion = ReportSchema, ReportSchemaVersion
+	b, err := json.MarshalIndent(&out, "", "  ")
 	if err != nil {
 		return nil, err
 	}
@@ -280,10 +297,13 @@ func Parse(b []byte) (*Report, error) {
 // PeriodReport は期間レポート (`report --from --to`、月次は `--month`) の report.json。
 // 決定 (ADR 0016): 収集も評価もせず、ストア (finding_events / findings / principals / metrics / runs) だけから作る。
 type PeriodReport struct {
-	Kind        string `json:"kind"` // "period"
-	Name        string `json:"name"`
-	Period      Period `json:"period"`
-	GeneratedAt string `json:"generated_at"`
+	// Schema と SchemaVersion はスキーマの名前と版 (ADR 0054。Report と同じ決まり)。
+	Schema        string `json:"schema" jsonschema:"const=report-period"`
+	SchemaVersion int    `json:"schema_version" jsonschema:"const=1"`
+	Kind          string `json:"kind" jsonschema:"const=period"`
+	Name          string `json:"name"`
+	Period        Period `json:"period"`
+	GeneratedAt   string `json:"generated_at"`
 	// HistorySince は状態遷移の履歴を記録し始めた時刻。Notes にこれより前は履歴が無いことを書く。
 	HistorySince  string          `json:"history_since,omitempty"`
 	Notes         []string        `json:"notes"`
@@ -327,7 +347,7 @@ type EventRow struct {
 	FindingID string `json:"finding_id"`
 	Check     string `json:"check"`
 	Key       string `json:"key"`
-	Severity  string `json:"severity"`
+	Severity  string `json:"severity" jsonschema:"enum=critical|high|medium|low|info"`
 	Summary   string `json:"summary"`
 	At        string `json:"at"`
 	Profile   string `json:"profile,omitempty"`
@@ -373,9 +393,11 @@ type ProfileRunSum struct {
 	Failed  int    `json:"failed"`
 }
 
-// JSON は整形済み JSON を返す。
+// JSON は整形済み JSON を返す。schema / schema_version は、ここで必ず今の版にする。
 func (r *PeriodReport) JSON() ([]byte, error) {
-	b, err := json.MarshalIndent(r, "", "  ")
+	out := *r
+	out.Schema, out.SchemaVersion = PeriodReportSchema, PeriodReportSchemaVersion
+	b, err := json.MarshalIndent(&out, "", "  ")
 	if err != nil {
 		return nil, err
 	}

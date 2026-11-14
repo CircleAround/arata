@@ -1,4 +1,6 @@
 {
+  "schema": "report",
+  "schema_version": 1,
   "profile": "daily",
   "window": {
     "from": "2026-10-21T09:00:00Z",

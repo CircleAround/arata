@@ -46,7 +46,7 @@ defaults:
     shell: bash     # -eo pipefail で動く
 
 env:
-  ARATA_VERSION: v0.5.1        # arata-audit-multi.yml と同じ版にする
+  ARATA_VERSION: v0.14.0       # arata-audit-multi.yml と同じ版にする (PR の検査 arata-check.yml が揃っていることを確かめる)
   AWS_REGION: ap-northeast-1
 
 jobs:

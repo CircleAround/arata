@@ -44,7 +44,7 @@ defaults:
     shell: bash     # -eo pipefail で動く
 
 env:
-  ARATA_VERSION: v0.5.1        # v0.5.1 以降にする (それより前は、Bedrock の新しいモデルで要約が失敗する)。固定し、上げるときは PR で
+  ARATA_VERSION: v0.14.0       # v0.14.0 以降にする (送り方の判別に aratam config check --format json が要る)。固定し、上げるときは PR で
   AWS_REGION: ap-northeast-1
 
 jobs:
@@ -70,6 +70,7 @@ jobs:
     env:
       ACCOUNT: ${{ matrix.account }}
       ARATA_CONFIG_DIR: aws/${{ matrix.account }}
+      ARATA_TARGET: ${{ matrix.account }}   # 監査対象の名前。最後の alert の連絡に出す
       ARATA_STORE_URL: s3://example-arata-store/${{ matrix.account }}   # aws/<account>/arata.yaml の store: と同じ値
       PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.profile || (github.event.schedule == '10 1 * * 1' && 'weekly' || 'daily') }}
     steps:
@@ -204,23 +205,42 @@ jobs:
       # max_age が効くのは --out が残る環境だけなので、ここでは daily と weekly で同じ aratam.yaml を使える。
       # 一部のソースが取れなかったとき (arata の終了コード 3) は report.json があるので、通常の通知が緊急用に届く。
       # どちらもジョブは失敗 (赤) のままにする。
+      # Slack への送り方 (bot か webhook) を aratam.yaml から読む。下の notify に、その送り方の secret だけを渡すため。
+      # 読むのは `aratam config check --format json` の .slack.method (機械が読む出力)。人向けの出力の行を grep で読まない
+      # (文言は版をまたいで変わり、判別が黙って外れる)。bot / webhook 以外なら、ここで止まる (README「Slack への送り方を判別する」)。
+      # 判別は .github/scripts/arata-slack-method.sh の 1 か所。試しの送信 (arata-notify-test.yml) と PR の検査 (arata-check.yml) も同じものを呼ぶ。
+      - id: slack-method
+        name: Slack への送り方を判別する
+        if: always() && steps.install.outcome == 'success' && !inputs.dry_run
+        timeout-minutes: 2
+        run: |
+          method="$(.github/scripts/arata-slack-method.sh "$ARATA_CONFIG_DIR/aratam.yaml")"
+          echo "slack method=$method"
+          echo "method=$method" >>"$GITHUB_OUTPUT"
+
       - id: notify
         name: aratam notify
         # 試しの実行では通知しない (aratam も dry_run の報告は送らない。ここで呼ばないのは、arata が失敗したときに「実行されていない」を送らないため)
         if: always() && steps.install.outcome == 'success' && !inputs.dry_run
         timeout-minutes: 5
         env:
-          ARATAM_SLACK_WEBHOOK: ${{ secrets.ARATAM_SLACK_WEBHOOK }}
-          ARATAM_SLACK_URGENT_WEBHOOK: ${{ secrets.ARATAM_SLACK_URGENT_WEBHOOK }}
-          # bot トークンの方式 (aratam.yaml の slack.bot_token_env と slack.channel。README の「bot トークンで送る」) なら、
-          # 上の 2 行の代わりに次の 1 行にする。secret は 1 つで、チャンネル ID は aratam.yaml に書く (秘密ではない)。
-          # ARATAM_SLACK_BOT_TOKEN: ${{ secrets.ARATAM_SLACK_BOT_TOKEN }}
+          # 判別した送り方の secret だけを渡す (使わないほうは空)。Webhook の方式なら上の 2 つ、bot トークンの方式なら下の 1 つ
+          # (README の「bot トークンで送る」。チャンネル ID は aratam.yaml に書く。秘密ではない)。
+          # 判別に失敗していれば 3 つとも空で、aratam は CONFIG_INVALID (終了コード 2) で止まる。そのことは最後の alert が知らせる。
+          ARATAM_SLACK_WEBHOOK: ${{ steps.slack-method.outputs.method == 'webhook' && secrets.ARATAM_SLACK_WEBHOOK || '' }}
+          ARATAM_SLACK_URGENT_WEBHOOK: ${{ steps.slack-method.outputs.method == 'webhook' && secrets.ARATAM_SLACK_URGENT_WEBHOOK || '' }}
+          ARATAM_SLACK_BOT_TOKEN: ${{ steps.slack-method.outputs.method == 'bot' && secrets.ARATAM_SLACK_BOT_TOKEN || '' }}
         run: |
           log="$RUNNER_TEMP/aratam.log"
           status=0
           aratam notify -c "$ARATA_CONFIG_DIR/aratam.yaml" --in "$RUNNER_TEMP/arata-out" >"$log" 2>&1 || status=$?
           jq -Rc 'fromjson? | objects | select(.level != "INFO") | {level, code, source}' "$log" || true
           echo "aratam exit=$status"
+          # Slack に何かが届いた終了コード: 0 = 送った (送る必要が無かった)、3 = LLM が使えず原文で送った、4 = 入力が無い・古いと送った。
+          # 2 (設定・secret の誤り) と 5 (送信の失敗) は、何も届いていない。最後の alert はこの印を見る
+          case "$status" in
+            0 | 3 | 4) echo "delivered=true" >>"$GITHUB_OUTPUT" ;;
+          esac
           exit "$status"
 
       # WAF の提案の全文は --in のディレクトリにしか書かれず、実行環境と一緒に消えるのでストアのバケットに残す。
@@ -234,4 +254,35 @@ jobs:
           file="$RUNNER_TEMP/arata-out/waf-proposals.md"
           if [ -f "$file" ]; then
             aws s3 cp "$file" "$ARATA_STORE_URL/reports/waf-proposals.md" --only-show-errors >/dev/null 2>&1
+          fi
+
+      # 定時の実行で、Slack に何も届かなかったときに、別の経路で知らせる (README「定時の通知が送れなかったとき」)。
+      # 通知そのものが壊れると (設定の誤り、secret の入れ替え忘れ、送り方の判別の失敗、バイナリが取れない)、aratam は知らせられない。
+      # 送るのは「監査対象の名前・プロファイル・失敗した段階の id・この実行の URL」だけ。指摘の中身・件数・ログの文は送らない。
+      # 失敗した段階は toJSON(steps) の outcome から拾う (id は、このファイルに書いた名前。値は見ない)。
+      # 手動実行 (workflow_dispatch) では送らない (実行した人が結果を見ている)。
+      # aratam が「実行されていない」「一部が取れなかった」を Slack に送れたとき (上の delivered) も送らない。
+      - id: alert
+        name: 定時の通知が送れなかったことを別の経路で知らせる
+        if: failure() && github.event_name == 'schedule' && steps.notify.outputs.delivered != 'true'
+        timeout-minutes: 3
+        env:
+          # 定時の通知とは別の Webhook (別のチャンネルか、{"text": "..."} を受け取る別の仕組み)。README の Secrets
+          ALERT_WEBHOOK: ${{ secrets.ARATA_ALERT_WEBHOOK }}
+          STEPS: ${{ toJSON(steps) }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # id は英小文字・数字・ハイフンのものだけを拾う (このファイルの id の形)。outcome のほかの値・outputs は読まない
+          failed="$(jq -r '[to_entries[] | select(.value.outcome == "failure") | .key | select(test("^[a-z0-9-]{1,40}$"))] | join(", ")' <<<"$STEPS" 2>/dev/null)" || failed=""
+          echo "failed steps: ${failed:-unknown}"
+          if [ -z "${ALERT_WEBHOOK:-}" ]; then
+            echo "::error::ARATA_ALERT_WEBHOOK が無いので、通知が送れなかったことを知らせられない"
+            exit 1
+          fi
+          text="arata の定時の通知を送れていません。対象: $ARATA_TARGET / プロファイル: $PROFILE / 失敗した段階: ${failed:-不明} / $RUN_URL"
+          # URL は秘密なので、curl の出力もエラーも出さない
+          if ! jq -n --arg text "$text" '{text: $text}' |
+            curl --silent --fail --max-time 20 --retry 2 -H 'Content-Type: application/json' --data-binary @- "$ALERT_WEBHOOK" >/dev/null 2>&1; then
+            echo "::error::通知が送れなかったことの連絡も送れなかった"
+            exit 1
           fi

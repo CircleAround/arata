@@ -97,5 +97,7 @@ go run ./cmd/arata help ai                               # LLM 向けの使い�
   `internal/checks` チェック / `internal/engine` run の流れ / `internal/report` レポート (`schema` は標準ライブラリだけ) /
   `internal/allowlist` 既知リスト / `internal/scaffold` 雛形 / `internal/notify`・`internal/llm`・`internal/slack` aratam
 - `docs/ai/*.md` はバイナリに埋め込まれる。変えたらテストのゴールデンも変わる。新しいチェックを足したら `docs/ai/playbooks/<check>.md` (対処手順。ADR 0025) も書く (無ければテストが落ちる)
+- `schemas/*.schema.json` は機械が読む出力の JSON Schema。バイナリに埋め込まれる。型 (`internal/jsonschema` が読む) から作るので手で編集せず、
+  型を直してその型のパッケージのテストを `-update` で流す。新しい `--format json` を足したら、型・スキーマ・`schematest` のテストも足す (ADR 0054)
 - `tools/agegate`・`tools/actionsgate`・`tools/wordscan` CI 用。`examples/` は架空の値の設定例
 - `deploy/iam/readonly-role.yaml` 顧客に配る読み取り専用ロール (素の CFN) / `deploy/github-actions/runner.yaml` GitHub Actions の実行の仕組み (素の CFN。ADR 0040) / `deploy/slack/app-manifest.yaml` aratam の通知用の Slack アプリの manifest (scope は chat:write だけ。`internal/slack/manifest_test.go` が固定) / `deploy/sandbox` 試験環境 (CDK、pnpm、Node 24。Go とは独立。ADR 0020)

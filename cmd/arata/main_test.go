@@ -22,6 +22,8 @@ import (
 	"github.com/CircleAround/arata/internal/collect/cwlogs/cwlogstest"
 	"github.com/CircleAround/arata/internal/config"
 	"github.com/CircleAround/arata/internal/engine"
+	"github.com/CircleAround/arata/internal/jsonschema/schematest"
+	"github.com/CircleAround/arata/internal/report/schema"
 	"github.com/CircleAround/arata/internal/store"
 )
 
@@ -216,6 +218,8 @@ func TestEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	compareGolden(t, "report.json", got)
+	// 実際に書いた report.json が、スキーマに合い、型に無い項目を持たない (ADR 0054)
+	schematest.Conforms(t, schema.ReportSchema, got, &schema.Report{})
 	md, err := os.ReadFile(filepath.Join(out, "report.md"))
 	if err != nil {
 		t.Fatal(err)
