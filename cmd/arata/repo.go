@@ -34,20 +34,26 @@ func newRepoCmd(d *Deps) *subcmd.Command {
 
 // repoFlags は repo init と repo check に共通の引数 (一式を決めるもの)。README のコマンドの init を check に替えれば打てるように、同じ名前にする。
 type repoFlags struct {
-	p                                             repoinit.Params
-	accounts, out, arataVersion, channels, urgent string
+	p                 repoinit.Params
+	out, arataVersion string
+	// カンマ区切りの引数。繰り返して渡されたら、つなげて受け取る (下の register)
+	accounts, channels, urgent []string
 }
 
 func (f *repoFlags) register(cmd *subcmd.Command, outUsage string) {
 	cmd.StringVar(&f.p.Owner, "owner", "", "GitHub の組織 (か利用者) の名前 (必須)")
 	cmd.StringVar(&f.p.Repo, "repo", "", "リポジトリの名前 (必須)")
-	cmd.StringVar(&f.accounts, "accounts", "", "監査対象の名前。カンマ区切り (必須。小文字の英数字とハイフン。aws/<名前>/・matrix・ストアの prefix に使う)")
+	// 決定: カンマ区切りの引数 (--accounts・--channel・--urgent-channel) は、繰り返して渡してもよく、つなげて受け取る
+	// (--channel prod=C… --channel staging=C… は --channel prod=C…,staging=C… と同じ)。文字列のフラグのままだと、標準の flag は最後の 1 つだけを残し、
+	// ほかを黙って捨てる (「--channel prod が足りない」のような、打ったものと合わないエラーになる。アカウントは、片方だけで書き出してしまう)。
+	// 同じアカウントを 2 度書いたとき・空の項目は、片方を選ばずに止める (Validate と ParseAssignmentList)。
+	cmd.StringSliceVar(&f.accounts, "accounts", "監査対象の名前。カンマ区切り (繰り返してもよい。必須。小文字の英数字とハイフン。aws/<名前>/・matrix・ストアの prefix に使う)")
 	cmd.StringVar(&f.p.AuditAccount, "audit-account", "", "監査する側のアカウント (必須): 実行の仕組み (runner.yaml) を置いたアカウントの 12 桁の ID。監査対象と同じアカウントなら none (config init と同じ)")
 	cmd.StringVar(&f.p.StoreBucket, "store-bucket", "", "ストアのバケットの名前 (必須。runner.yaml の出力 StoreUrl のバケット。s3:// は付けない)")
 	cmd.StringVar(&f.p.Region, "region", "", "AWS のリージョン (必須。ワークフローの AWS_REGION と arata.yaml の aws.region)")
 	cmd.StringVar(&f.p.AlertChannel, "alert-channel", "", "定時の通知が送れなかったことを知らせる Slack のチャンネル ID (必須。C0123456789 の形)。知らせないなら none。ワークフローに入る")
-	cmd.StringVar(&f.channels, "channel", "", "通常用の Slack のチャンネル ID。<アカウント>=<ID> のカンマ区切り (例 prod=C0123456789,staging=C0123456781)。aws/<アカウント>/aratam.yaml を新しく作るアカウントに必須。書き出した後は aratam.yaml だけが持つ")
-	cmd.StringVar(&f.urgent, "urgent-channel", "", "緊急用の Slack のチャンネル ID。<アカウント>=<ID>|same のカンマ区切り。same は「分けない」(通常用に、メンション付きで送る)。aratam.yaml を新しく作るアカウントに必須")
+	cmd.StringSliceVar(&f.channels, "channel", "通常用の Slack のチャンネル ID。<アカウント>=<ID> のカンマ区切り (繰り返してもよい。例 prod=C0123456789,staging=C0123456781)。aws/<アカウント>/aratam.yaml を新しく作るアカウントに必須。書き出した後は aratam.yaml だけが持つ")
+	cmd.StringSliceVar(&f.urgent, "urgent-channel", "緊急用の Slack のチャンネル ID。<アカウント>=<ID>|same のカンマ区切り (繰り返してもよい)。same は「分けない」(通常用に、メンション付きで送る)。aratam.yaml を新しく作るアカウントに必須")
 	cmd.StringVar(&f.out, "out", "", outUsage)
 	cmd.BoolVar(&f.p.Schedule, "schedule", false, "監査のワークフローに定時 (schedule) を入れる")
 	cmd.StringVar(&f.arataVersion, "arata-version", "", "ワークフローに入れる arata の版 (vX.Y.Z)。版の付かないビルド (開発・テスト) のときだけ要る。リリース版では、そのバイナリの版と違う値を指定できない")
@@ -63,13 +69,11 @@ func (f *repoFlags) parse() error {
 		return err
 	}
 	f.p.Version = v
-	if f.accounts != "" {
-		f.p.Accounts = strings.Split(f.accounts, ",")
-	}
-	if f.p.Channels, err = repoinit.ParseAssignments("--channel", f.channels); err != nil {
+	f.p.Accounts = f.accounts
+	if f.p.Channels, err = repoinit.ParseAssignmentList("--channel", f.channels); err != nil {
 		return err
 	}
-	f.p.UrgentChannels, err = repoinit.ParseAssignments("--urgent-channel", f.urgent)
+	f.p.UrgentChannels, err = repoinit.ParseAssignmentList("--urgent-channel", f.urgent)
 	return err
 }
 
