@@ -50,7 +50,7 @@ arata のチェックは、設定の `sources` に書いた記録からしか動
 - **アプリの JSON 行ログ**: 1 リクエストを **1 行の JSON** にして標準出力に出す。`format: json` と `fields` (対応表) で読む。要るのは送信元 IP とパス (メソッド・ステータスもあるとよい)
   - Rails: 標準のログは 1 リクエストが複数行で、IP・パス・ステータスが別の行に分かれる。アプリを変えられるなら lograge で 1 行の JSON にする (`Lograge::Formatters::Json`)。
     lograge は既定では送信元 IP を出さないので、`custom_payload` などで `remote_ip` (`request.remote_ip`) を足す。
-    アプリを変えないなら、標準のログのまま `format: request_lines` で読む (書き方は `arata help ai request_lines`)
+    アプリを変えないなら、標準のログのまま `format: request_lines` で読む (書き方は `arata help ai request_lines`)。ユーザー ID の要るチェックのためにアプリへ足す行 (種類と内部の ID だけ。メールアドレス・氏名は出さない) の形と出し方は `arata help ai user_id`
   - Go の slog (`slog.NewJSONHandler`)、Node の pino なども同じ。リクエストごとに 1 行、IP・メソッド・パス・ステータスを項目にする
   - 行の全体が JSON であること (時刻やタグを JSON の前に付けると、Logs Insights が項目として読めない)。パスにクエリ文字列を入れない。個人を特定できる値 (メールアドレス、氏名) を項目に入れない
 - **アプリのログの中身 (log_hygiene)**: 形を問わない。ロググループを `format: text` のソースにして、`checks.log_hygiene` に `sources`・`kinds`・`param_fields` を書く
@@ -114,7 +114,7 @@ sources:
 | `log_group` | `LOG_GROUP_MISSING` なら名前かリージョンが違う。名前は完全一致 (`aws logs describe-log-groups --log-group-name-prefix <接頭辞>` で確かめる) |
 | `queries` | `QUERY_INVALID` なら `regex` や `fields` の書き方を Logs Insights が受け付けていない |
 | `match_rate` | 直近 `--window` (既定 24h) の 100 行を形式で読めた割合。`expected_match_rate` 未満なら `FORMAT_MISMATCH` (ng) で、読めなかった行の例が出る。「行が無い」(warn) は、ログが届いていないか `stream_prefix` の誤り |
-| `requests` | `request_lines` のソースだけ。直近 `--window` の行をまとめた結果。まとめられた割合 (最初の行のあるリクエスト / request_id の数) が `expected_complete_rate` 未満、または request_id の異なりの数が最初の行の数の半分未満 (鍵の取り違え) なら `FORMAT_MISMATCH` (ng)。「行の種類」は種類ごとの当たった行数で、0 の種類があれば warn (その行の正規表現を見直す)。使い回し・タグの無い最初の行があるときも warn |
+| `requests` | `request_lines` のソースだけ。直近 `--window` の行をまとめた結果。まとめられた割合 (最初の行のあるリクエスト / request_id の数) が `expected_complete_rate` 未満、または request_id の異なりの数が最初の行の数の半分未満 (鍵の取り違え) なら `FORMAT_MISMATCH` (ng)。「行の種類」は種類ごとの当たった行数で、0 の種類があれば warn (その行の正規表現を見直す)。使い回し・タグの無い最初の行があるときも warn。`request.user_id` / `request.auth` を書いたソースには、ID の付いたリクエストの割合と auth の数も出る (`from: debug_sql` の間・ID が 0 件・形に合わない値を捨てたときは warn) |
 | `cost` | wafv2 のソースの 1 日のスキャン量と費用の概算、`max_scan_gb` の推奨値 |
 | `check` | 「skip される: no ... source」は、そのチェックの記録を出すソースが設定に無い (上の対応表)。使わないチェックなら `profiles` から外す |
 

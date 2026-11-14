@@ -970,6 +970,10 @@ func formatKinds(src config.Source) []record.Kind {
 		if src.Yields == "" {
 			return nil
 		}
+		// ユーザー ID を取り出す設定のあるソースは http_user も出す (ADR 0051 の 2 節。0 件の run では collector が Unavailable で外す)
+		if src.UserIDFrom() != config.UserIDFromNone {
+			return []record.Kind{record.Kind(src.Yields), record.KindHTTPUser}
+		}
 		return []record.Kind{record.Kind(src.Yields)}
 	case config.KindCredentialReport:
 		return []record.Kind{record.KindCredentialReport}

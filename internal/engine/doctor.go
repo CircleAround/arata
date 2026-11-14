@@ -487,6 +487,7 @@ func (d *doctor) requests(ctx context.Context, src config.Source, c *cwlogs.Coll
 			missing = append(missing, k.Name)
 		}
 	}
+	rc := requestCoverage(&st)
 	detail := fmt.Sprintf("まとめられた割合 %.2f (%d/%d リクエスト、閾値 %.2f)、最初の行 %d、ステータスあり %d、request_id の使い回し %d、タグの無い最初の行 %d。"+
 		"行の種類: %s。取れている項目: %s。スキャン %.1f MB (直近 %s の 1 本分。run は 1 回に %d 本)",
 		rate, st.Complete, st.Total, st.Expected, st.Starts, st.WithStatus, st.Reused, st.StartsUntagged,
@@ -502,7 +503,28 @@ func (d *doctor) requests(ctx context.Context, src config.Source, c *cwlogs.Coll
 		d.hintLast(LogsGuidePitfalls)
 		return
 	}
+	// ユーザー ID と auth の行 (ADR 0052)
+	if rc.Users != nil {
+		detail += "。" + rc.Users.Summary(rc.Starts)
+	}
+	if rc.Auth != nil {
+		detail += "。" + rc.Auth.Summary()
+	}
 	var warns []string
+	if u := rc.Users; u != nil {
+		// 決定 (ADR 0051 の 4 節): debug_sql は取れていても warn を出し続ける (誤設定に頼る取り方で、直されれば予告なく 0 件になる)
+		if u.From == config.UserIDFromDebugSQL {
+			warns = append(warns, "request.user_id の from: debug_sql は消えうる取り方 (本番の debug のログは誤設定で、直されれば予告なく 0 件になる。"+
+				"debug のログは秘密や個人の値を含み得るので、arata のために残さない)。アプリに actor の行を足して app_line へ移す (arata help ai user_id)")
+		}
+		if u.WithUser == 0 {
+			warns = append(warns, "ユーザー ID の付いたリクエストが 0 件 (この状態の run では、ユーザー ID の要るチェックは skip される。"+
+				"request.user_id の正規表現と、アプリがその行を出しているかを確認)")
+		}
+	}
+	if (rc.Users != nil && rc.Users.Invalid > 0) || (rc.Auth != nil && rc.Auth.Invalid > 0) {
+		warns = append(warns, "ユーザー ID・auth の行の、形に合わない値を捨てた (種類は小文字と _、ID は英数字・_・- の 64 文字まで。メールアドレスなどは ID にしない)")
+	}
 	if len(missing) > 0 {
 		warns = append(warns, "当たらない行の種類: "+strings.Join(missing, ", "))
 	}

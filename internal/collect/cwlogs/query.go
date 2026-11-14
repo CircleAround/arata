@@ -57,7 +57,7 @@ func HTTPLinesQuery(p Profile, c config.Checks) string {
 		marks = append(marks, mark{"probe_path", func(name string) string { return "^(?<" + name + ">" + strings.Join(alts, "|") + ")" }})
 		group = ", status, probe_path"
 	}
-	b.WriteString(p.head("1d", "day", "", marks, true, false))
+	b.WriteString(p.head("1d", "day", "", marks, true, false, true))
 	if p.req != nil {
 		// request_lines: 1 段目の結果 (request_id ごとの 1 行) を、日・status・探索パス・最初の行の数で数える。
 		// 行数は 1 段目で数えた行数の和。行の種類ごとの当たった数も返す (doctor 用)
@@ -67,6 +67,12 @@ func HTTPLinesQuery(p Profile, c config.Checks) string {
 		}
 		if group == "" && p.Has("status") {
 			group = ", status"
+		}
+		// ユーザー ID と auth の割合は、専用のクエリを足さずにこの 2 段目の軸で数える (user.go。ADR 0052)
+		ua, ug := p.req.userLines()
+		aggs = append(aggs, ua...)
+		for _, g := range ug {
+			group += ", " + g
 		}
 		b.WriteString("\n| stats " + strings.Join(aggs, ", ") + " by day" + group + ", " + rlStarts)
 	} else {
@@ -111,7 +117,7 @@ func HTTPHitsQuery(p Profile, c config.Checks) string {
 		marks = append(marks, mark{"probe_ex", func(name string) string { return "^(?<" + name + ">" + prefixAlternation(pp.ExcludePaths) + ")" }})
 		group += ", probe_ex"
 	}
-	b.WriteString(p.head("1d", "day", cond, marks, false, false))
+	b.WriteString(p.head("1d", "day", cond, marks, false, false, false))
 	b.WriteString("\n| stats " + p.count() + " as " + httpHits + " by " + p.binBy("1d", "day") + group)
 	b.WriteString("\n| sort " + httpHits + " desc")
 	b.WriteString("\n| limit " + strconv.Itoa(MaxRows))

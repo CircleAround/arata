@@ -93,6 +93,30 @@ I, [2026-11-01T01:02:03.230000 #1]  INFO -- : [5b0c1d2e-7a3f-4c1b-9e2d-0a1b2c3d4
   この場合に `[401]` と書くと、パスワードの誤り (最後は 200 / 422) は 1 件も入らず、`Completed 401` だけで終わるリクエストだけが入る。
   API や XHR のログインで、本当の 401 を返すと確かめた場合は `[401]`
 
+## ユーザー ID と auth の行 (アプリに足す行)
+
+ここまで (段 0) はアプリを変えずに動く。ユーザー ID の要るチェックには、アプリに次の 2 種類の行 (種類と内部の ID だけ。メールアドレス・氏名・ログイン名は出さない) を足してもらい、
+`request.user_id` / `request.auth` で読む。行の意味・出し方 (Rails の例)・値の決まり・doctor の読み方は **`arata help ai user_id`**。
+
+```
+I, [2026-11-01T01:02:03.010000 #1]  INFO -- : [5b0c1d2e-7a3f-4c1b-9e2d-0a1b2c3d4e5f] actor kind=user id=42 by=staff:5
+I, [2026-11-01T01:02:03.010000 #1]  INFO -- : [5b0c1d2e-7a3f-4c1b-9e2d-0a1b2c3d4e5f] auth result=failure kind=user id=none reason=not_found_in_database
+```
+
+```yaml
+    request:                         # id: と lines: は上の見本のまま
+      user_id:
+        from: app_line               # none (書かないのと同じ) | app_line | debug_sql (消えうる取り方。doctor がずっと warn を出す)
+        regex: ' -- : \[[A-Za-z0-9_@-]{1,255}\] actor kind=(?P<user_kind>[a-z_]{1,32}) id=(?P<user_id>[A-Za-z0-9_-]{1,64})(?: by=(?P<by_kind>[a-z_]{1,32}):(?P<by_id>[A-Za-z0-9_-]{1,64}))?$'
+      auth:
+        regex: ' -- : \[[A-Za-z0-9_@-]{1,255}\] auth result=(?P<auth_result>success|failure|impersonate) kind=(?P<auth_kind>[a-z_]{1,32}) id=(?P<auth_id>[A-Za-z0-9_-]{1,64})(?: via=(?P<auth_via>password|remember))?(?: by=(?P<auth_by_kind>[a-z_]{1,32}):(?P<auth_by_id>[A-Za-z0-9_-]{1,64}))?(?: reason=(?P<auth_reason>[a-z_]{1,64}))?$'
+```
+
+- 名前付きキャプチャ: `user_id` は `user_kind`・`user_id` (必須)、`by_kind`・`by_id` (任意。書くなら 2 つとも)。`auth` は `auth_result` (必須) と、見本のほかの `auth_…` (任意)。ほかの名前は `CONFIG_INVALID`
+- **正規表現は `$` で終える** (無ければ `CONFIG_INVALID`) と、**前の区切り (` -- : ` とタグ) から書く**: 行の途中の同じ並び (`Parameters:` の中の利用者の入力) と、入力の改行で作られた続きの行を読まないため
+- 値の形 (種類は小文字と `_`、ID は英数字・`_`・`-` の 64 文字まで) は arata が絞り、合わない値は**捨てて数だけ残す**
+- ID の付いたリクエストが **0 件の run** では、ユーザー ID の要るチェックは skip され、`coverage.checks_skipped` に理由が出る。段 0 のチェックは同じに動く。クエリの本数とスキャン量は増えない
+
 ## 確かめ方
 
 1. `arata config check` (オフライン。正規表現が読めるか、キャプチャの名前が決まったものか、ip と path が同じ行にあるか)

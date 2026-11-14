@@ -12,12 +12,12 @@ import (
 	"strings"
 )
 
-//go:embed index.md report.md approve.md runtime.md onboarding.md logs.md request_lines.md playbooks/*.md
+//go:embed index.md report.md approve.md runtime.md onboarding.md logs.md request_lines.md user_id.md playbooks/*.md
 var files embed.FS
 
 // Topic は文書 1 つ。
 type Topic struct {
-	Name string // "ai" / "ai report" / "ai approve" / "ai runtime" / "ai onboarding" / "ai logs" / "ai request_lines" / "ai playbook" / "ai playbook <check>"
+	Name string // "ai" / "ai report" / "ai approve" / "ai runtime" / "ai onboarding" / "ai logs" / "ai request_lines" / "ai user_id" / "ai playbook" / "ai playbook <check>"
 	File string // 空なら playbook の一覧 (埋め込んだ playbook から作る)
 }
 
@@ -30,6 +30,7 @@ var Topics = []Topic{
 	{Name: "ai onboarding", File: "onboarding.md"},
 	{Name: "ai logs", File: "logs.md"},
 	{Name: "ai request_lines", File: "request_lines.md"},
+	{Name: "ai user_id", File: "user_id.md"},
 	{Name: "ai playbook"},
 }
 
@@ -82,7 +83,7 @@ type Doc struct {
 	Sections []Section `json:"sections"`
 }
 
-// Lookup は sub ("" / "report" / "approve" / "runtime" / "onboarding" / "logs" / "request_lines" / "playbook" / "playbook <check>") の文書を返す。
+// Lookup は sub ("" / "report" / "approve" / "runtime" / "onboarding" / "logs" / "request_lines" / "user_id" / "playbook" / "playbook <check>") の文書を返す。
 func Lookup(sub string) (Topic, error) {
 	if check, ok := strings.CutPrefix(strings.TrimSpace(sub), "playbook "); ok {
 		check = strings.TrimSpace(check)

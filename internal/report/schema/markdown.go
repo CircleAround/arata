@@ -79,6 +79,12 @@ func (r *Report) Markdown() string {
 			if q := f.Requests; q != nil && q.CompleteRate != nil {
 				fmt.Fprintf(&b, "    - リクエスト単位: まとめられた割合 %.2f (%d/%d)、閾値 %.2f、ステータスあり %d、request_id の使い回し %d、タグの無い最初の行 %d\n",
 					*q.CompleteRate, q.Complete, q.Total, q.Expected, q.WithStatus, q.Reused, q.StartsUntagged)
+				if q.Users != nil {
+					fmt.Fprintf(&b, "    - %s\n", q.Users.Summary(q.Starts))
+				}
+				if q.Auth != nil {
+					fmt.Fprintf(&b, "    - %s\n", q.Auth.Summary())
+				}
 			}
 		}
 	}

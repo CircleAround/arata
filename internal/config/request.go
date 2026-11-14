@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"regexp"
+	"regexp/syntax"
 	"strings"
 	"time"
 )
@@ -47,6 +48,44 @@ type Request struct {
 	MaxDuration    time.Duration `yaml:"-"`
 	MaxDurationRaw string        `yaml:"max_duration"`
 	Lines          []RequestLine `yaml:"lines"`
+	// UserID はユーザー ID の取り方 (ADR 0051 の 4 節・0052)。書かなければ取らない (from: none と同じ)。
+	UserID *RequestUserID `yaml:"user_id"`
+	// Auth はログインの結果の行 (auth) の読み方 (ADR 0052)。書かなければ読まない。
+	Auth *RequestAuth `yaml:"auth"`
+}
+
+// request.user_id.from の値。
+const (
+	UserIDFromNone = "none"
+	// UserIDFromAppLine はアプリが意図して出す 1 行 (actor) を読む。勧める形。
+	UserIDFromAppLine = "app_line"
+	// UserIDFromDebugSQL は debug レベルの SQL の行を読む。本番の debug のログは誤設定で、直されれば予告なく 0 件になる (doctor が warn を出し続ける)。
+	UserIDFromDebugSQL = "debug_sql"
+)
+
+// YieldsHTTPUser は、ユーザー ID を取り出す設定のあるソースが http_access に加えて出す種類 (record.KindHTTPUser と同じ文字列)。
+const YieldsHTTPUser = "http_user"
+
+// RequestUserFields は request.user_id.regex の名前付きキャプチャ。user_kind と user_id は必須、by_kind と by_id は 2 つとも書くか書かないか。
+var RequestUserFields = []string{"user_kind", "user_id", "by_kind", "by_id"}
+
+// RequestAuthFields は request.auth.regex の名前付きキャプチャ。auth_result は必須。
+// 決定 (ADR 0052): actor と名前を分ける。2 つの正規表現は同じクエリの中の別の parse になり、Insights は同じ名前の一時フィールドを 2 度定義できない。
+var RequestAuthFields = []string{"auth_result", "auth_kind", "auth_id", "auth_via", "auth_by_kind", "auth_by_id", "auth_reason"}
+
+// RequestUserID は request.user_id。
+//
+// 決定 (ADR 0052):
+//   - 正規表現は $ で終える (行の途中の同じ並び = 利用者の入力を、アプリが出した行として読まない)。config check が確かめる
+//   - 取り出した値の形 (種類は小文字と _、ID は英数字と _ - の 64 文字まで) は、設定の正規表現がどう書かれていても collector が絞る (cwlogs の user.go)
+type RequestUserID struct {
+	From  string `yaml:"from"`
+	Regex string `yaml:"regex"`
+}
+
+// RequestAuth は request.auth。
+type RequestAuth struct {
+	Regex string `yaml:"regex"`
 }
 
 // RequestLine は行の種類 1 つ。
@@ -94,8 +133,90 @@ func (s *Source) validateRequest() error {
 	if s.ExpectedCompleteRate <= 0 || s.ExpectedCompleteRate > 1 {
 		return fmt.Errorf("expected_complete_rate %v: want 0 < rate <= 1", s.ExpectedCompleteRate)
 	}
-	_, err := s.Request.Groups()
+	if _, err := s.Request.Groups(); err != nil {
+		return err
+	}
+	if _, err := s.Request.UserGroups(); err != nil {
+		return err
+	}
+	_, err := s.Request.AuthGroups()
 	return err
+}
+
+// UserIDFrom はユーザー ID の取り方 (UserIDFrom*)。request_lines でない・書いていないソースは none。
+func (s Source) UserIDFrom() string {
+	if s.Format != FormatRequestLines || s.Request == nil || s.Request.UserID == nil {
+		return UserIDFromNone
+	}
+	return s.Request.UserID.From
+}
+
+// UserGroups は request.user_id を検証し、正規表現の名前付きキャプチャ (正規表現の中の順) を返す。取らない設定 (書いていない・from: none) なら nil。
+func (r *Request) UserGroups() ([]string, error) {
+	u := r.UserID
+	if u == nil {
+		return nil, nil
+	}
+	switch u.From {
+	case UserIDFromNone:
+		if u.Regex != "" {
+			return nil, fmt.Errorf("request.user_id: regex cannot be set with from: none")
+		}
+		return nil, nil
+	case UserIDFromAppLine, UserIDFromDebugSQL:
+	default:
+		return nil, fmt.Errorf("request.user_id.from %q: want %s, %s or %s", u.From, UserIDFromNone, UserIDFromAppLine, UserIDFromDebugSQL)
+	}
+	return anchoredGroups("request.user_id", u.Regex, RequestUserFields, []string{"user_kind", "user_id"}, "by_kind", "by_id")
+}
+
+// AuthGroups は request.auth を検証し、正規表現の名前付きキャプチャを返す。書いていなければ nil。
+func (r *Request) AuthGroups() ([]string, error) {
+	if r.Auth == nil {
+		return nil, nil
+	}
+	return anchoredGroups("request.auth", r.Auth.Regex, RequestAuthFields, []string{"auth_result"}, "auth_by_kind", "auth_by_id")
+}
+
+// anchoredGroups は、行末まで固定した正規表現を検証する。known 以外の名前は拒否し、required は必ず要り、pairA と pairB は 2 つとも書くか書かないか。
+func anchoredGroups(at, expr string, known, required []string, pairA, pairB string) ([]string, error) {
+	groups, err := requestRegexNames(at, expr)
+	if err != nil {
+		return nil, err
+	}
+	for _, g := range groups {
+		if !contains(known, g) {
+			return nil, fmt.Errorf("%s: unknown capture %q (want %s)", at, g, strings.Join(known, ", "))
+		}
+	}
+	for _, g := range required {
+		if !contains(groups, g) {
+			return nil, fmt.Errorf("%s: named capture (?P<%s>...) is required", at, g)
+		}
+	}
+	if contains(groups, pairA) != contains(groups, pairB) {
+		return nil, fmt.Errorf("%s: %s and %s must be captured together (or neither)", at, pairA, pairB)
+	}
+	if !endsAtLineEnd(expr) {
+		return nil, fmt.Errorf("%s: regex must end with $ (the whole pattern up to the end of the line; a line that merely contains the same text, e.g. user input, must not match)", at)
+	}
+	return groups, nil
+}
+
+// endsAtLineEnd は、正規表現のどの一致も入力の終わりで終わるか (全体が「…$」の並びで、最後が入力の終わりの $)。
+// `\$` (文字の $)・選択の片方だけの $ (`a$|b`)・複数行のフラグ (?m) の $ (行ごとの終わり)・括弧の中の $ は受け付けない。
+func endsAtLineEnd(expr string) bool {
+	if !strings.HasSuffix(expr, "$") {
+		return false
+	}
+	re, err := syntax.Parse(expr, syntax.Perl)
+	if err != nil {
+		return false
+	}
+	if re.Op == syntax.OpConcat && len(re.Sub) > 0 {
+		re = re.Sub[len(re.Sub)-1]
+	}
+	return re.Op == syntax.OpEndText
 }
 
 // Groups は request: を検証し、行の種類ごとの名前付きキャプチャ (正規表現の中の順) を返す。

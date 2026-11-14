@@ -76,6 +76,12 @@ type requestStage struct {
 	kinds  []string // 行の種類の名前 (設定順)
 	fields []string // 取り出す項目 (config.RequestLineFields の順)
 	sets   []requestSet
+	// ユーザー ID と auth の行 (user.go。ADR 0052)。userFrom は request.user_id.from (取らないなら空)、userFields / authFields は設定の名前付きキャプチャ、
+	// userPrelude は行の parse と値の突き合わせ (解釈率のクエリなど、この項目を使うクエリの 1 段目の前にだけ置く)。
+	userFrom    string
+	userFields  []string
+	authFields  []string
+	userPrelude string
 }
 
 // requestSet は「行の種類 kind があり、status が取れなかったリクエスト」に補う値。
@@ -112,6 +118,9 @@ func requestProfile(p *Profile, r *config.Request) (string, error) {
 			st.fields = append(st.fields, f)
 			p.setFields(f)
 		}
+	}
+	if err := userProfile(st, r); err != nil {
+		return "", err
 	}
 	p.req = st
 	return strings.Join(parts, "\n| "), nil
@@ -192,7 +201,8 @@ type mark struct {
 
 // head は集計の stats の手前までを組み立てる。cond はリクエスト単位の条件 (空なら絞らない)。
 // 1 行 = 1 リクエストの形式では、前処理 → filter → 印。request_lines では 1 段目を挟む (bin は最初の行の時刻の区切り。lines は解釈率のクエリか)。
-func (p Profile) head(bin, binName, cond string, marks []mark, lines, first bool) string {
+// users なら、1 段目の結果にユーザー ID と auth の列 (user_kind・user_id・by_kind・by_id・auth_result … 形に合った最後の値) を足す (user.go)。
+func (p Profile) head(bin, binName, cond string, marks []mark, lines, first, users bool) string {
 	var b strings.Builder
 	b.WriteString(p.Prelude)
 	if p.req == nil {
@@ -203,6 +213,10 @@ func (p Profile) head(bin, binName, cond string, marks []mark, lines, first bool
 			b.WriteString("\n| parse path /" + m.re(m.name) + "/")
 		}
 		return b.String()
+	}
+	users = users && p.req.userPrelude != ""
+	if users {
+		b.WriteString("\n| " + p.req.userPrelude)
 	}
 	b.WriteString("\n| fields bin(" + bin + ") as " + rlBin)
 	for _, m := range marks {
@@ -239,6 +253,9 @@ func (p Profile) head(bin, binName, cond string, marks []mark, lines, first bool
 	}
 	for _, m := range marks {
 		aggs = append(aggs, "earliest("+rlMark+m.name+") as "+m.name)
+	}
+	if users {
+		aggs = append(aggs, p.req.userAggs()...)
 	}
 	b.WriteString("\n| stats " + strings.Join(aggs, ", ") + " by " + rlID)
 	// 決定 (実データで確認): stats の後の if() は、else に stats 由来の項目を置くと null を返す
@@ -284,6 +301,15 @@ type requestRow struct {
 	Starts   float64 // 1 つの request_id あたりの最初の行の数
 	Untagged bool    // request_id の無い行の組を含む (Starts はその組の最初の行の数でもある)
 	Status   bool    // ステータスが取れている
+	// ユーザー ID と auth (user.go の readUserRow。形に合った値だけ)
+	User        bool   // 形に合った種類と ID がある
+	UserKind    string // その種類 (User のときだけ)
+	UserInvalid bool   // actor の行はあるが、値が形に合わない
+	By          bool   // by (代わりにログインした操作) がある
+	Auth        string // auth の結果 (success / failure / impersonate。無ければ空)
+	AuthVia     string // 成功の手段 (成功のときだけ)
+	AuthReason  string // 失敗の理由 (失敗のときだけ)
+	AuthInvalid bool   // auth の行はあるが、結果が形に合わない
 }
 
 // readRequestRow は Insights の結果の 1 行を読む。読めない値・負の値・NaN は 0、大きすぎる値は上限に丸める。
@@ -299,6 +325,7 @@ func readRequestRow(r map[string]string) requestRow {
 			rr.Requests--
 		}
 	}
+	readUserRow(r, &rr)
 	return rr
 }
 
@@ -312,6 +339,7 @@ func addRequestRow(st *collect.RequestStats, rr requestRow) {
 	if rr.Starts >= 1 {
 		st.Complete += n
 		st.Starts += int64(rr.Hits())
+		addUserRow(st, rr, int64(rr.Hits()))
 	}
 	if rr.Starts >= 2 {
 		st.Reused += n
@@ -324,9 +352,9 @@ func addRequestRow(st *collect.RequestStats, rr requestRow) {
 	}
 }
 
-// requestStats は解釈率のクエリの結果から、リクエスト単位の集計を作る。
-func requestStats(rows []map[string]string, expected float64) collect.RequestStats {
-	st := collect.RequestStats{Expected: expected}
+// requestStats は解釈率のクエリの結果から、リクエスト単位の集計を作る (req はこのソースの 1 段目の材料。ユーザー ID・auth を数えるかを決める)。
+func requestStats(rows []map[string]string, expected float64, req *requestStage) collect.RequestStats {
+	st := req.newStats(expected)
 	for _, r := range rows {
 		addRequestRow(&st, readRequestRow(r))
 	}
@@ -427,6 +455,12 @@ func epochMillis(s string) (time.Time, bool) {
 	return time.UnixMilli(ms).UTC(), true
 }
 
+// RequestSummary.Kinds に出す、アプリが足す行の名前 (設定の項目の名前)。
+const (
+	KindNameUserID = "user_id"
+	KindNameAuth   = "auth"
+)
+
 // KindCount は行の種類ごとの当たった行の数。
 type KindCount struct {
 	Name  string
@@ -450,13 +484,23 @@ func (c *Collector) RequestSummary(ctx context.Context, from, to time.Time) (*Re
 	if err != nil {
 		return nil, err
 	}
-	s := &RequestSummary{Stats: requestStats(rows, c.src.ExpectedCompleteRate)}
-	for i, name := range c.prof.req.kinds {
+	s := &RequestSummary{Stats: requestStats(rows, c.src.ExpectedCompleteRate, c.prof.req)}
+	kind := func(name, col string) {
 		k := KindCount{Name: name}
 		for _, r := range rows {
-			k.Lines += int64(math.Min(num(r[kindTotal(i)]), maxRequestCount))
+			k.Lines += int64(math.Min(num(r[col]), maxRequestCount))
 		}
 		s.Kinds = append(s.Kinds, k)
+	}
+	for i, name := range c.prof.req.kinds {
+		kind(name, kindTotal(i))
+	}
+	// アプリが足す行 (ADR 0052) も行の種類として数える。名前は設定の項目 (request.user_id / request.auth)
+	if len(c.prof.req.userFields) > 0 {
+		kind(KindNameUserID, rlKindUser)
+	}
+	if len(c.prof.req.authFields) > 0 {
+		kind(KindNameAuth, rlKindAuth)
 	}
 	for _, r := range rows {
 		s.Lines += int64(math.Min(num(r[MetricLinesTotal]), maxRequestCount))

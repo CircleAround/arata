@@ -70,7 +70,7 @@ func TestRequestLinesInvalid(t *testing.T) {
 		{"id が RE2 で読めない", head + "      id: '(?<=x)\\[(?P<request_id>\\w+)\\]'\n      lines:\n" + started, "request.id"},
 		{"lines が無い", head + id, "request.lines"},
 		{"知らないキャプチャ", head + id + "      lines:\n" + started + "        - { name: params, regex: 'Parameters: (?P<params>.*)' }\n", `unknown capture "params"`},
-		{"ユーザー ID はまだ書けない", head + id + "      lines:\n" + started + "        - { name: actor, regex: 'actor id=(?P<user_id>\\d+)' }\n", `unknown capture "user_id"`},
+		{"ユーザー ID は lines に書けない (request.user_id に書く)", head + id + "      lines:\n" + started + "        - { name: actor, regex: 'actor id=(?P<user_id>\\d+)' }\n", `unknown capture "user_id"`},
 		{"lines に request_id", head + id + "      lines:\n" + started + "        - { name: x, regex: '\\[(?P<request_id>\\w+)\\]' }\n", `unknown capture "request_id"`},
 		{"同じ項目を 2 つの行で", head + id + "      lines:\n" + started + "        - { name: again, regex: 'Processing (?P<method>[A-Z]+)' }\n", "method is captured by both"},
 		{"ip と path が別の行", head + id + "      lines:\n        - { name: a, regex: 'for (?P<ip>\\S+)' }\n        - { name: b, regex: 'path=(?P<path>\\S+)' }\n", "same line"},

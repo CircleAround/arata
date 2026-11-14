@@ -1,0 +1,60 @@
+# http_lines (bin: day)
+parse @message /(?:^| -- : )\[(?<rl_request_id>[A-Za-z0-9_@-]{1,255})\] /
+| parse @message /(?<rl_k0>Started (?<rl_method>[A-Z]+) "(?<rl_path>[^"?]*)[^"]*" for (?<rl_ip>\S+) at )/
+| parse @message /(?<rl_k1>Completed (?<rl_status>\d{3}) )/
+| parse @message /(?<rl_k2>ActionController::RoutingError)/
+| parse @message /(?<rl_ku> -- : \[[A-Za-z0-9_@-]{1,255}\] actor kind=(?<rl_user_kind>[a-z_]{1,32}) id=(?<rl_user_id>[A-Za-z0-9_-]{1,64})(?: by=(?<rl_by_kind>[a-z_]{1,32}):(?<rl_by_id>[A-Za-z0-9_-]{1,64}))?)$/
+| parse rl_user_kind /^(?<rl_v_user_kind>[a-z_]{1,32})$/
+| parse rl_user_id /^(?<rl_v_user_id>[A-Za-z0-9_-]{1,64})$/
+| parse rl_by_kind /^(?<rl_v_by_kind>[a-z_]{1,32})$/
+| parse rl_by_id /^(?<rl_v_by_id>[A-Za-z0-9_-]{1,64})$/
+| parse @message /(?<rl_ka> -- : \[[A-Za-z0-9_@-]{1,255}\] auth result=(?<rl_auth_result>success|failure|impersonate) kind=(?<rl_auth_kind>[a-z_]{1,32}) id=(?<rl_auth_id>[A-Za-z0-9_-]{1,64})(?: via=(?<rl_auth_via>password|remember))?(?: by=(?<rl_auth_by_kind>[a-z_]{1,32}):(?<rl_auth_by_id>[A-Za-z0-9_-]{1,64}))?(?: reason=(?<rl_auth_reason>[a-z_]{1,64}))?)$/
+| parse rl_auth_result /^(?<rl_v_auth_result>success|failure|impersonate)$/
+| parse rl_auth_kind /^(?<rl_v_auth_kind>[a-z_]{1,32})$/
+| parse rl_auth_id /^(?<rl_v_auth_id>[A-Za-z0-9_-]{1,64})$/
+| parse rl_auth_via /^(?<rl_v_auth_via>password|remember)$/
+| parse rl_auth_by_kind /^(?<rl_v_auth_by_kind>[a-z_]{1,32})$/
+| parse rl_auth_by_id /^(?<rl_v_auth_by_id>[A-Za-z0-9_-]{1,64})$/
+| parse rl_auth_reason /^(?<rl_v_auth_reason>[a-z_]{1,64})$/
+| fields bin(1d) as rl_bin
+| parse rl_path /^(?<rl_m_probe_path>\/\.env.*|\/wp-login\.php.*)/
+| stats count(*) as rl_lines, count(rl_request_id) as rl_tagged, count(rl_path) as rl_starts, min(rl_bin) as day, earliest(rl_ip) as ip, earliest(rl_method) as method, earliest(rl_path) as path, latest(rl_status) as rl_status_0, count(rl_k0) as rl_n0, count(rl_k1) as rl_n1, count(rl_k2) as rl_n2, earliest(rl_m_probe_path) as probe_path, count(rl_ku) as rl_user_lines, count(rl_v_user_id) as rl_users, count(rl_v_by_id) as rl_bys, latest(rl_v_user_kind) as user_kind, latest(rl_v_user_id) as user_id, latest(rl_v_by_kind) as by_kind, latest(rl_v_by_id) as by_id, count(rl_ka) as rl_auth_lines, latest(rl_v_auth_result) as auth_result, latest(rl_v_auth_kind) as auth_kind, latest(rl_v_auth_id) as auth_id, latest(rl_v_auth_via) as auth_via, latest(rl_v_auth_by_kind) as auth_by_kind, latest(rl_v_auth_by_id) as auth_by_id, latest(rl_v_auth_reason) as auth_reason by rl_request_id
+| fields coalesce(rl_status_0, if(rl_n2 > 0, "404", "")) as status
+| stats sum(rl_lines) as lines_total, sum(rl_tagged) as lines_matched, count(*) as rl_requests, sum(rl_n0) as rl_kind_0, sum(rl_n1) as rl_kind_1, sum(rl_n2) as rl_kind_2, sum(rl_user_lines) as rl_kind_user, sum(rl_auth_lines) as rl_kind_auth by day, status, probe_path, user_kind, rl_users, rl_user_lines, rl_bys, auth_result, auth_via, auth_reason, rl_auth_lines, rl_starts
+| sort lines_total desc
+| limit 10000
+
+# http_hits (bin: day)
+parse @message /(?:^| -- : )\[(?<rl_request_id>[A-Za-z0-9_@-]{1,255})\] /
+| parse @message /(?<rl_k0>Started (?<rl_method>[A-Z]+) "(?<rl_path>[^"?]*)[^"]*" for (?<rl_ip>\S+) at )/
+| parse @message /(?<rl_k1>Completed (?<rl_status>\d{3}) )/
+| parse @message /(?<rl_k2>ActionController::RoutingError)/
+| fields bin(1d) as rl_bin
+| parse rl_path /^(?<rl_m_sign_in>\/users\/sign_in)$/
+| parse rl_path /^(?<rl_m_probe>\/\.env|\/wp-login\.php)/
+| filter ispresent(rl_request_id)
+| stats count(rl_path) as rl_starts, min(rl_bin) as day, earliest(rl_ip) as ip, earliest(rl_method) as method, earliest(rl_path) as path, latest(rl_status) as rl_status_0, count(rl_k2) as rl_n2, earliest(rl_m_sign_in) as sign_in, earliest(rl_m_probe) as probe by rl_request_id
+| fields coalesce(rl_status_0, if(rl_n2 > 0, "404", "")) as status
+| filter (method in ["POST"] and path in ["/users/sign_in"] and status in [401, 422]) or (status in [403, 404] and path like /^(\/\.env|\/wp-login\.php)/)
+| stats sum(rl_starts) as http_hits by day, ip, method, status, sign_in, probe
+| sort http_hits desc
+| limit 10000
+
+# endpoint_abuse (bin: t)
+parse @message /(?:^| -- : )\[(?<rl_request_id>[A-Za-z0-9_@-]{1,255})\] /
+| parse @message /(?<rl_k0>Started (?<rl_method>[A-Z]+) "(?<rl_path>[^"?]*)[^"]*" for (?<rl_ip>\S+) at )/
+| parse @message /(?<rl_k1>Completed (?<rl_status>\d{3}) )/
+| parse @message /(?<rl_k2>ActionController::RoutingError)/
+| fields bin(10m) as rl_bin
+| parse rl_path /^(?<rl_m_ep0_0>\/)signup(?<rl_m_ep0_0_g1>[?#].*)?$/
+| parse rl_path /^(?<rl_m_ep1_0>\/)messages(?<rl_m_ep1_0_g1>[?#].*)?$/
+| parse rl_path /^(?<rl_m_ep1_1>\/)messages\/[^\/?#]+(?<rl_m_ep1_1_g1>[?#].*)?$/
+| parse rl_path /^(?<rl_m_ep1_2>\/)(?<rl_m_ep1_2_g1>[^\/?#]+\/)*messages(?<rl_m_ep1_2_g2>[?#].*)?$/
+| filter ispresent(rl_request_id)
+| stats count(rl_path) as rl_starts, min(rl_bin) as t, min(@timestamp) as rl_first, earliest(rl_ip) as ip, earliest(rl_method) as method, earliest(rl_path) as path, latest(rl_status) as rl_status_0, count(rl_k2) as rl_n2, earliest(rl_m_ep0_0) as ep0_0, earliest(rl_m_ep1_0) as ep1_0, earliest(rl_m_ep1_1) as ep1_1, earliest(rl_m_ep1_2) as ep1_2 by rl_request_id
+| fields coalesce(rl_status_0, if(rl_n2 > 0, "404", "")) as status
+| filter (((path like /^\/signup([?#].*)?$/) and method in ["POST"]) or ((path like /^\/messages([?#].*)?$/ or path like /^\/messages\/[^\/?#]+([?#].*)?$/ or path like /^(\/[^\/?#]+)*\/messages([?#].*)?$/) and method in ["POST"] and status in [200, 302])) and path not like /^\/messages\/preview([?#].*)?$/
+| stats sum(rl_starts) as endpoint_hits, min(rl_first) as first_seen, max(rl_first) as last_seen by t, ip, method, status, ep0_0, ep1_0, ep1_1, ep1_2
+| sort endpoint_hits desc
+| limit 10000
+

@@ -19,8 +19,11 @@ const (
 	KindTrailEvent    Kind = "trail_event"
 	KindPrincipalSeen Kind = "principal_seen"
 	// 後続 Step で追加する種類 (チェックの Needs 宣言とカバレッジ判定で使う)。
-	KindHTTPAccess  Kind = "http_access"
-	KindWAFAction   Kind = "waf_action"
+	KindHTTPAccess Kind = "http_access"
+	KindWAFAction  Kind = "waf_action"
+	// KindHTTPUser はユーザー ID の付いた http のリクエスト (ADR 0051・0052)。ユーザー ID を取り出す設定のあるソースが http_access に加えて出す。
+	// ストアに置くのは日次の集計 (metrics の From) だけで、リクエストの行は置かない。
+	KindHTTPUser    Kind = "http_user"
 	KindMetric      Kind = "metric"
 	KindPostureItem Kind = "posture_item"
 	KindGuardDuty   Kind = "guardduty"

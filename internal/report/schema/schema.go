@@ -7,6 +7,7 @@ package schema
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -178,6 +179,78 @@ type RequestCoverage struct {
 	Reused int64 `json:"request_id_reused"`
 	// StartsUntagged は request_id の付かない最初の行の数 (リクエストにまとめられず、どの集計にも入らない)。
 	StartsUntagged int64 `json:"starts_untagged"`
+	// Users はユーザー ID の付いたリクエストの集計 (request.user_id を書いたソースだけ。ADR 0052)。
+	Users *UserCoverage `json:"users,omitempty"`
+	// Auth はログインの結果の行 (auth) の集計 (request.auth を書いたソースだけ)。
+	Auth *AuthCoverage `json:"auth,omitempty"`
+}
+
+// UserCoverage は、ユーザー ID の付いたリクエストの集計。数は「数えたリクエスト」(RequestCoverage.Starts) の単位。
+// with_user が 0 の run では、ユーザー ID の要るチェックは skip される (coverage.checks_skipped に理由が出る)。
+// ユーザー ID の要るチェックが見るのは ID の付いたリクエストだけなので、user_rate は「見ている範囲」の広さを表す。
+type UserCoverage struct {
+	// From は取り方 (request.user_id.from。app_line / debug_sql)。debug_sql は消えうる取り方。
+	From string `json:"from"`
+	// WithUser は形に合った種類と ID の付いたリクエストの数。UserRate は WithUser / Starts (数えたリクエストが 0 なら null)。
+	WithUser int64    `json:"with_user"`
+	UserRate *float64 `json:"user_rate"`
+	// Kinds は種類ごとの数。
+	Kinds map[string]int64 `json:"kinds,omitempty"`
+	// WithBy は代わりにログインした操作 (by) の付いた数 (WithUser の内数)。
+	WithBy int64 `json:"with_by"`
+	// Invalid は行はあるが、値が形 (種類は小文字と _、ID は英数字・_・- の 64 文字まで) に合わず捨てたリクエストの数。
+	Invalid int64 `json:"user_id_invalid"`
+}
+
+// AuthCoverage は、ログインの結果の行 (auth) の集計。
+type AuthCoverage struct {
+	// Success は成功の数。Via は手段ごと (手段の無いものは空の key)。
+	Success int64            `json:"success"`
+	Via     map[string]int64 `json:"via,omitempty"`
+	// Failure は失敗の数。Reasons は理由ごと (理由の無いものは空の key)。
+	Failure int64            `json:"failure"`
+	Reasons map[string]int64 `json:"reasons,omitempty"`
+	// Impersonate は代わりのログインを始めた数。
+	Impersonate int64 `json:"impersonate"`
+	// Invalid は行はあるが、結果の値が形に合わず捨てたリクエストの数。
+	Invalid int64 `json:"invalid"`
+}
+
+// Summary は人が読む 1 行 (report.md と doctor)。starts は数えたリクエストの数。
+func (u *UserCoverage) Summary(starts int64) string {
+	rate := 0.0
+	if u.UserRate != nil {
+		rate = *u.UserRate
+	}
+	return fmt.Sprintf("ユーザー ID (%s): 付いたリクエスト %d/%d (割合 %.2f)、種類 %s、代わりのログインの操作 %d、形に合わず捨てた %d",
+		u.From, u.WithUser, starts, rate, countsText(u.Kinds), u.WithBy, u.Invalid)
+}
+
+// Summary は人が読む 1 行 (report.md と doctor)。
+func (a *AuthCoverage) Summary() string {
+	return fmt.Sprintf("ログインの結果 (auth): 成功 %d (%s)、失敗 %d (%s)、代わりのログインの開始 %d、形に合わず捨てた %d",
+		a.Success, countsText(a.Via), a.Failure, countsText(a.Reasons), a.Impersonate, a.Invalid)
+}
+
+// countsText は key ごとの数を key の順に並べる (空の key は「なし」)。
+func countsText(m map[string]int64) string {
+	if len(m) == 0 {
+		return "-"
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		name := k
+		if name == "" {
+			name = "なし"
+		}
+		parts = append(parts, fmt.Sprintf("%s=%d", name, m[k]))
+	}
+	return strings.Join(parts, " ")
 }
 
 // SkippedCheck は走らなかったチェックと理由。

@@ -16,7 +16,8 @@ func TestSections(t *testing.T) {
 		"ai runtime":       {"使い方", "リポジトリと fork", "ワークフローのトリガー", "OIDC の信頼", "main の保護と書き込み権限", "secrets", "Actions の設定", "ワークフローの形", "監査対象の前提 (context_file) の下書き", "報告の書き方"},
 		"ai onboarding":    {"流れ", "最初の run で出るもの", "1 件ずつ片付ける", "ack・snooze・resolve の使い分け", "導入作業の記録を拾う", "定時の通知を始める", "チェックやソースを後から足すとき", "設定の値は、推測せずに実データとアプリのコードで決める"},
 		"ai logs":          {"使い方", "チェックと記録の対応", "記録ごとの集め方", "保存期間と費用", "設定の書き方", "確かめ方", "よく詰まる点", "外部の拠り所"},
-		"ai request_lines": {"使い方", "見本 (Rails の既定のログ)", "書き方の決まり", "鍵 (request.id) の書き方", "ステータスの行が複数あるリクエスト (Devise のログインの失敗)", "確かめ方", "送る側が選べる値", "数え方"},
+		"ai request_lines": {"使い方", "見本 (Rails の既定のログ)", "書き方の決まり", "鍵 (request.id) の書き方", "ステータスの行が複数あるリクエスト (Devise のログインの失敗)", "ユーザー ID と auth の行 (アプリに足す行)", "確かめ方", "送る側が選べる値", "数え方"},
+		"ai user_id":       {"使い方", "アプリに足す行", "出す時点と読み方 (Rails + Devise の例)", "設定の書き方", "debug_sql (消えうる取り方)", "確かめ方と出る場所"},
 		"ai playbook":      {"使い方", "一覧"},
 	}
 	for _, tp := range Topics {
@@ -41,7 +42,7 @@ func TestSections(t *testing.T) {
 }
 
 func TestLookup(t *testing.T) {
-	for _, sub := range []string{"", "report", "approve", "runtime", "onboarding", "logs", "request_lines", "playbook", "playbook root_usage"} {
+	for _, sub := range []string{"", "report", "approve", "runtime", "onboarding", "logs", "request_lines", "user_id", "playbook", "playbook root_usage"} {
 		if _, err := Lookup(sub); err != nil {
 			t.Fatal(err)
 		}
@@ -336,6 +337,60 @@ func TestDeviseStatus(t *testing.T) {
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("request_lines (Devise) lacks %q", want)
+		}
+	}
+}
+
+// TestRequestUserLines は、アプリに足す行 (actor / auth) の見本と設定の書き方が文書にあることを固定する (ADR 0052)。
+// request_lines には見本と設定の書き方を短く、user_id には行の意味・出し方・値の決まり・確かめ方を書く。
+// 見本の正規表現は、収集のテスト (internal/collect/cwlogs の actorRegex / authRegex) が実際に流しているものと同じ。
+func TestRequestUserLines(t *testing.T) {
+	regexes := []string{
+		`regex: ' -- : \[[A-Za-z0-9_@-]{1,255}\] actor kind=(?P<user_kind>[a-z_]{1,32}) id=(?P<user_id>[A-Za-z0-9_-]{1,64})(?: by=(?P<by_kind>[a-z_]{1,32}):(?P<by_id>[A-Za-z0-9_-]{1,64}))?$'`,
+		`regex: ' -- : \[[A-Za-z0-9_@-]{1,255}\] auth result=(?P<auth_result>success|failure|impersonate) kind=(?P<auth_kind>[a-z_]{1,32}) id=(?P<auth_id>[A-Za-z0-9_-]{1,64})(?: via=(?P<auth_via>password|remember))?(?: by=(?P<auth_by_kind>[a-z_]{1,32}):(?P<auth_by_id>[A-Za-z0-9_-]{1,64}))?(?: reason=(?P<auth_reason>[a-z_]{1,64}))?$'`,
+	}
+	tp, _ := Lookup("request_lines")
+	var body string
+	for _, s := range tp.Parse().Sections {
+		if s.Title == "ユーザー ID と auth の行 (アプリに足す行)" {
+			body = s.Body
+		}
+	}
+	for _, want := range append([]string{
+		"actor kind=user id=42 by=staff:5", "auth result=failure kind=user id=none reason=not_found_in_database", // アプリに足す行の見本
+		"from: app_line", "debug_sql", "`$` で終える", "前の区切り", "捨てて数だけ残す", "0 件の run", "skip", "coverage.checks_skipped", // 設定の書き方と決まり
+		"メールアドレス・氏名・ログイン名は出さない", "arata help ai user_id",
+	}, regexes...) {
+		if !strings.Contains(body, want) {
+			t.Errorf("request_lines (ユーザー ID) lacks %q", want)
+		}
+	}
+	tp, _ = Lookup("user_id")
+	md := tp.Markdown()
+	for _, want := range append([]string{
+		// アプリに足す行の見本
+		"] actor kind=user id=42\n", "actor kind=user id=42 by=staff:5", "auth result=success kind=user id=42 via=password",
+		"auth result=failure kind=user id=none reason=not_found_in_database", "auth result=impersonate kind=user id=42 by=staff:5",
+		"認可に使った、ログインした身元の 1 人だけ", "`by` が実際に操作した人", "`result` → `kind` → `id` → `via` → `by` → `reason`",
+		// 出す時点と読み方
+		"prepend_around_action", "ensure", "warden.user(scope: :user, run_callbacks: false)", "after_action は動かない", "副作用なしに読む",
+		// 出さないもの
+		"メールアドレス・氏名・ログイン名", "パスの中の ID (操作の対象) は出さない",
+		// 設定と決まり
+		"from: app_line", "`$` で終える", "前の区切りから書く", "捨てて数だけ残す", "`auth_` が付くのは",
+		// 消えうる取り方と、0 件の run
+		"消えうる取り方", "ずっと warn", "0 件の run", "skip", "coverage.checks_skipped",
+		// 出る場所
+		"coverage.formats[].requests.users", "user_rate", "user_id_invalid", "本数とスキャン量は増えない", "arata config check",
+	}, regexes...) {
+		if !strings.Contains(md, want) {
+			t.Errorf("user_id lacks %q", want)
+		}
+	}
+	// 個人を特定できる値を出す例を載せない。副作用のある読み方 (current_user) を例のコードに使わない
+	for _, bad := range []string{"email=", "name=", "current_user.id"} {
+		if strings.Contains(md, bad) || strings.Contains(body, bad) {
+			t.Errorf("the docs must not show %q", bad)
 		}
 	}
 }

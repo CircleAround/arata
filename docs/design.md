@@ -72,7 +72,7 @@ LookupEvents はリージョン単位で、グローバルサービス (IAM の�
 初期に用意する形式プロファイル: `nginx_access`, `alb_access`, `wafv2`, `cloudtrail` (CloudWatch Logs 配信版), `regex`。
 Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応し、使い回せる正規表現をサンプル集として同梱する。
 決定 (ADR 0051): 1 リクエストが複数行に分かれるログ (Rails の既定のログなど) は 1 行ずつの `regex` では拾いきれない。request_id でリクエスト単位にまとめてから
-集計する形式 `request_lines` を足した (2-4)。取れる項目 (ユーザー ID など) ごとに動かせる新しいチェックは未実装 (ADR 0051 の 7 節の 3 以降)。
+集計する形式 `request_lines` を足した (2-4)。ユーザー ID と auth の行の読み取り (`request.user_id`・`request.auth`・`http_user`) も足した (2-5、ADR 0052)。取れる項目ごとに動かせる新しいチェックは未実装 (ADR 0051 の 7 節の 3・5・6)。
 
 決定 (cloudwatch-logs ソース。Step 2 の実装。クエリテンプレートの構造は ADR 0009):
 - 決定 (ADR 0050): 行を解釈しない形式 `text` を足す (正規化レコードを出さない。7 章の log_hygiene だけが読む)。下の決定は `text` 以外の形式のもの。
@@ -366,6 +366,60 @@ Rails の既定のログは、送信元とパスが最初の行 (`Started …`)�
 - 未確認 (実データで確かめる): request_id の無い行が 1 段目で 1 つの組にまとまること (1 行のログの集計では、軸の値が無い行が 1 つの組にまとまることを使っている)、
   2 段目の `by` に 1 段目の件数 (数) を置けること、量の多いログで 1 段目が時間内に終わること
 
+### 2-5. ユーザー ID と auth の行 (`request.user_id`・`request.auth`。ADR 0051 の 7 節の 4、ADR 0052)
+
+`request_lines` のソースは、アプリが足した 2 種類の行を読んで、リクエスト単位の項目にする。足す行の形と出し方 (種類と内部の ID だけ。around_action の ensure。副作用なしに読む) は ADR 0052 と `arata help ai user_id`。
+
+```
+actor kind=user id=42 [by=staff:5]                                      … そのリクエストが認可に使った、ログインした身元。by は実際に操作した人
+auth result=success|failure|impersonate kind=user id=42|none [via=password|remember] [by=staff:5] [reason=invalid]
+```
+
+```yaml
+    request:
+      user_id:
+        from: app_line                 # none (既定。書かないのと同じ) | app_line | debug_sql
+        regex: ' -- : \[[A-Za-z0-9_@-]{1,255}\] actor kind=(?P<user_kind>[a-z_]{1,32}) id=(?P<user_id>[A-Za-z0-9_-]{1,64})(?: by=(?P<by_kind>[a-z_]{1,32}):(?P<by_id>[A-Za-z0-9_-]{1,64}))?$'
+      auth:
+        regex: ' -- : \[[A-Za-z0-9_@-]{1,255}\] auth result=(?P<auth_result>success|failure|impersonate) kind=(?P<auth_kind>[a-z_]{1,32}) id=(?P<auth_id>[A-Za-z0-9_-]{1,64})(?: via=(?P<auth_via>password|remember))?(?: by=(?P<auth_by_kind>[a-z_]{1,32}):(?P<auth_by_id>[A-Za-z0-9_-]{1,64}))?(?: reason=(?P<auth_reason>[a-z_]{1,64}))?$'
+```
+
+確かめた事実 (本物の Logs Insights): `parse` は任意の名前付きキャプチャ (`(?:…(?<名前>…))?`) を受け、合わない行ではその項目だけが空になる。`$` は `@message` の終わりに当たる。
+
+決定:
+
+- **設定**: `user_id` は `from` と `regex`。名前付きキャプチャは `user_kind`・`user_id` が必須、`by_kind`・`by_id` は任意 (2 つとも書くか書かないか)。`from: none` に `regex` は書けない。
+  `auth` は `regex` だけで、`auth_result` が必須、`auth_kind`・`auth_id`・`auth_via`・`auth_by_kind`・`auth_by_id`・`auth_reason` は任意。`user_id` が無くても書ける。
+  知らない名前は `CONFIG_INVALID`。auth のキャプチャの名前に `auth_` を付けるのは、2 つの正規表現が同じクエリの別の `parse` になり、同じ名前の一時フィールドを 2 度定義できないため。
+  長さは 512 文字まで、RE2 で読めること
+- **正規表現は `$` で終える** (`config check` が確かめる)。正規表現の全体が「…`$`」の並びで、最後が入力の終わりであること。文字の `\$`・選択の片方だけの `$`・複数行のフラグの `$` は拒否する。
+  守る規則 (ファズ): 受け付けた正規表現は、どの入力に対しても、一致が入力の終わりで終わる (行の途中の同じ並び = 利用者の入力を読まない)
+- **前の区切りから書く** (勧める形。道具では確かめられない)。既定の formatter では Logger の前置きの終わり (` -- : `) とタグを含める。複数行のメッセージの 2 行目以降は前置きが無いので、
+  利用者の入力の改行で作られた続きの行を読まない。アプリが入力を 1 行のメッセージの全体としてそのまま出していれば同じ行を作れる (アプリの側の問題として文書に書く)
+- **値の形は arata が規則で絞る**。クエリの中で、取り出した値をもう一度 `parse` で形と突き合わせ (`parse rl_user_id /^(?<rl_v_user_id>[A-Za-z0-9_-]{1,64})$/`)、1 段目より後ろには形に合った値だけを渡す。
+  結果を読む Go の側でも同じ規則で確かめる (`ValidUserKind`・`ValidUserID`。クエリの正規表現と同じものを受けることをファズが確かめる)。
+  種類は `[a-z_]{1,32}`、ID は `[A-Za-z0-9_-]{1,64}`、`auth_result` は `success`・`failure`・`impersonate`、`auth_via` は `password`・`remember`、`auth_reason` は `[a-z_]{1,64}`。
+  合わない値のリクエストは捨てて数だけ残す (`user_id_invalid`・`auth_invalid`)。捨てた値は結果にもログにも出さない。
+  手段は成功のとき、理由は失敗のときだけ読み、形に合わなければ手段・理由なしの成功・失敗として数える。`auth_id` の `none` は ID なし
+- **1 つの request_id に行が複数あれば、最後の行の値** (`latest`。ステータスと同じ)
+- 行の種類ごとの当たった数のために、正規表現の全体を名前付きキャプチャで包む。行末の `$` は括弧の外に置く (`(?<rl_ku>…)$`。実データで確かめた形)
+- **リクエスト単位の中間の形** (クエリの中だけ): 1 段目の結果に `user_kind`・`user_id`・`by_kind`・`by_id`・`auth_result`・`auth_kind`・`auth_id`・`auth_via`・`auth_by_kind`・`auth_by_id`・`auth_reason` (形に合った値) の列が並ぶ。
+  段 1 のチェックは、この列を 2 段目の軸や条件に使う。今この列を使うのは解釈率のクエリだけで、ほかの集計 (`sign_in_failures` + `probe_hits`、endpoint_abuse) のクエリには行の `parse` も足さない
+- **割合は解釈率のクエリの 2 段目の軸で数える** (`user_kind`・ID の形に合った行の数・actor の行の数・`by` の数・`auth_result`・`auth_via`・`auth_reason`・auth の行の数)。クエリの本数とスキャン量は増やさない。
+  分母は段 0 と同じ「最初の行の数」。種類・手段・理由ごとの数の key は 32 個までで、超えた分は `other` にまとめる (ログ由来の値で key を増やし続けられないように)
+- **`http_user`**: `from` が `none` でないソースは `http_access` に加えて `http_user` を出す (`auth` だけのソースは出さない)。その run で ID の付いたリクエストが 0 件なら、
+  collector が「取れない」と報告し (`Unavailable`。GuardDuty が無効なときと同じ仕組み)、`http_user` を必要とするチェックは skip されて `coverage.checks_skipped` に理由 (ソース・取り方・0 件) が出る。
+  ソースは失敗にしない (段 0 は同じに動く)。標準エラーに WARN を出す。プロファイルのチェックが `http_user` だけを必要としていても、このソースを引く
+- **保存** (日次の metric。`From` は `http_user`。後の値で置き換える): `user_requests` (key = 種類)・`user_requests_by`・`user_id_invalid`・`auth_success` (key = 手段。無ければ空)・
+  `auth_failures` (key = 理由。無ければ空)・`auth_impersonate`・`auth_invalid`。ユーザー ID を key に置く集計は作らない (段 1 のチェックが、下限を超えた key の上位 N 件と分布として足す。
+  そのとき主体は `<kind>:<id>` の 1 つの軸にする。値の規則から `:` と `|` は入らない)
+- **coverage と doctor**: `coverage.formats[].requests` に `users` (`from`・`with_user`・`user_rate`・`kinds`・`with_by`・`user_id_invalid`) と `auth` (`success`・`via`・`failure`・`reasons`・`impersonate`・`invalid`)。
+  run の stats (`request_stats`) にも割合を残す。doctor の `requests` の行は同じ数を出し、「行の種類」に `user_id`・`auth` の当たった数を足す。
+  `from: debug_sql` の間は取れていても warn (誤設定に頼る取り方で、直されれば予告なく 0 件になる)、ID が 0 件・形に合わない値を捨てたときも warn
+- **`by` の付いたリクエスト**は、段 1 のチェックで利用者ごと・送信元ごとの異なり数に入れない (担当者の送信元を利用者の送信元として数えない)。今は数 (`with_by`) だけを出す
+- 未実装: 段 1 のチェック本体、ID の付いた割合が直近の平均から落ちたときの警告 (ADR 0051 の 4 節。割合は run の stats にある)、`json` 形式の `fields.user_id` から `http_user` を出すこと
+- 未確認 (実データで確かめる): 取り出した一時フィールドをもう一度 `parse` で突き合わせる書き方がこの値でも動くこと (探索パスの印と同じ形)、2 段目の軸を増やしても解釈率のクエリの結果が行数の上限 (10000) に遠いこと
+
 ### 2-3. ALB のアクセスログから http_access を取る (提案。未実装・未確認)
 
 **ここは提案。** (第 1 段の plain・既定の項目は実環境で確かめた。9 章の「記録の集め方」の決定) 案の比較 (S3 を直接読む、Athena、S3 Select)・費用の見積もり・出典は ADR 0046 (状態: 提案)。実際のログで確かめて採用を決めたら、この節を仕様に書き直す。
@@ -575,7 +629,7 @@ internal/collect/             Collector インターフェース
     cwlogs/                   Logs Insights 実行、形式プロファイル (クエリテンプレート)
     guardduty/ iam/ accessanalyzer/ posture/ (ec2 SG, s3 public, rds public, cloudtrail status ...)
                               決定: Step 3 では 4 つを account/ にまとめた (同じ形の小さな collector で SDK クライアントの束を共有する。ADR 0015)
-internal/record/              正規化レコード型 (http_access, waf_action, trail_event, principal_seen, metric, posture_item)
+internal/record/              正規化レコード型 (http_access, http_user, waf_action, trail_event, principal_seen, metric, posture_item)
 internal/checks/              Check インターフェースと各チェック (1 ファイル 1 チェック)
 internal/allowlist/           既知リストの読み書き (approve / expire)
 internal/report/              JSON / Markdown 生成、期間集計 (period.go)。決定: report.json の型は標準ライブラリだけに依存する report/schema に置く (aratam と共有。ADR 0018)
@@ -1236,7 +1290,8 @@ arata rebuild   [--from-scratch [--baseline]] [--format text|json]   # raw JSONL
 - 検査項目: `permission` (LookupEvents を 1 件だけ引く / 各 API の AccessDenied に不足 action を添える)、`log_group` (DescribeLogGroups で完全一致を探す)、
   `match_rate` (直近 100 行を `fields @timestamp, @message, ispresent(<判定フィールド>) as arata_matched | sort @timestamp desc | limit 100` で取り、手元で数える。生ログを引くのはここだけ)、
   `requests` (`request_lines` のソースだけ。解釈率のクエリを `--window` に 1 本流し、まとめられた割合・鍵の取り違えの検査・使い回し・行の種類ごとの当たった数を出す。
-  まとめられた割合が閾値未満・鍵の取り違えは ng、当たらない行の種類・使い回し・タグの無い最初の行は warn。2-4)、
+  まとめられた割合が閾値未満・鍵の取り違えは ng、当たらない行の種類・使い回し・タグの無い最初の行は warn。2-4。
+  `request.user_id` / `request.auth` を書いたソースには ID の付いたリクエストの割合・種類・捨てた数・auth の数も出し、`from: debug_sql` の間・ID が 0 件・形に合わない値を捨てたときは warn。2-5)、
   `queries` (集計・解釈率・サンプル・doctor 自身のクエリを StartQuery して直ちに StopQuery し、Insights の構文検査だけを受ける。match_rate より先に行う)、`check` (必要なレコードを出すソースが無いチェック = warn)、`config` (allowlist の検証)。
 - ng が 1 つでもあれば終了コード 2。ng の行は標準エラーに固定語彙の `code` 付きで 1 行ずつ出す。warn だけなら 0。
 - 表の最後に、設定のソースに必要な IAM action (`cloudtrail:LookupEvents`, `logs:DescribeLogGroups`, `logs:StartQuery`, `logs:GetQueryResults`, `logs:StopQuery`) を列挙する。
