@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:arata:schema:doctor:1",
+  "title": "doctor",
+  "description": "arata doctor --format json の出力。権限・ロググループ・解釈率などの検査の行と、必要な IAM action。読み方は arata help ai logs",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "doctor"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "rows": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/DoctorRow"
+      }
+    },
+    "required_actions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "store_actions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "schema_version",
+    "rows",
+    "required_actions"
+  ],
+  "$defs": {
+    "DoctorRow": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "item": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "ok",
+            "warn",
+            "ng",
+            "skip"
+          ]
+        },
+        "code": {
+          "type": "string"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "hint": {
+          "type": "string"
+        },
+        "samples": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "source",
+        "kind",
+        "item",
+        "status",
+        "detail"
+      ]
+    }
+  }
+}

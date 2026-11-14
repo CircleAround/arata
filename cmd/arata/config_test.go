@@ -13,6 +13,8 @@ import (
 	"github.com/CircleAround/arata/internal/collect/account/accounttest"
 	"github.com/CircleAround/arata/internal/collect/cloudtrail/cloudtrailtest"
 	"github.com/CircleAround/arata/internal/config"
+	"github.com/CircleAround/arata/internal/engine"
+	"github.com/CircleAround/arata/internal/jsonschema/schematest"
 	"github.com/CircleAround/arata/internal/scaffold"
 )
 
@@ -128,6 +130,7 @@ func TestProfilesCmd(t *testing.T) {
 	if code := c.run("profiles", "-c", c.cfg, "--format", "json"); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
+	schematest.Conforms(t, engine.ProfilesSchema, c.stdout.Bytes(), &engine.ProfilesView{})
 	var v struct {
 		Profiles []struct {
 			Name   string

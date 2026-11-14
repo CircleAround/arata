@@ -64,7 +64,7 @@ arata / aratam を定時に動かす仕組み (GitHub Actions など) は、コ�
 | `aratam-config-check` | `aratam config check --format json` (**新設**。下の例) | `ok`、`slack.method` (bot / webhook)、`slack.format` (blocks / text)、`llm.provider`、`timezone`、`rows[].status` | `name`、`config`、`rows[].message` |
 | `aratam-doctor` | `aratam doctor --format json` (**新設**) | `rows[].status`、`rows[].item`、`rows[].code` | `rows[].detail` |
 | `aratam-dry-run` | `aratam notify --dry-run --format json` | `messages[].route` (normal / urgent)、`messages[].destination.kind` (webhook / channel) | `messages[].payload` (Slack に送る payload そのもの。形は Slack の Block Kit の仕様に従い、arata のスキーマでは縛らない) |
-| `log` | 構造化ログの行 (6 節) | `level`、`code`、`source`、`run_id` | `msg`、`error` ほかの属性 |
+| `log` | 構造化ログの行 (6 節) | `level`、`code`、`source`、`run_id`、`slack_error` (2026-11-14 追記) | `msg`、`error` ほかの属性 |
 | (終了コード) | 両方のコマンド | arata: 0 正常 / 2 設定・権限 / 3 収集の一部失敗。aratam: 0 / 2 設定 / 3 LLM が使えず原文で送った / 4 入力が無い・古い / 5 送信に失敗 | |
 
 漏れとして足したもの: `arata config check`・`aratam config check`・`aratam doctor` の JSON (今は人向けだけ)、終了コード。
@@ -174,6 +174,7 @@ Release の本文に書く (版 1 は新しい形から始める)。`payload` �
 | `code` | 語彙 (開いた語彙。下) | 何が起きたかを表す固定の語。無い行もある |
 | `source` | 意味 | 設定の `sources` の名前。その行がソースに関するときだけ |
 | `run_id` | 意味 | 実行の ID。あるときだけ |
+| `slack_error` | 語彙 (開いた語彙) | (2026-11-14 追記) aratam の `SEND_FAILED` の行で、Slack の Web API が返した error コード (`not_in_channel` など)。形に合うものだけ。見本のワークフローが、人向けの `error` の文からコードを切り出していたのを直すために足した (足すのは互換) |
 | `msg` | あること | 人向けの文。文言は固定しない。**機械で読まない** |
 | `error` ほかの属性 | 固定しない | 人が原因を調べるための値。ログ由来の値を含み得るので、公開されるログ (Actions のログ) に出さない |
 

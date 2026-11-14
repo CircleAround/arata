@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:arata:schema:profiles:1",
+  "title": "profiles",
+  "description": "arata profiles --format json の出力。プロファイルごとに実際に走るチェックとパラメータ (由来つき)、どのプロファイルにも入っていないチェック",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "profiles"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "profiles": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ProfileView"
+      }
+    },
+    "unused_checks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "schema_version",
+    "profiles",
+    "unused_checks"
+  ],
+  "$defs": {
+    "Param": {
+      "type": "object",
+      "properties": {
+        "check": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "value": {},
+        "origin": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "check",
+        "key",
+        "value"
+      ]
+    },
+    "ProfileCheck": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "cadence": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "via": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "cadence",
+        "mode",
+        "via"
+      ]
+    },
+    "ProfileView": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "window": {
+          "type": "string"
+        },
+        "max_catchup": {
+          "type": "string"
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProfileCheck"
+          }
+        },
+        "params": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Param"
+          }
+        }
+      },
+      "required": [
+        "name",
+        "window",
+        "max_catchup",
+        "checks",
+        "params"
+      ]
+    }
+  }
+}

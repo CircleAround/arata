@@ -1287,6 +1287,7 @@ arata help ai [report|approve|runtime|onboarding|logs|playbook [check]] [--forma
 arata schema [名前]            # 機械が読む出力の JSON Schema (引数なしで名前の一覧。arata help schema も同じ。ADR 0054)
 arata prune     [--dry-run]
 arata rebuild   [--from-scratch [--baseline]] [--format text|json]   # raw JSONL から SQLite を再構築 (5-4、ADR 0033)
+                # --format json のある出力 (doctor・profiles・rebuild・help ai) は、最上位に schema / schema_version を持つ (arata schema <名前>)
 ```
 
 - 決定 (ADR 0054): **機械が読む出力は `--format json` と report.json で、読んでよい項目は JSON Schema (`schemas/<名前>.schema.json`) に書いたものがすべて。**
@@ -1296,8 +1297,12 @@ arata rebuild   [--from-scratch [--baseline]] [--format text|json]   # raw JSONL
   - 最上位に `schema` (名前) と `schema_version` (整数) を出す。項目を足すのは互換 (版はそのまま)。消す・名前や型や意味を変える・閉じた語彙 (`enum`) に値を足すときは
     版を上げ、Release の本文に書く。スキーマは開いた形 (`additionalProperties` を縛らない) で、古いスキーマで新しい出力を確かめても足した項目では落ちない
   - 読む側の決まり: 知らない項目は無視する。`enum` のある項目で知らない値を見たら止める。`schema_version` が知る版より大きければ止める
-  - 今スキーマで固定しているのは `report`・`report-period` (report.json) と `aratam-config-check`。ほかの `--format json` (doctor・profiles・rebuild・help ai・review・
-    config init --diff)、構造化ログの行と `code` の一覧は、順に足す (ADR 0054 の 7 節)。それまでは、今の形を変えないことだけを約束する
+  - 今スキーマで固定しているのは `report`・`report-period` (report.json)、`doctor`・`profiles`・`rebuild`・`help-ai` (それぞれの `--format json`)、`log` (ログの行)、
+    `aratam-config-check`。残りの `--format json` (review・config init --diff。最上位が配列) と、新設する `arata config check`・`aratam doctor` の JSON、
+    `aratam notify --dry-run --format json` は、次に足す (ADR 0054 の 7 節)。それまでは、今の形を変えないことだけを約束する
+  - `doctor` の `rows[].status` (ok / warn / ng / skip) は閉じた語彙。`rows[].item`・`rows[].code`・`rows[].kind`、`profiles` の `cadence`・`mode`・`via`・`origin` は開いた語彙。
+    `rows[].detail`・`rows[].hint`・`warnings`・`sections[].body` は人向けの文で、文言は固定しない。`rows[].samples` はログ由来の値 (マスク済み) なので、公開されるログに出さない
+  - 必須の項目は `null` で出さない (配列は `[]`、対応表は `{}`)。`doctor` の `required_actions` は、最初から `[]` で持つようにした (ソースが無い設定でも `null` にならない)
   - report.json の `schema` / `schema_version` は、書き出すときに必ず今の版にする (`arata report` が保存済みの古い報告を読み直して出すときも)。
     重大度 (`severity`・`summary.max_severity`) は閉じた語彙としてスキーマに書く。`status`・`check`・proposal の `kind`・`code` は開いた語彙
 - 決定: 設定ファイルのパスには既定を持たせる。解決順は `-c` (`--config`) > 環境変数 `ARATA_CONFIG` > カレントディレクトリの `./arata.yaml`。

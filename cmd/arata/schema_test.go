@@ -4,8 +4,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/CircleAround/arata/internal/jsonschema/schematest"
 	"github.com/CircleAround/arata/schemas"
 )
+
+// rebuild --format json の型から作ったスキーマを、schemas/ のファイルで固定する (ADR 0054)。
+func TestRebuildSchemaIsFixed(t *testing.T) {
+	schematest.Golden(t, schematest.Spec{Name: rebuildSchema, Version: rebuildSchemaVersion, Versioned: true, Type: rebuildOutput{},
+		Description: "arata rebuild --format json の出力。raw から作り直した表ごとの件数と、引き継いだもの・読み飛ばしたもの"}, *update)
+}
 
 // arata schema [名前] と arata help schema [名前] は、埋め込んだスキーマのファイルそのものを出す (ADR 0054)。
 // 引数なしなら名前の一覧。AWS にもストアにも繋がず、設定ファイルも要らない。

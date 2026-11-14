@@ -35,12 +35,19 @@ const (
 // DoctorSampleLines は解釈率を見る直近の行数 (設計書 2 章)。
 const DoctorSampleLines = 100
 
+// doctor --format json のスキーマの名前と版 (ADR 0054)。名前は `arata schema <名前>` の名前。
+// 版は、項目を消す・名前や型や意味を変える・閉じた語彙 (rows[].status) に値を足すときだけ上げる。
+const (
+	DoctorSchema        = "doctor"
+	DoctorSchemaVersion = 1
+)
+
 // DoctorRow は検査 1 項目。
 type DoctorRow struct {
 	Source string `json:"source"`
 	Kind   string `json:"kind"`
 	Item   string `json:"item"` // config / audit_account / permission / log_group / match_rate / requests / queries / check
-	Status string `json:"status"`
+	Status string `json:"status" jsonschema:"enum=ok|warn|ng|skip"`
 	Code   string `json:"code,omitempty"`
 	Detail string `json:"detail"`
 	// Hint は足りない記録 (ロググループが無い・解釈率が低い・行が無い・ソースが無くチェックが skip) の行に添える、読む文書の案内。
@@ -51,7 +58,10 @@ type DoctorRow struct {
 
 // DoctorResult は doctor の結果。
 type DoctorResult struct {
-	Rows []DoctorRow `json:"rows"`
+	// Schema と SchemaVersion はスキーマの名前と版 (ADR 0054)。
+	Schema        string      `json:"schema" jsonschema:"const=doctor"`
+	SchemaVersion int         `json:"schema_version" jsonschema:"const=1"`
+	Rows          []DoctorRow `json:"rows"`
 	// RequiredActions は設定のソースに必要な IAM action (読み取りロールに付ける)。
 	RequiredActions []string `json:"required_actions"`
 	// StoreActions は s3:// のストアのバケットに必要な IAM action。監査対象の読み取りロールには付けない (ADR 0034)。
@@ -92,7 +102,7 @@ func (r *DoctorResult) Problems() bool {
 // スキャンはほぼ発生しない。
 func Doctor(ctx context.Context, cfg *config.Config, deps Deps, window time.Duration, opts ...DoctorOptions) *DoctorResult {
 	deps.fill(cfg)
-	d := &doctor{cfg: cfg, deps: deps, now: deps.Now(), window: window, res: &DoctorResult{Rows: []DoctorRow{}}}
+	d := &doctor{cfg: cfg, deps: deps, now: deps.Now(), window: window, res: &DoctorResult{Schema: DoctorSchema, SchemaVersion: DoctorSchemaVersion, Rows: []DoctorRow{}, RequiredActions: []string{}}}
 	if len(opts) > 0 {
 		d.opts = opts[0]
 	}
