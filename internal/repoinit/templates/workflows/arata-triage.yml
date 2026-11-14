@@ -1,0 +1,189 @@
+# finding の ack / snooze / resolve を Actions の画面から行う (workflow_dispatch)。
+# ストアが S3 にあり、手元にストアを書ける認証を持たない運用で使う。
+# arata repo init が書き出したファイル (ADR 0059)。手で直さない: 版を上げる・アカウントを足すときは、
+# 同じ引数で arata repo init --force を流して書き直し、PR の差分で確かめる (このリポジトリの README.md)。
+# コメントの「説明書」は、arata のリポジトリの examples/github-actions/README.md。
+# 使い方・注意は説明書の「finding を片付ける」。
+#
+# approve はここに入れない。arata approve は allowlist.yaml への追記と同時にストアの finding も resolved にするので、
+# 追記の PR をマージする前に finding が消えてしまう。approve は allowlist.yaml を PR で直す (説明書)。
+name: arata-triage
+run-name: arata-triage ${{ inputs.action }} ${{ inputs.finding_id }} (${{ inputs.account }})
+
+on:
+  workflow_dispatch:
+    inputs:
+      account:
+        description: アカウント (aws/ の下のディレクトリの名前)
+        type: choice
+        options: [@@ACCOUNTS@@]   # arata-audit.yml の matrix.account と同じ並び
+        required: true
+      action:
+        description: 'ack = 再報告しない (未対応の一覧には残る) / snooze = 期日まで沈黙 / resolve = 対応済み (再び観測されたら new)'
+        type: choice
+        options: [ack, snooze, resolve]
+        required: true
+      finding_id:
+        description: finding の ID (Slack の通知か arata review に出る 12 桁の 16 進)
+        type: string
+        required: true
+      reason:
+        description: 理由 (1 行。この実行の Summary に残る。ARN・アカウント ID などは書かない)
+        type: string
+        required: true
+      until:
+        description: snooze の期日 (YYYY-MM-DD。その日の 0 時 UTC まで沈黙)。snooze のときだけ書く
+        type: string
+        required: false
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash     # -eo pipefail で動く
+
+env:
+  ARATA_VERSION: @@ARATA_VERSION@@       # arata-audit.yml と同じ版 (PR の検査 arata-check.yml が揃っていることを確かめる)
+  AWS_REGION: @@AWS_REGION@@
+
+jobs:
+  triage:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # 秘密は environment の secrets に置き、environment のデプロイできるブランチを main だけにする (説明書「実行するリポジトリと環境を堅くする」の 5)。
+    # ほかのブランチのジョブには秘密が渡らない。OIDC の sub は repo:…:environment:audit になる (runner.yaml の GitHubEnvironment=audit と組)。
+    environment: audit
+    # 定時の監査 (arata-audit.yml) と同じ group にして、同じストアへは順番に書く。
+    # 監査が走っていれば終わるまで待つ。走っている run は中断しない。
+    # 止めきれなくても、後から終わったほうが STORE_CONFLICT で失敗するだけで、ストアは壊れない (ADR 0034)。
+    concurrency:
+      group: arata-audit-${{ inputs.account }}
+      cancel-in-progress: false
+    permissions:
+      id-token: write   # OIDC で実行用ロールを引き受ける
+      contents: read    # 設定ファイルの checkout
+    env:
+      ACCOUNT: ${{ inputs.account }}
+      ARATA_CONFIG_DIR: aws/${{ inputs.account }}
+      # inputs は run に埋め込まず、env で渡す (式の埋め込みはスクリプトの注入になる)
+      ACTION: ${{ inputs.action }}
+      FINDING_ID: ${{ inputs.finding_id }}
+      REASON: ${{ inputs.reason }}
+      UNTIL: ${{ inputs.until }}
+    steps:
+      # 入力の形は認証より先に確かめる。API からの実行は画面の選択肢を通らないので、choice の値も確かめる。
+      # finding の ID は arata が振る 12 桁の 16 進。形を決めておけば、引数がフラグとして読まれることも無い。
+      - id: validate
+        name: 入力を確かめる
+        run: |
+          fail() {
+            echo "::error::$1"
+            exit 1
+          }
+          [[ "$ACCOUNT" =~ ^[a-z0-9][a-z0-9-]*$ ]] || fail "account は小文字の英数字とハイフン"
+          [[ "$FINDING_ID" =~ ^[0-9a-f]{12}$ ]] || fail "finding_id は 12 桁の 16 進 (Slack の通知か arata review の ID)"
+          case "$ACTION" in
+            ack | resolve)
+              [ -z "$UNTIL" ] || fail "until は snooze のときだけ書く"
+              ;;
+            snooze)
+              [[ "$UNTIL" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || fail "snooze には until (YYYY-MM-DD) が要る"
+              ;;
+            *)
+              fail "action は ack / snooze / resolve"
+              ;;
+          esac
+          [[ "$REASON" =~ [^[:space:]] ]] || fail "reason が空"
+          if [[ "$REASON" == *$'\n'* || "$REASON" == *$'\r'* || ${#REASON} -gt 300 ]]; then
+            fail "reason は 1 行、300 文字まで"
+          fi
+
+      - id: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # 照合の SHA256SUMS は同じリリースのものなので、壊れた取得は防げるがリリース自体のすり替えは防げない。
+      # 公開リポジトリのリリースなら gh attestation verify で来歴も確かめられる (arata の 説明書「来歴の検証」)。
+      - id: install
+        name: arata と aratam を取得する
+        env:
+          # arata のリポジトリは公開なので、Release は github.token で読める (ほかのトークンは要らない)
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          dir="$RUNNER_TEMP/arata-bin"
+          mkdir -p "$dir"
+          gh release download "$ARATA_VERSION" -R CircleAround/arata -D "$dir" \
+            -p arata-linux-amd64 -p aratam-linux-amd64 -p SHA256SUMS
+          cd "$dir"
+          for name in arata aratam; do
+            grep " ${name}-linux-amd64\$" SHA256SUMS | sha256sum --check --strict --quiet -
+            install -m 0755 "${name}-linux-amd64" "$name"
+          done
+          echo "$dir" >>"$GITHUB_PATH"
+
+      # 秘密が「仮の値」のままなら、ここで秘密の名前を出して止める (監査と同じスクリプト。ADR 0059)。値は出さない。
+      - id: secrets
+        name: 秘密に仮の値が残っていないことを確かめる
+        timeout-minutes: 2
+        env:
+          ARATA_RUNNER_ROLE_ARN: ${{ secrets.ARATA_RUNNER_ROLE_ARN }}
+        run: .github/scripts/arata-secret-check.sh ARATA_RUNNER_ROLE_ARN
+
+      # 実行用ロール (監査と同じ step)。信頼は 1 つのブランチだけなので、このワークフローは main で動かす (説明書)。
+      # ack / snooze / resolve が触るのはストアだけで、監査対象のアカウントには問い合わせない。
+      # ストアは標準の連鎖 (実行用ロール) で書くので、監査ロールのプロファイル (arata-audit) は書かなくてよい。
+      - id: aws
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.ARATA_RUNNER_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: arata-audit
+          role-duration-seconds: 3600
+          mask-aws-account-id: true
+
+      # ログの方針は監査と同じ: 出力は実行環境の一時ファイルに書き、Actions には INFO 以外の level / code / source だけを出す。
+      # 失敗の見分け: CONFIG_INVALID = ID が無い・既に resolved・期日が過去 / STORE_CONFLICT = 同時に書かれた (もう一度実行する)。
+      - id: triage
+        name: arata ack / snooze / resolve
+        timeout-minutes: 10
+        run: |
+          log="$RUNNER_TEMP/arata.log"
+          args=("$ACTION" -c "$ARATA_CONFIG_DIR/arata.yaml")
+          if [ "$ACTION" = snooze ]; then
+            args+=(--until "$UNTIL")
+          fi
+          status=0
+          arata "${args[@]}" "$FINDING_ID" >"$log" 2>&1 || status=$?
+          jq -Rc 'fromjson? | objects | select(.level != "INFO") | {level, code, source}' "$log" || true
+          echo "arata exit=$status"
+          exit "$status"
+
+      # 誰が・何を・なぜ、をこの実行の Summary に残す。arata の ack / snooze / resolve は理由と操作した人をストアに記録しないので、
+      # 記録は Actions の実行履歴が持つ。reason は利用者が書いた文字列なので、コードの囲みに入れて Markdown として解釈させない。
+      - id: summary
+        name: 記録を Summary に残す
+        if: always() && steps.validate.outcome == 'success'
+        env:
+          RESULT: ${{ steps.triage.outcome }}
+        run: |
+          {
+            echo "### arata-triage"
+            echo
+            echo "| 項目 | 値 |"
+            echo "|---|---|"
+            echo "| account | \`$ACCOUNT\` |"
+            echo "| action | \`$ACTION\` |"
+            echo "| finding | \`$FINDING_ID\` |"
+            if [ "$ACTION" = snooze ]; then
+              echo "| until | \`$UNTIL\` (UTC) |"
+            fi
+            echo "| by | \`$GITHUB_ACTOR\` |"
+            echo "| result | \`$RESULT\` |"
+            echo
+            echo "reason:"
+            echo
+            echo '```text'
+            printf '%s\n' "$REASON" | tr '`' "'"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"

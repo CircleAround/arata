@@ -9,19 +9,21 @@ import (
 	"testing"
 )
 
-// repoWithMethodScript は、送り方を判別するスクリプトを写した、利用者のリポジトリのつもりのディレクトリ。
+// repoWithMethodScript は、一式のスクリプト (.github/scripts) を置いた、利用者のリポジトリのつもりのディレクトリ。
 func repoWithMethodScript(t *testing.T) string {
 	t.Helper()
-	body, err := os.ReadFile(methodScript)
-	if err != nil {
-		t.Fatal(err)
-	}
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, filepath.Dir(methodScriptPath)), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, methodScriptPath), body, 0o755); err != nil {
-		t.Fatal(err)
+	for src, dst := range map[string]string{methodScript: methodScriptPath, secretScript: secretScriptPath} {
+		body, err := os.ReadFile(src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, dst), body, 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return dir
 }
@@ -211,11 +213,10 @@ func TestAlertTellsWhichTargetWasNotNotified(t *testing.T) {
 			}
 		})
 	})
-	// 対象の名前は、1 つのアカウントの形ではワークフローの env、複数の形では matrix のアカウント
-	single, _ := load(t, singleFile)
+	// 対象の名前は matrix のアカウント
 	multi, _ := load(t, multiFile)
-	if single.Env["ARATA_TARGET"] == "" || multi.Jobs["audit"].Env["ARATA_TARGET"] != "${{ matrix.account }}" {
-		t.Errorf("ARATA_TARGET: %q, %q", single.Env["ARATA_TARGET"], multi.Jobs["audit"].Env["ARATA_TARGET"])
+	if multi.Jobs["audit"].Env["ARATA_TARGET"] != "${{ matrix.account }}" {
+		t.Errorf("ARATA_TARGET: %q", multi.Jobs["audit"].Env["ARATA_TARGET"])
 	}
 }
 

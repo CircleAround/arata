@@ -16,7 +16,7 @@ import (
 // triggers はワークフローの on: のキー。
 func triggers(t *testing.T, file string) []string {
 	t.Helper()
-	b, err := os.ReadFile(file)
+	b, err := os.ReadFile(filepath.Join(workflowDir, file))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,8 +174,8 @@ func TestTriageTriggerAndInputs(t *testing.T) {
 			t.Errorf("job env %s = %q, want %q", k, j.Env[k], v)
 		}
 	}
-	// secrets は実行用ロールの ARN だけ。Slack にも監査ロールにも用が無い
-	if got := regexp.MustCompile(`secrets\.\w+`).FindAllString(text, -1); len(got) != 1 || got[0] != "secrets.ARATA_RUNNER_ROLE_ARN" {
+	// secrets は実行用ロールの ARN だけ (仮の値でないことを確かめる step と、引き受ける step の 2 か所)。Slack にも監査ロールにも用が無い
+	if got := regexp.MustCompile(`secrets\.\w+`).FindAllString(text, -1); len(got) != 2 || got[0] != "secrets.ARATA_RUNNER_ROLE_ARN" || got[1] != got[0] {
 		t.Errorf("secrets: %v", got)
 	}
 	order := map[string]int{}

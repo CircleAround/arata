@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:arata:schema:repo-diff:1",
+  "title": "repo-diff",
+  "description": "arata repo init --diff --format json の出力。今ある一式と、この版の arata が書き出す一式を、ファイルごとに比べた結果",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "repo-diff"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "ok": {
+      "description": "differs・missing・extra が 1 つも無い (終了コード 0)。1 つでもあれば false (終了コード 1)",
+      "type": "boolean"
+    },
+    "files": {
+      "description": "一式のファイルと、この版の一式に無い arata- のファイル。path の順",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/DiffFile"
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "schema_version",
+    "ok",
+    "files"
+  ],
+  "$defs": {
+    "DiffFile": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "リポジトリの根からの相対パス (区切りは /)",
+          "type": "string"
+        },
+        "kind": {
+          "description": "generated = 生成物 (手で直さない。--force で書き直す)、seed = 利用者が育てるファイル (aws/ の下。書き直さない)",
+          "type": "string",
+          "enum": [
+            "generated",
+            "seed"
+          ]
+        },
+        "status": {
+          "description": "same = この版の一式と同じ、differs = 違う、missing = 無い、extra = この版の一式に無い arata- のファイル、present = 利用者が育てるファイルがある (中身は比べない)",
+          "type": "string",
+          "enum": [
+            "same",
+            "differs",
+            "missing",
+            "extra",
+            "present"
+          ]
+        }
+      },
+      "required": [
+        "path",
+        "kind",
+        "status"
+      ]
+    }
+  }
+}

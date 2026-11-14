@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # aratam.yaml の Slack への送り方 (bot か webhook) を、標準出力に 1 語で出す。
-# 利用者のリポジトリの .github/scripts/ に写して使う。定時の監査・試しの送信・PR の検査の 3 つのワークフローが、
+# arata repo init が書き出したファイル (ADR 0059)。手で直さない。定時の監査・試しの送信・PR の検査の 3 つのワークフローが、
 # 同じこのスクリプトを呼ぶ (判別のしかたを 1 か所にして、片方だけ直して食い違うのを防ぐ)。
 #
 #   使い方: arata-slack-method.sh <aratam.yaml>

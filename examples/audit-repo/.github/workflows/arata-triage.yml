@@ -1,15 +1,12 @@
-# finding の ack / snooze / resolve を Actions の画面から行う見本 (workflow_dispatch)。
-# ストアが S3 にあり、手元にストアを書ける認証を持たない運用で使う。複数のアカウントの形 (arata-audit-multi.yml と組) で書いてある。
-# 利用者のリポジトリの .github/workflows/ に写して使う (arata のリポジトリの CI では動かさない)。
-# 使い方・注意は同じディレクトリの README.md「finding を片付ける」。例の値はすべて架空。
+# finding の ack / snooze / resolve を Actions の画面から行う (workflow_dispatch)。
+# ストアが S3 にあり、手元にストアを書ける認証を持たない運用で使う。
+# arata repo init が書き出したファイル (ADR 0059)。手で直さない: 版を上げる・アカウントを足すときは、
+# 同じ引数で arata repo init --force を流して書き直し、PR の差分で確かめる (このリポジトリの README.md)。
+# コメントの「説明書」は、arata のリポジトリの examples/github-actions/README.md。
+# 使い方・注意は説明書の「finding を片付ける」。
 #
 # approve はここに入れない。arata approve は allowlist.yaml への追記と同時にストアの finding も resolved にするので、
-# 追記の PR をマージする前に finding が消えてしまう。approve は allowlist.yaml を PR で直す (README)。
-#
-# 1 つのアカウントの形 (arata-audit.yml と組) で使うときは、次の 3 か所を変える:
-#   - inputs の account を消す
-#   - concurrency の group を arata-audit.yml と同じ値 (arata-audit-example) にする
-#   - ジョブの env の ACCOUNT を消し、ARATA_CONFIG_DIR を arata にする (validate の ACCOUNT の検査も消す)
+# 追記の PR をマージする前に finding が消えてしまう。approve は allowlist.yaml を PR で直す (説明書)。
 name: arata-triage
 run-name: arata-triage ${{ inputs.action }} ${{ inputs.finding_id }} (${{ inputs.account }})
 
@@ -19,7 +16,7 @@ on:
       account:
         description: アカウント (aws/ の下のディレクトリの名前)
         type: choice
-        options: [prod, staging]   # arata-audit-multi.yml の matrix.account と同じ並び
+        options: [prod, staging]   # arata-audit.yml の matrix.account と同じ並び
         required: true
       action:
         description: 'ack = 再報告しない (未対応の一覧には残る) / snooze = 期日まで沈黙 / resolve = 対応済み (再び観測されたら new)'
@@ -46,17 +43,17 @@ defaults:
     shell: bash     # -eo pipefail で動く
 
 env:
-  ARATA_VERSION: v0.14.0       # arata-audit-multi.yml と同じ版にする (PR の検査 arata-check.yml が揃っていることを確かめる)
+  ARATA_VERSION: v0.15.0       # arata-audit.yml と同じ版 (PR の検査 arata-check.yml が揃っていることを確かめる)
   AWS_REGION: ap-northeast-1
 
 jobs:
   triage:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    # 秘密は environment の secrets に置き、environment のデプロイできるブランチを main だけにする (README「実行するリポジトリと環境を堅くする」の 5)。
+    # 秘密は environment の secrets に置き、environment のデプロイできるブランチを main だけにする (説明書「実行するリポジトリと環境を堅くする」の 5)。
     # ほかのブランチのジョブには秘密が渡らない。OIDC の sub は repo:…:environment:audit になる (runner.yaml の GitHubEnvironment=audit と組)。
     environment: audit
-    # 定時の監査 (arata-audit-multi.yml) と同じ group にして、同じストアへは順番に書く。
+    # 定時の監査 (arata-audit.yml) と同じ group にして、同じストアへは順番に書く。
     # 監査が走っていれば終わるまで待つ。走っている run は中断しない。
     # 止めきれなくても、後から終わったほうが STORE_CONFLICT で失敗するだけで、ストアは壊れない (ADR 0034)。
     concurrency:
@@ -107,7 +104,7 @@ jobs:
           persist-credentials: false
 
       # 照合の SHA256SUMS は同じリリースのものなので、壊れた取得は防げるがリリース自体のすり替えは防げない。
-      # 公開リポジトリのリリースなら gh attestation verify で来歴も確かめられる (arata の README「来歴の検証」)。
+      # 公開リポジトリのリリースなら gh attestation verify で来歴も確かめられる (arata の 説明書「来歴の検証」)。
       - id: install
         name: arata と aratam を取得する
         env:
@@ -125,7 +122,15 @@ jobs:
           done
           echo "$dir" >>"$GITHUB_PATH"
 
-      # 実行用ロール (監査と同じ step)。信頼は 1 つのブランチだけなので、このワークフローは main で動かす (README)。
+      # 秘密が「仮の値」のままなら、ここで秘密の名前を出して止める (監査と同じスクリプト。ADR 0059)。値は出さない。
+      - id: secrets
+        name: 秘密に仮の値が残っていないことを確かめる
+        timeout-minutes: 2
+        env:
+          ARATA_RUNNER_ROLE_ARN: ${{ secrets.ARATA_RUNNER_ROLE_ARN }}
+        run: .github/scripts/arata-secret-check.sh ARATA_RUNNER_ROLE_ARN
+
+      # 実行用ロール (監査と同じ step)。信頼は 1 つのブランチだけなので、このワークフローは main で動かす (説明書)。
       # ack / snooze / resolve が触るのはストアだけで、監査対象のアカウントには問い合わせない。
       # ストアは標準の連鎖 (実行用ロール) で書くので、監査ロールのプロファイル (arata-audit) は書かなくてよい。
       - id: aws

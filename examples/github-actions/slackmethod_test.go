@@ -11,7 +11,7 @@ import (
 
 // 送り方を判別するスクリプト。定時の監査・試しの送信・PR の検査の見本が、同じこれを呼ぶ。
 const (
-	methodScript     = "scripts/arata-slack-method.sh"
+	methodScript     = "../audit-repo/.github/scripts/arata-slack-method.sh"
 	methodScriptPath = ".github/scripts/arata-slack-method.sh" // 利用者のリポジトリでの置き場所
 )
 

@@ -34,6 +34,7 @@ Available Commands:
   init        ストアを作り、設定を検証し、ベースラインを収集する (findings は出さない)
   profiles    プロファイルごとに実際に効いているチェックとパラメータ (由来: overrides / checks: / 既定値) を表示する
   rebuild     raw JSONL の原本から audit.sqlite を作り直す (findings・runs・主体の状態は既存の SQLite から引き継ぐ)
+  repo        監査を回すリポジトリ (GitHub Actions で arata と aratam を定時に動かす) の一式を書き出す / この版の一式と比べる (repo init)
   report      最後の run / evaluate のレポートを出す。--from / --to (または --month) で期間レポート
   resolve     finding を resolved にする (再び観測されたら new として報告)
   review      未対応 (open / acked) の finding を一覧する (対話なし。approve できるものは対象を示す)

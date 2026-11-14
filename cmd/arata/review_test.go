@@ -294,7 +294,7 @@ func TestAllowlistEditResolves(t *testing.T) {
 	}
 }
 
-// GitHub Actions の見本 (examples/github-actions/arata-triage.yml) が渡す引数の並び (フラグが先、ID が最後) で動く。
+// GitHub Actions のワークフロー (arata repo init が書き出す arata-triage.yml。見本は examples/audit-repo) が渡す引数の並び (フラグが先、ID が最後) で動く。
 // 見本の側のテストは偽の arata で引数を確かめるだけなので、本物が同じ並びを受け付けることをここで確かめる。
 func TestTriageWorkflowArguments(t *testing.T) {
 	c := newCLI(t)

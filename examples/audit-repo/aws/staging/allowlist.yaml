@@ -1,0 +1,7 @@
+# 既知リスト (arata config init が書き出した雛形)。人が承認したものだけを書く。arata.yaml と一緒に git 管理する。
+# 主体の指定は arn (完全一致) / account (そのアカウントの全主体) / arn_pattern (glob) のどれか 1 つ。
+# 書き方と承認の手順: arata help ai approve
+principals:
+  - account: "111122223333"
+    note: 監査する側のアカウント。このアカウントの実行用ロールが、監査対象の読み取り専用ロールを引き受けて arata を動かす (arata config init --audit-account が記入)
+    approved_at: 2026-11-14

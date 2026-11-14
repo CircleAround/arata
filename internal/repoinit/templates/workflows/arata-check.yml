@@ -1,11 +1,13 @@
-# PR で設定 (arata.yaml・aratam.yaml) と allowlist.yaml の形を検査する見本。
+# PR で設定 (arata.yaml・aratam.yaml) と allowlist.yaml の形を検査する。
 # allowlist.yaml の書き間違い (主体の指定が 2 つ、expires の日付の形、未知のキーなど) を、マージの前に止める。
 # マージ後に気づくと、次の定時の監査が設定エラーで止まる (aratam が「実行されていない」と知らせる)。
-# 利用者のリポジトリの .github/workflows/ に写して使う (arata のリポジトリの CI では動かさない)。
-# 使い方は同じディレクトリの README.md「PR で設定を検査する」。例の値はすべて架空。
+# arata repo init が書き出したファイル (ADR 0059)。手で直さない: 版を上げる・アカウントを足すときは、
+# 同じ引数で arata repo init --force を流して書き直し、PR の差分で確かめる (このリポジトリの README.md)。
+# コメントの「説明書」は、arata のリポジトリの examples/github-actions/README.md。
+# 使い方は説明書の「PR で設定を検査する」。ジョブの名前 (check) は、main のルールセットの必須のチェックの名前 (github/main.tf)。
 #
 # AWS にも Slack にも繋がない。認証も secrets も使わないので、権限は contents: read だけ。
-# 検査するのはリポジトリの中の arata.yaml と aratam.yaml のすべて (1 つのアカウントの形でも、複数のアカウントの形でも同じ)。
+# 検査するのはリポジトリの中の arata.yaml と aratam.yaml のすべて。
 #
 # 定時の監査と同じ版の arata / aratam で、同じ判別を、マージの前に流す:
 #   - versions: arata を使うワークフローの ARATA_VERSION が、すべて同じ版に固定されている
@@ -24,7 +26,7 @@ defaults:
     shell: bash     # -eo pipefail で動く
 
 env:
-  ARATA_VERSION: v0.14.0       # 監査のワークフローと同じ版にする (下の versions が確かめる)。v0.14.0 以降 (aratam config check --format json が要る)
+  ARATA_VERSION: @@ARATA_VERSION@@       # 監査のワークフローと同じ版 (下の versions が確かめる)
 
 jobs:
   check:
@@ -81,7 +83,7 @@ jobs:
           exit "$status"
 
       # 照合の SHA256SUMS は同じリリースのものなので、壊れた取得は防げるがリリース自体のすり替えは防げない。
-      # 公開リポジトリのリリースなら gh attestation verify で来歴も確かめられる (arata の README「来歴の検証」)。
+      # 公開リポジトリのリリースなら gh attestation verify で来歴も確かめられる (arata の 説明書「来歴の検証」)。
       - id: install
         name: arata と aratam を取得する
         env:
