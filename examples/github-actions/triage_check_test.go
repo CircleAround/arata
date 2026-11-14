@@ -369,20 +369,21 @@ func TestCheckTriggerAndPermissions(t *testing.T) {
 }
 
 // check は、リポジトリの中の arata.yaml と aratam.yaml のすべてに config check をかける。
+// 送り方の判別はしない (ADR 0060: aratam.yaml が bot トークンの方式であることは、次の repo-check が確かめる)。
 func TestCheckRunsConfigCheckForEveryConfig(t *testing.T) {
-	w, _ := load(t, checkFile)
+	w, text := load(t, checkFile)
 	script := stepByID(t, w, "check").Run
-	// 偽の arata / aratam。引数を記録し、-c のファイルに bad と書いてあれば終了コード 2。
-	// --format json には、ファイルに書いた送り方 (bot / webhook / それ以外) を返す。人向けの出力には、わざと紛らわしい語を入れる
+	for _, bad := range []string{"arata-slack-method", ".github/scripts", "--format json", "slack method"} {
+		if strings.Contains(text, bad) {
+			t.Errorf("the check must not detect the method by itself: %q", bad)
+		}
+	}
+	// 偽の arata / aratam。引数を記録し、-c のファイルに bad と書いてあれば終了コード 2
 	fake := `echo "$(basename "$0") $*" >>"$RUNNER_TEMP/calls"
 echo '{"level":"ERROR","msg":"stderr log"}' >&2
 cat >/dev/null # 標準入力 (ループのファイルの一覧) を読んでも、次のファイルが消えない
 if grep -q bad "$4"; then exit 2; fi
-if [ "${5:-}" = --format ]; then
-  echo "{\"ok\":true,\"slack\":{\"method\":\"$(grep -o 'method-[a-z]*' "$4" | cut -d- -f2)\",\"urgent_webhook\":false},\"rows\":[]}"
-else
-  echo "ok    $4: checked, slack webhook, slack bot"
-fi
+echo "ok    $4: checked"
 `
 	bin := t.TempDir()
 	for _, name := range []string{"arata", "aratam"} {
@@ -390,19 +391,8 @@ fi
 			t.Fatal(err)
 		}
 	}
-	methodScriptBody, err := os.ReadFile(methodScript)
-	if err != nil {
-		t.Fatal(err)
-	}
 	tree := func(files map[string]string) string {
 		dir := t.TempDir()
-		// 利用者のリポジトリに写した、送り方を判別するスクリプト
-		if err := os.MkdirAll(filepath.Join(dir, filepath.Dir(methodScriptPath)), 0o750); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, methodScriptPath), methodScriptBody, 0o755); err != nil {
-			t.Fatal(err)
-		}
 		for name, body := range files {
 			p := filepath.Join(dir, name)
 			if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
@@ -419,17 +409,12 @@ fi
 		return string(b)
 	}
 	multi := map[string]string{
-		"aws/prod/arata.yaml": "ok", "aws/prod/aratam.yaml": "method-bot", "aws/prod/allowlist.yaml": "ok",
-		"aws/staging/arata.yaml": "ok", "aws/staging/aratam.yaml": "method-webhook",
+		"aws/prod/arata.yaml": "ok", "aws/prod/aratam.yaml": "ok", "aws/prod/allowlist.yaml": "ok",
+		"aws/staging/arata.yaml": "ok", "aws/staging/aratam.yaml": "ok",
 		".git/arata.yaml": "bad", "README.md": "ok",
 	}
-	// aratam.yaml は、形の検査のあとに、送り方の判別と、緊急用の Webhook を持つかの判別 (どちらも --format json) を 1 回ずつ
-	// (定時の監査の slack-method と同じ 2 つ。古い aratam で urgent_webhook が読めないことも、マージの前に止める)
-	jsonCalls := func(file string) string {
-		return strings.Repeat("aratam config check -c "+file+" --format json\n", 2)
-	}
-	wantMulti := "arata config check -c ./aws/prod/arata.yaml\naratam config check -c ./aws/prod/aratam.yaml\n" + jsonCalls("./aws/prod/aratam.yaml") +
-		"arata config check -c ./aws/staging/arata.yaml\naratam config check -c ./aws/staging/aratam.yaml\n" + jsonCalls("./aws/staging/aratam.yaml")
+	wantMulti := "arata config check -c ./aws/prod/arata.yaml\naratam config check -c ./aws/prod/aratam.yaml\n" +
+		"arata config check -c ./aws/staging/arata.yaml\naratam config check -c ./aws/staging/aratam.yaml\n"
 
 	t.Run("multi", func(t *testing.T) {
 		out, code, tmp := runStepIn(t, tree(multi), script, bin)
@@ -439,58 +424,112 @@ fi
 		if !strings.Contains(out, "ok    ./aws/prod/arata.yaml: checked") || strings.Contains(out, "stderr log") {
 			t.Errorf("the result lines must be shown, without the duplicate JSON log:\n%s", out)
 		}
-		// 送り方は設定ごとに判別する (アカウントごとに違ってよい)
-		if strings.Count(out, "slack method: bot (urgent_webhook: false)\n") != 1 || strings.Count(out, "slack method: webhook (urgent_webhook: false)\n") != 1 {
-			t.Errorf("each aratam.yaml must show its method:\n%s", out)
-		}
-	})
-	// 送り方を判別できない設定 (知らない値) は、形の検査を通っても失敗にする。残りの設定も検査する
-	t.Run("unknown method", func(t *testing.T) {
-		files := map[string]string{}
-		for k, v := range multi {
-			files[k] = v
-		}
-		files["aws/prod/aratam.yaml"] = "method-email"
-		out, code, tmp := runStepIn(t, tree(files), script, bin)
-		// 送り方が判別できなければ、その設定の 2 つ目の判別はしない
-		want := strings.Replace(wantMulti, jsonCalls("./aws/prod/aratam.yaml"), "aratam config check -c ./aws/prod/aratam.yaml --format json\n", 1)
-		if code != 1 || calls(tmp) != want || !strings.Contains(out, "::error::") || strings.Contains(out, "slack method: email") ||
-			!strings.Contains(out, "slack method: webhook (urgent_webhook: false)\n") {
-			t.Errorf("exit %d, calls:\n%s\n%s", code, calls(tmp), out)
-		}
-	})
-	// スクリプトを写し忘れたリポジトリでは、通さない
-	t.Run("no script", func(t *testing.T) {
-		dir := tree(multi)
-		if err := os.Remove(filepath.Join(dir, methodScriptPath)); err != nil {
-			t.Fatal(err)
-		}
-		if _, code, _ := runStepIn(t, dir, script, bin); code != 1 {
-			t.Errorf("exit %d", code)
-		}
-	})
-	t.Run("single", func(t *testing.T) {
-		_, code, tmp := runStepIn(t, tree(map[string]string{"arata/arata.yaml": "ok", "arata/aratam.yaml": "method-webhook"}), script, bin)
-		if code != 0 || calls(tmp) != "arata config check -c ./arata/arata.yaml\naratam config check -c ./arata/aratam.yaml\n"+jsonCalls("./arata/aratam.yaml") {
-			t.Errorf("exit %d, calls:\n%s", code, calls(tmp))
-		}
 	})
 	// 1 つが失敗しても残りを検査し、最後に失敗にする (1 回の PR で全部の誤りが分かる)
-	t.Run("one fails", func(t *testing.T) {
-		files := map[string]string{}
-		for k, v := range multi {
-			files[k] = v
-		}
-		files["aws/prod/arata.yaml"] = "bad"
-		_, code, tmp := runStepIn(t, tree(files), script, bin)
-		if code != 1 || calls(tmp) != wantMulti {
-			t.Errorf("exit %d, calls:\n%s", code, calls(tmp))
-		}
-	})
+	for _, file := range []string{"aws/prod/arata.yaml", "aws/staging/aratam.yaml"} {
+		t.Run("one fails: "+file, func(t *testing.T) {
+			files := map[string]string{}
+			for k, v := range multi {
+				files[k] = v
+			}
+			files[file] = "bad"
+			_, code, tmp := runStepIn(t, tree(files), script, bin)
+			if code != 1 || calls(tmp) != wantMulti {
+				t.Errorf("exit %d, calls:\n%s", code, calls(tmp))
+			}
+		})
+	}
 	t.Run("nothing to check", func(t *testing.T) {
 		out, code, _ := runStepIn(t, tree(map[string]string{"README.md": "ok"}), script, bin)
 		if code != 1 || !strings.Contains(out, "::error::") {
 			t.Errorf("no config must fail: exit %d\n%s", code, out)
+		}
+	})
+}
+
+// copyTree は src を一時ディレクトリに写す (見本を書き換えて確かめるため)。
+func copyTree(t *testing.T, src string) string {
+	t.Helper()
+	dst := t.TempDir()
+	err := filepath.Walk(src, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(src, p)
+		if info.IsDir() {
+			return os.MkdirAll(filepath.Join(dst, rel), 0o750)
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(dst, rel), b, info.Mode().Perm())
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dst
+}
+
+// PR の検査は、一式を書き出したときの引数で arata repo check を流す (ADR 0060)。--github は付けない (PR の検査は、秘密も GitHub を読む鍵も持たない)。
+// 偽の出力ではなく、この版の本物の arata で、見本そのものに流して確かめる: 見本は通り、手で直した一式と、Webhook の aratam.yaml は止まる。
+func TestCheckRunsRepoCheckOnTheSet(t *testing.T) {
+	w, text := load(t, checkFile)
+	s := stepByID(t, w, "repo-check")
+	want := "arata repo check --owner example-org --repo security-audit --accounts prod,staging --audit-account 111122223333 --store-bucket example-arata-store --region ap-northeast-1 --alert-channel C0123456782 --schedule --out . </dev/null 2>/dev/null"
+	if s.Run != want {
+		t.Fatalf("repo-check runs:\n%s\nwant:\n%s", s.Run, want)
+	}
+	// 設定の検査が落ちても流す (1 回の PR で、全部の誤りが分かる)。バイナリが取れなければ流せない
+	if s.If != "always() && steps.install.outcome == 'success'" {
+		t.Errorf("if: %q", s.If)
+	}
+	if strings.Contains(s.Run, "--github") || strings.Contains(text, "GITHUB_TOKEN") || strings.Contains(text, "GH_TOKEN: ${{ secrets") {
+		t.Error("the PR check must not read GitHub settings")
+	}
+	// チャンネル ID (aratam.yaml が持つ) は、ワークフローに入れない
+	for _, id := range []string{"C0123456789", "C0123456780", "C0123456781"} {
+		if strings.Contains(text, id) {
+			t.Errorf("the workflow must not carry the notification channel %s", id)
+		}
+	}
+	bin := realBins(t)
+	t.Run("the example passes", func(t *testing.T) {
+		out, code, _ := runStepIn(t, copyTree(t, exampleRepo), s.Run, bin)
+		if code != 0 || !strings.Contains(out, "ng はありません") {
+			t.Fatalf("exit %d\n%s", code, out)
+		}
+	})
+	t.Run("an edited workflow stops", func(t *testing.T) {
+		dir := copyTree(t, exampleRepo)
+		p := filepath.Join(dir, ".github/workflows/arata-audit.yml")
+		b, _ := os.ReadFile(p)
+		if err := os.WriteFile(p, []byte(strings.Replace(string(b), "timeout-minutes: 60", "timeout-minutes: 90", 1)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		out, code, _ := runStepIn(t, dir, s.Run, bin)
+		if code != 2 || !strings.Contains(out, "REPO_SET_DIFFERS") || !strings.Contains(out, ".github/workflows/arata-audit.yml") {
+			t.Fatalf("exit %d\n%s", code, out)
+		}
+	})
+	t.Run("a webhook aratam.yaml stops", func(t *testing.T) {
+		dir := copyTree(t, exampleRepo)
+		p := filepath.Join(dir, "aws/staging/aratam.yaml")
+		b, _ := os.ReadFile(p)
+		body := strings.NewReplacer("bot_token_env: ARATAM_SLACK_BOT_TOKEN", `bot_token_env: ""`, `channel: "C0123456781"`, `channel: ""`, `webhook_env: "" `, "webhook_env: ARATAM_SLACK_WEBHOOK ").Replace(string(b))
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		out, code, _ := runStepIn(t, dir, s.Run, bin)
+		if code != 2 || !strings.Contains(out, "REPO_NOTIFY_MISMATCH") || !strings.Contains(out, "notify staging の直し方:") || !strings.Contains(out, "bot_token_env: ARATAM_SLACK_BOT_TOKEN") {
+			t.Fatalf("exit %d\n%s", code, out)
+		}
+	})
+	// 書き出した設定は、この版の config check もそのまま通る (最初の PR の検査が落ちない)
+	t.Run("the example configs pass config check", func(t *testing.T) {
+		out, code, _ := runStepIn(t, copyTree(t, exampleRepo), stepByID(t, w, "check").Run, bin)
+		if code != 0 {
+			t.Fatalf("exit %d\n%s", code, out)
 		}
 	})
 }

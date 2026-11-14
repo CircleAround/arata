@@ -2,6 +2,7 @@ package repoinit
 
 import (
 	"bytes"
+	"errors"
 	"flag"
 	"os"
 	"path/filepath"
@@ -24,6 +25,10 @@ func exampleParams() Params {
 		Owner: "example-org", Repo: "security-audit", Accounts: []string{"prod", "staging"},
 		AuditAccount: "111122223333", StoreBucket: "example-arata-store", Region: "ap-northeast-1",
 		Schedule: true, Version: "v0.15.0",
+		// 緊急用を分けるアカウント (prod) と分けないアカウント (staging)、知らせのチャンネルあり (ADR 0060 の見本の形)
+		AlertChannel:   "C0123456782",
+		Channels:       map[string]string{"prod": "C0123456789", "staging": "C0123456781"},
+		UrgentChannels: map[string]string{"prod": "C0123456780", "staging": SameChannel},
 	}
 }
 
@@ -90,6 +95,19 @@ func TestValidateRejectsValuesOutsideTheShapes(t *testing.T) {
 		"version without v":      func(p *Params) { p.Version = "0.15.0" },
 		"version pre-release":    func(p *Params) { p.Version = "v0.15.0-rc1" },
 		"version with expansion": func(p *Params) { p.Version = "v0.15.$(id)" },
+		"alert channel missing":  func(p *Params) { p.AlertChannel = "" },
+		"alert channel name":     func(p *Params) { p.AlertChannel = "#alerts" },
+		"alert channel same":     func(p *Params) { p.AlertChannel = SameChannel },
+		"alert channel token":    func(p *Params) { p.AlertChannel = "xoxb-not-a-channel" },
+		"alert channel newline":  func(p *Params) { p.AlertChannel = "C0123456782\n  evil: 1" },
+		"channel name":           func(p *Params) { p.Channels["prod"] = "#general" },
+		"channel none":           func(p *Params) { p.Channels["prod"] = NoAlert },
+		"channel same":           func(p *Params) { p.Channels["prod"] = SameChannel },
+		"channel lower":          func(p *Params) { p.Channels["prod"] = "c0123456789" },
+		"channel quote":          func(p *Params) { p.Channels["prod"] = `C0123456789"` },
+		"channel other account":  func(p *Params) { p.Channels["dev"] = "C0123456789" },
+		"urgent channel name":    func(p *Params) { p.UrgentChannels["prod"] = "general" },
+		"urgent other account":   func(p *Params) { p.UrgentChannels["dev"] = SameChannel },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -107,7 +125,11 @@ func TestValidateRejectsValuesOutsideTheShapes(t *testing.T) {
 		func(p *Params) { p.AuditAccount = config.AuditAccountNone },
 		func(p *Params) { p.Region = "us-gov-west-1" },
 		func(p *Params) { p.Repo = ".github" },
-		func(p *Params) { p.Accounts = []string{"a"} },
+		func(p *Params) { p.Accounts, p.Channels, p.UrgentChannels = []string{"a"}, nil, nil },
+		func(p *Params) { p.AlertChannel = NoAlert },
+		func(p *Params) { p.Channels, p.UrgentChannels = nil, nil }, // aratam.yaml が既にあるアカウントには要らない
+		func(p *Params) { p.UrgentChannels = map[string]string{"prod": SameChannel} },
+		func(p *Params) { p.AlertChannel = "G0123456789ABCDEF" },
 	} {
 		p := exampleParams()
 		ok(&p)
@@ -167,12 +189,11 @@ func TestFilesFillInTheArguments(t *testing.T) {
 		}
 	}
 	want := []string{
-		".github/scripts/arata-secret-check.sh", ".github/scripts/arata-slack-method.sh",
 		".github/workflows/arata-audit.yml", ".github/workflows/arata-check.yml", ".github/workflows/arata-notify-test.yml", ".github/workflows/arata-triage.yml",
 		".gitignore", "README.md",
 		"aws/prod/allowlist.yaml", "aws/prod/arata.yaml", "aws/prod/aratam.yaml",
 		"aws/staging/allowlist.yaml", "aws/staging/arata.yaml", "aws/staging/aratam.yaml",
-		"github/.terraform.lock.hcl", "github/main.tf", "github/secrets/.terraform.lock.hcl", "github/secrets/main.tf",
+		"github/.terraform.lock.hcl", "github/main.tf",
 	}
 	sort.Strings(paths)
 	if strings.Join(paths, "\n") != strings.Join(want, "\n") {
@@ -198,10 +219,8 @@ func TestFilesFillInTheArguments(t *testing.T) {
 		}
 	}
 	for _, f := range files {
-		if f.Mode != 0o755 && f.Mode != 0o644 {
-			t.Errorf("%s: mode %o", f.Path, f.Mode)
-		}
-		if exec := strings.HasSuffix(f.Path, ".sh"); exec != (f.Mode == 0o755) {
+		// スクリプトは書き出さない (ADR 0060)。実行できるファイルは無い
+		if f.Mode != 0o644 {
 			t.Errorf("%s: mode %o", f.Path, f.Mode)
 		}
 		if seed := strings.HasPrefix(f.Path, "aws/"); seed != (f.Kind == Seed) {
@@ -215,8 +234,24 @@ func TestFilesFillInTheArguments(t *testing.T) {
 		}
 	}
 	readme := string(byPath(t, files, "README.md").Body)
-	if !strings.Contains(readme, "arata repo init --owner example-org --repo security-audit --accounts prod,staging --audit-account 111122223333 --store-bucket example-arata-store --region ap-northeast-1 --schedule --out .\n") {
+	if !strings.Contains(readme, "arata repo init --owner example-org --repo security-audit --accounts prod,staging --audit-account 111122223333 --store-bucket example-arata-store --region ap-northeast-1 --alert-channel C0123456782 --schedule --out .\n") {
 		t.Errorf("README must show the command that reproduces this set:\n%s", readme[:600])
+	}
+	// 通知のチャンネル ID は aratam.yaml だけが持つ (README のコマンドにも、ワークフローにも入れない。ADR 0060)
+	for _, f := range files {
+		if f.Kind == Seed {
+			continue
+		}
+		for _, id := range []string{"C0123456789", "C0123456780", "C0123456781"} {
+			if bytes.Contains(f.Body, []byte(id)) && f.Path != "README.md" {
+				t.Errorf("%s must not carry the notification channel %s", f.Path, id)
+			}
+		}
+	}
+	// PR の検査は、同じ引数で arata repo check を流す
+	check := string(byPath(t, files, ".github/workflows/arata-check.yml").Body)
+	if !strings.Contains(check, "        run: "+p.CheckCommand()+" </dev/null 2>/dev/null\n") || !strings.HasPrefix(p.CheckCommand(), "arata repo check --owner example-org ") || strings.Contains(p.CheckCommand(), "--github") {
+		t.Errorf("arata-check.yml must run %q without --github", p.CheckCommand())
 	}
 }
 
@@ -240,7 +275,8 @@ func TestScheduleIsOptIn(t *testing.T) {
 	a, b := mustFiles(t, exampleParams()), files
 	for i := range a {
 		same := bytes.Equal(a[i].Body, b[i].Body)
-		if changes := a[i].Path == workflowPaths[0] || a[i].Path == "README.md"; same == changes {
+		// PR の検査は arata repo check に同じ引数を渡すので、--schedule の有無で変わる
+		if changes := a[i].Path == workflowPaths[0] || a[i].Path == workflowPaths[3] || a[i].Path == "README.md"; same == changes {
 			t.Errorf("%s: same=%v", a[i].Path, same)
 		}
 	}
@@ -268,6 +304,17 @@ func TestSeedsLoad(t *testing.T) {
 		if err != nil || !strings.Contains(string(am), "\nname: "+account+" ") {
 			t.Errorf("%s aratam.yaml: %v", account, err)
 		}
+		// bot トークンの方式で、引数のチャンネル ID が入っている (ADR 0060)。arata の側の読み取り (repo check) でも bot と読める
+		slack, err := readAratamSlack(am)
+		if err != nil || slack.method() != "bot" || slack.BotTokenEnv != "ARATAM_SLACK_BOT_TOKEN" || slack.WebhookEnv != "" || slack.UrgentWebhookEnv != "" {
+			t.Errorf("%s aratam.yaml: %+v %v", account, slack, err)
+		}
+	}
+	prod, _ := os.ReadFile(filepath.Join(dir, "aws", "prod", "aratam.yaml"))
+	staging, _ := os.ReadFile(filepath.Join(dir, "aws", "staging", "aratam.yaml"))
+	if !strings.Contains(string(prod), `  channel: "C0123456789"`) || !strings.Contains(string(prod), `  urgent_channel: "C0123456780"`) ||
+		!strings.Contains(string(staging), `  channel: "C0123456781"`) || !strings.Contains(string(staging), `  urgent_channel: ""`) {
+		t.Errorf("channels are not filled in:\n%s\n%s", prod, staging)
 	}
 	// 外から監査しない (none) なら、既知リストは書かない (config init と同じ)
 	p := exampleParams()
@@ -281,9 +328,9 @@ func TestSeedsLoad(t *testing.T) {
 
 var secretRef = regexp.MustCompile(`secrets\.([A-Z][A-Z0-9_]*)`)
 
-// TestSecretBoxesMatchTheWorkflows は、秘密の箱の名前が、ワークフローが使う秘密の名前と同じであることを固定する。
-func TestSecretBoxesMatchTheWorkflows(t *testing.T) {
-	files := mustFiles(t, exampleParams())
+// usedSecrets は、ワークフローの (コメントでない) 行が参照する秘密の名前。
+func usedSecrets(t testing.TB, files []File) []string {
+	t.Helper()
 	used := map[string]bool{}
 	for _, path := range workflowPaths {
 		body := byPath(t, files, path).Body
@@ -301,25 +348,164 @@ func TestSecretBoxesMatchTheWorkflows(t *testing.T) {
 		names = append(names, n)
 	}
 	sort.Strings(names)
-	if strings.Join(names, ",") != strings.Join(SecretNames, ",") {
-		t.Fatalf("workflows use %v, boxes are %v", names, SecretNames)
+	return names
+}
+
+// TestWorkflowsUseOnlyTheThreeSecrets は、どの引数でも、ワークフローが使う秘密が同じ 3 つであることと、
+// これまでの秘密 (Webhook)・秘密の箱・仮の値の名残が、どの生成物にも出てこないことを固定する (ADR 0060)。
+func TestWorkflowsUseOnlyTheThreeSecrets(t *testing.T) {
+	if strings.Join(SecretNames, ",") != "ARATAM_SLACK_BOT_TOKEN,ARATA_AUDIT_ROLE_ARNS,ARATA_RUNNER_ROLE_ARN" {
+		t.Fatalf("SecretNames: %v", SecretNames)
 	}
-	tf := string(byPath(t, files, "github/secrets/main.tf").Body)
-	for _, n := range SecretNames {
-		if !strings.Contains(tf, `    "`+n+`",`+"\n") {
-			t.Errorf("github/secrets/main.tf lacks %s", n)
+	withAlert, noAlert, noSchedule := exampleParams(), exampleParams(), exampleParams()
+	noAlert.AlertChannel = NoAlert
+	noSchedule.Schedule = false
+	for name, p := range map[string]Params{"alert": withAlert, "no alert": noAlert, "no schedule": noSchedule} {
+		files := mustFiles(t, p)
+		if got := usedSecrets(t, files); strings.Join(got, ",") != strings.Join(SecretNames, ",") {
+			t.Errorf("%s: workflows use %v, want %v", name, got, SecretNames)
+		}
+		for _, f := range files {
+			if f.Kind != Generated {
+				continue
+			}
+			for _, bad := range append([]string{"arata-secret-check", "arata-slack-method", "placeholder", "仮の値", "github_actions_environment_secret"}, FormerSecretNames...) {
+				if bytes.Contains(f.Body, []byte(bad)) {
+					t.Errorf("%s: %s must not mention %q", name, f.Path, bad)
+				}
+			}
+			if strings.HasPrefix(f.Path, "github/secrets/") || strings.HasPrefix(f.Path, ".github/scripts/") {
+				t.Errorf("%s: %s must not be written", name, f.Path)
+			}
+			// arata repo check と同じ読み方でも、同じ 3 つ (か、その一部) で、名前を式で作る参照は無い
+			if strings.HasPrefix(f.Path, ".github/workflows/") {
+				names, dynamic, err := WorkflowSecrets(f.Body)
+				if err != nil || dynamic {
+					t.Errorf("%s: %s: dynamic=%v err=%v", name, f.Path, dynamic, err)
+				}
+				for _, n := range names {
+					if !strings.Contains(","+strings.Join(SecretNames, ",")+",", ","+n+",") {
+						t.Errorf("%s: %s uses %s", name, f.Path, n)
+					}
+				}
+			}
 		}
 	}
-	// 仮の値は 1 か所で決め、Terraform と検査のスクリプトに同じ文字列が入る
-	script := string(byPath(t, files, ".github/scripts/arata-secret-check.sh").Body)
-	if !strings.Contains(tf, `placeholder = "`+Placeholder+`"`) || !strings.Contains(script, "PLACEHOLDER='"+Placeholder+"'") {
-		t.Error("the placeholder must be the same string in the Terraform and in the script")
+}
+
+// TestAlertIsOptIn は、--alert-channel none なら知らせの段階ごと無く、ID なら監査と試しの通知に同じ送り方が入ることを確かめる。
+func TestAlertIsOptIn(t *testing.T) {
+	type doc struct {
+		On struct {
+			WorkflowDispatch struct {
+				Inputs map[string]struct {
+					Options []string `yaml:"options"`
+				} `yaml:"inputs"`
+			} `yaml:"workflow_dispatch"`
+		} `yaml:"on"`
+		Jobs map[string]struct {
+			Steps []struct {
+				ID  string            `yaml:"id"`
+				If  string            `yaml:"if"`
+				Env map[string]string `yaml:"env"`
+				Run string            `yaml:"run"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
 	}
-	// 仮の値は、どの秘密の形にも合わない
-	for _, bad := range []string{"arn:", "{", "http", "xox", " ", "'", `"`, "$"} {
-		if strings.Contains(Placeholder, bad) {
-			t.Errorf("placeholder %q must not look like a real value (%q)", Placeholder, bad)
+	alertStep := func(f File, job string) (env map[string]string, run string, ok bool) {
+		var d doc
+		if err := yaml.Unmarshal(f.Body, &d); err != nil {
+			t.Fatalf("%s: %v", f.Path, err)
 		}
+		for _, s := range d.Jobs[job].Steps {
+			if s.ID == "alert" {
+				return s.Env, s.Run, true
+			}
+		}
+		return nil, "", false
+	}
+	routes := func(f File) string {
+		var d doc
+		if err := yaml.Unmarshal(f.Body, &d); err != nil {
+			t.Fatal(err)
+		}
+		return strings.Join(d.On.WorkflowDispatch.Inputs["route"].Options, ",")
+	}
+	p := exampleParams()
+	files := mustFiles(t, p)
+	aEnv, aRun, ok := alertStep(byPath(t, files, workflowPaths[0]), "audit")
+	nEnv, nRun, ok2 := alertStep(byPath(t, files, workflowPaths[2]), "notify-test")
+	if !ok || !ok2 || aEnv["ALERT_CHANNEL"] != "C0123456782" || nEnv["ALERT_CHANNEL"] != "C0123456782" {
+		t.Fatalf("alert steps: %v %v %v %v", ok, ok2, aEnv, nEnv)
+	}
+	// 送る部分は、2 つのワークフローで同じ (同じ送り方で確かめて、初めて確認になる)
+	const mark = "# ここから下は、"
+	if i, j := strings.Index(aRun, mark), strings.Index(nRun, mark); i < 0 || j < 0 || aRun[i:] != nRun[j:] {
+		t.Error("the sending part of the alert must be the same in the audit and in the notify test")
+	}
+	if !strings.Contains(aRun, "https://slack.com/api/chat.postMessage") || !strings.Contains(aRun, `.ok == true`) || strings.Contains(aRun, "hooks.slack.com") {
+		t.Errorf("the alert must post with the bot token and check ok:\n%s", aRun)
+	}
+	if got := routes(byPath(t, files, workflowPaths[2])); got != "normal,urgent,alert" {
+		t.Errorf("routes with the alert: %s", got)
+	}
+	p.AlertChannel = NoAlert
+	files = mustFiles(t, p)
+	if _, _, ok := alertStep(byPath(t, files, workflowPaths[0]), "audit"); ok {
+		t.Error("--alert-channel none must not write the alert step")
+	}
+	if _, _, ok := alertStep(byPath(t, files, workflowPaths[2]), "notify-test"); ok {
+		t.Error("--alert-channel none must not write the alert route")
+	}
+	if got := routes(byPath(t, files, workflowPaths[2])); got != "normal,urgent" {
+		t.Errorf("routes without the alert: %s", got)
+	}
+	for _, f := range files {
+		if f.Kind == Generated && (bytes.Contains(f.Body, []byte("chat.postMessage")) || bytes.Contains(f.Body, []byte("ALERT_CHANNEL"))) {
+			t.Errorf("%s must not carry the alert", f.Path)
+		}
+	}
+	if !strings.Contains(p.Command(), "--alert-channel none ") {
+		t.Errorf("the command must state none: %s", p.Command())
+	}
+}
+
+// TestChannelsAreRequiredOnlyForNewAccounts は、新しく作る aratam.yaml にはチャンネル ID が要り (空では書き出さない)、
+// 既にある aratam.yaml には要らないことを確かめる (ADR 0060)。
+func TestChannelsAreRequiredOnlyForNewAccounts(t *testing.T) {
+	dir := t.TempDir()
+	p := exampleParams()
+	p.Channels, p.UrgentChannels = nil, map[string]string{"prod": SameChannel}
+	_, err := Apply(dir, mustFiles(t, p), false)
+	var missing *MissingArgsError
+	if !errors.As(err, &missing) || strings.Join(missing.Args, " ") != "--channel prod=<channel ID> --channel staging=<channel ID> --urgent-channel staging=<channel ID>|same" {
+		t.Fatalf("want the missing arguments, got %v", err)
+	}
+	if ents, _ := os.ReadDir(dir); len(ents) != 0 {
+		t.Fatalf("nothing must be written when arguments are missing: %v", ents)
+	}
+	if got, err := NewAccounts(dir, p.Accounts); err != nil || strings.Join(got, ",") != "prod,staging" {
+		t.Fatalf("NewAccounts: %v %v", got, err)
+	}
+	if _, err := Apply(dir, mustFiles(t, exampleParams()), false); err != nil {
+		t.Fatal(err)
+	}
+	// 既にあるアカウントは、チャンネル無しで書き直せる (--force でも aratam.yaml は触らない)
+	before, _ := os.ReadFile(filepath.Join(dir, "aws/prod/aratam.yaml"))
+	if got, _ := NewAccounts(dir, p.Accounts); len(got) != 0 {
+		t.Fatalf("NewAccounts after writing: %v", got)
+	}
+	p.Channels, p.UrgentChannels = nil, nil
+	if _, err := Apply(dir, mustFiles(t, p), true); err != nil {
+		t.Fatalf("existing accounts need no channels: %v", err)
+	}
+	if after, _ := os.ReadFile(filepath.Join(dir, "aws/prod/aratam.yaml")); !bytes.Equal(before, after) {
+		t.Fatal("aratam.yaml must never be rewritten")
+	}
+	// 足したアカウントだけ要る
+	p.Accounts = append(p.Accounts, "dev")
+	if _, err := Apply(dir, mustFiles(t, p), true); !errors.As(err, &missing) || !strings.Contains(missing.Error(), "--channel dev=") || strings.Contains(missing.Error(), "prod") {
+		t.Fatalf("the added account needs its channels: %v", err)
 	}
 }
 
@@ -327,9 +513,6 @@ func TestSecretBoxesMatchTheWorkflows(t *testing.T) {
 func TestLockFilePinsTheProviderVersion(t *testing.T) {
 	files := mustFiles(t, exampleParams())
 	lock := byPath(t, files, "github/.terraform.lock.hcl")
-	if !bytes.Equal(lock.Body, byPath(t, files, "github/secrets/.terraform.lock.hcl").Body) {
-		t.Error("the two roots must share the same lock")
-	}
 	s := string(lock.Body)
 	if !strings.Contains(s, `version     = "`+ProviderVersion+`"`) || !strings.Contains(s, `constraints = "`+ProviderVersion+`"`) {
 		t.Errorf("lock does not pin %s", ProviderVersion)
@@ -351,8 +534,8 @@ func TestApplyNeverOverwritesByDefault(t *testing.T) {
 			t.Errorf("%s: %s", r.Path, r.Action)
 		}
 	}
-	if st, err := os.Stat(filepath.Join(dir, ".github/scripts/arata-slack-method.sh")); err != nil || st.Mode().Perm()&0o111 == 0 {
-		t.Errorf("the script must be executable: %v", err)
+	if _, err := os.Stat(filepath.Join(dir, ".github/scripts")); !os.IsNotExist(err) {
+		t.Errorf("the set has no scripts (ADR 0060): %v", err)
 	}
 	// 2 回目は何も変えない
 	res, err = Apply(dir, files, false)
@@ -415,6 +598,8 @@ func TestApplyAddsAnAccount(t *testing.T) {
 	}
 	p := exampleParams()
 	p.Accounts = append(p.Accounts, "dev")
+	// 足したアカウントのチャンネルだけを渡す (既にあるアカウントの分は要らない)
+	p.Channels, p.UrgentChannels = map[string]string{"dev": "C0123456783"}, map[string]string{"dev": SameChannel}
 	res, err := Apply(dir, mustFiles(t, p), false)
 	if err != nil {
 		t.Fatal(err)
@@ -518,6 +703,10 @@ func TestDiffReportsEachGeneratedFile(t *testing.T) {
 	// github/ と github/secrets/ に残った、ほかの .tf (手で作った宣言など) も差にする: 同じ root の .tf は全部当たるので、
 	// 残っていると、書き出した宣言と二重になる・緩い設定が当たる
 	must(os.WriteFile(filepath.Join(dir, "github/repository.tf"), []byte("# old\n"), 0o644))
+	// github/secrets/ は、これまでの版の「秘密の箱」。この版は書き出さないので、残っていれば差にする (ADR 0060)
+	must(os.MkdirAll(filepath.Join(dir, "github/secrets"), 0o755))
+	must(os.MkdirAll(filepath.Join(dir, ".github/scripts"), 0o755))
+	must(os.WriteFile(filepath.Join(dir, ".github/scripts/arata-secret-check.sh"), []byte("#!/bin/sh\n"), 0o755))
 	must(os.WriteFile(filepath.Join(dir, "github/secrets/old.tf"), []byte("# old\n"), 0o644))
 	must(os.WriteFile(filepath.Join(dir, "github/NOTES.md"), []byte("notes\n"), 0o644))
 	must(os.WriteFile(filepath.Join(dir, "github/terraform.tfstate"), []byte("{}\n"), 0o644))
@@ -532,6 +721,7 @@ func TestDiffReportsEachGeneratedFile(t *testing.T) {
 	want := map[string]string{
 		workflowPaths[0]: StatusDiffers, ".gitignore": StatusMissing, "aws/staging/aratam.yaml": StatusMissing,
 		".github/workflows/arata-old.yml": StatusExtra, "github/repository.tf": StatusExtra, "github/secrets/old.tf": StatusExtra,
+		".github/scripts/arata-secret-check.sh": StatusExtra,
 	}
 	if len(got) != len(want) || out.OK {
 		t.Fatalf("got %v", got)

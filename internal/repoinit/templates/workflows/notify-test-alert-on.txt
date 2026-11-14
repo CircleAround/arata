@@ -1,0 +1,14 @@
+
+      # route: alert は、定時の通知が送れなかったことの知らせ (arata-audit.yml の最後の alert) と同じ送り方で、知らせのチャンネルに 1 通送る。
+      # 知らせは、ふだん使われない。bot を知らせのチャンネルに招待し忘れていることを、定時の前に、ここで確かめる。aratam は通さない。
+      - id: alert
+        name: 知らせのチャンネルに試験メッセージを送る
+        if: inputs.route == 'alert'
+        timeout-minutes: 3
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.ARATAM_SLACK_BOT_TOKEN }}
+          ALERT_CHANNEL: @@ALERT_CHANNEL@@   # arata-audit.yml の alert と同じチャンネル ID
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          text="arata の知らせの試験メッセージです (定時の通知が送れなかったときに、ここへ知らせます)。 $RUN_URL"
+@@ALERT_SEND@@

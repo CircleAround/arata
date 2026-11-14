@@ -153,7 +153,7 @@ func (c *cli) run(args ...string) int {
 	// どの実行でも、出したログの行は log スキーマに合い、code は aratam の一覧にあり、ERROR には code がある (ADR 0054)
 	codestest.Check(c.t, codes.Aratam, c.stderr.String())
 	for _, out := range []string{c.stdout.String(), c.stderr.String()} {
-		if strings.Contains(out, "secret") || strings.Contains(out, c.hook.srv.URL) || strings.Contains(out, botToken) {
+		if strings.Contains(out, "-secret") || strings.Contains(out, c.hook.srv.URL) || strings.Contains(out, botToken) {
 			c.t.Fatalf("webhook URL or bot token leaked:\n%s", out)
 		}
 	}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -30,11 +31,20 @@ type Deps struct {
 	Getenv func(string) string
 	// s3Store は読み込んだ設定のストアが s3:// か (中断の案内に使う)。
 	s3Store bool
+	// Stdin は対話の入力 (repo init のチャンネル ID)。IsTerminal は、標準入力が端末か。
+	// 決定 (ADR 0060): 対話で聞くのは、端末から打って引数が足りないときだけ。IsTerminal が nil か false なら聞かず、CONFIG_INVALID で止める
+	// (CI や LLM が、黙って既定で進まない)。テストは差し替える (実際の端末は使わない)。
+	Stdin      io.Reader
+	IsTerminal func() bool
+	// GitHubClient と GitHubAPIURL は repo check --github の API の向き先。ふだんは空 (https://api.github.com に固定。環境変数では変えられない)。
+	// テストだけが偽の API に差し替える。
+	GitHubClient *http.Client
+	GitHubAPIURL string
 }
 
 // DefaultDeps は実行時の依存 (実 AWS SDK、現在時刻、標準出力 / 標準エラー)。
 func DefaultDeps() Deps {
-	return Deps{Stdout: os.Stdout, Stderr: os.Stderr, Getenv: os.Getenv}
+	return Deps{Stdout: os.Stdout, Stderr: os.Stderr, Getenv: os.Getenv, Stdin: os.Stdin, IsTerminal: func() bool { return isTerminal(os.Stdin) }}
 }
 
 // Execute は引数で CLI を実行し終了コードを返す (設計書 8: 0 / 2 / 3)。
@@ -622,4 +632,21 @@ func orNone(l []string) string {
 		return "-"
 	}
 	return strings.Join(l, ", ")
+}
+
+// isTerminal は f が端末かを、標準ライブラリだけで判定する (依存を足さない。ADR 0060)。
+// 文字デバイスであることを見る。/dev/null も文字デバイスなので、同じファイルなら端末としない
+// (CI や cron は、標準入力を /dev/null にする)。パイプ・ふつうのファイル・閉じた入力は、端末ではない。
+func isTerminal(f *os.File) bool {
+	if f == nil {
+		return false
+	}
+	st, err := f.Stat()
+	if err != nil || st.Mode()&os.ModeCharDevice == 0 {
+		return false
+	}
+	if null, err := os.Stat(os.DevNull); err == nil && os.SameFile(st, null) {
+		return false
+	}
+	return true
 }

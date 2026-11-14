@@ -20,8 +20,8 @@ slack:
   # 送り方は bot トークン (chat.postMessage)。秘密はトークン 1 つで、送り先はチャンネル ID (秘密ではない) で書く。
   # Slack アプリは deploy/slack/app-manifest.yaml から作る (scope は chat:write だけ)。bot は、送り先のチャンネルに招待しておく。
   bot_token_env: ARATAM_SLACK_BOT_TOKEN             # bot トークン (xoxb-...) を入れる環境変数の名前。トークンは設定ファイルに書かない
-  channel: ""                                       # 必須。通常用のチャンネル ID (例 C0123456789。名前ではなく ID)
-  urgent_channel: ""                                # 緊急用のチャンネル ID。空にすると channel に送り、冒頭に urgent_mention を付ける
+  channel: "C0123456789"                            # 必須。通常用のチャンネル ID (例 C0123456789。名前ではなく ID)
+  urgent_channel: "C0123456780"                     # 緊急用のチャンネル ID。空にすると channel に送り、冒頭に urgent_mention を付ける
   urgent_mention: "<!channel>"                      # 緊急用を通常用に送るときのメンション (空なら付けない)
   format: blocks                                    # blocks = Block Kit (見出し・件数・まず対応・まとめて確認) | text = mrkdwn の本文だけ (v0.3.0 までの書式)
   # 非推奨 (ADR 0061): Incoming Webhook の方式。動き続けるが、config check と doctor が警告を出す。新しく使わない (空のままにする)。

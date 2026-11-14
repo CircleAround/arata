@@ -1,0 +1,25 @@
+
+      # 定時の実行で、Slack に何も届かなかったときに、知らせのチャンネルへ 1 行を送る (説明書「定時の通知が送れなかったとき」。ADR 0060)。
+      # 通知そのものが壊れると (設定の誤り、バイナリが取れない、認証の失敗、aratam の異常終了)、aratam は知らせられない。
+      # aratam を通さず、同じ bot トークンで chat.postMessage を直接呼ぶ。送り先は、このファイルに書いたチャンネル ID (秘密ではない)。
+      # 送るのは「監査対象の名前・プロファイル・失敗した段階の id・この実行の URL」だけ。指摘の中身・件数・ログの文は送らない。
+      # 失敗した段階は toJSON(steps) の outcome から拾う (id は、このファイルに書いた名前。値は見ない)。
+      # 手動実行 (workflow_dispatch) では送らない (実行した人が結果を見ている)。
+      # aratam が「実行されていない」「一部が取れなかった」を Slack に送れたとき (上の delivered) も送らない。
+      # トークンそのものが使えないとき (未登録・失効) は、ここも送れない。ジョブは赤のままで、下のエラーが出る。
+      # 定時の前に、arata repo check --github (未登録) と arata-notify-test の alert (失効・bot がチャンネルにいない) で確かめておく。
+      - id: alert
+        name: 定時の通知が送れなかったことを知らせる
+        if: failure() && github.event_name == 'schedule' && steps.notify.outputs.delivered != 'true'
+        timeout-minutes: 3
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.ARATAM_SLACK_BOT_TOKEN }}
+          ALERT_CHANNEL: @@ALERT_CHANNEL@@   # 知らせのチャンネル ID (arata repo init --alert-channel)
+          STEPS: ${{ toJSON(steps) }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # id は英小文字・数字・ハイフンのものだけを拾う (このファイルの id の形)。outcome のほかの値・outputs は読まない
+          failed="$(jq -r '[to_entries[] | select(.value.outcome == "failure") | .key | select(test("^[a-z0-9-]{1,40}$"))] | join(", ")' <<<"$STEPS" 2>/dev/null)" || failed=""
+          echo "failed steps: ${failed:-unknown}"
+          text="arata の定時の通知を送れていません。対象: $ARATA_TARGET / プロファイル: $PROFILE / 失敗した段階: ${failed:-不明} / $RUN_URL"
+@@ALERT_SEND@@

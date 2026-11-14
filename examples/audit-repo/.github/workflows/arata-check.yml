@@ -1,7 +1,7 @@
 # PR で設定 (arata.yaml・aratam.yaml) と allowlist.yaml の形を検査する。
 # allowlist.yaml の書き間違い (主体の指定が 2 つ、expires の日付の形、未知のキーなど) を、マージの前に止める。
 # マージ後に気づくと、次の定時の監査が設定エラーで止まる (aratam が「実行されていない」と知らせる)。
-# arata repo init が書き出したファイル (ADR 0059)。手で直さない: 版を上げる・アカウントを足すときは、
+# arata repo init が書き出したファイル (ADR 0059・0060)。手で直さない: 版を上げる・アカウントを足すときは、
 # 同じ引数で arata repo init --force を流して書き直し、PR の差分で確かめる (このリポジトリの README.md)。
 # コメントの「説明書」は、arata のリポジトリの examples/github-actions/README.md。
 # 使い方は説明書の「PR で設定を検査する」。ジョブの名前 (check) は、main のルールセットの必須のチェックの名前 (github/main.tf)。
@@ -9,10 +9,12 @@
 # AWS にも Slack にも繋がない。認証も secrets も使わないので、権限は contents: read だけ。
 # 検査するのはリポジトリの中の arata.yaml と aratam.yaml のすべて。
 #
-# 定時の監査と同じ版の arata / aratam で、同じ判別を、マージの前に流す:
-#   - versions: arata を使うワークフローの ARATA_VERSION が、すべて同じ版に固定されている
-#   - check:    その版で全部の設定に config check をかけ、aratam.yaml ごとに Slack への送り方を判別する (定時の監査と同じスクリプト)
-# 版を上げる PR・設定を直す PR・スクリプトを直す PR のどれでも、「定時の実行で初めて判別が外れる」ことを、ここで止める。
+# 定時の監査と同じ版の arata / aratam で、マージの前に流す:
+#   - versions:   arata を使うワークフローの ARATA_VERSION が、すべて同じ版に固定されている
+#   - check:      その版で全部の設定に config check をかける
+#   - repo-check: この一式 (ワークフロー・github/ の Terraform・README) が、書き出した版と引数の一式と揃っていて、
+#                 アカウントごとの aratam.yaml が、ワークフローの渡す秘密 (bot トークン) で送る設定になっている (arata repo check。ADR 0060)
+# 版を上げる PR・設定を直す PR のどれでも、「定時の実行で初めて食い違いが分かる」ことを、ここで止める。
 name: arata-check
 
 on:
@@ -104,8 +106,6 @@ jobs:
       # 出力はそのまま出す。検査の結果に出るのは PR のファイルの中身 (行番号と項目) で、PR を読める人には元から見えている。
       # 標準エラーの JSON のログは同じ内容の繰り返しなので出さない。
       # 設定が 1 つも見つからなければ失敗にする (置き場所を変えたのに、何も検査しないまま通るのを防ぐ)。
-      # aratam.yaml は、形の検査のあとに Slack への送り方も判別する (定時の監査・試しの送信と同じ .github/scripts/arata-slack-method.sh)。
-      # bot / webhook 以外なら失敗にする。秘密は使わない (判別は設定の形だけで決まる)。
       - id: check
         name: arata config check / aratam config check
         run: |
@@ -120,15 +120,6 @@ jobs:
             echo "== $tool config check -c $file"
             if ! "$tool" config check -c "$file" </dev/null 2>/dev/null; then
               status=1
-              continue
-            fi
-            if [ "$tool" = aratam ]; then
-              if method="$(.github/scripts/arata-slack-method.sh "$file" </dev/null)" &&
-                urgent="$(.github/scripts/arata-slack-method.sh --urgent-webhook "$file" </dev/null)"; then
-                echo "slack method: $method (urgent_webhook: $urgent)"
-              else
-                status=1
-              fi
             fi
           done < <(find . -path ./.git -prune -o -type f \( -name arata.yaml -o -name aratam.yaml \) -print | sort)
           if [ "$count" -eq 0 ]; then
@@ -136,3 +127,13 @@ jobs:
             exit 1
           fi
           exit "$status"
+
+      # この一式が、書き出した版・引数の一式と揃っていることと、アカウントごとの aratam.yaml がワークフローと合っていることを確かめる (ADR 0060)。
+      # 見るのはリポジトリの中のファイルだけ (--github は付けない。PR の検査は、秘密も、GitHub の設定を読む権限も持たない)。
+      # 引数は、この一式を書き出したときのもの (README.md のコマンドと同じ)。ng があれば終了コード 2。
+      # 生成物を手で直した・aratam.yaml を Webhook の方式にした・古い版の残りがある、を、マージの前に止める。
+      # 出力は人向けの表をそのまま出す (出るのは PR のファイルの名前と、直し方)。標準エラーの JSON のログは、同じ内容の繰り返しなので出さない。
+      - id: repo-check
+        name: arata repo check
+        if: always() && steps.install.outcome == 'success'
+        run: arata repo check --owner example-org --repo security-audit --accounts prod,staging --audit-account 111122223333 --store-bucket example-arata-store --region ap-northeast-1 --alert-channel C0123456782 --schedule --out . </dev/null 2>/dev/null

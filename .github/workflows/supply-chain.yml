@@ -38,8 +38,16 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: go run ./tools/actionsgate -days 7 -lock .github/workflows/actions.lock .github/workflows examples/audit-repo/.github/workflows
+      # 見本 (examples/audit-repo) は、知らせのチャンネルを使う形。知らせを使わない形 (--alert-channel none) は、ここで書き出して確かめる (ADR 0060)。
+      # 引数はすべて架空の値。GitHub にも AWS にも繋がない
+      - name: 知らせを使わない形の一式を書き出す
+        run: |
+          go run ./cmd/arata repo init --owner example-org --repo security-audit --accounts prod,staging --audit-account 111122223333 \
+            --store-bucket example-arata-store --region ap-northeast-1 --alert-channel none \
+            --channel prod=C0123456789,staging=C0123456781 --urgent-channel prod=C0123456780,staging=same \
+            --schedule --arata-version v0.15.0 --out "$RUNNER_TEMP/no-alert"
       - name: actionlint
-        run: go run "${ACTIONLINT/@//cmd/actionlint@}" .github/workflows/*.yml examples/audit-repo/.github/workflows/*.yml
+        run: go run "${ACTIONLINT/@//cmd/actionlint@}" .github/workflows/*.yml examples/audit-repo/.github/workflows/*.yml "$RUNNER_TEMP"/no-alert/.github/workflows/*.yml
       # ロックファイルが古い・壊れている・上流と合わないときに落ちる。無いときは読み飛ばす
       - name: workflow lockfile
         env:
@@ -61,6 +69,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      # 知らせを使わない形 (--alert-channel none) も確かめる (上の actions のジョブと同じ引数。ADR 0060)
+      - name: 知らせを使わない形の一式を書き出す
+        run: |
+          go run ./cmd/arata repo init --owner example-org --repo security-audit --accounts prod,staging --audit-account 111122223333 \
+            --store-bucket example-arata-store --region ap-northeast-1 --alert-channel none \
+            --channel prod=C0123456789,staging=C0123456781 --urgent-channel prod=C0123456780,staging=same \
+            --schedule --arata-version v0.15.0 --out "$RUNNER_TEMP/no-alert"
       - name: zizmor を取得する
         run: |
           cd "$RUNNER_TEMP"
@@ -70,12 +89,12 @@ jobs:
       - name: zizmor
         env:
           GH_TOKEN: ${{ github.token }}   # 固定した commit の偽装や既知の脆弱な action を調べるオンラインの検査に使う
-        run: '"$RUNNER_TEMP/zizmor" --config .github/zizmor.yml . examples/audit-repo/.github/workflows/*.yml'
+        run: '"$RUNNER_TEMP/zizmor" --config .github/zizmor.yml . examples/audit-repo/.github/workflows/*.yml "$RUNNER_TEMP"/no-alert/.github/workflows/*.yml'
 
   # arata repo init が書き出す GitHub の設定の Terraform (examples/audit-repo は、その出力そのもの。ADR 0059)。
   #   - provider の版が公開から 7 日以上 (レジストリの公開日を読む)
   #   - terraform fmt / validate (書き出した lock のハッシュで、取得した provider を確かめる)
-  #   - 秘密の箱を、偽の GitHub API (テストの中の httptest) に当てる: 既にある秘密に 1 度も書き込まない
+  # plan も apply もしない。この一式の Terraform は秘密に触れない (ADR 0060。秘密の箱をやめたので、偽の GitHub API への apply は無くなった)。
   # 実際の GitHub には接続しない。Terraform 本体は版と sha256 を固定して公式の配布元から取る。
   # Terraform 本体は Go のモジュールでも action でもないので、agegate・actionsgate の対象外。版を上げるときは、
   # 公開から 7 日以上の版を選び、公開日と SHA256SUMS の値を PR に書く (docs/supply-chain.md「道具の版を上げる」)。
@@ -93,7 +112,7 @@ jobs:
           go-version-file: go.mod
           cache: false
       - name: provider-gate (Terraform の provider は公開から 7 日以上)
-        run: go run ./tools/tfprovidergate -days 7 examples/audit-repo/github/.terraform.lock.hcl examples/audit-repo/github/secrets/.terraform.lock.hcl
+        run: go run ./tools/tfprovidergate -days 7 examples/audit-repo/github/.terraform.lock.hcl
       - name: terraform を取得する
         run: |
           cd "$RUNNER_TEMP"
@@ -102,10 +121,10 @@ jobs:
           mkdir terraform-bin
           unzip -q terraform.zip terraform -d terraform-bin
           echo "$RUNNER_TEMP/terraform-bin" >>"$GITHUB_PATH"
-      - name: terraform fmt / validate と、偽の GitHub API への apply
+      - name: terraform fmt / validate
         env:
           ARATA_TEST_TERRAFORM: '1'
-        run: go test ./internal/repoinit -run 'Terraform|SecretBoxes' -count=1 -v
+        run: go test ./internal/repoinit -run 'Terraform' -count=1 -v
 
   # 依存の既知の脆弱性。Go は呼び出し経路まで見る govulncheck、deploy/sandbox の pnpm の依存は osv-scanner
   vulnerabilities:

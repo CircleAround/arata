@@ -1,7 +1,7 @@
 # Slack への送信だけを確かめる (workflow_dispatch)。監査 (arata run) は回さず、aratam test-notify で試験メッセージを 1 通送る。
-# 新しい通知先 (チャンネル) を足したとき、Webhook や bot トークンを入れ替えたときに、environment の secrets と
-# リポジトリの aratam.yaml の組み合わせで届くかを確かめる。
-# arata repo init が書き出したファイル (ADR 0059)。手で直さない: 版を上げる・アカウントを足すときは、
+# 新しい通知先 (チャンネル) を足したとき・変えたとき、bot トークンを入れ替えたときに、environment の secrets と
+# リポジトリの aratam.yaml の組み合わせで届くかを確かめる (bot がそのチャンネルに招待されているかは、送ってみないと分からない)。
+# arata repo init が書き出したファイル (ADR 0059・0060)。手で直さない: 版を上げる・アカウントを足すときは、
 # 同じ引数で arata repo init --force を流して書き直し、PR の差分で確かめる (このリポジトリの README.md)。
 # コメントの「説明書」は、arata のリポジトリの examples/github-actions/README.md。
 # 使い方・注意は説明書の「Slack への送信だけを確かめる」。
@@ -20,9 +20,9 @@ on:
         options: [prod, staging]   # arata-audit.yml の matrix.account と同じ並び
         required: true
       route:
-        description: 'normal = 通常用に 1 通 / urgent = 緊急用に 1 通 (メンションが付くなら、それも届く)'
+        description: 'normal = 通常用に 1 通 / urgent = 緊急用に 1 通 (メンションが付くなら、それも届く) / alert = 知らせのチャンネルに 1 通 (定時の通知が送れなかったときの知らせの確認。アカウントによらない)'
         type: choice
-        options: [normal, urgent]
+        options: [normal, urgent, alert]
         required: true
 
 permissions: {}
@@ -59,8 +59,8 @@ jobs:
           }
           [[ "$ACCOUNT" =~ ^[a-z0-9][a-z0-9-]*$ ]] || fail "account は小文字の英数字とハイフン"
           case "$ROUTE" in
-            normal | urgent) ;;
-            *) fail "route は normal / urgent" ;;
+            normal | urgent | alert) ;;
+            *) fail "route は normal / urgent / alert" ;;
           esac
 
       - id: checkout
@@ -87,37 +87,21 @@ jobs:
           done
           echo "$dir" >>"$GITHUB_PATH"
 
-      # 送り方の判別は、定時の監査と同じスクリプト (定時の通知と同じ判別で送って、初めて定時の通知の確認になる)。
-      # bot / webhook 以外なら、ここで止まる。
-      - id: slack-method
-        name: Slack への送り方を判別する
-        timeout-minutes: 2
-        run: |
-          method="$(.github/scripts/arata-slack-method.sh "$ARATA_CONFIG_DIR/aratam.yaml")"
-          urgent="$(.github/scripts/arata-slack-method.sh --urgent-webhook "$ARATA_CONFIG_DIR/aratam.yaml")"
-          echo "slack method=$method urgent_webhook=$urgent"
-          echo "method=$method" >>"$GITHUB_OUTPUT"
-          echo "urgent_webhook=$urgent" >>"$GITHUB_OUTPUT"
-
       # secrets の渡し方は監査の notify と同じにする (同じ secrets と同じ aratam.yaml で送って、初めて定時の通知の確認になる)。
       # ログの方針も監査と同じ: 出力は実行環境の一時ファイルに書き、Actions には INFO 以外の level / code / source だけを出す。
-      # 失敗の見分け: CONFIG_INVALID = 設定の誤りか、secret が空 (終了コード 2) / SEND_FAILED = Slack が受け取らなかった (終了コード 5)。
-      # bot トークンの方式の SEND_FAILED には、Slack の error コードだけを足して出す (not_in_channel = bot をそのチャンネルに招待する、など。説明書)。
+      # 失敗の見分け: CONFIG_INVALID = 設定の誤りか、トークンが未登録 (終了コード 2) / SEND_FAILED = Slack が受け取らなかった (終了コード 5)。
+      # SEND_FAILED には、Slack の error コードだけを足して出す (not_in_channel = bot をそのチャンネルに招待する、など。説明書)。
       # コードは、ログの slack_error (機械が読む項目。aratam schema log) から読む。人向けの error の文からは切り出さない。
       # slack_error を出すのは v0.15.0 以降の aratam。それより前の版では、この 1 行 (slack error=…) が出ないだけで、ほかは同じに動く。
       # aratam が形を確かめた値で、ここでも形を確かめてから出す。チャンネル ID・案内の文・Webhook の応答の本文は出さない。
       - id: test-notify
         name: aratam test-notify
+        if: inputs.route != 'alert'
         timeout-minutes: 3
         env:
-          # aratam.yaml が使う secret だけを渡す (使わないものは空)。Webhook の方式なら上の 2 つ (緊急用は、aratam.yaml が別に持つときだけ)、
-          # bot トークンの方式なら下の 1 つ。使わない秘密の箱は、仮の値のままでも、消してあってもよい
-          ARATAM_SLACK_WEBHOOK: ${{ steps.slack-method.outputs.method == 'webhook' && secrets.ARATAM_SLACK_WEBHOOK || '' }}
-          ARATAM_SLACK_URGENT_WEBHOOK: ${{ steps.slack-method.outputs.method == 'webhook' && steps.slack-method.outputs.urgent_webhook == 'true' && secrets.ARATAM_SLACK_URGENT_WEBHOOK || '' }}
-          ARATAM_SLACK_BOT_TOKEN: ${{ steps.slack-method.outputs.method == 'bot' && secrets.ARATAM_SLACK_BOT_TOKEN || '' }}
+          # Slack の秘密は bot トークンの 1 つだけ (監査の notify と同じ。ADR 0060・0061)
+          ARATAM_SLACK_BOT_TOKEN: ${{ secrets.ARATAM_SLACK_BOT_TOKEN }}
         run: |
-          # 渡された秘密 (= aratam.yaml が使うもの) が仮の値のままなら、名前を出して止める (監査の notify と同じ)
-          .github/scripts/arata-secret-check.sh ARATAM_SLACK_WEBHOOK ARATAM_SLACK_URGENT_WEBHOOK ARATAM_SLACK_BOT_TOKEN
           log="$RUNNER_TEMP/aratam.log"
           args=(test-notify -c "$ARATA_CONFIG_DIR/aratam.yaml")
           if [ "$ROUTE" = urgent ]; then
@@ -130,3 +114,35 @@ jobs:
             | select(test("^[a-z0-9_]{1,64}$")) | "slack error=\(.)"' "$log" || true
           echo "aratam exit=$status"
           exit "$status"
+
+      # route: alert は、定時の通知が送れなかったことの知らせ (arata-audit.yml の最後の alert) と同じ送り方で、知らせのチャンネルに 1 通送る。
+      # 知らせは、ふだん使われない。bot を知らせのチャンネルに招待し忘れていることを、定時の前に、ここで確かめる。aratam は通さない。
+      - id: alert
+        name: 知らせのチャンネルに試験メッセージを送る
+        if: inputs.route == 'alert'
+        timeout-minutes: 3
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.ARATAM_SLACK_BOT_TOKEN }}
+          ALERT_CHANNEL: C0123456782   # arata-audit.yml の alert と同じチャンネル ID
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          text="arata の知らせの試験メッセージです (定時の通知が送れなかったときに、ここへ知らせます)。 $RUN_URL"
+          # ここから下は、arata-audit.yml の alert と arata-notify-test.yml の alert で同じ (同じ送り方で確かめて、初めて確認になる)。
+          # トークンは秘密なので、ヘッダーは標準入力で渡し (引数に書かない)、curl の出力もエラーも出さない。前後の空白 (secret の末尾の改行) は除く。
+          token="$(printf '%s' "${SLACK_BOT_TOKEN:-}" | tr -d '[:space:]')"
+          if [ -z "$token" ]; then
+            echo "::error::ARATAM_SLACK_BOT_TOKEN が未登録なので、知らせを送れない (手元で arata repo check --github)"
+            exit 1
+          fi
+          body="$RUNNER_TEMP/arata-alert.json"
+          jq -n --arg channel "$ALERT_CHANNEL" --arg text "$text" '{channel: $channel, text: $text, unfurl_links: false, unfurl_media: false}' >"$body"
+          resp="$(printf 'Authorization: Bearer %s\n' "$token" |
+            curl --silent --fail --max-time 20 --retry 2 -H @- -H 'Content-Type: application/json; charset=utf-8' \
+              --data-binary "@$body" https://slack.com/api/chat.postMessage 2>/dev/null)" || resp=""
+          # Slack は失敗でも HTTP 200 を返す。応答の ok が true のときだけ、届いたとみなす
+          if [ "$(jq -r '.ok == true' <<<"$resp" 2>/dev/null)" != true ]; then
+            # error は、決まった形 (英小文字・数字・_) のときだけ出す (not_in_channel = bot を知らせのチャンネルに招待する、など)。応答の本文は出さない
+            err="$(jq -r '.error | strings | select(test("^[a-z0-9_]{1,64}$"))' <<<"$resp" 2>/dev/null)" || err=""
+            echo "::error::知らせを送れなかった (slack error=${err:-unknown})"
+            exit 1
+          fi

@@ -2,12 +2,9 @@
 
 ## 概要
 
-arata は AWS のログと設定を定期的に改め、**前回から新しく発生したもの**を報せる監査エンジン。
-エンジンが行うのは収集・保存・差分判定・レポート生成 (report.json / report.md) まで。
-通知・定期起動・要約は組み込み側 (cron スクリプトや LLM) の仕事。
+arata は AWS のログと設定を定期的に改め、**前回から新しく発生したもの**を報せる監査エンジン。エンジンが行うのは収集・保存・差分判定・レポート生成 (report.json / report.md) まで。通知・定期起動・要約は組み込み側 (cron スクリプトや LLM) の仕事。
 
-LLM の役割は「危険の判定を代行する」ことではなく「人が短時間で判断できる材料に整える」こと。
-判定の責任は規則 (エンジン) と人にある。LLM は allowlist を書き換えない (approve は人が実行する)。
+LLM の役割は「危険の判定を代行する」ことではなく「人が短時間で判断できる材料に整える」こと。判定の責任は規則 (エンジン) と人にある。LLM は allowlist を書き換えない (approve は人が実行する)。
 
 ## 概念
 
@@ -46,6 +43,7 @@ LLM の役割は「危険の判定を代行する」ことではなく「人が�
 | `arata review [--format json]` | 未対応 (open / acked) の一覧と approve の対象 | よい |
 | `arata approve <id> --note ... [--expires] [--tag] [--commit]` | allowlist に追記し finding を解消 (`--destination` は主体ではなく、外向きの引き受けの行き先のアカウントを既知にする) | **しない** (人に提案する) |
 | `arata ack / snooze --until / resolve <id>` | finding の状態を変える | 人の指示があれば |
+| `arata repo check … [--github] [--format json]` | 監査を回すリポジトリ (`arata repo init` の一式) が揃っているか。`--github` で environment と秘密の名前も読む (GET だけ。値は読まない)。足りない秘密の登録のコマンドを出す | よい (読むだけ)。出たコマンド (`gh secret set`) は人が打つ |
 | `arata help ai onboarding` | 導入の流れ (init の後、最初の run の指摘を通知の前に片付ける手順。ack / snooze / resolve の使い分け。チェックやソースを後から足すときの順番、設定の値の決め方) | よい (読み取りのみ) |
 | `arata help ai logs` | 記録の集め方 (どの記録があればどのチェックが動くか、ログの出し方、doctor の読み方) | よい (読み取りのみ) |
 | `arata help ai request_lines` | 1 リクエストが複数行のアプリのログ (Rails の既定のログなど) を `format: request_lines` で読む設定の書き方と確かめ方 | よい (読み取りのみ) |
@@ -87,6 +85,8 @@ LLM の役割は「危険の判定を代行する」ことではなく「人が�
 | `USER_ID_MISSING` / `USER_ID_INVALID` | ユーザー ID の付いたリクエストが無く、要るチェックを skip した / 形に合わないユーザー ID・ログインの結果を捨てた (警告) | アプリの行と `request.user_id` / `request.auth` を確かめる (`arata help ai user_id`) |
 | `WAF_RESOURCES_UNKNOWN` / `MATCH_RATE_HISTORY_UNAVAILABLE` | WebACL の資源の一覧を取れず不明として扱った / 直近の解釈率を読めず、急落 (`FORMAT_DRIFT`) を判定していない (警告) | 前者は読み取りロールの権限。後者が続くならストアの状態を人に知らせる (見ていない状態) |
 | `INIT_INCOMPLETE` / `ALLOWLIST_MISSING` / `REBUILD_WARNING` / `REBUILT_FROM_SCRATCH` | init が途中で止まった / allowlist が無く空として扱った / rebuild の警告 / raw だけから作り直した (警告) | `arata init --resume`。allowlist の場所を確かめる。最後のものは、次の run で未解決の指摘がすべて new として再報告されると人に知らせる |
+| `REPO_SET_DIFFERS` / `REPO_NOTIFY_MISMATCH` | `arata repo check` のファイルの検査: 監査を回すリポジトリの一式が、この版の一式と揃っていない (生成物の違い・古い版の残り・ワークフローの使う秘密・アカウントの設定が無い) / `aratam.yaml` が bot トークンの方式でない | その行の `fix` を人に示す (`arata repo init … --force`、`slack` の節に書く行)。生成物を手で直さない |
+| `REPO_ENVIRONMENT_MISSING` / `REPO_ENVIRONMENT_OPEN` / `REPO_ENVIRONMENT_PROTECTED` / `REPO_SECRET_MISSING` / `REPO_SECRET_UNUSED` / `REPO_SECRET_OUTSIDE_ENVIRONMENT` / `GITHUB_API_FAILED` | `arata repo check --github`: environment が無い / デプロイできるブランチが既定のブランチだけでない / レビュー担当か待ち時間が付いている (警告) / 使う秘密が未登録 / 使わない秘密が残っている (警告) / リポジトリの (environment でない) 秘密がある / GitHub の API を読めない | 秘密は `missing_secrets` のコマンドを人が打つ (arata も LLM も登録しない。値を受け取らない)。environment は `github/` の Terraform を人が当てる (`arata help ai runtime`) |
 
 `RUN_MISSED` と終了コードは LLM を経由せず組み込み側が直接通知する規則になっている。
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,6 +48,12 @@ type cli struct {
 	nextID int
 	s3     store.S3API     // s3:// のストアのテストで偽の S3 につなぐ
 	ctx    context.Context // 中断のテスト用。nil なら中断しない
+	// repo init の対話 (ADR 0060)。stdin は入力、terminal は「標準入力が端末」。既定は端末でない (聞かない)
+	stdin    string
+	terminal bool
+	// repo check --github の偽の API (ADR 0060)。空なら、GitHub を読むテストではない
+	githubURL    string
+	githubClient *http.Client
 	// onCollect は CloudTrail のクライアントを作るときに呼ばれる (収集の途中の中断の再現)。
 	onCollect func()
 	env       map[string]string // Getenv が返す環境変数 (テストを動かす環境の ARATA_CONFIG を見ない)
@@ -91,7 +98,13 @@ func (c *cli) writeConfig(body string) {
 func (c *cli) run(args ...string) int {
 	c.stdout.Reset()
 	c.stderr.Reset()
-	d := Deps{Stdout: c.stdout, Stderr: c.stderr, Getenv: func(k string) string { return c.env[k] }}
+	d := Deps{Stdout: c.stdout, Stderr: c.stderr, Getenv: func(k string) string { return c.env[k] },
+		Stdin: strings.NewReader(c.stdin), IsTerminal: func() bool { return c.terminal },
+		// 実際の api.github.com に向かないよう、GitHub の向き先は必ず偽物にする (偽の API を立てていないテストは、繋がらない場所)
+		GitHubAPIURL: "http://127.0.0.1:1", GitHubClient: c.githubClient}
+	if c.githubURL != "" {
+		d.GitHubAPIURL = c.githubURL
+	}
 	d.Engine = engine.Deps{
 		Limiter: noLimit{},
 		Now:     func() time.Time { return c.now },

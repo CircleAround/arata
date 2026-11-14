@@ -31,8 +31,9 @@ func TestNotifyTestTriggerAndInputs(t *testing.T) {
 	if a := in["account"]; a.Type != "choice" || !a.Required || strings.Join(a.Options, ",") != strings.Join(multi.Jobs["audit"].Strategy.Matrix.Account, ",") {
 		t.Errorf("account must be a choice of the accounts of %s: %+v", multiFile, a)
 	}
-	if r := in["route"]; r.Type != "choice" || !r.Required || strings.Join(r.Options, ",") != "normal,urgent" {
-		t.Errorf("route must be a choice of normal, urgent: %+v", r)
+	if r := in["route"]; r.Type != "choice" || !r.Required || strings.Join(r.Options, ",") != "normal,urgent,alert" {
+		// 見本は知らせのチャンネルを使う (--alert-channel)。alert は、その知らせの送り方の確認 (ADR 0060)
+		t.Errorf("route must be a choice of normal, urgent, alert: %+v", r)
 	}
 	if len(in) != 2 {
 		t.Errorf("inputs must be account and route only: %v", in)
@@ -61,7 +62,7 @@ func TestNotifyTestTriggerAndInputs(t *testing.T) {
 	if !(order["validate"] < order["checkout"] && order["checkout"] < order["install"] && order["install"] < order["test-notify"]) {
 		t.Errorf("step order: %v", order)
 	}
-	if s := stepByID(t, w, "test-notify"); s.ContinueOnErr != nil || s.TimeoutMinutes == 0 || s.If != "" {
+	if s := stepByID(t, w, "test-notify"); s.ContinueOnErr != nil || s.TimeoutMinutes == 0 || s.If != "inputs.route != 'alert'" {
 		t.Errorf("a failed send must leave the job red, with a timeout: %+v", s)
 	}
 	// 監査はしない。ストアにも監査対象にも触れない
@@ -89,7 +90,7 @@ func TestNotifyTestNeedsNoAWSCredentials(t *testing.T) {
 	}
 }
 
-// Slack の秘密の渡し方は監査の notify と同じ (片方だけを直して食い違うのを防ぐ)。
+// Slack の秘密の渡し方は監査の notify と同じ (片方だけを直して食い違うのを防ぐ)。渡すのは bot トークンだけ (ADR 0060)。
 func TestNotifyTestPassesSlackSecretsLikeTheAudit(t *testing.T) {
 	w, text := load(t, notifyTestFile)
 	for _, f := range workflowFiles {
@@ -99,12 +100,13 @@ func TestNotifyTestPassesSlackSecretsLikeTheAudit(t *testing.T) {
 		if string(x) != string(y) {
 			t.Errorf("env of test-notify differs from notify of %s:\n%s\n---\n%s", f, y, x)
 		}
-		// 送り方の判別も同じスクリプトを同じように呼ぶ (定時の通知と同じ判別で送って、初めて定時の通知の確認になる)
-		if a, b := stepByID(t, audit, "slack-method").Run, stepByID(t, w, "slack-method").Run; a != b {
-			t.Errorf("slack-method differs from %s:\n%s\n---\n%s", f, b, a)
+	}
+	for _, s := range steps(t, w) {
+		if s.ID == "slack-method" {
+			t.Error("the workflow must not detect the method at run time")
 		}
 	}
-	// secrets は Slack のものだけで、送る step にだけ渡す
+	// secrets は bot トークンだけで、送る step (aratam の送信と、知らせの確認) にだけ渡す
 	got := map[string]bool{}
 	for _, s := range regexp.MustCompile(`secrets\.\w+`).FindAllString(text, -1) {
 		got[s] = true
@@ -114,7 +116,7 @@ func TestNotifyTestPassesSlackSecretsLikeTheAudit(t *testing.T) {
 		names = append(names, s)
 	}
 	sort.Strings(names)
-	if strings.Join(names, ",") != "secrets.ARATAM_SLACK_BOT_TOKEN,secrets.ARATAM_SLACK_URGENT_WEBHOOK,secrets.ARATAM_SLACK_WEBHOOK" {
+	if strings.Join(names, ",") != "secrets.ARATAM_SLACK_BOT_TOKEN" {
 		t.Errorf("secrets: %v", names)
 	}
 	for k, v := range w.Env {
@@ -129,7 +131,7 @@ func TestNotifyTestPassesSlackSecretsLikeTheAudit(t *testing.T) {
 	}
 	for _, s := range steps(t, w) {
 		for k, v := range s.Env {
-			if strings.Contains(v, "secrets.") && s.ID != "test-notify" {
+			if strings.Contains(v, "secrets.") && s.ID != "test-notify" && s.ID != "alert" {
 				t.Errorf("secret %s must not be given to step %q", k, s.ID)
 			}
 		}
@@ -141,6 +143,39 @@ func TestNotifyTestPassesSlackSecretsLikeTheAudit(t *testing.T) {
 			}
 		}
 	}
+}
+
+// route: alert は、定時の通知が送れなかったことの知らせ (監査の最後の alert) と同じ送り方で、知らせのチャンネルに 1 通送る (ADR 0060)。
+// 知らせは、ふだん使われない。bot を知らせのチャンネルに招待し忘れていることを、定時の前に確かめる。
+func TestNotifyTestCanSendToTheAlertChannel(t *testing.T) {
+	w, _ := load(t, notifyTestFile)
+	a := stepByID(t, w, "alert")
+	if a.If != "inputs.route == 'alert'" || stepByID(t, w, "test-notify").If != "inputs.route != 'alert'" {
+		t.Errorf("alert runs only for the alert route: %q / %q", a.If, stepByID(t, w, "test-notify").If)
+	}
+	if len(a.Env) != 3 || a.Env["SLACK_BOT_TOKEN"] != "${{ secrets.ARATAM_SLACK_BOT_TOKEN }}" || a.Env["ALERT_CHANNEL"] != alertChannel || a.TimeoutMinutes == 0 {
+		t.Errorf("alert env: %v", a.Env)
+	}
+	// 送る部分は、監査の alert と 1 文字も違わない
+	audit, _ := load(t, multiFile)
+	const mark = "# ここから下は、"
+	x, y := stepByID(t, audit, "alert").Run, a.Run
+	if i, j := strings.Index(x, mark), strings.Index(y, mark); i < 0 || j < 0 || x[i:] != y[j:] {
+		t.Error("the sending part must be the same as the alert of the audit")
+	}
+	env := []string{"SLACK_BOT_TOKEN=" + fakeToken, "ALERT_CHANNEL=" + alertChannel, "RUN_URL=https://github.example/acme/audit/actions/runs/42"}
+	out, code, tmp := runStep(t, a.Run, fakeCurl(t, 0, `{"ok":true}`), env...)
+	if code != 0 {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	checkAlertCall(t, tmp, "arata の知らせの試験メッセージです (定時の通知が送れなかったときに、ここへ知らせます)。 https://github.example/acme/audit/actions/runs/42")
+	noLeak(t, out)
+	// bot が知らせのチャンネルにいない → 失敗し、Slack の error コードだけを出す
+	out, code, _ = runStep(t, a.Run, fakeCurl(t, 0, `{"ok":false,"error":"not_in_channel"}`), env...)
+	if code != 1 || !strings.Contains(out, "slack error=not_in_channel") {
+		t.Errorf("exit %d\n%s", code, out)
+	}
+	noLeak(t, out)
 }
 
 func notifyTestEnv(kv ...string) []string {
@@ -158,7 +193,7 @@ func notifyTestEnv(kv ...string) []string {
 func TestNotifyTestValidatesInputs(t *testing.T) {
 	w, _ := load(t, notifyTestFile)
 	script := stepByID(t, w, "validate").Run
-	for _, kv := range [][]string{nil, {"ROUTE", "urgent"}, {"ACCOUNT", "staging-2"}} {
+	for _, kv := range [][]string{nil, {"ROUTE", "urgent"}, {"ROUTE", "alert"}, {"ACCOUNT", "staging-2"}} {
 		t.Run("ok/"+strings.Join(kv, " "), func(t *testing.T) {
 			if out, code, _ := runStep(t, script, t.TempDir(), notifyTestEnv(kv...)...); code != 0 {
 				t.Errorf("exit %d\n%s", code, out)

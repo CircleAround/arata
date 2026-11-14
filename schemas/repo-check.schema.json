@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:arata:schema:repo-check:1",
+  "title": "repo-check",
+  "description": "arata repo check --format json の出力。監査を回すリポジトリの一式 (手元のファイル) と、--github を付けたときは GitHub の environment と秘密の名前を、読むだけで確かめた結果",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "repo-check"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "ok": {
+      "description": "ng の行が無い (終了コード 0)。warn だけなら true。ng が 1 つでもあれば false (終了コード 2)",
+      "type": "boolean"
+    },
+    "rows": {
+      "description": "検査の結果の行 (table の出力の行と同じ内容)",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/CheckRow"
+      }
+    },
+    "missing_secrets": {
+      "description": "environment に足りない秘密 (--github を付けたときだけ調べる)。名前ごとに、登録のコマンドと、値の形・取得元。値そのものは扱わない",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/MissingSecret"
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "schema_version",
+    "ok",
+    "rows",
+    "missing_secrets"
+  ],
+  "$defs": {
+    "CheckRow": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "description": "files = 手元のファイルの検査、github = GitHub の設定の検査 (--github)",
+          "type": "string",
+          "enum": [
+            "files",
+            "github"
+          ]
+        },
+        "item": {
+          "description": "検査した項目 (files / terraform / workflow_secrets / notify / accounts / github / environment / deployment_branches / environment_protection / secret / secret_unused / repository_secret)。開いた語彙",
+          "type": "string"
+        },
+        "target": {
+          "description": "対象 (ファイルのパス、アカウントの名前、秘密の名前)。項目の全体についての行には無い",
+          "type": "string"
+        },
+        "status": {
+          "description": "ng が 1 つでもあれば終了コード 2。skip = 検査していない (--github を付けていない)",
+          "type": "string",
+          "enum": [
+            "ok",
+            "warn",
+            "ng",
+            "skip"
+          ]
+        },
+        "code": {
+          "description": "ログと同じ固定語彙の code (warn・ng の行)",
+          "type": "string"
+        },
+        "detail": {
+          "description": "人向けの文。文言は固定しない (機械で読まない)",
+          "type": "string"
+        },
+        "fix": {
+          "description": "直し方。そのまま打てるコマンドか、ファイルに書く行 (人向け。秘密の値は含まない)",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "scope",
+        "item",
+        "status",
+        "detail"
+      ]
+    },
+    "MissingSecret": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "秘密の名前",
+          "type": "string"
+        },
+        "environment": {
+          "description": "登録する先の environment の名前",
+          "type": "string"
+        },
+        "command": {
+          "description": "そのまま打てる登録のコマンド (値は gh が端末で聞く。コマンドには含まない)",
+          "type": "string"
+        },
+        "value_format": {
+          "description": "値の形の例 (架空の値)",
+          "type": "string"
+        },
+        "source": {
+          "description": "値を取りに行く場所",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "environment",
+        "command",
+        "value_format",
+        "source"
+      ]
+    }
+  }
+}

@@ -24,11 +24,11 @@ build-local:
 test:
 	$(GO) test ./...
 
-## test-terraform: arata repo init が書き出す Terraform を、terraform fmt / validate と、偽の GitHub API への apply で確かめる
-## (terraform が PATH に要る。provider の取得でレジストリに繋ぐ。実際の GitHub には繋がない。ADR 0059。CI の supply-chain.yml と同じ)
+## test-terraform: arata repo init が書き出す Terraform を、terraform fmt / validate で確かめる
+## (terraform が PATH に要る。provider の取得でレジストリに繋ぐ。plan も apply もせず、実際の GitHub には繋がない。ADR 0059・0060。CI の supply-chain.yml と同じ)
 test-terraform:
-	$(GO) run ./tools/tfprovidergate -days 7 examples/audit-repo/github/.terraform.lock.hcl examples/audit-repo/github/secrets/.terraform.lock.hcl
-	ARATA_TEST_TERRAFORM=1 $(GO) test ./internal/repoinit -run 'Terraform|SecretBoxes' -count=1 -v
+	$(GO) run ./tools/tfprovidergate -days 7 examples/audit-repo/github/.terraform.lock.hcl
+	ARATA_TEST_TERRAFORM=1 $(GO) test ./internal/repoinit -run 'Terraform' -count=1 -v
 
 ## fuzz: ファズテストを対象ごとに FUZZTIME ずつ探索する (ADR 0041、docs/fuzzing.md。CI の fuzz.yml と同じ)
 FUZZTIME ?= 30s

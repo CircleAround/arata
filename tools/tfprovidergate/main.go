@@ -1,6 +1,6 @@
 // tfprovidergate は、Terraform の lock (.terraform.lock.hcl) に固定した provider の版が、公開から決まった日数を過ぎていることを確かめる CI 用の小さなツール。
 //
-//	go run ./tools/tfprovidergate -days 7 examples/audit-repo/github/.terraform.lock.hcl examples/audit-repo/github/secrets/.terraform.lock.hcl
+//	go run ./tools/tfprovidergate -days 7 examples/audit-repo/github/.terraform.lock.hcl
 //
 // arata repo init が書き出す GitHub の設定の Terraform は、provider を完全な版で固定する (ADR 0059)。Go のモジュールでも action でもないので、
 // tools/agegate と tools/actionsgate の対象にならない。公開時刻は Terraform のレジストリの /v1/providers/<namespace>/<name>/<version> の published_at を使う。
