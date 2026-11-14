@@ -246,6 +246,20 @@ func (l *List) OIDCRoleKnown(role string, at time.Time) bool {
 	return false
 }
 
+// OIDCEntranceKnown は、引き受け a の入り口 (プロバイダと、GitHub ならリポジトリと ref / environment / pull_request) が、ロールを問わず、
+// at 時点で期限内の項目のどれかにあるか。失敗した引き受けの記録にはロールが無いので、入り口だけで「既知リストにある入り口か」を data に出すために使う
+// (既知として報告を止める判定には使わない。ロールの分からない引き受けを既知にしない)。
+func (l *List) OIDCEntranceKnown(a OIDCAssume, at time.Time) bool {
+	for i := range l.OIDCSubjects {
+		e := &l.OIDCSubjects[i]
+		a.Role = e.Role
+		if e.active(at) && e.matches(a) {
+			return true
+		}
+	}
+	return false
+}
+
 // sameOIDCSubject は 2 つの項目が同じ入り口を書いているか (プロバイダ・ロール・リポジトリ・refs / environments の集合・pull_request が同じ)。
 func sameOIDCSubject(a, b *OIDCSubjectEntry) bool {
 	set := func(l []string) string {

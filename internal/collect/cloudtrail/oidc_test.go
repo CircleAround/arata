@@ -121,6 +121,19 @@ func TestNormalizeOIDCAssume(t *testing.T) {
 			}
 		})
 	}
+	// 信頼ポリシーが止めた引き受けの記録 (実際の形): requestParameters が null で roleArn が無い。sub とプロバイダは読める
+	denied := `{"userIdentity":{"type":"WebIdentityUser","principalId":"` + ghProvider + `:sts.amazonaws.com:repo:example-org@1234567/example-repo@7654321:ref:refs/heads/work",
+	  "userName":"repo:example-org@1234567/example-repo@7654321:ref:refs/heads/work","identityProvider":"` + ghProvider + `"},
+	  "eventSource":"sts.amazonaws.com","eventName":"AssumeRoleWithWebIdentity","sourceIPAddress":"203.0.113.30","userAgent":"` + ghAgent + `",
+	  "errorCode":"AccessDenied","errorMessage":"Not authorized to perform sts:AssumeRoleWithWebIdentity","requestParameters":null,"responseElements":null,"recipientAccountId":"123456789012","readOnly":true}`
+	d, ok := c.normalize(ev("e-denied", fuzzEventTime, denied))
+	if !ok || d.ErrorCode != "AccessDenied" || d.PrincipalARN != "" || d.Data["oidc_sub_form"] != "github" || d.Data["oidc_repo"] != "example-org/example-repo" ||
+		d.Data["oidc_ref"] != "refs/heads/work" || d.Data["oidc_owner_id"] != "1234567" || d.Data["gha_run_id"] != "19283746501" || d.Data["oidc_provider_account"] != "123456789012" {
+		t.Fatalf("%+v", d)
+	}
+	if _, has := d.Data["role_arn"]; has {
+		t.Fatalf("role_arn: %v", d.Data["role_arn"])
+	}
 	// ほかの AssumeRole には付けない
 	e, _ := c.normalize(ev("e-2", fuzzEventTime, assumeRole))
 	for k := range e.Data {

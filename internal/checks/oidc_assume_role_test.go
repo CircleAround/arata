@@ -146,8 +146,31 @@ func TestOIDCAssumeRole(t *testing.T) {
 	// 形の崩れた値 (ストアから読み戻した値を信用しない)
 	s.put(at(15, 0), "203.0.113.8", "", map[string]any{"oidc_provider": oidcGH, "role_arn": "arn:aws:iam::123456789012:role/gha-deploy\n", "oidc_sub_form": "github", "oidc_repo": "a/b <!here>", "oidc_sub_kind": "ref", "oidc_ref": "refs/heads/main"})
 
+	// 失敗の記録は requestParameters が無く、ロールが記録に無い (実際の記録の形)。sub で組を作る。知らないブランチでも、止められているので low
+	for i := 0; i < 3; i++ {
+		s.put(at(16, i), "203.0.113.30", "AccessDenied", map[string]any{"oidc_provider": oidcGH, "oidc_provider_account": "123456789012", "oidc_sub_form": "github",
+			"oidc_repo": "example-org/example-repo", "oidc_owner_id": "1234567", "oidc_repo_id": "7654321", "oidc_sub_kind": "ref", "oidc_ref": "refs/heads/work", "gha_run_id": "444"})
+	}
+	// 既知の入り口 (main) からの失敗も、ロールが記録に無いので組は別。入り口が既知リストにあることを data に出す
+	s.put(at(16, 30), "203.0.113.30", "AccessDenied", map[string]any{"oidc_provider": oidcGH, "oidc_sub_form": "github", "oidc_repo": "example-org/example-repo", "oidc_sub_kind": "ref", "oidc_ref": "refs/heads/main"})
+	// 以前の版で集めた記録 (プロバイダと sub の項目が無い) は判定しない。件数を注記に出す
+	for i := 0; i < 2; i++ {
+		s.put(at(17, i), "203.0.113.31", "", map[string]any{"role_arn": oidcDeploy, "recipient_account": "123456789012"})
+	}
+	s.put(at(17, 5), "203.0.113.31", "AccessDenied", map[string]any{"recipient_account": "123456789012"})
+
 	w := collect.Window{From: time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC), To: time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC)}
 	by := oidcEval(t, st, w, oidcAllowlist)
+	al0, _ := allowlist.Parse([]byte(oidcAllowlist))
+	if _, notes, err := oidcCheck().EvaluateWithNotes(context.Background(), st, w, al0); err != nil || len(notes) != 1 ||
+		!strings.Contains(notes[0], "oidc_assume_role") || !strings.Contains(notes[0], "3 件") || !strings.Contains(notes[0], "以前の版") {
+		t.Fatalf("notes: %q %v", notes, err)
+	}
+	for k := range by {
+		if strings.HasPrefix(k, "unparsed|") {
+			t.Errorf("以前の版の記録が finding になった: %s", k)
+		}
+	}
 
 	type want struct {
 		sev     Severity
@@ -171,6 +194,11 @@ func TestOIDCAssumeRole(t *testing.T) {
 		oidcGH + "|repo:mallory/fork:ref:refs/heads/main|" + oidcDeploy:                                      {Low, []string{"unknown_subject"}, "2 回試みて全部失敗", map[string]any{"denied": true, "has_errors": true, "role_known": true}},
 		oidcGH + "|repo:example-org/example-repo:ref:refs/heads/main|" + oidcNightly:                         {Medium, []string{"outside_hours", "unexpected_source"}, "既知の入り口だが、項目の時間帯の外・項目の送信元の外", map[string]any{"allowlist_status": "approved", "outside_count": 1}},
 		oidcGH + "|unparsed|unparsed":                                                                        {Medium, []string{"unknown_subject"}, "ロール (読めない) を", nil},
+		oidcGH + "|repo:example-org/example-repo:ref:refs/heads/work|-": {Low, []string{"unknown_subject"},
+			"example-org/example-repo のブランチ・タグ refs/heads/work から OIDC で 3 回試みて全部失敗 (信頼ポリシーなどが止めた。失敗の記録にロールは無い)",
+			map[string]any{"denied": true, "role_recorded": false, "role_known": false, "role_arn": nil, "repo": "example-org/example-repo", "ref": "refs/heads/work", "run_ids": []string{"444"},
+				"owner_id": "1234567", "entrance_known": false, "count": 3}},
+		oidcGH + "|repo:example-org/example-repo:ref:refs/heads/main|-": {Low, []string{"unknown_subject"}, "入り口は既知リストにある", map[string]any{"entrance_known": true, "role_recorded": false}},
 		"known:" + oidcDeploy: {Info, nil, "既知の入り口からの OIDC の引き受け 3 回は報告していない (ロール gha-deploy、入り口 2)",
 			map[string]any{"known_oidc": true, "count": 3, "subjects_total": 2,
 				"subjects": []string{oidcGH + "|repo:example-org/example-repo:environment:production", oidcGH + "|repo:example-org/example-repo:ref:refs/heads/main"}}},
@@ -382,7 +410,10 @@ func FuzzOIDCTuple(f *testing.F) {
 		if tu.provider != oidcUnparsed && (!record.ValidOIDCProvider(tu.provider) || tu.provider != provider) {
 			t.Fatalf("プロバイダ: %q", tu.provider)
 		}
-		if tu.role != oidcUnparsed && (tu.role != role || !strings.HasPrefix(role, "arn:aws") || strings.ContainsAny(role, "*?\n ")) {
+		if tu.role == oidcNoRole && role != "" {
+			t.Fatalf("ロールの値があるのに「記録に無い」: %q", role)
+		}
+		if tu.hasRole() && (tu.role != role || !strings.HasPrefix(role, "arn:aws") || strings.ContainsAny(role, "*?\n ")) {
 			t.Fatalf("ロール: %q", tu.role)
 		}
 		switch tu.form {
@@ -401,7 +432,7 @@ func FuzzOIDCTuple(f *testing.F) {
 		default:
 			t.Fatalf("sub の形: %q", tu.form)
 		}
-		for _, s := range []string{tu.key(), tu.entrance(), tu.roleLabel, oidcUnknownSummary(tu, true, false, true, 1)} {
+		for _, s := range []string{tu.key(), tu.entrance(), tu.roleLabel, oidcUnknownSummary(tu, true, true, false, true, 1)} {
 			if strings.ContainsAny(s, "\n\r\t<>\x00") {
 				t.Fatalf("表記に出してはいけない文字: %q", s)
 			}

@@ -774,7 +774,9 @@ func (e *Engine) ingest(ctx context.Context, source string, rec record.Record, p
 type EvalResult struct {
 	Results []checks.Result
 	// Proposals は WAF の修正提案の候補 (waf_review。ADR 0023)。
-	Proposals     []schema.Proposal
+	Proposals []schema.Proposal
+	// CoverageNotes はチェックが返した注記 (判定しなかった記録など。checks.Noter)。report.json の coverage.notes に出す。
+	CoverageNotes []string
 	ChecksRun     []string
 	ChecksSkipped []report.SkippedCheck
 }
@@ -824,6 +826,10 @@ func (e *Engine) Evaluate(ctx context.Context, profileName string, w collect.Win
 			var props []schema.Proposal
 			props, obs, err = p.Propose(ctx, q, w)
 			res.Proposals = append(res.Proposals, props...)
+		} else if n, ok := c.(checks.Noter); ok {
+			var notes []string
+			obs, notes, err = n.EvaluateWithNotes(ctx, q, w, e.al)
+			res.CoverageNotes = append(res.CoverageNotes, notes...)
 		} else {
 			obs, err = c.Evaluate(ctx, q, w, e.al)
 		}
@@ -1181,7 +1187,7 @@ func (e *Engine) RunWithOptions(ctx context.Context, profileName string, o RunOp
 	rep := e.buildReport(profileName, runID, w, now, cr, ev)
 	if dry != nil {
 		rep.DryRun = true
-		rep.Coverage.Notes = e.dryRunNotes(prof, w, dry, ev)
+		rep.Coverage.Notes = append(e.dryRunNotes(prof, w, dry, ev), rep.Coverage.Notes...)
 	}
 	if o.Prepare != nil {
 		if err := o.Prepare(rep); err != nil {
@@ -1394,11 +1400,14 @@ func (e *Engine) window(ctx context.Context, profileName string, prof config.Pro
 }
 
 func (e *Engine) buildReport(profileName, runID string, w collect.Window, now time.Time, cr CollectResult, ev EvalResult) *report.Report {
-	return report.Build(report.Input{
+	rep := report.Build(report.Input{
 		Profile: profileName, Name: e.cfg.Name, RunID: runID, Window: w, Now: now, DiffFrom: e.diffFrom,
 		Results: ev.Results, CollectErrors: cr.Errors, SourcesOK: cr.SourcesOK, Formats: cr.Formats,
 		ChecksRun: ev.ChecksRun, ChecksSkipped: ev.ChecksSkipped, Proposals: ev.Proposals,
 	})
+	// 決定 (ADR 0055): チェックが判定しなかった記録 (以前の版で集めた記録など) は、黙って捨てずに coverage.notes に出す
+	rep.Coverage.Notes = append(rep.Coverage.Notes, ev.CoverageNotes...)
+	return rep
 }
 
 func (e *Engine) markReported(ctx context.Context, rep *report.Report, now time.Time) error {

@@ -16,6 +16,9 @@ OIDC のトークンでのロールの引き受け (`AssumeRoleWithWebIdentity`)
 
 - **どのワークフローのファイルからかは分からない。** CloudTrail の記録にトークンの `job_workflow_ref` は残らない。
   既定のブランチの既存のワークフローを書き換える手口は、既知の入り口のままなので、ここでは見つからない (回数の外れと、入った後の操作で見る)
+- **失敗した引き受けの記録にはロールが無い** (`role_recorded: false`。Key のロールの部分は `-`)。CloudTrail の失敗の記録は `requestParameters` が空で、
+  どのロールを試したかは分からない。見出しは入り口 (sub) で書かれる。`entrance_known: true` なら、その入り口は既知リストのどれかの項目にある (一時的な失敗の可能性)
+- `coverage.notes` の「以前の版の arata が集めた … 記録 N 件を見ていない」は、プロバイダと sub を残す前に集めた記録。finding にはならない (版を上げた直後だけ出る)
 - `sub_form: unparsed` は sub が決まった形でない (sub の形をカスタマイズしたリポジトリを含む)。値は残していないので、リポジトリは CloudTrail で確かめる
 - `sub_form: not_read` は GitHub 以外のプロバイダ (EKS のサービスアカウント、Cognito など)。sub は読まず、(プロバイダ, ロール) の組で見る
 - ID 入りの sub (`repo:example-org@1234567/example-repo@7654321:…`) は ID を外して比べる。ID は `owner_id` / `repo_id` (複数あれば `owner_ids` / `repo_ids`)。
@@ -23,9 +26,9 @@ OIDC のトークンでのロールの引き受け (`AssumeRoleWithWebIdentity`)
 - `run_ids` は userAgent にあった GitHub Actions の実行の ID。**呼ぶ側が書ける値**なので、証拠ではなく手がかりとして使う
 - 引き受けた後のロールの活動は別のチェック (new_principal・principal_new_source・iam_changes・secret_access など) が見る。主体はロールの ARN
 
-- Key は `<プロバイダ>|<sub。読めなければ unparsed、GitHub 以外は ->|<ロールの ARN>`
+- Key は `<プロバイダ>|<sub。読めなければ unparsed、GitHub 以外は ->|<ロールの ARN。失敗の記録で無ければ ->`
 - data: `provider`、`provider_account`、`role_arn`、`repo`、`sub_kind` (ref / environment / pull_request)、`ref`、`environment`、`sub_form`、`reasons`、
-  `role_known`、`allowlist_status` (unknown / expired / approved)、`count`、`ips`、`run_ids`、`has_errors`、`denied`、`outside_count`。
+  `role_known`、`role_recorded` (false のときだけ)、`entrance_known`、`allowlist_status` (unknown / expired / approved)、`count`、`ips`、`run_ids`、`has_errors`、`denied`、`outside_count`。
   平常帯の行は `date`・`count`・`baseline_median`・`threshold`。info の行は `subjects`・`subjects_total`
 
 ## まず確かめること
@@ -39,7 +42,7 @@ OIDC のトークンでのロールの引き受け (`AssumeRoleWithWebIdentity`)
    `userIdentity.userName` が sub、`responseElements.credentials.accessKeyId` が一時キー
 5. 引き受けた後の操作: `aws cloudtrail lookup-events --lookup-attributes AttributeKey=AccessKeyId,AttributeValue=<一時キー>`
 6. GitHub の側: `run_ids` があれば `https://github.com/<repo>/actions/runs/<run_id>` の実行と、そのコミット・ワークフローの変更履歴を人に見てもらう
-7. `denied: true` なら引き受けは成功していない。同じ入り口の成功が別の時間帯に無いかを 4 で確かめる
+7. `denied: true` なら引き受けは成功していない。同じ入り口の成功が別の時間帯に無いかを 4 で確かめる。ロールが記録に無いときは、6 のワークフローの実行で、どのロールを指定していたかを見る
 
 ## 判断の分かれ目
 

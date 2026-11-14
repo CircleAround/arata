@@ -152,8 +152,8 @@ type Coverage struct {
 	ChecksSkipped []SkippedCheck  `json:"checks_skipped"`
 	// Formats は cloudwatch-logs ソースの解釈率 (設計書 2-2)。「取れていたか」の一部として必ず出す。
 	Formats []FormatCoverage `json:"formats"`
-	// Notes は「取れていたか」についての注記 (人が読む文)。今は試しの実行が、見た範囲が定時の実行より狭いことと、
-	// 日次集計を使うチェックが評価しなかった日を書く。注記が無ければ出さない (omitempty)。
+	// Notes は「取れていたか」についての注記 (人が読む文)。試しの実行が、見た範囲が定時の実行より狭いことと、
+	// 日次集計を使うチェックが評価しなかった日、チェックが判定しなかった記録 (以前の版で集めた記録など。checks.Noter) を書く。注記が無ければ出さない (omitempty)。
 	Notes []string `json:"notes,omitempty"`
 }
 

@@ -29,6 +29,11 @@ import (
 //   - data はストアから読み戻した値 (元はログ由来)。決まった形のときだけ使い、外れたら unparsed にまとめる (見出しにそのまま出さない)
 //   - Fingerprint は重大度と理由。IP は入れない (GitHub の実行環境の IP は毎回変わる)。run_id は呼ぶ側が書ける値なので判定に使わず、data に出すだけ
 //   - 主体 (principals) は見ない。ロールを主体として承認しても、入り口は既知にならない
+//   - 失敗した引き受けの記録は requestParameters が無く、ロールが記録に無い (実際の記録で確かめた)。ロールは「読めない」(unparsed) ではなく
+//     「記録に無い」(Key のロールの部分は -。data.role_recorded: false) として、sub で組を作る。ロールが分からないので既知にはならず、
+//     全部失敗なら low。入り口 (ロールを問わない) が既知リストにあるかを data.entrance_known と見出しに出す
+//   - 以前の版で集めた記録 (data に oidc_provider が無い。プロバイダと sub を残す前の記録) は判定しない。unparsed の finding にすると、
+//     版を上げた直後に、中身の分からない medium が出る。件数を coverage.notes に出す (EvaluateWithNotes。黙って捨てない)。平常帯にも数えない
 type OIDCAssumeRole struct {
 	Config config.OIDCAssumeRole
 }
@@ -61,6 +66,8 @@ const (
 	maxOIDCSubjects = 20
 	oidcUnparsed    = "unparsed"
 	oidcNoSub       = "-"
+	// oidcNoRole は、記録にロールが無い (失敗した引き受け。requestParameters が無い) ときの Key のロールの部分。
+	oidcNoRole = "-"
 )
 
 // oidcTuple は 1 つの引き受けの組。
@@ -75,9 +82,12 @@ type oidcTuple struct {
 
 func (t oidcTuple) key() string { return t.provider + "|" + t.sub + "|" + t.role }
 
+// hasRole はロールの ARN が決まった形で記録にあるか (読めない・記録に無いなら false)。
+func (t oidcTuple) hasRole() bool { return t.role != oidcUnparsed && t.role != oidcNoRole }
+
 func (t oidcTuple) assume() allowlist.OIDCAssume {
 	a := allowlist.OIDCAssume{Provider: t.provider, Repo: t.gh.Repo, Kind: t.gh.Kind, Ref: t.gh.Ref, Environment: t.gh.Environment}
-	if t.role != oidcUnparsed {
+	if t.hasRole() {
 		a.Role = t.role
 	}
 	return a
@@ -103,8 +113,11 @@ func (t oidcTuple) entrance() string {
 // data は組の各項目 (既知リストに書くときに使う値)。
 func (t oidcTuple) data(d map[string]any) {
 	d["provider"], d["sub_form"] = t.provider, t.form
-	if t.role != oidcUnparsed {
+	if t.hasRole() {
 		d["role_arn"] = t.role
+	}
+	if t.role == oidcNoRole {
+		d["role_recorded"] = false
 	}
 	if t.form != record.OIDCSubGitHub {
 		return
@@ -126,6 +139,8 @@ func oidcTupleOf(data map[string]any) oidcTuple {
 	}
 	if m := assumeRoleRe.FindStringSubmatch(dataStr(data, "role_arn")); m != nil && len(m[2]) <= maxAssumeLabel {
 		t.role, t.roleLabel = m[0], m[2]
+	} else if v, has := data["role_arn"]; !has || v == nil || v == "" {
+		t.role, t.roleLabel = oidcNoRole, "(記録に無い)"
 	}
 	if t.provider != record.GitHubOIDCProvider {
 		return t
@@ -196,15 +211,37 @@ func (a *oidcAgg) fill() map[string]any {
 	return a.eventAgg.data()
 }
 
+// oidcLegacy は、以前の版で集めた記録か (プロバイダと sub を残す前。collector は今、AssumeRoleWithWebIdentity の記録に oidc_provider を必ず付ける)。
+func oidcLegacy(e record.TrailEvent) bool {
+	_, has := e.Data["oidc_provider"]
+	return !has
+}
+
 func (c OIDCAssumeRole) Evaluate(ctx context.Context, q store.Query, w collect.Window, al *allowlist.List) ([]Observation, error) {
+	obs, _, err := c.EvaluateWithNotes(ctx, q, w, al)
+	return obs, err
+}
+
+// EvaluateWithNotes は Evaluate と同じ観測に、coverage.notes に出す注記 (見なかった記録) を添えて返す (Noter)。
+func (c OIDCAssumeRole) EvaluateWithNotes(ctx context.Context, q store.Query, w collect.Window, al *allowlist.List) ([]Observation, []string, error) {
+	obs, legacy, err := c.evaluate(ctx, q, w, al)
+	if err != nil || legacy == 0 {
+		return obs, nil, err
+	}
+	return obs, []string{fmt.Sprintf("oidc_assume_role: 以前の版の arata が集めた AssumeRoleWithWebIdentity の記録 %d 件を見ていない (プロバイダと sub を残す前の記録で、どこからの引き受けかが分からない。この版で集めた記録から判定する)", legacy)}, nil
+}
+
+// evaluate は観測と、判定しなかった以前の版の記録の件数を返す。
+func (c OIDCAssumeRole) evaluate(ctx context.Context, q store.Query, w collect.Window, al *allowlist.List) ([]Observation, int, error) {
 	f := store.EventFilter{NamePrefixes: []string{OIDCAssumeEvent}}
 	evs, err := windowEvents(ctx, q, w, f)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if al == nil {
 		al = &allowlist.List{}
 	}
+	legacy := 0
 	unknown, outside, known := map[string]*oidcAgg{}, map[string]*oidcAgg{}, map[string]*oidcAgg{}
 	status := map[string]allowlist.Status{}
 	reasons := map[string]map[string]bool{}
@@ -218,6 +255,10 @@ func (c OIDCAssumeRole) Evaluate(ctx context.Context, q store.Query, w collect.W
 	}
 	for _, e := range evs {
 		if e.Name != OIDCAssumeEvent || e.EventSource != "sts.amazonaws.com" {
+			continue
+		}
+		if oidcLegacy(e) {
+			legacy++
 			continue
 		}
 		t := oidcTupleOf(e.Data)
@@ -252,7 +293,12 @@ func (c OIDCAssumeRole) Evaluate(ctx context.Context, q store.Query, w collect.W
 
 	obs := map[string]Observation{}
 	for k, a := range unknown {
-		roleKnown := a.t.role != oidcUnparsed && al.OIDCRoleKnown(a.t.role, w.To)
+		roleKnown := a.t.hasRole() && al.OIDCRoleKnown(a.t.role, w.To)
+		entranceKnown := false
+		if a.t.role == oidcNoRole {
+			entranceKnown = al.OIDCEntranceKnown(a.t.assume(), w.To)
+			a.extra["entrance_known"] = entranceKnown
+		}
 		sev := Medium
 		if roleKnown {
 			sev = High
@@ -266,7 +312,7 @@ func (c OIDCAssumeRole) Evaluate(ctx context.Context, q store.Query, w collect.W
 		a.extra["role_known"] = roleKnown
 		a.extra["allowlist_status"] = string(status[k])
 		obs[k] = Observation{Check: c.Name(), Key: k, Severity: sev, Data: a.fill(),
-			Summary:     oidcUnknownSummary(a.t, roleKnown, denied, status[k] == allowlist.StatusExpired, a.count),
+			Summary:     oidcUnknownSummary(a.t, roleKnown, entranceKnown, denied, status[k] == allowlist.StatusExpired, a.count),
 			Fingerprint: fingerprint(sev, nil, reasonUnknownSubject, status[k], roleKnown)}
 	}
 	for k, a := range outside {
@@ -326,22 +372,36 @@ func (c OIDCAssumeRole) Evaluate(ctx context.Context, q store.Query, w collect.W
 
 	vol, err := c.volume(ctx, q, w, al, f, known)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	for _, o := range vol {
 		obs[o.Key] = o
 	}
-	return sortedObs(obs), nil
+	return sortedObs(obs), legacy, nil
 }
 
-func oidcUnknownSummary(t oidcTuple, roleKnown, denied, expired bool, count int) string {
-	who := "既知リストに無いロール " + t.roleLabel + " を、"
-	if roleKnown {
-		who = "既知のロール " + t.roleLabel + " を、既知リストに無い入り口 "
-	}
+func oidcUnknownSummary(t oidcTuple, roleKnown, entranceKnown, denied, expired bool, count int) string {
 	verb := "引き受け"
 	if denied {
 		verb = "試みて全部失敗 (信頼ポリシーなどが止めた)"
+	}
+	// 決定: ロールが記録に無い (失敗した引き受け) ときは、入り口 (sub) で見出しを作る
+	if t.role == oidcNoRole {
+		note := "失敗の記録にロールは無い"
+		if !denied {
+			verb, note = "引き受け", "記録にロールが無い"
+		} else {
+			verb = "試みて全部失敗"
+			note = "信頼ポリシーなどが止めた。" + note
+		}
+		if entranceKnown {
+			note += "。入り口は既知リストにある"
+		}
+		return fmt.Sprintf("%s から OIDC で %d 回%s (%s)", t.entrance(), count, verb, note)
+	}
+	who := "既知リストに無いロール " + t.roleLabel + " を、"
+	if roleKnown {
+		who = "既知のロール " + t.roleLabel + " を、既知リストに無い入り口 "
 	}
 	s := fmt.Sprintf("%s(%s) から OIDC で %d 回%s", who, t.entrance(), count, verb)
 	if expired {
@@ -373,7 +433,7 @@ func (c OIDCAssumeRole) volume(ctx context.Context, q store.Query, w collect.Win
 	}
 	counts := map[string]map[string]float64{} // 組 → 日 → 成功した引き受けの回数
 	for _, e := range past {
-		if e.Name != OIDCAssumeEvent || e.EventSource != "sts.amazonaws.com" || e.ErrorCode != "" {
+		if e.Name != OIDCAssumeEvent || e.EventSource != "sts.amazonaws.com" || e.ErrorCode != "" || oidcLegacy(e) {
 			continue
 		}
 		k := oidcTupleOf(e.Data).key()
@@ -416,6 +476,11 @@ func (c OIDCAssumeRole) volume(ctx context.Context, q store.Query, w collect.Win
 			Fingerprint: fingerprint(sev, nil, reasonAboveBaseline, best.Date)})
 	}
 	return out, nil
+}
+
+// Noter は、観測のほかに coverage.notes に出す注記 (判定しなかった記録など。人が読む文) を返すチェックが満たす。engine は Evaluate の代わりに呼ぶ。
+type Noter interface {
+	EvaluateWithNotes(ctx context.Context, q store.Query, w collect.Window, al *allowlist.List) ([]Observation, []string, error)
 }
 
 // IsKnownOIDCLine は、finding が「報告しなかった引き受けをまとめた info の行」か。ロールの ARN も返す。
