@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/CircleAround/arata/internal/codes"
 	"github.com/CircleAround/arata/internal/engine"
 	"github.com/CircleAround/arata/internal/store"
 	"github.com/CircleAround/arata/internal/subcmd"
@@ -64,10 +65,10 @@ raw に無いもの (runs・findings・finding_events・meta・主体の状態 a
 				return err
 			}
 			for _, w := range res.Warnings {
-				d.Engine.Logger.Warn("rebuild: " + w)
+				d.Engine.Logger.Warn("rebuild: "+w, "code", codes.RebuildWarning)
 			}
 			if o.FromScratch {
-				d.Engine.Logger.Warn("rebuilt from raw only: findings, runs and their history start empty; every open finding is reported again as new on the next run",
+				d.Engine.Logger.Warn("rebuilt from raw only: findings, runs and their history start empty; every open finding is reported again as new on the next run", "code", codes.RebuiltFromScratch,
 					"principal_status", principalStatus(o))
 			}
 			out := rebuildOutput{Schema: rebuildSchema, SchemaVersion: rebuildSchemaVersion, Database: res.Database, FromScratch: res.FromScratch, PrincipalStatus: principalStatus(o), CarriedOver: []string{},

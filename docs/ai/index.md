@@ -61,7 +61,7 @@ LLM の役割は「危険の判定を代行する」ことではなく「人が�
 
 ## 標準エラーのログと code
 
-エンジン自身のログは標準エラーに JSON 行で出る。`code` は固定語彙。機械で読んでよいのは `level`・`code`・`source`・`run_id` (`arata schema log`)。`msg` は人向け。
+エンジン自身のログは標準エラーに JSON 行で出る。`code` は固定語彙で、ERROR と WARN の行には必ず付く。機械で読んでよいのは `level`・`code`・`source`・`run_id` (`arata schema log`)。`msg` は人向け。
 
 | code | 意味 | 対処 |
 |---|---|---|
@@ -81,8 +81,12 @@ LLM の役割は「危険の判定を代行する」ことではなく「人が�
 | `CONFIG_INVALID` | 設定ファイルの読み込み・検証エラー | エラーメッセージに従い設定を直す |
 | `CHECK_UNUSED` | どのプロファイルにも入っていないチェックがある (警告。`checks` に名前) | 入れ忘れなら profiles に足す。`arata config init --diff` で雛形と比べる。意図して外したなら人に確認するだけでよい |
 | `REPORT_NOT_FOUND` | `arata report --profile X` で、そのプロファイルの run がまだ無い (終了コード 2) | 先に `arata run --profile X` を実行する。プロファイル名の打ち間違いも疑う |
-| `SOURCE_CATCHUP` | 前に失敗したソースを、取れていた位置から引き直している (警告。`from` に位置) | 何もしなくてよい。同じソースで続くなら、失敗の原因 (その前の run の code) を見る |
-| `SOURCE_CATCHUP_TRUNCATED` | ソースの遅れが `max_catchup` を超え、古い分を取りこぼした (警告) | 取りこぼした期間を人に知らせる。失敗が続いた原因を直す |
+| `SOURCE_CATCHUP` / `SOURCE_CATCHUP_TRUNCATED` | 前に失敗したソースを取れていた位置から引き直している (警告) / 遅れが `max_catchup` を超え、古い分を取りこぼした (警告) | 前者は何もしなくてよい (続くなら前の run の code を見る)。後者は取りこぼした期間を人に知らせる |
+| `NO_LOG_LINES` / `LOG_GROUP_UNVERIFIED` | 窓の中にログの行が無い (警告) / ロググループの保存期間などを確かめられないまま問い合わせた (警告) | `log_group`・`stream_prefix` と、`logs:DescribeLogGroups` の権限を確かめる (`arata doctor`、`arata help ai logs`) |
+| `AGGREGATE_TRUNCATED` / `REQUESTS_UNTAGGED` | 集計が行の上限で切れた / request id の無い最初の行を数えていない (どちらも件数が少なめに出る。警告) | 件数を下限として読む。後者は `arata help ai request_lines` |
+| `USER_ID_MISSING` / `USER_ID_INVALID` | ユーザー ID の付いたリクエストが無く、要るチェックを skip した / 形に合わないユーザー ID・ログインの結果を捨てた (警告) | アプリの行と `request.user_id` / `request.auth` を確かめる (`arata help ai user_id`) |
+| `WAF_RESOURCES_UNKNOWN` / `MATCH_RATE_HISTORY_UNAVAILABLE` | WebACL の資源の一覧を取れず不明として扱った / 直近の解釈率を読めず、急落 (`FORMAT_DRIFT`) を判定していない (警告) | 前者は読み取りロールの権限。後者が続くならストアの状態を人に知らせる (見ていない状態) |
+| `INIT_INCOMPLETE` / `ALLOWLIST_MISSING` / `REBUILD_WARNING` / `REBUILT_FROM_SCRATCH` | init が途中で止まった / allowlist が無く空として扱った / rebuild の警告 / raw だけから作り直した (警告) | `arata init --resume`。allowlist の場所を確かめる。最後のものは、次の run で未解決の指摘がすべて new として再報告されると人に知らせる |
 
 `RUN_MISSED` と終了コードは LLM を経由せず組み込み側が直接通知する規則になっている。
 
@@ -143,7 +147,4 @@ assume_destinations:              # 外向きの引き受けで、行き先と�
 
 ## 出力を機械で読むとき
 
-- 読むのは `--format json` と report.json。読んでよい項目は `arata schema <名前>` の JSON Schema に書いてある (`arata schema` で名前の一覧。`report`・`report-period` など)
-- 表や文 (table / text / md、ログの `msg`) は人向けで、版をまたいで文言と並びが変わる。grep や行の位置で読まない
-- 知らない項目は無視する。`enum` のある項目で知らない値を見たら止める。`schema_version` が知っている版より大きければ止める
-  (項目が消える・意味が変わるときに上がり、Release の本文に書かれる)
+読むのは `--format json` と report.json。読んでよい項目は `arata schema <名前>` の JSON Schema にある (`arata schema` で名前の一覧)。表や文 (table / text / md、ログの `msg`) は人向けで、版をまたいで文言と並びが変わるので、grep や行の位置で読まない。知らない項目は無視する。`enum` のある項目で知らない値を見たら止める。`schema_version` が知っている版より大きければ止める (項目が消える・意味が変わるときに上がり、Release の本文に書かれる)。

@@ -256,6 +256,13 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
 | `CONFIG_INVALID` | 決定: 設定ファイルの読み込み・検証エラー (終了コード 2) |
 | `REPORT_NOT_FOUND` | 決定: `arata report` で出す報告が無い (そのプロファイルの run がまだ無い。終了コード 2) |
 | `SOURCE_CATCHUP` / `SOURCE_CATCHUP_TRUNCATED` | 決定 (ADR 0038): 前に失敗したソースを取れていた位置から引き直している (警告) / 遅れが `max_catchup` を超え、古い分を取りこぼした (警告) |
+| `NO_LOG_LINES` / `LOG_GROUP_UNVERIFIED` | 決定 (ADR 0054): 窓の中にログの行が無い (警告) / ロググループの保存期間などを確かめられないまま問い合わせた (範囲の確認をしていない。警告) |
+| `AGGREGATE_TRUNCATED` / `REQUESTS_UNTAGGED` | 決定 (ADR 0054): 集計が行の上限で切れ、件数が下限になった (警告) / request id の無い最初の行を数えていない (警告) |
+| `USER_ID_MISSING` / `USER_ID_INVALID` | 決定 (ADR 0054): ユーザー ID の付いたリクエストが無く、要るチェックを skip した (警告) / 形に合わないユーザー ID・ログインの結果を捨てた (警告) |
+| `WAF_RESOURCES_UNKNOWN` | 決定 (ADR 0054): WebACL に付いた資源の一覧を取れず、不明として扱った (警告) |
+| `MATCH_RATE_HISTORY_UNAVAILABLE` | 決定 (ADR 0054): 直近の解釈率を読めず、急落 (`FORMAT_DRIFT`) の判定をしていない (警告)。続くと「見ていない」状態が隠れるので、INFO にしない |
+| `INIT_INCOMPLETE` / `ALLOWLIST_MISSING` | 決定 (ADR 0054): init が途中で止まった・前の init が終わっていない (警告) / allowlist のファイルが無く、空として扱った (警告) |
+| `REBUILD_WARNING` / `REBUILT_FROM_SCRATCH` | 決定 (ADR 0054): rebuild の警告 (読み飛ばした行など) / raw だけから作り直した。次の run で未解決の指摘がすべて new として再報告される (影響が別なので code を分ける。警告) |
 | `CHECK_UNUSED` | 決定: どのプロファイルにも入っていないチェックがある (警告。run / evaluate / doctor が出す。3 章、ADR 0014) |
 
 決定 (ADR 0054): ログの行で機械が読んでよい (安定な) 項目は、`time`・`level` (`DEBUG` / `INFO` / `WARN` / `ERROR`。大文字)・`code`・`source`・`run_id` と、
@@ -266,7 +273,11 @@ aratam の `slack_error`。スキーマは `arata schema log` (`schemas/log.sche
   log スキーマの code の既知の値が一覧と一致する / コマンドのテストが出したログの行がすべて log スキーマに合い、code がそのコマンドの一覧にある
 - code は開いた語彙。足すのは互換で、読む側は知らない code を「その他の警告・エラー」として扱う。消す・名前を変える・意味を変えるのは互換を壊す変更で、Release の本文に書く。
   スキーマには `anyOf` で「既知の値」か「大文字・数字・`_` の語」と書く (既知の値を機械で引けて、足しても古いスキーマで落ちない)
-- WARN には code の無い行がある (再試行、行が無い、など)。運用で気づくべきものには code を付ける
+- **ERROR と WARN の行には必ず code を付ける** (ソースの走査と、コマンドのテストが出したログの行の両方で確かめる)。WARN は「運用で気づくべきもの」:
+  結果が欠ける・少なく出る・設定を直す必要がある、のどれか。**自動で回復するもの・結果に影響しないものは INFO にする**: Insights の上限・CloudTrail のスロットルでの再試行
+  (最後まで失敗すれば `QUERY_LIMIT` の ERROR が出る)、クエリの停止の失敗 (後片付け)、サンプル行の取得の失敗 (原因調査の補助)、失敗したソースの取れた分を残したこと
+  (同じソースの ERROR が出ている)。見本のワークフローが出す「INFO 以外の行」は、これですべて code を持つ
+- `config init --out -` のときの「既知リストに足す項目」は、打った人への案内で、運用で拾うログではない。ログの行 (JSON) にせず、標準エラーに文で出す
 
 `doctor` は同じ検査を実行前に行い、全ソースの解釈率を表で出す。
 

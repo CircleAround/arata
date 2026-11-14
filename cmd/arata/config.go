@@ -82,7 +82,9 @@ func newConfigInitCmd(d *Deps, g *globalFlags) *subcmd.Command {
 					if err != nil {
 						return configErr(d, err)
 					}
-					d.Engine.Logger.Warn("--out - does not write the allowlist: add this entry to principals in allowlist.yaml (arata config check verifies it)", "audit_account", id, "entry", entry)
+					// 決定 (ADR 0054): これは打った人への案内で、運用で拾うログではない。ログの行 (JSON) にせず、標準エラーに文で出す
+					// (標準出力は雛形そのものなので、案内は混ぜない)
+					fmt.Fprintf(d.Stderr, "--out - は既知リスト (allowlist.yaml) を書きません。監査する側のアカウント %s の次の項目を、allowlist.yaml の principals に足してください (arata config check が確かめます):\n%s\n", id, entry)
 				}
 				_, err := d.Stdout.Write(body)
 				return err

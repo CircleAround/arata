@@ -606,7 +606,7 @@ func (e *Engine) Collect(ctx context.Context, w collect.Window, o CollectOptions
 			re := report.CollectError{Source: src.ID, Code: ce.Code, Action: ce.Action, Message: msg}
 			if !ce.CoveredFrom.IsZero() {
 				re.CoveredFrom, re.CoveredUntil = ce.CoveredFrom.UTC().Format(time.RFC3339), ce.CoveredUntil.UTC().Format(time.RFC3339)
-				e.log.Warn("partial data kept for failed source", "source", src.ID, "covered_from", re.CoveredFrom, "covered_until", re.CoveredUntil)
+				e.log.Info("partial data kept for failed source", "source", src.ID, "covered_from", re.CoveredFrom, "covered_until", re.CoveredUntil)
 			}
 			res.Errors = append(res.Errors, re)
 			continue

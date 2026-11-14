@@ -261,7 +261,7 @@ func (c *Collector) lookup(ctx context.Context, rc RegionClient, in *ct.LookupEv
 		if collect.Classify(c.id, "", err).Code != collect.CodeQueryLimit || attempt >= maxThrottleRetries {
 			return nil, err
 		}
-		c.Logger.Warn("throttled; retrying", "source", c.id, "region", rc.Region, "attempt", attempt+1, "wait", backoff.String())
+		c.Logger.Info("throttled; retrying", "source", c.id, "region", rc.Region, "attempt", attempt+1, "wait", backoff.String())
 		if err := c.Sleep(ctx, backoff); err != nil {
 			return nil, err
 		}

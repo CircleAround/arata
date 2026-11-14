@@ -204,8 +204,9 @@ func TestConfigInitAuditAccountStdout(t *testing.T) {
 	if code := c.run("config", "init", "--audit-account", auditAcct, "--out", "-"); code != 0 || c.stdout.String() != string(scaffold.Generate(checks.NewRegistry(), auditAcct)) {
 		t.Fatalf("stdout must be the template: exit %d", code)
 	}
-	lines := c.logLines()
-	if len(lines) != 1 || lines[0]["level"] != "WARN" || !strings.Contains(lines[0]["entry"].(string), `- account: "111122223333"`) {
+	// 打った人への案内で、運用で拾うログではない。JSON の行にせず、文で出す (ADR 0054)。標準出力 (雛形) には混ぜない
+	if errOut := c.stderr.String(); !strings.Contains(errOut, `- account: "111122223333"`) || !strings.Contains(errOut, "allowlist.yaml の principals に足してください") ||
+		strings.Contains(errOut, `"level"`) {
 		t.Fatalf("stderr: %s", c.stderr)
 	}
 	if ents, _ := os.ReadDir("."); len(ents) != 0 {

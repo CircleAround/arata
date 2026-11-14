@@ -8,6 +8,9 @@
 //   - log スキーマ (schemas/log.schema.json) の code の既知の値が、この一覧と一致する
 //   - コマンドが実際に出すログの行が log スキーマに合い、その code がそのコマンドの一覧にある
 //
+// 決まり (ADR 0054): ERROR と WARN の行には必ず code を付ける。WARN は「運用で気づくべきもの」(結果が欠ける・少なく出る・設定を直す必要がある)。
+// 自動で回復するもの (再試行)・結果に影響しないもの (後片付けの失敗) は INFO にする。
+//
 // code は開いた語彙。足すのは互換 (読む側は、知らない code を「その他の警告・エラー」として扱う)。
 // 消す・名前を変える・意味を変えるのは互換を壊す変更で、Release の本文に書く。
 // 標準ライブラリだけに依存する (aratam も import する)。
@@ -34,6 +37,19 @@ const (
 	ReportNotFound         = "REPORT_NOT_FOUND"
 	SourceCatchup          = "SOURCE_CATCHUP"
 	SourceCatchupTruncated = "SOURCE_CATCHUP_TRUNCATED"
+	// 警告 (結果が欠ける・少なく出る・設定を直す必要がある)
+	NoLogLines                  = "NO_LOG_LINES"
+	LogGroupUnverified          = "LOG_GROUP_UNVERIFIED"
+	AggregateTruncated          = "AGGREGATE_TRUNCATED"
+	RequestsUntagged            = "REQUESTS_UNTAGGED"
+	UserIDMissing               = "USER_ID_MISSING"
+	UserIDInvalid               = "USER_ID_INVALID"
+	WAFResourcesUnknown         = "WAF_RESOURCES_UNKNOWN"
+	MatchRateHistoryUnavailable = "MATCH_RATE_HISTORY_UNAVAILABLE"
+	InitIncomplete              = "INIT_INCOMPLETE"
+	AllowlistMissing            = "ALLOWLIST_MISSING"
+	RebuildWarning              = "REBUILD_WARNING"
+	RebuiltFromScratch          = "REBUILT_FROM_SCRATCH"
 )
 
 // arata と aratam の両方が出す code。
@@ -110,6 +126,18 @@ var All = []Code{
 	{ReportNotFound, arataOnly, "arata report で出す報告が無い (そのプロファイルの run がまだ無い)"},
 	{SourceCatchup, arataOnly, "前に失敗したソースを、取れていた位置から引き直している (警告)"},
 	{SourceCatchupTruncated, arataOnly, "ソースの遅れが max_catchup を超え、古い分を取りこぼした (警告)"},
+	{NoLogLines, arataOnly, "窓の中にログの行が無い (log_group / stream_prefix の誤りの疑い。警告)"},
+	{LogGroupUnverified, arataOnly, "ロググループの保存期間などを確かめられないまま問い合わせた (範囲の確認をしていない。警告)"},
+	{AggregateTruncated, arataOnly, "集計が行の上限で切れ、件数が下限になった (警告)"},
+	{RequestsUntagged, arataOnly, "request id の無い最初の行があり、リクエストに数えていない (警告)"},
+	{UserIDMissing, arataOnly, "ユーザー ID の付いたリクエストが無く、ユーザー ID の要るチェックを skip した (警告)"},
+	{UserIDInvalid, arataOnly, "形に合わないユーザー ID・ログインの結果を捨てた (警告)"},
+	{WAFResourcesUnknown, arataOnly, "WebACL に付いた資源の一覧を取れず、不明として扱った (警告)"},
+	{MatchRateHistoryUnavailable, arataOnly, "直近の解釈率を読めず、急落 (FORMAT_DRIFT) の判定をしていない (警告)"},
+	{InitIncomplete, arataOnly, "init が途中で止まった・前の init が終わっていない (警告)"},
+	{AllowlistMissing, arataOnly, "allowlist のファイルが無く、空として扱った (警告)"},
+	{RebuildWarning, arataOnly, "rebuild の警告 (読み飛ばした行など)"},
+	{RebuiltFromScratch, arataOnly, "raw だけから作り直した。次の run で未解決の指摘がすべて new として再報告される (警告)"},
 
 	{InputMissing, aratamOnly, "report.json が無い・読めない (その旨を緊急用に送る)"},
 	{InputInvalid, aratamOnly, "report.json を解釈できない・知らない版 (その旨を緊急用に送る)"},

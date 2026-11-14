@@ -9,6 +9,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/wafv2"
 	waftypes "github.com/aws/aws-sdk-go-v2/service/wafv2/types"
 
+	"github.com/CircleAround/arata/internal/codes"
 	"github.com/CircleAround/arata/internal/collect"
 	"github.com/CircleAround/arata/internal/record"
 )
@@ -161,7 +162,7 @@ func (c *WAFConfig) aclData(ctx context.Context, sc wafScope, acl *waftypes.WebA
 					return nil, c.fail(ActionListResourcesForWebACL, err)
 				}
 				unknown = append(unknown, string(rt)+": "+code)
-				c.Logger.Warn("cannot list resources of this type for the web ACL; treating them as unknown", "source", c.id, "web_acl", aws.ToString(acl.Name),
+				c.Logger.Warn("cannot list resources of this type for the web ACL; treating them as unknown", "code", codes.WAFResourcesUnknown, "source", c.id, "web_acl", aws.ToString(acl.Name),
 					"region", sc.region, "resource_type", string(rt), "code", code, "error", err.Error())
 				continue
 			}

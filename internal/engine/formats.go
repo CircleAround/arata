@@ -6,6 +6,7 @@ import (
 	"math"
 	"sort"
 
+	"github.com/CircleAround/arata/internal/codes"
 	"github.com/CircleAround/arata/internal/collect"
 	"github.com/CircleAround/arata/internal/report"
 	"github.com/CircleAround/arata/internal/report/schema"
@@ -40,7 +41,7 @@ func (e *Engine) formatCoverage(ctx context.Context, st collect.FormatStats, col
 	}
 	avg, n, err := e.recentMatchRate(ctx, st.Source)
 	if err != nil {
-		e.log.Warn("failed to read recent match rates", "source", st.Source, "error", err.Error())
+		e.log.Warn("failed to read recent match rates", "code", codes.MatchRateHistoryUnavailable, "source", st.Source, "error", err.Error())
 		return fc
 	}
 	if n < driftMinRuns {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 
+	"github.com/CircleAround/arata/internal/codes"
 	"github.com/CircleAround/arata/internal/collect"
 	"github.com/CircleAround/arata/internal/config"
 	"github.com/CircleAround/arata/internal/record"
@@ -331,7 +332,7 @@ func (c *Collector) collectHygiene(ctx context.Context, w collect.Window, sink c
 		items = append(items, record.SnapshotItem{Kind: record.KindLogHygiene, Time: at, Source: c.src.ID, Key: cond.Kind, Data: data})
 	}
 	if lines == 0 {
-		c.Logger.Warn("log_hygiene: no log lines in window; check log_group / stream_prefix", attrs...)
+		c.Logger.Warn("log_hygiene: no log lines in window; check log_group / stream_prefix", append([]any{"code", codes.NoLogLines}, attrs...)...)
 	} else {
 		c.Logger.Info("log_hygiene: counted lines by kind (no values are read)", attrs...)
 	}

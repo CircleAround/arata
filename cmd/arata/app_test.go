@@ -189,8 +189,9 @@ func TestNewLogGroup(t *testing.T) {
 	if code := c.run("run", "--config", c.cfg, "--profile", "daily"); code != 0 {
 		t.Fatalf("run exit %d: %s", code, c.stderr)
 	}
-	// appConfig は daily だけなので doctor の CHECK_UNUSED (warn) だけが出る
-	if codes := strings.Join(c.codes(), ","); codes != "CHECK_UNUSED" {
+	// appConfig は daily だけなので CHECK_UNUSED (warn)。偽のログは集計の行を返さないので、2 つのソースが「窓に行が無い」(NO_LOG_LINES) を出す
+	// (この WARN は前からあり、code が付いた。ADR 0054)
+	if codes := strings.Join(c.codes(), ","); codes != "CHECK_UNUSED,NO_LOG_LINES,NO_LOG_LINES" {
 		t.Fatalf("codes: %v", codes)
 	}
 }

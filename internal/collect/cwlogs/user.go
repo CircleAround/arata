@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/CircleAround/arata/internal/codes"
 	"github.com/CircleAround/arata/internal/collect"
 	"github.com/CircleAround/arata/internal/config"
 	"github.com/CircleAround/arata/internal/record"
@@ -303,15 +304,15 @@ func (c *Collector) warnUsers() {
 	}
 	if u := rs.Users; u != nil {
 		if u.Requests == 0 && rs.Starts > 0 {
-			c.Logger.Warn("no requests with a user id; checks that need http_user are skipped in this run", "source", c.src.ID, "log_group", c.src.LogGroup,
+			c.Logger.Warn("no requests with a user id; checks that need http_user are skipped in this run", "code", codes.UserIDMissing, "source", c.src.ID, "log_group", c.src.LogGroup,
 				"from", u.From, "requests", rs.Starts)
 		}
 		if u.Invalid > 0 {
-			c.Logger.Warn("user ids that do not fit the allowed form were dropped (letters, digits, _ and -, up to 64)", "source", c.src.ID, "requests", u.Invalid)
+			c.Logger.Warn("user ids that do not fit the allowed form were dropped (letters, digits, _ and -, up to 64)", "code", codes.UserIDInvalid, "source", c.src.ID, "requests", u.Invalid)
 		}
 	}
 	if a := rs.Auth; a != nil && a.Invalid > 0 {
-		c.Logger.Warn("auth results that do not fit the allowed form were dropped", "source", c.src.ID, "requests", a.Invalid)
+		c.Logger.Warn("auth results that do not fit the allowed form were dropped", "code", codes.UserIDInvalid, "source", c.src.ID, "requests", a.Invalid)
 	}
 }
 
