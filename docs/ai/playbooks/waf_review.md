@@ -51,3 +51,7 @@ finding になるのは、正規の画面で多数の IP が BLOCK された誤�
 - `challenge_impact` の解かれた割合が低いことを「人が巻き込まれていない」「ボットだけ」と書かない
 - ヘッダー・クエリ文字列・Cookie などの生の値を推測で補わない (report.json に無い)
 - LLM が WAF の設定を変更しない
+
+## 関連する事例
+
+対応する公開の事例はまだ無い (`arata help ai threats`)。

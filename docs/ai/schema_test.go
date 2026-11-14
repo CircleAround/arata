@@ -26,6 +26,13 @@ func TestEveryDocConforms(t *testing.T) {
 		}
 		topics = append(topics, tp)
 	}
+	for _, id := range ThreatNames() {
+		tp, err := Lookup("threats " + id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		topics = append(topics, tp)
+	}
 	for _, tp := range topics {
 		b, err := json.Marshal(tp.Parse())
 		if err != nil {

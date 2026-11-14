@@ -58,3 +58,10 @@
 - 「使っていないリージョンだから影響は無い」と判断しない。費用と足場はどのリージョンでも同じ
 - 資源の停止や削除を確かめずに ack しない。LLM が資源を止めない・消さない (提案まで)
 - 正規の利用を見つけたとき、`compute_apis` や `ignore_event_sources` から外して黙らせない (`regions` に足すか ack する)
+
+## 関連する事例
+
+公開の事例で、このチェックが当たる段階 (一覧と読み方は `arata help ai threats`)。指摘がその攻撃だと断定する材料ではない。
+
+- `arata help ai threats ghostaction-2026-10`: 盗んだアクセスキーで、ふだん使わないリージョンに資源を作る段階 (出典には無い想定)
+- `arata help ai threats env-extortion-2024-08`: Lambda 関数を有効な全リージョンへ配った段階

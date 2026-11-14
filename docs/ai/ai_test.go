@@ -19,6 +19,7 @@ func TestSections(t *testing.T) {
 		"ai request_lines": {"使い方", "見本 (Rails の既定のログ)", "書き方の決まり", "鍵 (request.id) の書き方", "ステータスの行が複数あるリクエスト (Devise のログインの失敗)", "ユーザー ID と auth の行 (アプリに足す行)", "確かめ方", "送る側が選べる値", "数え方"},
 		"ai user_id":       {"使い方", "アプリに足す行", "出す時点と読み方 (Rails + Devise の例)", "設定の書き方", "debug_sql (消えうる取り方)", "確かめ方と出る場所"},
 		"ai playbook":      {"使い方", "一覧"},
+		"ai threats":       {"使い方", "事例の一覧", "チェックごとの事例", "保守の決まり"},
 	}
 	for _, tp := range Topics {
 		d := tp.Parse()
@@ -42,12 +43,12 @@ func TestSections(t *testing.T) {
 }
 
 func TestLookup(t *testing.T) {
-	for _, sub := range []string{"", "report", "approve", "runtime", "onboarding", "logs", "request_lines", "user_id", "playbook", "playbook root_usage"} {
+	for _, sub := range []string{"", "report", "approve", "runtime", "onboarding", "logs", "request_lines", "user_id", "playbook", "playbook root_usage", "threats", "threats wfx-loot-2026-11"} {
 		if _, err := Lookup(sub); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := Lookup("nope"); err == nil || !strings.Contains(err.Error(), "arata help ai report") || !strings.Contains(err.Error(), "arata help ai playbook") {
+	if _, err := Lookup("nope"); err == nil || !strings.Contains(err.Error(), "arata help ai report") || !strings.Contains(err.Error(), "arata help ai playbook") || !strings.Contains(err.Error(), "arata help ai threats <id>") {
 		t.Fatalf("%v", err)
 	}
 	if _, err := Lookup("playbook nope"); err == nil || !strings.Contains(err.Error(), "root_usage") {
@@ -125,6 +126,15 @@ func TestPlaybooks(t *testing.T) {
 		if n := strings.Count(body, "\n"); n > 120 {
 			t.Errorf("%s: %d lines (keep it within about 120)", name, n)
 		}
+		// aratam に渡す本文は「関連する事例」より前の全部で、その節を含まない
+		proc, ok := PlaybookProcedure(name)
+		if !ok || !strings.HasPrefix(body, strings.TrimRight(proc, "\n")) || strings.Contains(proc, "関連する事例") ||
+			!strings.Contains(proc, "## やってはいけないこと") || !strings.HasSuffix(strings.TrimSpace(proc), strings.TrimSpace(sec["やってはいけないこと"])) {
+			t.Errorf("%s: PlaybookProcedure must be the playbook without its last section", name)
+		}
+	}
+	if _, ok := PlaybookProcedure("nope"); ok {
+		t.Fatal("unknown check must not have a procedure")
 	}
 	if _, ok := Playbook("nope"); ok {
 		t.Fatal("unknown check must not have a playbook")

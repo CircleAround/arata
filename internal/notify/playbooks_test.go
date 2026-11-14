@@ -35,10 +35,14 @@ func TestSummarySystemHasPlaybooksOfRunChecks(t *testing.T) {
 		t.Fatalf("playbooks %v, want %v", got, want)
 	}
 	for _, c := range want {
-		body, _ := ai.Playbook(c)
-		if !strings.Contains(l.system, body) {
+		body, _ := ai.PlaybookProcedure(c)
+		if !strings.Contains(l.system, strings.TrimSpace(body)) {
 			t.Fatalf("%s must be embedded whole", c)
 		}
+	}
+	// 「関連する事例」(公開の攻撃の事例への案内。ADR 0057) は入れない: 上限に入る playbook を減らさず、指摘を特定の攻撃と結び付けさせない
+	if strings.Contains(l.system, "関連する事例") || strings.Contains(l.system, "help ai threats") {
+		t.Fatal("the threats section of a playbook must not be embedded")
 	}
 	if strings.Contains(l.system, "# iam_changes:") {
 		t.Fatal("resolved-only checks are not embedded")
@@ -115,8 +119,8 @@ func TestOrderedChecksSkipsUnknown(t *testing.T) {
 
 // 上限を超えるときは重大度の高い順に入れ、入らなかったチェックは落とす (1 つの playbook を途中で切らない)。
 func TestPlaybooksSectionLimit(t *testing.T) {
-	a, _ := ai.Playbook("root_usage")
-	b, _ := ai.Playbook("posture")
+	a, _ := ai.PlaybookProcedure("root_usage")
+	b, _ := ai.PlaybookProcedure("posture")
 	limit := len(a) + len(b) + 400 // 区切りの分の余裕。3 つ目は入らない
 	text, omitted := playbooksSection([]string{"root_usage", "posture", "waf_review", "new_principal"}, limit)
 	if got := playbookChecksIn(text); !eq(got, []string{"root_usage", "posture"}) || !eq(omitted, []string{"waf_review", "new_principal"}) {
@@ -167,7 +171,7 @@ func TestProposalsSystemHasWAFReviewPlaybook(t *testing.T) {
 	if len(l.systems) != 2 {
 		t.Fatalf("calls %d", len(l.systems))
 	}
-	body, _ := ai.Playbook("waf_review")
+	body, _ := ai.PlaybookProcedure("waf_review")
 	if got := playbookChecksIn(l.systems[1]); !eq(got, []string{"waf_review"}) || !strings.Contains(l.systems[1], body) {
 		t.Fatalf("proposals system: %v", got)
 	}

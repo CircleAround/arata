@@ -41,3 +41,11 @@ allowlist にもベースライン (`arata init` の時点で見えた主体) �
 - 名前がそれらしいだけで承認を勧めない。作成者・権限・送信元を根拠に書く
 - 広い `arn_pattern` (アカウント全体に近いもの) を提案しない
 - LLM が `arata approve` を実行しない
+
+## 関連する事例
+
+公開の事例で、このチェックが当たる段階 (一覧と読み方は `arata help ai threats`)。指摘がその攻撃だと断定する材料ではない。
+
+- `arata help ai threats wfx-loot-2026-11`: CI のロールや乗り移った先のロールが、既知でないまま使われた場合
+- `arata help ai threats env-extortion-2024-08`: 漏れたキーの主体が、既知リストにもベースラインにも無い場合
+- `arata help ai threats lucr-3-2023-09`: 攻撃者が作った IAM ユーザーが使われた段階

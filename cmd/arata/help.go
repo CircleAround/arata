@@ -40,9 +40,9 @@ AI (LLM) から使う場合は ` + "`arata help ai`" + ` を最初に読んで�
 func newAICmd(d *Deps) *subcmd.Command {
 	var format string
 	cmd := &subcmd.Command{
-		Use:   "ai [report|approve|runtime|onboarding|logs|request_lines|playbook [check]]",
+		Use:   "ai [report|approve|runtime|onboarding|logs|request_lines|playbook [check]|threats [id]]",
 		Short: "AI (LLM) 向けの使い方 (arata help ai と同じ。最初に読む)",
-		Long:  "AI (LLM) 向けの使い方を出す。トピック: (なし) 全体像 / report report.json の読み方と要約の手順 / approve 承認判断の基準 /\nruntime GitHub Actions で動かす利用者の環境 (リポジトリの設定・OIDC の信頼・context_file の下書き) のチェックリスト /\nonboarding 導入の流れ (init の後の最初の run を通知の前に片付ける手順と、ack / snooze / resolve の使い分け) /\nlogs 記録の集め方 (どの記録があればどのチェックが動くか、ALB・WAF・nginx・アプリのログの出し方、doctor の読み方) /\nrequest_lines 1 リクエストが複数行のアプリのログ (Rails の既定のログなど) を format: request_lines で読む設定の書き方と確かめ方 /\nplaybook チェックごとの対処手順の一覧 (playbook <check> で本文)。\n--format json で {topic, title, sections: [{title, body}]} を返す。",
+		Long:  "AI (LLM) 向けの使い方を出す。トピック: (なし) 全体像 / report report.json の読み方と要約の手順 / approve 承認判断の基準 /\nruntime GitHub Actions で動かす利用者の環境 (リポジトリの設定・OIDC の信頼・context_file の下書き) のチェックリスト /\nonboarding 導入の流れ (init の後の最初の run を通知の前に片付ける手順と、ack / snooze / resolve の使い分け) /\nlogs 記録の集め方 (どの記録があればどのチェックが動くか、ALB・WAF・nginx・アプリのログの出し方、doctor の読み方) /\nrequest_lines 1 リクエストが複数行のアプリのログ (Rails の既定のログなど) を format: request_lines で読む設定の書き方と確かめ方 /\nplaybook チェックごとの対処手順の一覧 (playbook <check> で本文) /\nthreats 公開された攻撃の事例と、arata のどのチェックで何が見えるか・見えないかの対応表 (threats <id> で本文)。\n--format json で {topic, title, sections: [{title, body}]} を返す。",
 		Args:  subcmd.MaximumNArgs(2),
 		Run: func(ctx context.Context, args []string) error {
 			return writeAIDoc(d.Stdout, strings.Join(args, " "), format)
@@ -108,7 +108,7 @@ func newHelpCmd(d *Deps, root *subcmd.Command) *subcmd.Command {
 		Run: func(ctx context.Context, args []string) error {
 			if len(args) > 0 && args[0] == "ai" {
 				if len(args) > 3 {
-					return errors.New("usage: arata help ai [report|approve|runtime|onboarding|logs|request_lines|playbook [check]]")
+					return errors.New("usage: arata help ai [report|approve|runtime|onboarding|logs|request_lines|playbook [check]|threats [id]]")
 				}
 				return writeAIDoc(d.Stdout, strings.Join(args[1:], " "), format)
 			}

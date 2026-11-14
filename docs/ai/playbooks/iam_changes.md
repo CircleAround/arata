@@ -46,3 +46,12 @@
 - `known_deploy_principal` (info) でも、操作が役割と合わないもの (デプロイ主体が他人のアクセスキーを作るなど) を見逃さない
 - 拒否された試行 (`denied`) を「変更は起きていないので問題なし」と書かない
 - LLM が IAM を変更しない。元に戻す操作も提案まで
+
+## 関連する事例
+
+公開の事例で、このチェックが当たる段階 (一覧と読み方は `arata help ai threats`)。指摘がその攻撃だと断定する材料ではない。
+
+- `arata help ai threats wfx-loot-2026-11`: 長期のアクセスキーを作り、ロールの信頼ポリシーを広げる段階 (出典はスクリプトの機能として書く。既知デプロイ主体なら info に下がる点に注意)
+- `arata help ai threats env-extortion-2024-08`: 作ったロールに `AdministratorAccess` を付けた段階
+- `arata help ai threats scarleteel-2023-02`: ユーザーの作成とアクセスキーの作成を試みて拒否された段階
+- `arata help ai threats lucr-3-2023-09`: ポリシーの書き換えと、IAM ユーザー・アクセスキー・ログインプロファイルの作成で居座る段階

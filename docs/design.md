@@ -659,7 +659,7 @@ internal/report/              JSON / Markdown 生成、期間集計 (period.go)�
 tools/agegate/                CI 用の依存の age-gate (エンジンには入らない小さな main。決定: internal/ ではなく tools/ に置く。ADR 0017)
 tools/actionsgate/            CI 用の Actions の検査 (SHA 固定・版の一致・7 日待機。ADR 0035)
 tools/wordscan/               CI 用の禁止語の検査 (語の一覧は secrets から読む。ADR 0036)
-docs/ai/*.md                  LLM 向けの使い方。embed でバイナリに入り `arata help ai [report|approve|runtime|onboarding|logs|playbook <check>]` で出る (決定: skills/ の同梱は取りやめ。ADR 0012)
+docs/ai/*.md                  LLM 向けの使い方。embed でバイナリに入り `arata help ai [report|approve|runtime|onboarding|logs|playbook <check>|threats <id>]` で出る (決定: skills/ の同梱は取りやめ。ADR 0012)
 deploy/iam/readonly-role.yaml 顧客に配る読み取りロール + Roles Anywhere 用信頼ポリシーの CloudFormation (決定: 信頼先は AWS の主体と Roles Anywhere のトラストアンカーをパラメータで受ける。action は collector の一覧と Go のテストで一致させる。ADR 0020)
 deploy/sandbox/               試験環境 (sandbox = arata の試験用に条件を整えた開発用アカウント上の環境) の CDK (TypeScript)。Go モジュールとは独立。readonly-role.yaml を CfnInclude で取り込む (ADR 0020)
 deploy/lambda/                Lambda 配備用 CDK or SAM テンプレート (S3 ストア、別アカウント推奨)
@@ -1271,8 +1271,15 @@ arata は LLM を使わず候補だけを作り、aratam の LLM は候補を文
 - 未確認: 上の正規表現が Insights の方言でそのまま通るか (`{16}`・`{10,}`・`\s`・`\d`・`<NP>` の長い選択肢、条件を 40 個ほど並べた `fields`)。
   開発では実際の AWS に接続しないので、実際のロググループで doctor と weekly の run を流して確かめ、通らなければ表現を直してここに残す
 
-決定 (対処手順。ADR 0025): チェックごとに `docs/ai/playbooks/<check>.md` (見出しは固定: この指摘の意味 / まず確かめること / 判断の分かれ目 / 対処の選択肢 / やってはいけないこと) を書き、
+決定 (対処手順。ADR 0025): チェックごとに `docs/ai/playbooks/<check>.md` (見出しは固定: この指摘の意味 / まず確かめること / 判断の分かれ目 / 対処の選択肢 / やってはいけないこと / 関連する事例) を書き、
 `arata help ai playbook <check>` で出す。登録済みのチェックすべてに playbook が要る (テストで固定)。新しいチェックを足すときは playbook も書く。封じ込めは人が判断して実行し、LLM は提案まで。
+
+決定 (攻撃の事例との対応表。ADR 0057): 公開された攻撃の事例ごとに `docs/ai/threats/<id>.md` (見出しは固定: 概要 / 出典 / 攻撃の段階と arata で見えるもの / arata では見えないもの / 予定している改善) を書き、
+`arata help ai threats [<id>]` で出す。人向けの入口は `docs/threats.md`。段階ごとに、出典が「観測した」と書くのか「スクリプトにその機能がある」とだけ書くのかを分け (観測 / 機能 / 推定 / 記述 / 想定)、
+見えない段階とその理由を必ず書く。一覧とチェックごとの表は事例の本文から作る。playbook の最後の節「関連する事例」は、事例への案内か「対応する公開の事例はまだ無い」。
+テストで固定: 各事例に公開日と日付付きの出典の URL がある / 表のチェックが実在する / playbook の案内と事例の表が食い違わない / `docs/threats.md` の表が生成したものと一字一句同じ。
+事例の本文も playbook の「関連する事例」の節も、aratam の LLM の system には入れない (`ai.PlaybookProcedure` が節を除く)。入れると上限 (24 KiB) に入る playbook が 1 つ減ることをテストで確かめた。
+`arata help ai playbook` を自分で引く LLM には節が見えるので、playbook の使い方に「その攻撃だと断定する材料ではない」と書く。
 
 ## 8. CLI
 
@@ -1294,7 +1301,7 @@ arata review    [--status open|acked]
 arata approve   <finding-id> --note "..." [--expires date] [--tag deploy] [--by name] [--commit] [--account | --arn-pattern glob]
 arata approve   <finding-id> --destination --note "..." [--destination-role glob] [--expires date] [--by name] [--commit]   # 行き先のアカウントを既知にする (ADR 0047)
 arata ack|snooze|resolve <finding-id>        # snooze は --until date
-arata help ai [report|approve|runtime|onboarding|logs|playbook [check]] [--format json]   # LLM 向けの使い方 (arata ai と同じ)。playbook はチェックごとの対処手順
+arata help ai [report|approve|runtime|onboarding|logs|playbook [check]|threats [id]] [--format json]   # LLM 向けの使い方 (arata ai と同じ)。playbook はチェックごとの対処手順、threats は攻撃の事例との対応表
 arata schema [名前]            # 機械が読む出力の JSON Schema (引数なしで名前の一覧。arata help schema も同じ。ADR 0054)
 arata prune     [--dry-run]
 arata rebuild   [--from-scratch [--baseline]] [--format text|json]   # raw JSONL から SQLite を再構築 (5-4、ADR 0033)

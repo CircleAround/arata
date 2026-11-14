@@ -31,6 +31,7 @@ AWS のログと設定を定期的に改め、**前回から新しく発生し�
 出力をスクリプトや CI で読むときは、`--format json` と report.json を読む。読んでよい項目は `arata schema <名前>` の JSON Schema にある (`arata schema` で一覧)。
 表や文 (table / text / md、ログの `msg`) は人向けで、版をまたいで変わるので機械で読まない (ADR 0054)。
 内容はバイナリに埋め込まれていて、エンジンの版と常に揃う。
+公開された攻撃の事例ごとに、どの段階が arata のどのチェックで見え、どの段階は見えないかは [docs/threats.md](docs/threats.md) (`arata help ai threats`。出典の URL 付き)。
 チェックが skip される・解釈率が低いなど、記録が足りないときは `arata help ai logs` (チェックと記録の対応表、ログの出し方) を読ませる。
 GitHub Actions で動かす利用者の環境 (リポジトリの設定・OIDC の信頼・secrets) を作る・見直すときは `arata help ai runtime` を読ませる (チェックリスト。設定を変えるのは人)。
 
@@ -458,6 +459,7 @@ internal/llm/           aratam の LLM プロバイダ (claude-cli / bedrock)
 internal/slack/         Slack への送信 (Incoming Webhook、bot トークンの chat.postMessage)
 internal/engine/        collect → evaluate → report の束ねと doctor (CLI と Lambda が共用)
 docs/ai/                arata help ai の文書 (embed でバイナリに入る)
+docs/threats.md         実際に起きた攻撃と、arata で見えるもの・見えないものの対応表の入口 (本文は docs/ai/threats/)
 examples/               設定サンプル
 deploy/iam/              顧客に配る読み取り専用ロール (素の CloudFormation)
 deploy/slack/            aratam の通知用の Slack アプリの manifest (bot の scope は chat:write だけ)

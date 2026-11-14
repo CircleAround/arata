@@ -19,6 +19,8 @@ import (
 //   - 合計 MaxPlaybookBytes まで。超えたら重大度の高い順に入れ、入らないものは落とす。1 つの playbook を途中で切らない (誤解を招く)。
 //     落としたチェック名は WARN (PLAYBOOKS_OMITTED)。小さい playbook が後ろにあれば入れる (上限の中でできるだけ多く渡す)。
 //   - playbook の無いチェックは黙って飛ばす。
+//   - playbook の最後の節「関連する事例」(公開の攻撃の事例への案内。ADR 0057) は入れない。入れると上限に入る playbook が減り、
+//     LLM が指摘を特定の攻撃と結び付けて書くおそれもある。
 //   - 位置づけ: 対処手順 → 利用者の前提 (context_file) の順に参考にするだけ。重大度・分類・規則より優先しない。
 //     封じ込めや設定の変更、approve / ack / snooze / resolve は人への提案にとどめ、LLM は実行しない。
 //   - 提案の書き起こし (2 回目の呼び出し) には waf_review の playbook を同じ形で入れる。provider: none は LLM を呼ばないので使わない。
@@ -55,7 +57,7 @@ func playbooksSection(checks []string, limit int) (string, []string) {
 	var b strings.Builder
 	var omitted []string
 	for _, c := range checks {
-		body, ok := ai.Playbook(c)
+		body, ok := ai.PlaybookProcedure(c) // 「関連する事例」の節は入れない (ADR 0057)
 		if !ok {
 			continue
 		}
