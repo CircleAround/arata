@@ -1,7 +1,7 @@
 # 0059. 監査を回すリポジトリの一式を `arata repo init` で書き出し、見本はその出力から作る (GitHub の設定は Terraform。秘密の箱は、既にある秘密を取り込んでから作る)
 
 - 日付: 2026-11-14
-- 状態: 提案 (実装の PR で採用にする。実際の GitHub では確かめていない。「結果」)
+- 状態: 採用 (実際の GitHub では確かめていない。「結果」)
 - 関係する判断: ADR 0014 (雛形と `--diff`)、0040・0057 (実行の仕組みと environment)、0042 (PR の検査)、0054 (機械が読む出力)、0035・0039 (Actions の固定)、0019 (依存の待機期間)
 
 ## 背景
@@ -174,6 +174,10 @@ environment `audit` に仮の値で作る。値を入れる人は、画面で「
   **偽の GitHub API (`httptest`) に向けた apply** を回し、「既にある秘密の名前には、書き込みの呼び出しが 1 つも来ない」「2 回目の plan に変化が無い」
   「人が値を入れた後も変化が無い」「destroy が止まる」を固定する。provider の取得にネットワークが要るので、ふだんの `go test ./...` では動かさず、環境変数で有効にする (CI と `make` の的)
 - provider の版が公開から 7 日以上であることは、CI でレジストリの公開日を読んで確かめる (`tools/agegate` と同じ考え方の検査を足す)
+- **CI の Terraform 本体も、公開から 7 日以上たった版にする** (依存の方針と同じ。ADR 0019)。Terraform 本体は Go のモジュールでも action でもないので、
+  `tools/agegate` と `tools/actionsgate` の対象外で、公開日は CI では確かめない (zizmor・osv-scanner と同じ扱い。`docs/supply-chain.md`)。
+  版を変える PR で、公式のリリース (`gh api repos/hashicorp/terraform/releases/tags/<版> --jq .published_at`) の公開日と、
+  公式の配布元の `SHA256SUMS` の値を本文に書き、レビューで見る。脆弱性の修正版の例外は ADR 0043 のとおり
 - どのテストも、実際の GitHub・AWS・Slack・LLM に接続しない
 
 ## 検討した選択肢
