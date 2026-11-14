@@ -28,7 +28,7 @@ PR は提案で、承認するのは差分を見てマージする人 (上の原
 2. `arata config check -c <arata.yaml>` を実行し、`ng` と `warn` (同じ主体の重複、行き先の重複・期限切れ) が無いことを確かめる (AWS にもストアにも繋がない)
 3. PR の本文に、finding の `id`・承認の対象・承認してよい理由 (下の目安に照らして) を書く。ARN やアカウント ID を、リポジトリの外 (公開の場所) に書かない
 4. 人が差分を見てマージする。次の run が、一致する finding を allowlisted として解消する (resolve は要らない)。
-   行き先 (`assume_destinations`。下の「行き先を既知にする」) を足したときは、外向き・MFA ありの finding が known_destination として解消する (ack 済みのものも)
+   行き先 (`assume_destinations`。下の「行き先を既知にする」) を足したときは、外向き・MFA ありの finding が known_destination として、OIDC の入り口 (`oidc_subjects`。書き方は `arata help ai playbook oidc_assume_role`) を足したときは、その入り口の finding が known_oidc_subject として解消する (ack 済みのものも)
 
 主体の承認ではないもの (下の「approve ではなく ack / snooze / resolve にするもの」) は PR では止まらない。ack / snooze / resolve を人に提案する。
 

@@ -24,26 +24,22 @@
 | GitHub での準備: 下調べの PR、ワークフロー・フックの書き換え、実行、実行の記録の削除 | 観測 | — | 無し | 見えない (GitHub の中) |
 | 認証情報の収集: secrets・vars、プロセスのメモリ、認証情報のファイル、self-hosted のランナーではクラウドのメタデータ | 機能 | — | 無し | 見えない (ランナーの中) |
 | 外への送信: 攻撃者のサーバーへの HTTP POST (後に Telegram) | 観測 | — | 無し | 見えない (ランナーの通信) |
-| AWS での利用: ジョブの OIDC のトークンで、リポジトリが使うロールを引き受ける | 機能 | `new_principal` | CloudTrail: `AssumeRoleWithWebIdentity`、そのロールの API 呼び出し | 引き受けそのものは今は指摘にならない。CI のロールが既知リストにもベースラインにも無いときだけ、ロールの初出が medium |
+| AWS での利用: ジョブの OIDC のトークンで、リポジトリが使うロールを引き受ける | 機能 | `oidc_assume_role`, `new_principal` | CloudTrail: `AssumeRoleWithWebIdentity`、そのロールの API 呼び出し | 既知リストの `oidc_subjects` に無い入り口 (リポジトリ・ブランチ・environment) からなら、既知のロールは high、どの項目にも無いロールは medium。**既知の入り口のまま (既定のブランチの既存のワークフローの書き換え) なら出ない**。その日の回数が平常帯を超えたときだけ low か medium。CI のロールが既知リストにもベースラインにも無ければ、ロールの初出が medium |
 | 権限の昇格: 見つけた別のロールへ乗り移る (セッションタグ付きの `AssumeRole`) | 機能 | `unknown_assume_role`, `new_principal` | CloudTrail: `AssumeRole` | 呼び出し元の CI のロールが承認済みでなければ high。承認済みなら出ない (今の抜け)。乗り移った先のロールが既知でなければ、その初出が medium |
-| 永続化: IAM ユーザーを列挙し、最大 2 人に長期のアクセスキーを作る | 機能 | `iam_changes` | CloudTrail: `CreateAccessKey` | medium。**変更した主体が既知デプロイ主体 (`tags: [deploy]`) なら info に下がり、通知に出ない** |
-| 永続化: 乗り移った先のロールの信頼ポリシーを、どの AWS アカウントからでも引き受けられる形に書き換える | 機能 | `iam_changes`, `access_analyzer` | CloudTrail: `UpdateAssumeRolePolicy`。Access Analyzer の検出 | iam_changes は medium (既知デプロイ主体なら info)。access_analyzer は公開として high (weekly。Access Analyzer が有効なとき。最大 1 週間遅れる) |
+| 永続化: IAM ユーザーを列挙し、最大 2 人に長期のアクセスキーを作る | 機能 | `iam_changes` | CloudTrail: `CreateAccessKey` | medium。変更した主体が既知デプロイ主体 (`tags: [deploy]`) でも下げない |
+| 永続化: 乗り移った先のロールの信頼ポリシーを、どの AWS アカウントからでも引き受けられる形に書き換える | 機能 | `iam_changes`, `access_analyzer` | CloudTrail: `UpdateAssumeRolePolicy`。Access Analyzer の検出 | iam_changes は、信頼ポリシーが誰でも (`*`) を許す形なら high、外のアカウントを足す形なら medium (どちらも既知デプロイ主体でも下げない。ロールを作るときの信頼ポリシーも同じ)。access_analyzer は公開として high (weekly。Access Analyzer が有効なとき。最大 1 週間遅れる) |
 | 後日の利用: 作ったキーを攻撃者の環境から使う、開いたロールを外のアカウントから引き受ける | 想定 | `principal_new_source`, `unknown_assume_role`, `new_principal` | CloudTrail: その主体の API 呼び出し、`AssumeRole` | 既知の IAM ユーザーが新しい送信元から使われて low、書き込みがあれば medium、拒否の急増が重なれば high。外部アカウントからの引き受けは high (内向き) |
 
 ## arata では見えないもの
 
 - **GitHub の中の動き** (PR、ワークフローとフックの書き換え、実行、実行の記録の削除): arata が読むのは AWS の記録だけで、GitHub の監査ログは読まない
 - **外への送信**: GitHub が用意する実行環境の通信は、利用者の AWS のどの記録にも残らない。self-hosted のランナーでも、arata は VPC フローログを読まない
-- **OIDC の引き受けが、どのワークフローからか**: CloudTrail の `AssumeRoleWithWebIdentity` の記録に、トークンの `job_workflow_ref` は残らない。正規のワークフローと、書き換えられたワークフローを区別できない
+- **OIDC の引き受けが、どのワークフローからか**: CloudTrail の `AssumeRoleWithWebIdentity` の記録に、トークンの `job_workflow_ref` は残らない。正規のワークフローと、書き換えられたワークフローを区別できない。
+  `oidc_assume_role` が比べるのは sub にある単位 (リポジトリと、ブランチ・タグ / environment / pull_request) まで
 - **CI と同じロール・同じ実行環境からの操作**: 主体も送信元の帯も正規の CI と同じなので、`principal_new_source` では区別できない (CI のロールは `dynamic_source` にしていることが多い)
 - **AWS 以外に効く秘密** (GitHub のトークン、パッケージの公開用のトークン、ほかのクラウド): 盗まれても AWS の記録に現れない
 - どの段階も、出典が AWS の側で観測した記録ではない。上の表は「スクリプトが書かれた通りに動いたら」の対応
 
 ## 予定している改善
 
-どれも予定 (方針は ADR 0055・0056 で決めたが、まだ実装していない)。実装した PR で上の表へ移す。
-
-- OIDC でのロールの引き受け (`AssumeRoleWithWebIdentity`) を、既知の (プロバイダ, sub, ロール) の組と比べて報告するチェック (予定。ADR 0055)。
-  実装しても、どのワークフローからかは見えない (記録に無い)
-- 既知デプロイ主体でも、`CreateAccessKey` と、信頼ポリシーを外へ広げる `UpdateAssumeRolePolicy` の重大度を下げない。どのアカウントからでも引き受けられる形は high (予定。ADR 0056)
-- 承認済みのロールからの乗り移りを見ることは、まだ決めていない (ADR 0055 に次の候補として書いてある)
+- 承認済みのロールからの乗り移り (CI のロールから、初めてのロールへの `AssumeRole`) を見ること (予定。まだ決めていない。ADR 0055 に次の候補として書いてある)

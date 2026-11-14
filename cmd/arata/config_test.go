@@ -86,7 +86,7 @@ func TestConfigInitThenRun(t *testing.T) {
 	if err := json.Unmarshal(c.stdout.Bytes(), &rep); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(rep.Coverage.ChecksRun, ",") != "access_denied,ai_path_usage,defense_evasion,iam_changes,new_principal,principal_new_source,public_exposure,root_usage,secret_access,unknown_assume_role,unused_region_activity" || len(rep.Coverage.ChecksSkipped) != 5 {
+	if strings.Join(rep.Coverage.ChecksRun, ",") != "access_denied,ai_path_usage,defense_evasion,iam_changes,new_principal,oidc_assume_role,principal_new_source,public_exposure,root_usage,secret_access,unknown_assume_role,unused_region_activity" || len(rep.Coverage.ChecksSkipped) != 5 {
 		t.Fatalf("coverage: %+v", rep.Coverage)
 	}
 	if code := c.run("config", "init", "--diff", "-c", c.cfg); code != 0 || c.stdout.String() != "この版の雛形との差分はありません。\n" {
@@ -121,8 +121,8 @@ func TestConfigInitDiff(t *testing.T) {
 func TestProfilesCmd(t *testing.T) {
 	c := newCLI(t)
 	b, _ := os.ReadFile(c.cfg)
-	body := strings.Replace(string(b), "    checks: [default-daily, root_usage, unknown_assume_role]\n",
-		"    checks: [default-daily, root_usage, unknown_assume_role]\n    overrides:\n      login_bruteforce: { factor: 5 }\n", 1)
+	body := strings.Replace(string(b), "    checks: [default-daily, root_usage, unknown_assume_role, oidc_assume_role]\n",
+		"    checks: [default-daily, root_usage, unknown_assume_role, oidc_assume_role]\n    overrides:\n      login_bruteforce: { factor: 5 }\n", 1)
 	c.writeConfig(body + "checks:\n  login_bruteforce:\n    min_count: 30\n")
 	if code := c.run("profiles", "-c", c.cfg); code != 0 {
 		t.Fatalf("exit %d: %s", code, c.stderr)
@@ -153,7 +153,7 @@ func TestProfilesCmd(t *testing.T) {
 	if v.Profiles[0].Name != "daily" || origins["login_bruteforce.factor"] != "overrides" || origins["login_bruteforce.min_count"] != "checks" || origins["login_bruteforce.baseline_days"] != "default" {
 		t.Fatalf("origins: %v", origins)
 	}
-	if v.Profiles[1].Name != "hourly" || len(v.Profiles[1].Params) != 0 || len(v.Unused) != 0 || v.Profiles[2].Name != "weekly" || len(v.Profiles[2].Params) != 2+17+3 {
+	if v.Profiles[1].Name != "hourly" || len(v.Profiles[1].Params) != 5 || len(v.Unused) != 0 || v.Profiles[2].Name != "weekly" || len(v.Profiles[2].Params) != 2+17+3 {
 		t.Fatalf("hourly: %+v", v)
 	}
 }

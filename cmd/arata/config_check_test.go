@@ -87,13 +87,13 @@ func TestConfigCheckRules(t *testing.T) {
 		{"unknown key with line", func(c *cli) { c.writeConfig(cfgOf(c) + "retension:\n  events: 30d\n") }, 2,
 			[]string{"ng    " + "<dir>/config.yaml", "field retension not found", "line 20"}},
 		{"type", func(c *cli) {
-			c.writeConfig(strings.Replace(cfgOf(c), "checks: [root_usage, unknown_assume_role]", "checks: root_usage", 1))
+			c.writeConfig(strings.Replace(cfgOf(c), "checks: [root_usage, unknown_assume_role, oidc_assume_role]", "checks: root_usage", 1))
 		}, 2,
 			[]string{"line 12", "cannot unmarshal"}},
 		{"required", func(c *cli) { c.writeConfig(strings.Replace(cfgOf(c), "name: acme\n", "", 1)) }, 2,
 			[]string{"config: name is required"}},
 		{"unknown check name (the rule of doctor and run)", func(c *cli) {
-			c.writeConfig(strings.Replace(cfgOf(c), "checks: [root_usage, unknown_assume_role]", "checks: [root_usage, root_usege]", 1))
+			c.writeConfig(strings.Replace(cfgOf(c), "checks: [root_usage, unknown_assume_role, oidc_assume_role]", "checks: [root_usage, root_usege]", 1))
 		}, 2, []string{`profile hourly: unknown check "root_usege"`}},
 		// 設定が読めなければ allowlist の場所が決まらないので、allowlist は見ない
 		{"allowlist is skipped when the config is broken", func(c *cli) {

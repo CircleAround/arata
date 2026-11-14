@@ -152,6 +152,9 @@ func subjectPrincipal(f store.Finding) (string, record.PrincipalKind, error) {
 		if kind == string(record.PrincipalRoot) {
 			return "", "", fmt.Errorf("%w: the root user cannot be approved", errNotApprovable)
 		}
+	case "oidc_assume_role":
+		return "", "", fmt.Errorf("%w: approve does not write oidc_subjects; add the entry point (provider, role, repo and refs / environments) to oidc_subjects in allowlist.yaml by hand "+
+			"(see `arata help ai playbook oidc_assume_role`), or use ack / snooze", errNotApprovable)
 	default:
 		return "", "", fmt.Errorf("%w: %s findings are not about a principal; use ack, snooze or resolve", errNotApprovable, f.Check)
 	}
@@ -165,7 +168,9 @@ func subjectPrincipal(f store.Finding) (string, record.PrincipalKind, error) {
 //
 // 決定: iam_changes は含めない。承認済み (deploy タグ無し) の主体による IAM 変更も medium で報告するチェックなので、
 // 承認を理由に解消すると次の観測で new に戻り、毎回 resolved → new を繰り返す。iam_changes は approve した 1 件だけを resolved にする。
-var allowlistResolvable = map[string]bool{"new_principal": true, "unknown_assume_role": true}
+//
+// 決定 (ADR 0055): oidc_assume_role も含める。こちらは主体の承認 (principals) では解消せず、入り口が oidc_subjects で既知になったときだけ解消する。
+var allowlistResolvable = map[string]bool{"new_principal": true, "unknown_assume_role": true, "oidc_assume_role": true}
 
 // 既知リストによって解消した finding の Data["resolved_reason"]。
 const (
@@ -175,6 +180,10 @@ const (
 	ReasonKnownDestination = "known_destination"
 	// ReasonDestinationRemoved は、報告しなかった引き受けをまとめた info の行の行き先が、既知リストから外れた (期限切れを含む)。
 	ReasonDestinationRemoved = "destination_removed"
+	// ReasonKnownOIDCSubject は、OIDC の引き受けの入り口が oidc_subjects で既知になった (ADR 0055)。
+	ReasonKnownOIDCSubject = "known_oidc_subject"
+	// ReasonOIDCSubjectRemoved は、報告しなかった OIDC の引き受けをまとめた info の行のロールが、oidc_subjects の期限内の項目から無くなった。
+	ReasonOIDCSubjectRemoved = "oidc_subject_removed"
 )
 
 // allowlistResolution は、finding が al によって at 時点で解消されるか (理由と、根拠になった既知リストの項目の表示) を返す。解消しないなら空。
@@ -182,7 +191,23 @@ const (
 // 決定 (ADR 0047): unknown_assume_role は、主体の承認に加えて、行き先の既知でも解消する。満たす条件はチェックが報告しない条件と同じ
 // (外向き・行き先が期限内で既知・finding の mfa が true)。ack 済みの finding も同じ条件で解消する (MFA が無い・不明のものは残る)。
 // 報告しなかった分の info の行は、行き先の期限内の項目が無くなったら解消する (「報告していない」という行を残さない)。
+//
+// 決定 (ADR 0055): oidc_assume_role は、知らない組として報告した finding の組が oidc_subjects で既知になったら解消する (人が既知リストに入り口を書いた後)。
+// 時間帯・送信元の外の finding と、平常帯の行は解消しない (入り口は既に既知)。info の行は、ロールが期限内の項目から無くなったら解消する。
+// principals での承認 (ロールを主体として承認) では解消しない。
 func allowlistResolution(al *allowlist.List, f store.Finding, at time.Time) (reason, subject string) {
+	if f.Check == "oidc_assume_role" {
+		if role, ok := checks.IsKnownOIDCLine(f.Key, f.Data); ok {
+			if al.OIDCRoleKnown(role, at) {
+				return "", ""
+			}
+			return ReasonOIDCSubjectRemoved, ""
+		}
+		if entry, ok := checks.KnownOIDCSubjectOf(al, f.Key, f.Data, at); ok {
+			return ReasonKnownOIDCSubject, entry.Subject()
+		}
+		return "", ""
+	}
 	if f.Check == "unknown_assume_role" {
 		if acct, ok := checks.IsKnownDestinationLine(f.Key, f.Data); ok {
 			if al.HasAssumeDestination(acct, at) {

@@ -5,7 +5,7 @@ principals:
     approved_by: alice
     approved_at: 2026-10-21
   - arn: arn:aws:iam::123456789012:role/github-actions-deploy
-    note: GitHub Actions の OIDC デプロイロール。IAM 変更は info に下げる
+    note: GitHub Actions の OIDC デプロイロール。IAM 変更は info に下げる (アクセスキーの作成と、信頼ポリシーを外へ広げる変更は下げない。ADR 0056)
     approved_at: 2026-10-21
     tags: [deploy]
   - arn: arn:aws:iam::123456789012:user/contractor-x
@@ -41,6 +41,24 @@ assume_destinations:
     approved_at: 2026-11-13
     expires: 2027-03-31          # 契約の終わりに合わせる。過ぎたら再び報告される (config check が warn にする)
     # roles: ["ReadOnly", "ops-*"]   # 書けばこのロールだけ (ロール名の glob。ARN の role/ より後ろ)
+# OIDC でのロールの引き受け (GitHub Actions など) の、既知の入り口 (ADR 0055)。oidc_assume_role は (プロバイダ, sub, ロール) の組をここと比べる。
+# ロールがここに無ければ medium、ロールはあるが入り口 (リポジトリ・ブランチ・environment) が無ければ high。principals (主体の承認) とは別で、
+# ロールを principals で承認しても入り口は既知にならない。arata approve はここを書かない (人が書く)
+oidc_subjects:
+  - provider: token.actions.githubusercontent.com   # プロバイダの名前 (ARN の oidc-provider/ より後ろ)
+    role: arn:aws:iam::123456789012:role/github-actions-deploy   # ロールの ARN (完全一致)
+    repo: example-org/example-repo                   # 組織/リポジトリ (完全一致。glob は書けない)
+    refs: ["refs/heads/main", "refs/tags/v*"]        # ブランチ・タグ (glob)。refs / environments / pull_request: true のどれか 1 つ以上
+    environments: ["production"]                     # environment の名前 (完全一致)
+    note: 本番のデプロイ                               # 必須
+    approved_by: alice
+    approved_at: 2026-11-14
+    # hours: ["18:00-19:00"]       # 任意。許す時間帯 (UTC。外なら medium)
+    # source_ips: ["203.0.113.0/24"]   # 任意。許す送信元 (自前のランナーなど。外なら medium)
+    # expires: 2027-03-31
+  - provider: oidc.eks.ap-northeast-1.amazonaws.com/id/EXAMPLE0123456789   # GitHub 以外は provider と role だけ (sub は読まない)
+    role: arn:aws:iam::123456789012:role/example-app-irsa
+    note: クラスタのサービスアカウント
 # 主体 × 秘匿値 (名前・パスの glob)。secret_access が「初めて読む秘匿値」に数えない (一括読み出しには数える。ADR 0027)
 secrets_access:
   - principal: arn:aws:iam::123456789012:role/example-app-task

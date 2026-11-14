@@ -20,7 +20,7 @@
       "status": "ok",
       "item": "allowlist",
       "path": "<dir>/allowlist.yaml",
-      "message": "principals 3, source_ips 1, admin_users 0, secrets_access 0, assume_destinations 0"
+      "message": "principals 3, source_ips 1, admin_users 0, secrets_access 0, assume_destinations 0, oidc_subjects 0"
     }
   ]
 }

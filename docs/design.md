@@ -811,7 +811,7 @@ principals:
     note: パートナー開発者の switch role。引き受け元ユーザーの増加は別途検知
     approved_by: alice
     approved_at: 2026-10-21
-    tags: [deploy]               # 決定: 任意のタグ。deploy を持つ主体の IAM 変更は info に下げる (7 章 iam_changes)
+    tags: [deploy]               # 決定: 任意のタグ。deploy を持つ主体の IAM 変更は info に下げる (7 章 iam_changes。下げない変更は ADR 0056)
   - arn: arn:aws:iam::123456789012:user/contractor-x
     approved_at: 2026-10-21
     expires: 2026-12-31          # 期限付き承認。過ぎたら expired として再報告
@@ -834,6 +834,12 @@ assume_destinations:             # 外向きの引き受けで、行き先とし
     approved_by: alice
     approved_at: 2026-11-13
     expires: 2027-03-31
+oidc_subjects:                   # OIDC でのロールの引き受けの、既知の入り口 (ADR 0055)。principals (主体の承認) とは別
+  - provider: token.actions.githubusercontent.com
+    role: arn:aws:iam::123456789012:role/gha-deploy
+    repo: example-org/example-repo
+    refs: ["refs/heads/main"]
+    note: 本番のデプロイ
 ```
 
 決定: `allowlist.yaml` が無い場合は空のリストとして扱う (init 直後の運用を許す)。主体 ARN の突合は完全一致。AssumedRole 主体はセッション ARN ではなくロール ARN (`sessionContext.sessionIssuer.arn`) に正規化してから突合する (セッション名に個人名やメールが入るため)。
@@ -885,6 +891,22 @@ assume_destinations:             # 外向きの引き受けで、行き先とし
   - 不明: どちらの項目も無い (長期のアクセスキーでの呼び出し、ロール側の記録など)。項目が無いことを「なし」と書かない。
   - mixed: 1 つの finding のイベントで判定が揃わない (1 件の「あり」で全体を「あり」と書かない)。
   - `serialNumber` の値は残さない (MFA デバイスの ARN に利用者名が入る)。collector は AssumeRole* のときだけ、有無を `data.mfa_serial: true` に残す。
+- 決定 (OIDC の引き受けの記録。ADR 0055): `AssumeRoleWithWebIdentity` の記録 (`userIdentity.type` は `WebIdentityUser`) には呼び出し元の ARN が無い。
+  主体 (`PrincipalARN`) は空のままにし、sub を主体にしない (`principals`・主体の活動の日次集計に載せない)。collector は data に次を残す。
+  - `oidc_provider` (`userIdentity.identityProvider` の `oidc-provider/` より後ろ。ARN でなければ値そのもの。決まった形でなければ `unparsed`)・`oidc_provider_account` (ARN のアカウント)
+  - GitHub のプロバイダのときだけ sub (`userIdentity.userName`) を読む。形は `repo:<組織>[@<数字>]/<リポジトリ>[@<数字>]:` の後に `ref:<ref>`・`environment:<名前>`・`pull_request`。
+    読めたら `oidc_sub_form: github` と各部分 (`oidc_repo`・`oidc_owner_id`・`oidc_repo_id`・`oidc_sub_kind`・`oidc_ref`・`oidc_environment`) を残し、**sub そのものは残さない**。
+    ID 入りの形は ID を外した形で比べる (ID は別の項目)。ref は `refs/` で始まり英数字と `._/@+=-` だけ、environment は英数字と `._-` と途中の空白だけ
+    (通知にそのまま出る値なので、git や GitHub が許す文字より狭くする)。外れたら `oidc_sub_form: unparsed` (値は残さない。sub の形をカスタマイズしたリポジトリを含む)
+  - GitHub 以外のプロバイダは `oidc_sub_form: not_read` (sub は読まず、残さない。利用者ごとの ID が入るプロバイダがある)
+  - `gha_run_id`: `userAgent` が `exec-env/GitHubActions` を名乗るときの `md/run_id#<数字>`。呼ぶ側が書ける値なので判定に使わない (調べる手がかり)
+  - `roleSessionName` は残さない。**`job_workflow_ref` は CloudTrail に記録されない**ので、どのワークフローのファイルからかは残せない
+- 決定 (信頼ポリシーの記録。ADR 0056): `UpdateAssumeRolePolicy` (`requestParameters.policyDocument`) と `CreateRole` (`assumeRolePolicyDocument`) の信頼ポリシーを collector が読み、
+  判定に使う値だけを data に残す (文書そのものは残さない): `trust_policy` (ok / unreadable。必ず付ける)・`trust_wildcard`・`trust_accounts` (AWS / Federated の主体のアカウント)・
+  `trust_federated` (ARN でない Federated の値)・`trust_has_condition`。見るのは `Effect: Allow` の Statement の `Principal` だけ。`"*"`・`"AWS": "*"` は `*`。
+  Allow + `NotPrincipal` も `*` として扱う (「挙げた主体以外の全員」。バケットポリシーの判定と同じ。ADR 0056 の本文は「読めない」と書いたが、重い側に寄せた)。
+  `Service` は数えない。決まった形でない主体 (消えた主体の ID など)・JSON として読めない・大きすぎる・一覧が上限を超える文書と、`requestParameters` の無い記録
+  (拒否された呼び出し) は unreadable。URL エンコードされた文書とオブジェクトのままの文書も読む。`Condition` は判定しない (有無だけ)
 - 決定 (unknown_assume_role の送信元): collector は `sourceIPAddress` が IP ならそのまま残し、チェックは finding の `ips` に出す (落としていない)。`ips` が無いのは、
   記録の送信元が AWS のサービス名 (`AWS Internal` など) で IP が無いとき。このとき root_usage と同じく `invoked_by` (経由したサービスの一覧) を出し、IP が無い理由が分かるようにする。
 - 決定: unknown_assume_role の Key と Fingerprint は変えない。向きは Key (呼び出し元とロール) から決まる。MFA を Fingerprint に足すと、既存の finding が一斉に changed になる。
@@ -901,6 +923,16 @@ assume_destinations:             # 外向きの引き受けで、行き先とし
   主体に一致する期限内の項目すべての `expected_denied` の和で判定する (項目ごとに理由と期限が違ってよいため。タグの判定に使う項目の選び方と、同じ arn の重複の後勝ちは変えない)。
   期限切れの項目の分は除かない。空のリスト・空の要素・コロンの無いもの・空白を含むものは読み込みエラー。`expected_denied` を持つ項目は `note` が必須。
   項目そのものは主体も承認する (expected_denied のためだけに項目を作ると new_principal なども止まる)。
+- 決定 (ADR 0055): `oidc_subjects` は、OIDC でのロールの引き受け (`AssumeRoleWithWebIdentity`) の「既知の入り口」。oidc_assume_role が (プロバイダ, sub, ロール) の組を比べる。
+  - `principals` とは別の節にする (ADR 0047 と同じ理由)。ロールを `principals` で承認しても入り口は既知にならず、ここに書いてもロールは主体として承認されない
+  - `provider` (必須) はプロバイダの名前 (ARN の `oidc-provider/` より後ろ。ARN は書けない)、`role` (必須) はロールの ARN の完全一致 (glob は書けない)、`note` は必須
+  - GitHub (`token.actions.githubusercontent.com`) の項目は `repo` (組織/リポジトリの完全一致。glob は書けない。大文字小文字は区別しない) が必須で、
+    `refs` (ブランチ・タグの glob。`*` か `refs/` で始まる。先頭から末尾までの一致)・`environments` (名前の完全一致)・`pull_request: true` のどれか 1 つ以上を必ず書く
+    (「リポジトリの全部」という暗黙の広さを持たせない)。GitHub 以外の項目は `provider` と `role` だけ (sub は読まないので、`repo` などは書けない)
+  - `hours` (許す時間帯。UTC の `HH:MM-HH:MM`。終わりは含まない。日をまたぐ書き方も可)・`source_ips` (許す送信元の CIDR) は任意。書かなければ見ない。
+    一致する期限内の項目のどれか 1 つが、時間帯と送信元の両方を許せば内
+  - `expires` は `assume_destinations` と同じ (期限日の終わりまで有効)。`config check` は、同じ入り口を書いた項目と期限切れの項目を warn にする
+  - `arata approve` はこの節を書かない (ADR 0055。人が書く)
 - 決定 (ADR 0047): `assume_destinations` は、外向きの引き受けで「行き先として既知のアカウント」。unknown_assume_role は、
   **外向き・行き先のアカウントが期限内で載っている・MFA あり (その組の全イベントで)** の全部を満たす引き受けだけを報告しない。
   知らない行き先、MFA なし・不明・混在、内向き、内部、向きが決まらない引き受けは今までどおり high。
@@ -934,7 +966,7 @@ assume_destinations:             # 外向きの引き受けで、行き先とし
    ├─ arata resolve <finding-id>     → resolved。再び観測されたら new
    └─ 放置                              → still_open。週次の未対応一覧に残り続ける
 
-allowlist.yaml を人が直接編集して承認 ──> 次の evaluate の冒頭で該当 finding を resolved (reason: allowlisted。行き先を足したときは known_destination)
+allowlist.yaml を人が直接編集して承認 ──> 次の evaluate の冒頭で該当 finding を resolved (reason: allowlisted。行き先を足したときは known_destination、OIDC の入り口を足したときは known_oidc_subject)
 expires 到来 ──> その主体の次回観測は new (expired) として再報告
 90 日間観測の無い approved 主体 ──> 四半期レポートで「削除候補」
 ```
@@ -962,6 +994,11 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
   外向き・行き先が期限内で既知・finding の `mfa` が true のものを resolved にし、`resolved_reason: known_destination` と `allowlist_subject` を残す。
   ack 済みの finding も同じ (MFA が無い・不明のものは残る)。行き先を消す・期限が切れると、次の引き受けは new として報告される。
   報告しなかった分の info の行は、その行き先の期限内の項目が無くなったら resolved にする (`resolved_reason: destination_removed`)。
+- 決定 (ADR 0055): `oidc_subjects` による解消も、evaluate の冒頭でする (approve は `oidc_subjects` を書かないので、経路は人が既知リストを直したときだけ)。
+  open / acked / snoozed の oidc_assume_role のうち、知らない組として報告した finding (`reasons` が `unknown_subject` だけ) の組が期限内の項目に一致するものを
+  resolved にし、`resolved_reason: known_oidc_subject` と `allowlist_subject` を残す。時間帯・送信元の外の finding と平常帯の行は解消しない (入り口は既に既知)。
+  報告しなかった分の info の行は、そのロールが期限内の項目から無くなったら resolved にする (`resolved_reason: oidc_subject_removed`)。
+  `principals` での承認 (ロールを主体として承認) では解消しない。`approve` は oidc_assume_role の finding を断り、`oidc_subjects` に書くよう案内する。
 - 決定 (ADR 0022): access_denied は `approve <id> --expected-denied <glob>` (複数可) でだけ approve できる。主体 (外部アカウントの root なら `account:`) の項目を
   `expected_denied` 付きで追記し、finding は resolved にしない (次の run で除いて数え直す。event 型なので閾値を下回れば open のまま沈黙する)。
   主体の項目が既にあれば書き換えずに止まり、足す行 (`expected_denied: [...]`) をエラーに示す。`--expected-denied` を付けない approve は拒否する。
@@ -975,10 +1012,11 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 |---|---|---|---|---|
 | root_usage | hourly | trail_event | Root の利用 | critical |
 | defense_evasion (決定: 当初の trail_tampering を置き換え。daily) | daily | trail_event | 監査・検知の仕組み (CloudTrail・GuardDuty・Access Analyzer・ログ・フローログ・Config・Security Hub・WAF のログ・証跡の宛先バケット) を止める・弱める操作の成功。決定: ADR 0026 | critical / high (deploy タグなら 1 段下げる) |
-| unknown_assume_role | hourly | trail_event | 呼び出し元 ARN が allowlist に無い AssumeRole。決定: AWS サービス主体 (EC2 / Lambda がインスタンスロールを引き受けるもの) は対象外。向き (外向き / 内向き / 内部) と MFA の有無を見出しと data に出す (6 章の決定)。決定 (ADR 0047): 外向きで、行き先のアカウントが allowlist の `assume_destinations` に期限内で載っていて、MFA ありの引き受けは報告しない (行き先ごとに info で 1 行残す) | high (報告しなかった分の行は info) |
+| unknown_assume_role | hourly | trail_event | 呼び出し元 ARN が allowlist に無い AssumeRole。決定: AWS サービス主体 (EC2 / Lambda がインスタンスロールを引き受けるもの) は対象外。決定 (ADR 0055): OIDC での引き受け (`AssumeRoleWithWebIdentity`) も名前で対象外にする (oidc_assume_role が扱う)。向き (外向き / 内向き / 内部) と MFA の有無を見出しと data に出す (6 章の決定)。決定 (ADR 0047): 外向きで、行き先のアカウントが allowlist の `assume_destinations` に期限内で載っていて、MFA ありの引き受けは報告しない (行き先ごとに info で 1 行残す) | high (報告しなかった分の行は info) |
+| oidc_assume_role | hourly | trail_event | OIDC でのロールの引き受け (`AssumeRoleWithWebIdentity`) を (プロバイダ, sub, ロール) の組にまとめ、allowlist の `oidc_subjects` と比べる。sub を読むのは GitHub のプロバイダだけ (ほかは (プロバイダ, ロール) の組)。既知の入り口の分は報告せず、ロールごとに info で 1 行残す。`job_workflow_ref` は記録に無いので、ワークフローの単位では見られない。決定: ADR 0055 | high (既知のロールに、項目に無い入り口から) / medium (どの項目にも無いロール。既知の入り口だが項目の時間帯・送信元の外) / low・medium (既知の入り口の、その日の回数が平常帯超え) / low (全部失敗) |
 | secret_access (決定: 当初の secret_access_unknown を置き換え。daily) | daily | trail_event | 秘匿値 (Secrets Manager・SSM SecureString) の「主体 × 秘匿値」の初出と一括読み出し。決定: ADR 0027 | low / medium / high |
 | guardduty_findings | hourly (High) / daily (他)。決定: Step 3 は weekly のみ (state) | guardduty | finding ID 初出、count 増加 | severity 準拠 |
-| iam_changes | daily | trail_event | CreateAccessKey / CreateUser / Attach*Policy / Put*Policy / UpdateAssumeRolePolicy / CreateLoginProfile | medium (既知デプロイ主体なら info。決定: 既知デプロイ主体 = allowlist の principals で `tags: [deploy]` を持つもの) |
+| iam_changes | daily | trail_event | CreateAccessKey / CreateUser / CreateRole / Attach*Policy / Put*Policy / UpdateAssumeRolePolicy / CreateLoginProfile | medium (既知デプロイ主体なら info。決定: 既知デプロイ主体 = allowlist の principals で `tags: [deploy]` を持つもの)。決定 (ADR 0056): CreateAccessKey と、信頼ポリシー (UpdateAssumeRolePolicy / CreateRole) に外の主体がある・読めない変更は既知デプロイ主体でも medium、信頼ポリシーが誰でも (`*`) を許す変更は誰でも high |
 | access_denied | daily | trail_event | 拒否された API 呼び出しの主体ごとの種類 (幅) と件数 (量) が平常帯超え。権限の列挙の兆候。決定: ADR 0021 | 幅は medium (種類が多ければ high)、量は medium |
 | console_login | daily | trail_event | 失敗が閾値超え、MFA 無し成功 | medium / high |
 | new_principal | daily | principal_seen | allowlist にも principals にも無い主体。決定: principals.status が unknown / expired の主体を毎回観測する (承認されるまで still_open として残る)。root は root_usage が扱うので対象外 | medium |
@@ -1007,10 +1045,15 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 |---|---|---|---|
 | root_usage | event | `<root ARN>\|<ip>` | 重大度 + IP 集合 + MFA の有無 |
 | unknown_assume_role | event | `<caller ARN>-><role ARN>` (報告しなかった分の info の行は `known-destination:<行き先のアカウント>`) | 重大度 + IP 集合 + allowlist 状態 (unknown / expired)。info の行は固定 |
+| oidc_assume_role | event | `<プロバイダ>\|<正規化した sub。読めなければ unparsed、GitHub 以外は ->\|<ロールの ARN>` (平常帯の行は先頭に `volume:`、報告しなかった分の info の行は `known:<ロールの ARN>`) | 重大度 + 理由 (+ allowlist 状態・ロールが既知か。平常帯の行は日付)。IP は入れない (GitHub の実行環境の IP は毎回変わる)。info の行は固定 |
 | iam_changes | event | `<event name>\|<caller ARN>\|<対象>` | 重大度 + IP 集合 + 対象 + policy ARN (全件拒否のときは denied) |
 | new_principal | state | `<ARN>` | 重大度 + IP 集合 + 種類 + allowlist 状態 |
 
 決定: iam_changes は集約した呼び出しがすべてエラー (ErrorCode あり) のとき、変更は起きていないので見出しを「IAM 変更の試行 (拒否)」とし、Data に `denied: true` と `error_codes` を残す (重大度と Key は変えない。権限の無い主体が IAM を変えようとしたこと自体が指摘になるため)。成功が混ざるときは「IAM 変更」のまま `has_errors: true`。対象が取れないとき (拒否では requestParameters が記録されない) は表示を「不明」とする。Fingerprint は全件拒否のときだけ `denied` を足す (既存の finding の指紋は変わらない)。
+
+決定 (ADR 0056): iam_changes は、既知デプロイ主体でも次の変更を下げない。`CreateAccessKey` (medium)、信頼ポリシー (`UpdateAssumeRolePolicy` / `CreateRole`) に、そのアカウントの外の主体がある・信頼ポリシーを読めない (medium)、信頼ポリシーが誰でも (`*`) を許す (high。デプロイ主体でない主体も high)。「読めて、`*` も外の主体も無い」と確かめられたときだけ下げる (`trust_policy` の無い、以前の版で集めた記録は「読めない」)。自アカウントは記録を受け取ったアカウント (`recipient_account`。無ければ呼び出した主体のアカウント)。外のアカウントが `principals` の `account:` で承認済みでも下げない (あちらは「呼び出し元として既知」)。`Condition` は判定せず、有無を data (`trust_has_condition`) と見出しに出す。data に `not_lowered` (下げなかった理由: `access_key` / `trust_external` / `trust_unreadable` / `trust_wildcard`。既知デプロイ主体のときだけ)・`trust_policy`・`trust_wildcard`・`trust_external_accounts`・`trust_external_federated` を出し、見出しの末尾に理由の文を足す。1 つの Key にまとめた呼び出しの中で、いちばん重い重大度を採る。Key と Fingerprint の形は変えない (重大度が上がった既存の finding は changed として報告される)。対象の一覧に `CreateRole` を足した (デプロイ主体でない主体は medium、デプロイ主体は読めて `*` も外の主体も無ければ info)。
+
+決定 (ADR 0055): oidc_assume_role の判定。(1) 組に一致する期限内の項目が無ければ「知らない組」(`reasons: [unknown_subject]`)。ロールが期限内の項目のどれかにあれば high (`role_known: true`)、無ければ medium。一致する項目が期限切れだけなら `allowlist_status: expired` (ロールが既知かは、ほかの期限内の項目で決める)。(2) 組が既知で、一致する期限内の項目のどれも時間帯と送信元の両方を許さない引き受けは medium (`reasons` に `outside_hours` / `unexpected_source`。Key は組のまま。外だった件数だけを数える)。(3) (1)(2) で、まとめた引き受けが全部失敗なら low (`denied: true`。ロールの ARN は秘密ではなく、誰でも自分のリポジトリから試せる)。(4) 既知で内の引き受けは報告せず、ロールごとに info で 1 行 (`known:<ロールの ARN>`。`subjects` に入り口の一覧。Fingerprint は固定)。(5) 平常帯: 窓に既知の組の引き受けがあるときだけ、その組の、窓に重なる UTC の日の回数 (成功した引き受け) を、その日の前日から `baseline_days` 日の日次の回数 (無い日は 0) の中央値 × `factor` (下限 `min_count`) と比べる。超えたら low、その `medium_ratio` 倍を超えたら medium (Key は `volume:<組>`。いちばん超えた日を 1 件)。CloudTrail を収集し終えた過去日が `min_baseline_days` 未満なら判定しない (principal_new_source と同じ数え方)。材料は保存済みの注目イベントで、新しい日次集計は足さない。設定は `checks.oidc_assume_role` (`baseline_days: 14`・`factor: 3`・`min_count: 20`・`min_baseline_days: 7`・`medium_ratio: 3`)。イベントの data はストアから読み戻した値なので、決まった形のときだけ使い、外れたら `unparsed` にまとめる (見出しにそのまま出さない)。finding の data は `provider`・`provider_account`・`role_arn`・`repo`・`sub_kind`・`ref`・`environment`・`sub_form`・`owner_id`・`repo_id` (同じ名前で ID が複数なら `owner_ids`・`repo_ids`)・`run_ids`・`reasons`・`role_known`・`allowlist_status`。雛形は hourly と daily のプロファイルに入れる (既存の設定には `CHECK_UNUSED` の警告と `config init --diff` で見える。暗黙には動かない)。
 
 決定 (アプリ層チェック。Step 2 の 3 つ。ADR 0005 の event 型):
 

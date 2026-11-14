@@ -22,6 +22,8 @@ type Checks struct {
 	// PrincipalNewSource と SecretAccess は CloudTrail の主体の活動・秘匿値の読み取りを見る daily のチェック (ADR 0027)。
 	PrincipalNewSource PrincipalNewSource `yaml:"principal_new_source"`
 	SecretAccess       SecretAccess       `yaml:"secret_access"`
+	// OIDCAssumeRole は OIDC でのロールの引き受けを見る hourly のチェックの、平常帯の設定 (ADR 0055)。
+	OIDCAssumeRole OIDCAssumeRole `yaml:"oidc_assume_role"`
 	// EndpointAbuse は画面 (会員登録・メッセージ送信など) への多数の IP からの集中と「A のあと B」の連鎖を見る daily のチェック (ADR 0030)。
 	EndpointAbuse EndpointAbuse `yaml:"endpoint_abuse"`
 	// UnusedRegionActivity と CostAnomaly はふだん使わないリージョンでの書き込みと費用の急増を見る daily のチェック (ADR 0032)。
@@ -53,6 +55,16 @@ type Baseline struct {
 	MinCount     float64 `yaml:"min_count"`     // 平常帯の下限 (中央値 0 の IP でもこの件数までは鳴らさない)
 	// MinBaselineDays は「初出」判定に必要な、データのある過去日数 (導入直後に全部が初出になるのを防ぐ)。既定 7。
 	MinBaselineDays int `yaml:"min_baseline_days"`
+}
+
+// OIDCAssumeRole は oidc_assume_role (OIDC でのロールの引き受け) の設定 (ADR 0055)。
+// 既知リスト (oidc_subjects) との比較に設定は無い。ここにあるのは、既知の組の回数を比べる平常帯だけ:
+// その組自身の直近 baseline_days 日の日次の回数 (成功した引き受け。無い日は 0) の中央値 × factor。ただし min_count を下限にする。
+// min_baseline_days は判定に要る、CloudTrail を収集し終えた過去日数 (それ未満の間は回数を判定しない)。
+type OIDCAssumeRole struct {
+	Baseline Baseline `yaml:",inline"`
+	// MediumRatio は、回数が平常帯のしきい値のこの倍を超えたら medium (超えただけなら low)。
+	MediumRatio float64 `yaml:"medium_ratio"`
 }
 
 // LoginBruteforce は login_bruteforce の設定。
@@ -486,6 +498,8 @@ func (c *Checks) applyDefaults() {
 	setInt(&ns.BaselineDays, 30)
 	setInt(&ns.MinBaselineDays, (ns.BaselineDays+1)/2)
 	setInt(&ns.MinWrites, 5)
+	c.OIDCAssumeRole.Baseline.applyDefaults(20)
+	setFloat(&c.OIDCAssumeRole.MediumRatio, 3)
 	c.EndpointAbuse.applyDefaults()
 	if len(c.UnusedRegionActivity.ComputeAPIs) == 0 {
 		c.UnusedRegionActivity.ComputeAPIs = DefaultComputeAPIs
@@ -588,6 +602,12 @@ func (c *Checks) validate() error {
 	}
 	if ns := c.PrincipalNewSource; ns.BaselineDays < 1 || ns.MinBaselineDays < 1 || ns.MinBaselineDays > ns.BaselineDays || ns.MinWrites < 1 {
 		return fmt.Errorf("principal_new_source: baseline_days >= 1, 1 <= min_baseline_days <= baseline_days, min_writes >= 1")
+	}
+	if err := c.OIDCAssumeRole.Baseline.validate(); err != nil {
+		return fmt.Errorf("oidc_assume_role: %w", err)
+	}
+	if c.OIDCAssumeRole.MediumRatio <= 1 {
+		return fmt.Errorf("oidc_assume_role: medium_ratio > 1")
 	}
 	if sa := c.SecretAccess; sa.BaselineDays < 1 || sa.MinBaselineDays < 1 || sa.MinBaselineDays > sa.BaselineDays || sa.Factor <= 0 || sa.MinDistinct < 1 {
 		return fmt.Errorf("secret_access: baseline_days >= 1, 1 <= min_baseline_days <= baseline_days, factor > 0, min_distinct >= 1")

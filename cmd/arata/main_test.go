@@ -67,10 +67,10 @@ sources:
 profiles:
   hourly:
     window: 1h
-    checks: [root_usage, unknown_assume_role]
+    checks: [root_usage, unknown_assume_role, oidc_assume_role]
   daily:
     window: 24h
-    checks: [default-daily, root_usage, unknown_assume_role]
+    checks: [default-daily, root_usage, unknown_assume_role, oidc_assume_role]
   weekly:
     window: 7d
     checks: [default-weekly]
@@ -336,7 +336,7 @@ func TestExitCodes(t *testing.T) {
 			t.Fatalf("report must still be emitted: %v", err)
 		}
 		cov := rep["coverage"].(map[string]any)
-		if len(cov["sources_failed"].([]any)) != 1 || len(cov["checks_skipped"].([]any)) != 16 {
+		if len(cov["sources_failed"].([]any)) != 1 || len(cov["checks_skipped"].([]any)) != 17 {
 			t.Fatalf("coverage: %v", cov)
 		}
 		if sf := cov["sources_failed"].([]any)[0].(map[string]any); sf["source"] != "trail" || sf["code"] != "ACCESS_DENIED" {

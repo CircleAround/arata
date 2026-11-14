@@ -98,8 +98,9 @@ sources:
 # チェック一覧 (周期 / 型 / 必要なレコード)。event 型は窓内の出来事、state 型は今の状態を報告する。
 #   root_usage              hourly  event  trail_event     ルートユーザーの利用 (critical)
 #   unknown_assume_role     hourly  event  trail_event     allowlist に無い呼び出し元の AssumeRole (high)
+#   oidc_assume_role        hourly  event  trail_event     OIDC でのロールの引き受け (GitHub Actions など) を allowlist の oidc_subjects と比べる。既知のロールに知らない入り口から (high)、知らないロール (medium)、既知の入り口の回数が平常帯超え (low / medium)
 #   new_principal           daily   state  principal_seen  allowlist にもベースラインにも無い主体 (medium)
-#   iam_changes             daily   event  trail_event     IAM の変更。deploy タグの主体なら info (medium)
+#   iam_changes             daily   event  trail_event     IAM の変更。deploy タグの主体なら info。アクセスキーの作成と、外の主体を信頼する信頼ポリシーは deploy タグでも下げない。誰でも (*) を信頼する形は high (medium / high)
 #   access_denied           daily   event  trail_event     拒否された API 呼び出しの急増。種類が多ければ権限の列挙の兆候 (medium / high)
 #   defense_evasion         daily   event  trail_event     監査・検知の仕組み (CloudTrail・GuardDuty・ログなど) を止める・弱める操作。deploy タグの主体なら 1 段下げる (critical / high)
 #   public_exposure         daily   event  trail_event     セキュリティグループ・S3・RDS・スナップショットなどを外部に開く設定変更。deploy タグでも下げない (high / medium / low)
@@ -126,14 +127,16 @@ profiles:
     checks:
       - root_usage              # ルートユーザーの利用 (critical)
       - unknown_assume_role     # allowlist に無い呼び出し元の AssumeRole (high)
+      - oidc_assume_role        # OIDC でのロールの引き受け (GitHub Actions など) を allowlist の oidc_subjects と比べる。既知のロールに知らない入り口から (high)、知らないロール (medium)、既知の入り口の回数が平常帯超え (low / medium)
   daily:                                         # 前兆・試行の発見と平常帯との比較。hourly を回さない運用でも拾えるよう hourly のチェックも入れる
     window: 24h
     # max_catchup: 7d                            # cron が遅れた時に前回の窓の終わりから追いつく上限
     checks:
       - root_usage              # ルートユーザーの利用 (critical)
       - unknown_assume_role     # allowlist に無い呼び出し元の AssumeRole (high)
+      - oidc_assume_role        # OIDC でのロールの引き受け (GitHub Actions など) を allowlist の oidc_subjects と比べる。既知のロールに知らない入り口から (high)、知らないロール (medium)、既知の入り口の回数が平常帯超え (low / medium)
       - new_principal           # allowlist にもベースラインにも無い主体 (medium)
-      - iam_changes             # IAM の変更。deploy タグの主体なら info (medium)
+      - iam_changes             # IAM の変更。deploy タグの主体なら info。アクセスキーの作成と、外の主体を信頼する信頼ポリシーは deploy タグでも下げない。誰でも (*) を信頼する形は high (medium / high)
       - access_denied           # 拒否された API 呼び出しの急増。種類が多ければ権限の列挙の兆候 (medium / high)
       - defense_evasion         # 監査・検知の仕組み (CloudTrail・GuardDuty・ログなど) を止める・弱める操作。deploy タグの主体なら 1 段下げる (critical / high)
       - public_exposure         # セキュリティグループ・S3・RDS・スナップショットなどを外部に開く設定変更。deploy タグでも下げない (high / medium / low)
@@ -225,6 +228,12 @@ checks:
     min_baseline_days: 7                         # 初出の判定に要る、CloudTrail を収集し終えた過去日数 (活動の無い日も数える (導入直後は初出を報告しない。一括読み出しは報告する)
     factor: 3                                    # 一括読み出しの平常帯 = その主体の日ごとの異なる秘匿値の数の中央値 × factor
     min_distinct: 10                             # 1 日に読んだ異なる秘匿値の数がこれを超えたら一括読み出し (high)。GetParametersByPath はパス単位で 1 と数える
+  oidc_assume_role:
+    baseline_days: 14                            # 既知の入り口の回数の平常帯 = その組 (プロバイダ・sub・ロール) 自身の直近 baseline_days 日の日次の回数の中央値 × factor
+    factor: 3                                    # 平常帯の倍率
+    min_count: 20                                # 平常帯の下限 (1 日の回数がこれ以下なら、中央値が小さくても報告しない)
+    min_baseline_days: 7                         # 回数の判定に要る、CloudTrail を収集し終えた過去日数 (導入直後は回数を判定しない。既知リストとの比較は導入直後からする)
+    medium_ratio: 3                              # 回数が平常帯のしきい値のこの倍を超えたら medium (超えただけなら low)
   endpoint_abuse:
     endpoints: []                                # 見る画面 (例 [{ name: signup, paths: [/signup], methods: [POST] }])。空なら何もしない。paths は glob (* は 1 区間、** は 0 区間以上、:id は数字か UUID)。sources: [<ソース ID>] で数えるソースを選ぶ (http_access のみ)。集計条件
     window: 10m                                  # 集計の時間幅 (1 日を割り切る 1m〜1h)。集計条件

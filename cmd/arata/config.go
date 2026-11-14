@@ -297,7 +297,7 @@ text の出力は人向けで、文言と並びは版をまたいで変わるの
 				}
 				list, alOK = l, l != nil
 				if l != nil {
-					row("ok", "allowlist", alPath, 0, fmt.Sprintf("principals %d, source_ips %d, admin_users %d, secrets_access %d, assume_destinations %d", len(l.Principals), len(l.SourceIPs), len(l.AdminUsers), len(l.SecretsAccess), len(l.AssumeDestinations)))
+					row("ok", "allowlist", alPath, 0, fmt.Sprintf("principals %d, source_ips %d, admin_users %d, secrets_access %d, assume_destinations %d, oidc_subjects %d", len(l.Principals), len(l.SourceIPs), len(l.AdminUsers), len(l.SecretsAccess), len(l.AssumeDestinations), len(l.OIDCSubjects)))
 				}
 			}
 			// 決定 (ADR 0045): 監査する側のアカウント (audit_account) と既知リストの食い違い。既知リストが読めないときは上の ng に任せる

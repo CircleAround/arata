@@ -17,6 +17,7 @@ import (
 // 決定 (ADR 0047): 外向きで、行き先のアカウントが既知リストの assume_destinations に期限内で載っていて、MFA ありの引き受けは報告しない。
 // 報告しなかった分は、行き先のアカウントごとに info で 1 行残す (Key は known-destination:<アカウント>)。
 // 決定: AWS サービス主体 (EC2 / Lambda などがインスタンスロールを引き受けるもの) は対象外。
+// 決定 (ADR 0055): OIDC での引き受け (AssumeRoleWithWebIdentity) も対象外 (oidc_assume_role が扱う)。
 // 決定 (設計書 6 章): 引き受けの向き (外向き / 内向き / 内部) と MFA の有無を規則で決め、見出しと data に出す。
 // 決められないときは書かない (向き)・「不明」と書く (MFA)。Key と Fingerprint は変えない。
 type UnknownAssumeRole struct{}
@@ -235,7 +236,9 @@ func (c UnknownAssumeRole) Evaluate(ctx context.Context, q store.Query, w collec
 	}
 	aggs := map[string]*assumeAgg{}
 	for _, e := range evs {
-		if e.PrincipalKind == record.PrincipalService || e.PrincipalARN == "" {
+		// 決定 (ADR 0055): OIDC での引き受け (AssumeRoleWithWebIdentity) は名前で対象から外す。oidc_assume_role が (プロバイダ, sub, ロール) の組で見る。
+		// この記録は呼び出し元の ARN が無く、主体が空なので今までも対象外だったが、形の結果ではなく決定として固定する (同じ出来事を二重に出さない)
+		if e.Name == OIDCAssumeEvent || e.PrincipalKind == record.PrincipalService || e.PrincipalARN == "" {
 			continue
 		}
 		_, status := al.Principal(e.PrincipalARN, w.To)

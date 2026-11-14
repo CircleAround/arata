@@ -274,16 +274,16 @@ func (c *Collector) lookup(ctx context.Context, rc RegionClient, in *ct.LookupEv
 // rawEvent は CloudTrailEvent JSON のうち使うフィールド。
 type rawEvent struct {
 	UserIdentity struct {
-		Type           string `json:"type"`
-		PrincipalID    string `json:"principalId"`
-		ARN            string `json:"arn"`
-		AccountID      string `json:"accountId"`
-		InvokedBy      string `json:"invokedBy"`
+		Type        string `json:"type"`
+		PrincipalID string `json:"principalId"`
+		ARN         string `json:"arn"`
+		AccountID   string `json:"accountId"`
+		InvokedBy   string `json:"invokedBy"`
 		// AssumeRoleWithWebIdentity の記録 (type は WebIdentityUser) にある。userName はトークンの sub、identityProvider は OIDC プロバイダ (ADR 0055)。
 		// 文字列でない値でも記録ごと捨てないように any で受ける
 		UserName         any `json:"userName"`
 		IdentityProvider any `json:"identityProvider"`
-		SessionContext struct {
+		SessionContext   struct {
 			SessionIssuer struct {
 				ARN string `json:"arn"`
 			} `json:"sessionIssuer"`
