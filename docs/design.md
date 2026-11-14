@@ -1295,6 +1295,19 @@ arata rebuild   [--from-scratch [--baseline]] [--format text|json]   # raw JSONL
   `queries` (集計・解釈率・サンプル・doctor 自身のクエリを StartQuery して直ちに StopQuery し、Insights の構文検査だけを受ける。match_rate より先に行う)、`check` (必要なレコードを出すソースが無いチェック = warn)、`config` (allowlist の検証)。
 - ng が 1 つでもあれば終了コード 2。ng の行は標準エラーに固定語彙の `code` 付きで 1 行ずつ出す。warn だけなら 0。
 - 表の最後に、設定のソースに必要な IAM action (`cloudtrail:LookupEvents`, `logs:DescribeLogGroups`, `logs:StartQuery`, `logs:GetQueryResults`, `logs:StopQuery`) を列挙する。
+- 決定 (ADR 0053): 監査のロールにも読ませないロググループは、配布用のロール (`deploy/iam/readonly-role.yaml`) のパラメータ `DeniedLogGroupNames`
+  (名前のカンマ区切り。既定は空で、文を出さない) に書き、中身を読む操作 (`logs:StartQuery`・`GetQueryResults`・`GetLogRecord`・`GetLogEvents`・`FilterLogEvents`・
+  `StartLiveTail`・`GetLogGroupFields`・`Unmask`) を明示の Deny で止める。Allow から外すだけにしない (ほかのポリシーが付いても効く)。
+  - 決定: ARN は名前ごとに `arn:*:logs:*:*:log-group:<名前>` と `…:<名前>:*` の 2 つ。リージョンは `*` にする (ロールはリージョンを持たず、ソースはリージョンごとに書けるので、
+    どのリージョンの同じ名前も読ませない。止めすぎる側に倒す)。アカウントとパーティションも `*` (素の CloudFormation では、名前の並びに関数の値を含む接頭辞を付けられないため)。
+    名前は完全一致で、ワイルドカード・空白・ARN は AllowedPattern で弾く。
+  - 複数のロググループを 1 回で問い合わせる StartQuery は、1 つでも Deny に当たれば問い合わせ全体が拒否される (IAM は明示の Deny を優先する。
+    この場合を明記した AWS の文書は見つけられなかったので、IAM のポリシーシミュレーターで確かめた。ADR 0053)。arata は 1 回の StartQuery に 1 つのロググループ (`logGroupName`) しか渡さないので、ほかのソースには影響しない。
+  - 読ませないロググループは `sources` に書かない。書くと、run はそのソースだけを `ACCESS_DENIED` で失敗にして続ける。
+  - 決定: doctor は、クエリの検査で StartQuery が拒否されたら、クエリごとの `queries` の行を並べず、`permission` の 1 行
+    (`logs:StartQuery が拒否された (<ロググループ>): ロールに action が無いか、読ませない設定 (DeniedLogGroupNames)。後者なら sources から外す: <AWS のエラー>`) にまとめ、
+    そのソースの残りの検査 (ほかのクエリ・解釈率・費用) は行わない。`log_group` の行は ok のまま (一覧は止めないため)。
+    action が無いのか明示の Deny なのかは、AWS のエラーの文言でしか分からないので、arata は判定せず両方を書く。
 - 決定 (Step 3): アカウント単位のソースは、collector の読み取り API を 1 回ずつ試して action ごとに permission 行を出す (拒否は ng / ACCESS_DENIED)。
   必要な action: iam-credential-report = `iam:GenerateCredentialReport` (書き込み系。doctor では試さない)・`iam:GetCredentialReport`、
   guardduty = `guardduty:ListDetectors`・`ListFindings`・`GetFindings`、access-analyzer = `access-analyzer:ListAnalyzers`・`ListFindings`、

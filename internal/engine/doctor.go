@@ -365,6 +365,18 @@ func (d *doctor) logs(ctx context.Context, src config.Source) {
 	for _, n := range names {
 		if err := c.Validate(ctx, queries[n], d.now.Add(-time.Minute), d.now); err != nil {
 			ce := collect.Classify(src.ID, "", err)
+			// 決定 (ADR 0053): 権限の拒否はどのクエリでも同じなので、permission の 1 行にまとめ、残りのクエリと解釈率は試さない。
+			// log_group が ok でここだけ拒否されるのは、ロールに action が無いか、ロールがこのロググループを読ませない (DeniedLogGroupNames) とき
+			if ce.Code == collect.CodeAccessDenied {
+				action := ce.Action
+				if action == "" {
+					action = cwlogs.ActionStartQuery
+				}
+				d.add(src, "permission", DoctorNG, ce.Code, fmt.Sprintf(
+					"%s が拒否された (%s): ロールに action が無いか、ロールがこのロググループを読ませない設定 (readonly-role.yaml の DeniedLogGroupNames)。後者ならこのソースを sources から外す: %v",
+					action, src.LogGroup, ce.Err))
+				return
+			}
 			bad = append(bad, n)
 			d.add(src, "queries", DoctorNG, ce.Code, n+": "+ce.Err.Error())
 		}

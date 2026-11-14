@@ -110,7 +110,7 @@ sources:
 
 | ITEM | 読み方 |
 |---|---|
-| `permission` | `ACCESS_DENIED` なら、読み取り専用ロールにその action が無い。必要な action の一覧は表の最後 |
+| `permission` | `ACCESS_DENIED` なら、読み取り専用ロールにその action が無い。必要な action の一覧は表の最後。`log_group` が ok なのに `logs:StartQuery` だけが拒否されるなら、利用者がロールの `DeniedLogGroupNames` で読ませない設定にしたロググループ (個人情報だけを書くログなど)。権限を足す提案をせず、そのソースを `sources` から外す |
 | `log_group` | `LOG_GROUP_MISSING` なら名前かリージョンが違う。名前は完全一致 (`aws logs describe-log-groups --log-group-name-prefix <接頭辞>` で確かめる) |
 | `queries` | `QUERY_INVALID` なら `regex` や `fields` の書き方を Logs Insights が受け付けていない |
 | `match_rate` | 直近 `--window` (既定 24h) の 100 行を形式で読めた割合。`expected_match_rate` 未満なら `FORMAT_MISMATCH` (ng) で、読めなかった行の例が出る。「行が無い」(warn) は、ログが届いていないか `stream_prefix` の誤り |

@@ -351,3 +351,44 @@ func sourceFailed(rep *report.Report, id string) bool {
 	}
 	return false
 }
+
+// ロールが読ませないロググループ (readonly-role.yaml の DeniedLogGroupNames。ADR 0053) をソースに書いたとき:
+// 一覧は通るので log_group は ok、StartQuery が拒否される。クエリごとに同じ行を並べず、permission の 1 行に action・ロググループ・対処を出す。
+func TestDoctorStartQueryDeniedOnOneLogGroup(t *testing.T) {
+	h := newHarnessWith(t, hygieneSources, hygieneChecks)
+	h.logs.LogGroups = []string{"prod-app"}
+	h.logs.On("", cwlogstest.Response{})
+	h.logs.StartErr = cwlogstest.APIError{Code: "AccessDeniedException", Message: "with an explicit deny in an identity-based policy"}
+	res := Doctor(context.Background(), h.cfg, h.deps, time.Hour)
+	var perm []DoctorRow
+	for _, r := range res.Rows {
+		if r.Source != "app_prod" {
+			continue
+		}
+		switch r.Item {
+		case "permission":
+			perm = append(perm, r)
+		case "queries", "match_rate":
+			t.Errorf("拒否の後に %s の行を出さない: %+v", r.Item, r)
+		case "log_group":
+			if r.Status != DoctorOK {
+				t.Errorf("log_group は ok のはず: %+v", r)
+			}
+		}
+	}
+	if len(perm) != 1 {
+		t.Fatalf("permission の行は 1 つのはず: %+v", res.Rows)
+	}
+	r := perm[0]
+	if r.Status != DoctorNG || r.Code != "ACCESS_DENIED" {
+		t.Fatalf("%+v", r)
+	}
+	for _, want := range []string{"logs:StartQuery が拒否された", "prod-app", "DeniedLogGroupNames", "sources から外す", "explicit deny"} {
+		if !strings.Contains(r.Detail, want) {
+			t.Errorf("detail に %q が無い: %s", want, r.Detail)
+		}
+	}
+	if !res.Problems() {
+		t.Error("ng のはず")
+	}
+}
