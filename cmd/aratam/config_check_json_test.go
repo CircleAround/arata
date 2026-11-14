@@ -39,6 +39,10 @@ func TestConfigCheckJSON(t *testing.T) {
 	}
 	out := c.checkJSON(0)
 	compareGolden(t, "config_check.json", c.checkOut())
+	// 雛形は緊急用の Webhook を別に持つ (urgent_webhook_env が空でない)
+	if !out.Slack.UrgentWebhook {
+		t.Errorf("urgent_webhook must be true when slack.urgent_webhook_env is set: %+v", out.Slack)
+	}
 	if !out.OK || out.Name != "acme" || out.Slack == nil || out.Slack.Method != "webhook" || out.Slack.Format != "text" ||
 		out.LLM == nil || out.LLM.Provider != "claude-cli" || out.Timezone != "Asia/Tokyo" || len(c.codes()) != 0 {
 		t.Fatalf("%+v %v", out, c.codes())
@@ -51,7 +55,7 @@ func TestConfigCheckJSONBot(t *testing.T) {
 	c.useBot()
 	c.offline()
 	out := c.checkJSON(0)
-	if !out.OK || out.Slack == nil || out.Slack.Method != "bot" || out.Timezone != "UTC" || out.LLM.Provider != "none" {
+	if !out.OK || out.Slack == nil || out.Slack.Method != "bot" || out.Slack.UrgentWebhook || out.Timezone != "UTC" || out.LLM.Provider != "none" {
 		t.Fatalf("%+v", out)
 	}
 	// チャンネル ID・環境変数の名前は出さない (送り方の判別に要らない)
@@ -132,5 +136,20 @@ func TestSchemaCommand(t *testing.T) {
 	c.stdout.Reset()
 	if code := c.run("schema", "none"); code != 2 || c.stdout.Len() != 0 || !strings.Contains(c.stderr.String(), "aratam-config-check") {
 		t.Fatalf("exit %d\n%s%s", code, c.stdout, c.stderr)
+	}
+}
+
+// 緊急用の Webhook を使わない設定 (urgent_webhook_env が空) では、urgent_webhook は false。
+// 書き出したワークフローは、これを見て「使う秘密」だけを仮の値と比べる (arata repo init。ADR 0059)。環境変数の名前は出さない。
+func TestConfigCheckJSONWithoutUrgentWebhook(t *testing.T) {
+	c := newCLI(t)
+	c.offline()
+	c.editConfig("urgent_webhook_env: ARATAM_SLACK_URGENT_WEBHOOK", `urgent_webhook_env: ""`)
+	out := c.checkJSON(0)
+	if !out.OK || out.Slack == nil || out.Slack.Method != "webhook" || out.Slack.UrgentWebhook {
+		t.Fatalf("%+v", out.Slack)
+	}
+	if !strings.Contains(c.stdout.String(), `"urgent_webhook": false`) {
+		t.Errorf("urgent_webhook must be present even when false (readers tell an old aratam by its absence):\n%s", c.stdout)
 	}
 }

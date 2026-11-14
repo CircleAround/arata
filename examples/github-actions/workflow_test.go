@@ -16,20 +16,21 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// 定時の監査の見本は 2 つ。1 つのアカウントを監査する形と、複数のアカウントを matrix で監査する形。
-// ほかに、finding を片付ける見本 (triage) と、PR で設定を検査する見本 (check) がある (triage_check_test.go)。
-// Slack への送信だけを確かめる見本 (notify-test) は notifytest_test.go。
+// 見本は、arata repo init が決まった架空の引数で書き出した一式 (examples/audit-repo。ADR 0059)。雛形と 1 バイトも違わないことは
+// internal/repoinit のテストが固定する。ここでは、そのワークフローの中身を確かめる。
+// 定時の監査 (アカウントの matrix)、finding を片付ける triage、PR で設定を検査する check (triage_check_test.go)、
+// Slack への送信だけを確かめる notify-test (notifytest_test.go)。
 const (
-	singleFile = "arata-audit.yml"
-	multiFile  = "arata-audit-multi.yml"
-	triageFile = "arata-triage.yml"
-	checkFile  = "arata-check.yml"
+	workflowDir = "../audit-repo/.github/workflows"
+	multiFile   = "arata-audit.yml"
+	triageFile  = "arata-triage.yml"
+	checkFile   = "arata-check.yml"
 )
 
 // workflowFiles は定時の監査の見本。allFiles は見本のすべて。
 var (
-	workflowFiles = []string{singleFile, multiFile}
-	allFiles      = []string{singleFile, multiFile, triageFile, checkFile, notifyTestFile}
+	workflowFiles = []string{multiFile}
+	allFiles      = []string{multiFile, triageFile, checkFile, notifyTestFile}
 )
 
 type step struct {
@@ -90,7 +91,7 @@ type workflow struct {
 
 func load(t *testing.T, file string) (*workflow, string) {
 	t.Helper()
-	b, err := os.ReadFile(file)
+	b, err := os.ReadFile(filepath.Join(workflowDir, file))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +104,7 @@ func load(t *testing.T, file string) (*workflow, string) {
 	return w, string(b)
 }
 
-// forEachWorkflow は定時の監査の 2 つの見本に同じ検査をかける。
+// forEachWorkflow は定時の監査の見本に検査をかける。
 func forEachWorkflow(t *testing.T, fn func(t *testing.T, w *workflow, text string)) {
 	t.Helper()
 	for _, f := range workflowFiles {
@@ -284,7 +285,9 @@ func testSecretsReachOnlyTheStepsThatNeedThem(t *testing.T, w *workflow, text st
 			if !strings.Contains(v, "secrets.") {
 				continue
 			}
-			want := map[string]string{"GH_TOKEN": "install", "AUDIT_ROLE_ARN": "aws-config", "AUDIT_ROLE_ARNS": "aws-config", "ARATAM_SLACK_WEBHOOK": "notify", "ARATAM_SLACK_URGENT_WEBHOOK": "notify", "ARATAM_SLACK_BOT_TOKEN": "notify", "ALERT_WEBHOOK": "alert"}[k]
+			want := map[string]string{"GH_TOKEN": "install", "AUDIT_ROLE_ARNS": "aws-config",
+				// 仮の値のままでないことを確かめる step (比べるだけで、値は出さない。secrets_test.go)
+				"ARATA_RUNNER_ROLE_ARN": "secrets", "ARATA_AUDIT_ROLE_ARNS": "secrets", "ARATA_ALERT_WEBHOOK": "secrets", "ARATAM_SLACK_WEBHOOK": "notify", "ARATAM_SLACK_URGENT_WEBHOOK": "notify", "ARATAM_SLACK_BOT_TOKEN": "notify", "ALERT_WEBHOOK": "alert"}[k]
 			if want != s.ID {
 				t.Errorf("secret %s must not be given to step %q", k, s.ID)
 			}
@@ -356,7 +359,7 @@ func testRunScriptsParse(t *testing.T, w *workflow, text string) {
 // runStep は Actions と同じ bash の起動で step のスクリプトを動かす。PATH の先頭は偽の実行ファイルの置き場所。
 func runStep(t *testing.T, script, bin string, env ...string) (string, int, string) {
 	t.Helper()
-	return runStepIn(t, t.TempDir(), script, bin, env...)
+	return runStepIn(t, repoWithMethodScript(t), script, bin, env...)
 }
 
 // runStepIn は dir をカレントディレクトリ (checkout したリポジトリのつもり) にして step を動かす。
@@ -623,28 +626,5 @@ func TestMultiMatrix(t *testing.T) {
 		if _, ok := w.Env[k]; ok {
 			t.Errorf("%s must be per job, not per workflow", k)
 		}
-	}
-}
-
-// 2 つの見本は、監査ロールのプロファイルを書く step のほかは同じ (片方だけを直して食い違うのを防ぐ)。
-func TestMultiSharesStepsWithSingle(t *testing.T) {
-	a, _ := load(t, singleFile)
-	b, _ := load(t, multiFile)
-	sa, sb := steps(t, a), steps(t, b)
-	if len(sa) != len(sb) {
-		t.Fatalf("steps: %d and %d", len(sa), len(sb))
-	}
-	for i := range sa {
-		if sa[i].ID == "aws-config" {
-			continue
-		}
-		x, _ := yaml.Marshal(sa[i])
-		y, _ := yaml.Marshal(sb[i])
-		if string(x) != string(y) {
-			t.Errorf("step %q differs:\n%s\n---\n%s", sa[i].ID, x, y)
-		}
-	}
-	if a.Jobs["audit"].Env["PROFILE"] != b.Jobs["audit"].Env["PROFILE"] {
-		t.Errorf("PROFILE differs")
 	}
 }

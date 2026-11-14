@@ -646,6 +646,8 @@ cmd/aratam/                LLM 要約と通知 (arata の出力だけを読む�
 cmd/arata-lambda/          Lambda ハンドラ (同じ internal を呼ぶ。runtime provided.al2023, arm64)
 internal/config/              YAML 読み込み・検証・既定値
 internal/scaffold/            設定の雛形 (config init) と雛形との差分 (決定: config と checks の両方を使うので別パッケージ)
+internal/repoinit/            監査を回すリポジトリの一式 (repo init) と、今ある一式との差分。雛形 (templates/) を埋め込む (9 章、ADR 0059)
+internal/aratamscaffold/      aratam の設定の雛形の本文 (標準ライブラリだけ。aratam config init と arata repo init が使う。ADR 0059)
 internal/store/               Store インターフェース、sqlite 実装、jsonl 書き出し、backend (dir / s3)
 internal/collect/             Collector インターフェース
     cloudtrail/               LookupEvents / CloudWatch Logs 配信版
@@ -1329,6 +1331,9 @@ arata は LLM を使わず候補だけを作り、aratam の LLM は候補を文
 ```
 arata config init --audit-account <12 桁の ID>|none [--by NAME] [--out FILE|-] [--force] | --diff
                                # 推奨設定の雛形を書き出す (既定 ./arata.yaml。監査する側のアカウントは必須。ID なら既知リストにも書く。ADR 0045) / 雛形との差分 (3 章、ADR 0014)
+arata repo init --owner O --repo R --accounts a,b --audit-account <12 桁の ID>|none --store-bucket B --region REGION --out DIR
+                [--schedule] [--force] | --diff [--format text|json]
+                               # 監査を回すリポジトリの一式を書き出す / 今ある一式とこの版の一式を比べる (9 章、ADR 0059)。違いがあれば終了コード 1
 arata config check [--format text|json]   # 設定と allowlist.yaml の形をオフラインで検査 (AWS・ストアに繋がない。問題があれば終了コード 2。3 章、ADR 0042)
 arata profiles  [--format table|json]   # プロファイルごとに実際に効いているチェックとパラメータ、その由来
 arata init      [--window 7d | --resume]   # ストア作成、設定検証、ベースライン収集 (findings は出さない)
@@ -1359,7 +1364,7 @@ arata rebuild   [--from-scratch [--baseline]] [--format text|json]   # raw JSONL
     版を上げ、Release の本文に書く。スキーマは開いた形 (`additionalProperties` を縛らない) で、古いスキーマで新しい出力を確かめても足した項目では落ちない
   - 読む側の決まり: 知らない項目は無視する。`enum` のある項目で知らない値を見たら止める。`schema_version` が知る版より大きければ止める
   - スキーマで固定している出力 (`arata schema` の一覧): `report`・`report-period` (report.json)、`doctor`・`profiles`・`rebuild`・`help-ai`・`arata-config-check`・
-    `review`・`config-diff` (arata のそれぞれの `--format json`)、`aratam-config-check`・`aratam-doctor`・`aratam-dry-run` (aratam)、`log` (ログの行)。
+    `review`・`config-diff`・`repo-diff` (arata のそれぞれの `--format json`)、`aratam-config-check`・`aratam-doctor`・`aratam-dry-run` (aratam)、`log` (ログの行)。
     `--format json` を持つ出力は、これで全部
   - **`review` と `config init --diff` は、最上位が配列のまま版 1 として固定した** (`schema` / `schema_version` の項目は無い)。オブジェクトで包むのは互換を壊す変更で、
     `review --format json` は playbook が LLM に読ませている。包むのは、ほかの理由でその出力の版を上げるときに一緒に行う。これから足す出力は、最上位を必ずオブジェクトにする
@@ -1467,8 +1472,55 @@ arata rebuild   [--from-scratch [--baseline]] [--format text|json]   # raw JSONL
 | GitHub Actions | `schedule → arata run (S3 ストア。5-5) → aratam notify` | サーバーを持たずに定期実行したい顧客。ストアのバケットは監査対象とは別のアカウントが望ましい。同時実行は `concurrency:` でも止める (衝突しても後のほうが失敗するだけ)。見本は [examples/github-actions](../examples/github-actions/README.md)、実行の仕組みは `deploy/github-actions/runner.yaml` |
 | AgentConsole タイマー | 一時的な追跡のみ | 恒常運用には使わない |
 
-決定 (GitHub Actions の見本): 認証は OIDC の実行用ロール 1 つから分ける。監査は `aws.profile` で読み取り専用ロールへ連鎖し、ストアは `store_profile` を書かず実行用ロールのまま書く (`credential_source` は `role_arn` なしでは使えない)。
+決定 (GitHub Actions のワークフロー。`arata repo init` が書き出す): 認証は OIDC の実行用ロール 1 つから分ける。監査は `aws.profile` で読み取り専用ロールへ連鎖し、ストアは `store_profile` を書かず実行用ロールのまま書く (`credential_source` は `role_arn` なしでは使えない)。
 Actions のログには arata / aratam の `level`・`code`・`source` と終了コードだけを出す。`::add-mask::` で値を列挙する案は、監査の結果に何が出るかを列挙できないので採らない。
+
+決定 (監査を回すリポジトリの一式。ADR 0059): GitHub Actions で動かすリポジトリの一式 (ワークフロー、送り方の判別と秘密の検査のスクリプト、GitHub の設定の Terraform、
+アカウントごとの設定の雛形、README) は `arata repo init` が引数から書き出す。見本 (`examples/audit-repo`) は、決まった架空の引数での出力そのもので、テストが雛形との一致を固定する。
+- 決定: 引数に既定値は無い。値は YAML・HCL・シェルに入るので、書く前に形で絞る (`internal/repoinit` の `Validate`。アカウントの名前は、引用符なしの YAML で文字列にならない語
+  (`true`・`null` など) と、数字で始まるものも拒む)。差し込みは決まった印 (`@@…@@`) の置換だけで、テンプレートの言語は使わない。ファズテストが、形を通った引数なら生成物が YAML として読め、
+  値が決まった場所に入ることを固定する
+- 決定: ワークフローの `ARATA_VERSION` は、そのバイナリの版。リリース版 (`vX.Y.Z`) ではほかの版を指定できず、版の付かないビルドでは `--arata-version` を書いたときだけ進む
+- 決定: ファイルは 2 種類。生成物 (`.github/`、`github/`、`README.md`、`.gitignore`) は手で直さないもので、`--force` で書き直し、`--diff` で比べる。
+  利用者が育てるもの (`aws/<アカウント>/`) は、無いときだけ作り、どの指定でも書き直さない。既定では 1 つも上書きしない
+- 決定: 終了コード 1 は「一式がこの版と揃っていない」(`--diff` で差がある・`--force` なしで違う生成物がある)。設定の誤り (2) と分け、エラーのログは出さない。
+  `config init --diff` は差があっても 0 だが (差は誤りではない)、一式の生成物は手で直さない前提なので、差を CI で止められるようにした。`--diff --format json` のスキーマは `repo-diff`
+- 決定: 書く先がふつうのファイルでない (シンボリックリンク、ディレクトリ)・途中がシンボリックリンクなら、何も書かずに止まる。先に全部を確かめてから書く。
+  今あるファイルは 1 MiB までしか読まず、行の差分を出すときは制御文字を置き換える (端末の制御列を、今あるファイルから画面に運ばない)
+- 決定: 定時 (`schedule`) は `--schedule` を付けたときだけ入れる。最初の PR で定時まで入ると、ベースラインの収集の前に監査が走り、溜まっていた指摘が一度に通知される (`help ai onboarding`)
+- 決定: 既知リストの `approved_at` だけは書き出した日 (`config init` と同じ)。ほかは時刻を読まず、同じ版と同じ引数なら同じバイト列
+- 決定 (GitHub の設定の Terraform): provider (`integrations/github`) は完全な版で固定し、lock (linux / darwin の amd64・arm64) を一緒に書き出す。宣言はセキュリティに効く項目だけ
+  (非公開、fork の禁止、main のルールセット、Actions の許可と SHA の固定、`GITHUB_TOKEN` の既定、environment `audit` のデプロイできるブランチ)。ほかは `ignore_changes`。
+  リポジトリは `prevent_destroy`。当てるのは人が手元で、state も手元
+- 決定 (秘密の箱): `github/secrets/` は別の root。`for_each` は決まった名前の全部で、既にある名前は data source の一覧から `import` で取り込み、無い名前だけを仮の値で作る。
+  `ignore_changes = [value]` と `prevent_destroy`。「一覧に無い名前だけを作る」形は、作った次の plan で箱を消すので採らない。
+  仮の値は決まった 1 つの文字列 (`internal/repoinit` の `Placeholder`) で、ワークフローは秘密を使う前に比べ、一致したら秘密の名前を出して止まる (`.github/scripts/arata-secret-check.sh`)。
+  空は通す (使わない秘密は空で渡る。無い秘密は、使う step がそれぞれの理由で止まる)
+- 決定 (使わない箱では止めない): 箱は 6 つ全部作るが、使う秘密は構成で違う (Webhook か bot トークンか、緊急用の Webhook を別に持つか、失敗の連絡を使うか)。
+  使わない箱の仮の値で実行を止めると、Webhook だけの利用者・緊急用を持たない利用者が毎回止まる。確かめるのは「使う秘密」だけにする
+  - 必ず使う 2 つ (`ARATA_RUNNER_ROLE_ARN`・`ARATA_AUDIT_ROLE_ARNS`) は、実行用ロールを引き受ける前に止める
+  - Slack の秘密は、アカウントの `aratam.yaml` が使うものだけを notify に渡す (式で選ぶ。使わないものは空)。送り方は `.slack.method`、緊急用の Webhook は
+    `.slack.urgent_webhook` (`aratam config check --format json` に足した真偽値。必ず出す。環境変数の名前は出さない) で判別する。渡した秘密だけを仮の値と比べる。
+    使わない秘密は step に渡らないので、最小の権限にもなる。`urgent_webhook` が読めなければ止める (この項目を知らない古い aratam を、「緊急用なし」と決めつけない)
+  - `ARATA_ALERT_WEBHOOK` は、使うかどうかを設定から判別できない (aratam の設定ではなく、ワークフローだけが使う)。仮の値のままなら、止めずに警告を出す
+    (ADR 0059 は「ジョブの最初に確かめる」としていた。確かめる場所は同じで、止める代わりに警告にした。ふだん使われない秘密なので、何も出さないと気づけない)。
+    連絡を送る段階は、仮の値を「無い」と同じに扱う (仮の値の URL に送らない)
+  - 却下: 使わない箱を作らない (構成を Terraform に持たせる) 案は、アカウントごとに送り方が違う構成を宣言に写すことになり、`aratam.yaml` と二重になる
+- 決定 (監査のリポジトリは会社ごと): 監査のリポジトリは、会社 (監査を任される組織) ごとに 1 つにすることを勧める。実行用ロール・リポジトリ・秘密の 1 組が複数の会社に届くと、
+  乗っ取りや取り違え (ある会社の指摘が別の会社の Slack に届く) の被害が全部の会社に及ぶ。1 つのリポジトリで複数のアカウントを回す matrix の形は残す (同じ会社の prod / staging など)。
+  実行用ロールも会社ごとに分ける: `runner.yaml` を、スタックの名前と `RoleName` を変えて別のスタックにし、OIDC プロバイダは `OIDCProviderArn` で共有し、`AuditRoleArns` はその会社のロールだけにする。
+  ストアのバケットは、スタックごとに別に作られる (テンプレートは必ずバケットを作るので、別のスタックの実行用ロールからは読み書きできない)。手順は、書き出す README の 1。
+  Slack の bot トークンは、リポジトリごとの environment に置く (アカウントごとのトークンを 1 つの JSON にまとめる案は採らない。リポジトリを分ければ要らない)。
+  残ること: 同じアカウントに置いた実行用ロールは、既知リストの `account:` では見分けられない (絞るのは読み取り専用ロールの信頼ポリシー)。同じ bot トークンを複数のリポジトリに置けば、被害は分かれない
+- 決定 (`--diff` が見る残りもの): `.github/workflows`・`.github/scripts` の `arata-` で始まるファイルに加えて、`github`・`github/secrets` の `.tf` も「この版の一式に無い」として出す。
+  Terraform は同じ root の `.tf` を全部当てるので、手で作った宣言が残っていると、書き出した宣言と二重になる・緩い設定が当たる (ADR 0059 の一覧に足した)
+- 決定 (既にあるリポジトリ): `import` ブロックは `github/` に書かない (無いリソースの取り込みはエラーになり、新しく作る場合に通らない)。取り込みは、書き出す README の
+  「既にあるリポジトリを取り込む」の `terraform import` で人が行う。古い state は使わず、新しい state に取り込み直す (古い state のまま当てると、宣言の名前が違うリソースを消す計画になる)。
+  plan の「destroy」が 0 であることを確かめてから当てる
+- 決定 (テスト): Terraform は、偽の GitHub API (`httptest`) に実際の provider を向けて apply し、「既にある秘密に 1 度も書き込まない・2 回目に変化が無い・人が値を入れた後も変化が無い・
+  destroy が止まる・state を失っても取り込むだけ」を固定する。provider の取得にネットワークが要るので、`ARATA_TEST_TERRAFORM=1` のときだけ動く (CI の `terraform` のジョブ、`make test-terraform`)。
+  provider の版の待機は `tools/tfprovidergate` が確かめる。**実際の GitHub では確かめていない** (`github/` の apply、空のリポジトリへの最初の PR、`sha_pinning_required`。ロードマップ)
+- 決定: aratam の設定の雛形の本文は `internal/aratamscaffold` (標準ライブラリだけ) に出した。arata は `internal/notify`・`internal/llm`・`internal/slack` につながない (テストで固定)
 
 決定 (GitHub Actions の実行の仕組み。ADR 0040): OIDC プロバイダ・ストアのバケット・実行用ロールは、素の CloudFormation (`deploy/github-actions/runner.yaml`) で 1 コマンドで置く。
 監査対象には `deploy/iam/readonly-role.yaml` を置き、`TrustedPrincipalArn` に実行用ロールを渡す (2 つの `aws cloudformation deploy`。同じアカウントでも別のアカウントでも同じ手順)。

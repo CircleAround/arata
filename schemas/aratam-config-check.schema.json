@@ -111,11 +111,16 @@
         "format": {
           "description": "slack.format (blocks / text)。開いた語彙",
           "type": "string"
+        },
+        "urgent_webhook": {
+          "description": "緊急用の Webhook を別に持つ (slack.urgent_webhook_env が空でない)。false なら、緊急の通知は通常用の送り先に送る。bot トークンの方式では常に false。環境変数の名前は出さない",
+          "type": "boolean"
         }
       },
       "required": [
         "method",
-        "format"
+        "format",
+        "urgent_webhook"
       ]
     }
   }

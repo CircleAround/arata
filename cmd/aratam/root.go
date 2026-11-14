@@ -244,6 +244,8 @@ type configCheckLLM struct {
 type configCheckSlack struct {
 	Method string `json:"method" jsonschema:"enum=bot|webhook" desc:"Slack への送り方。webhook = Incoming Webhook (slack.webhook_env)、bot = bot トークン (slack.bot_token_env と slack.channel)。閉じた語彙 (知らない値を見たら止める)"`
 	Format string `json:"format" desc:"slack.format (blocks / text)。開いた語彙"`
+	// UrgentWebhook は必ず出す (false でも)。読む側は、項目が無いことで、この項目を知らない古い aratam と見分ける
+	UrgentWebhook bool `json:"urgent_webhook" desc:"緊急用の Webhook を別に持つ (slack.urgent_webhook_env が空でない)。false なら、緊急の通知は通常用の送り先に送る。bot トークンの方式では常に false。環境変数の名前は出さない"`
 }
 
 type configCheckRow struct {
@@ -297,7 +299,7 @@ func newConfigCheckCmd(d *Deps, g *globalFlags) *subcmd.Command {
 				out.OK = true
 				out.Name = cfg.Name
 				out.LLM = &configCheckLLM{Provider: cfg.LLM.Provider}
-				out.Slack = &configCheckSlack{Method: cfg.Slack.Method(), Format: cfg.Slack.Format}
+				out.Slack = &configCheckSlack{Method: cfg.Slack.Method(), Format: cfg.Slack.Format, UrgentWebhook: cfg.Slack.Method() == notify.SlackWebhook && cfg.Slack.UrgentWebhookEnv != ""}
 				out.Timezone = cfg.Rules(false).Zone.Name()
 				out.Rows = append(out.Rows, configCheckRow{Status: "ok", Item: "config",
 					Message: fmt.Sprintf("name %s, provider %s, format %s, slack %s, timezone %s", out.Name, out.LLM.Provider, out.Slack.Format, out.Slack.Method, out.Timezone)})

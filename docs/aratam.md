@@ -329,7 +329,7 @@ LLM に求める出力:
 
 ### 3-5. finding の ID の表示
 
-通知を見た人や別の仕組みが、指摘を triage (`arata ack / snooze / resolve <ID>`、`examples/github-actions/arata-triage.yml` の `finding_id`) や作業の記録に結びつけられるよう、
+通知を見た人や別の仕組みが、指摘を triage (`arata ack / snooze / resolve <ID>`、`arata repo init` が書き出す `arata-triage.yml` の `finding_id`) や作業の記録に結びつけられるよう、
 finding を 1 件ずつ出す行に ID を出す。組み立ては `internal/notify/blocks.go` の `idTag` / `groupIDLine`。
 
 - 決定: 表記は `` `id: 7f16a4507445` `` (コード表記)。blocks と text で同じにし、行の末尾に置く (概要より目立たせない。Slack ではコード表記の中身をそのまま写せる)。
@@ -560,7 +560,8 @@ aratam test-notify [-c aratam.yaml] # Slack に試験メッセージを 1 通送
   text の ok の行に `timezone` を足したとき、行末の `slack bot` を grep して送り方を判別していた仕組みが判別を外し、定時の通知を送れなかった。
   人向けの行は、これからも文言と並びを変える。
   - 出すもの: `schema` / `schema_version`、`ok` (ng の行が無い)、`config` (検査したファイル)、`name`、`llm.provider`、`slack.method` (`bot` / `webhook`)、
-    `slack.format`、`timezone`、`rows` (`status`・`item`・`code`・`message`。text の行と同じ内容)。スキーマは `aratam schema aratam-config-check`
+    `slack.format`、`slack.urgent_webhook` (緊急用の Webhook を別に持つか。`slack.urgent_webhook_env` が空でなければ `true`。必ず出す。`arata repo init` が書き出すワークフローが、
+    使う秘密だけを通知の段階に渡すために読む。ADR 0059。環境変数の名前は出さない)、`timezone`、`rows` (`status`・`item`・`code`・`message`。text の行と同じ内容)。スキーマは `aratam schema aratam-config-check`
     (`schemas/aratam-config-check.schema.json`。型から作り、テストで固定する)
   - **設定を読めなかったときは、設定から決まる値 (`name`・`llm`・`slack`・`timezone`) を出さない** (`ok: false` と ng の行だけ。終了コードは 2 のまま)。
     `jq -r .slack.method` は `null` になり、「bot / webhook 以外なら止める」と書いた側は止まる。読めない設定から送り方を推し量らない

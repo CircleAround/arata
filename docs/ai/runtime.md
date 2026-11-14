@@ -10,7 +10,7 @@ arata / aratam を GitHub Actions で動かすリポジトリ (以下「監査�
 
 LLM が行ってよいのは**読み取りだけ** (`gh api` の GET、ファイルを読む)。設定の変更・ワークフローの追加・secrets の操作は、**人が**判断して行う (LLM は差分や手順を提案する)。
 `OWNER` / `REPO` は監査のリポジトリに読み替える。API が 403 / 404 を返す項目は、権限が足りないだけのことが多い。「確かめられなかった」と報告し、問題なしにしない。
-手順の全体 (テンプレート、secrets の名前、見本) は arata のリポジトリの `examples/github-actions/README.md`。
+手順の全体 (テンプレート、secrets の名前) は arata のリポジトリの `examples/github-actions/README.md`。 監査のリポジトリの一式 (`.github/` のワークフローとスクリプト、`github/` の Terraform、`aws/<アカウント>/` の設定の雛形) は `arata repo init` が書き出したもの (ADR 0059)。生成物 (`.github/`、`github/`、`README.md`、`.gitignore`) は手で直さない。この版の一式と揃っているかは `arata repo init <同じ引数> --diff --format json` で確かめる (何も書かない。`ok` と `files[].status`。スキーマは `arata schema repo-diff`。引数はリポジトリの README.md のコマンド)。揃っていなければ、**人が** `--force` で書き直して PR にする (`aws/<アカウント>/` は書き直されない)。下の設定のうち、非公開・fork の禁止・main のルールセット・Actions の許可・`GITHUB_TOKEN` の既定・environment `audit` は `github/` の Terraform が宣言し、admin を持つ人が手元で当てる (LLM は当てない。当てていない・後から画面で変えた、があり得るので、実際の設定は下の `gh api` で確かめる)。`github/secrets/` は秘密の名前を仮の値で作る Terraform (秘密の箱) で、使う秘密が仮の値のままのワークフローは `秘密 <名前> が仮の値のまま` と出して止まる (人が environment の secrets に本物の値を入れる)。使わない箱 (使わない送り方の Slack の秘密、`slack.urgent_webhook_env` が空のときの緊急用、使わない `ARATA_ALERT_WEBHOOK`) は、仮の値のままでも消してあってもよい (`ARATA_ALERT_WEBHOOK` は警告だけが出る)。定時 (`schedule`) は、人が `--schedule --force` で書き直すまで入らない (`arata help ai onboarding`)
 
 ## リポジトリと fork
 
@@ -98,7 +98,7 @@ gh api repos/OWNER/REPO/environments/audit/secrets --jq '[.secrets[].name]'
 - 秘密が environment にあり、リポジトリの secrets (1 つ目) が空。同じ名前がリポジトリにも残っていれば、移行の途中か消し忘れ (どのブランチからも読める)
 - 覚えのない environment が無い (書き込み権限のある人は、ワークフローで別の名前の environment を作れる。秘密が無く `sub` も違うので使えないが、作った跡)
 - environment の設定を変えられるのは admin を持つ人。admin の人数が最小か (`collaborators` の `permissions.admin`) を人に確かめてもらう
-- 置いてあるのが、見本の 4 つ (実行用ロールと監査ロールの ARN、Slack の Webhook 2 つ。複数のアカウントなら ARN は JSON の 1 つ。bot トークンの方式なら Webhook 2 つの代わりに `ARATAM_SLACK_BOT_TOKEN` 1 つ) だけ。長期の AWS のアクセスキーが無い
+- 置いてあるのが、ワークフローが使う 6 つの名前 (`ARATA_RUNNER_ROLE_ARN`、`ARATA_AUDIT_ROLE_ARNS` (アカウントの名前からロールを引く JSON)、`ARATA_ALERT_WEBHOOK`、Slack は Webhook の `ARATAM_SLACK_WEBHOOK`・`ARATAM_SLACK_URGENT_WEBHOOK` か bot トークンの `ARATAM_SLACK_BOT_TOKEN`。使わない名前は、仮の値の箱のままでも、無くてもよい) だけ。長期の AWS のアクセスキーが無い
 - 読み出されて困るのは Webhook と bot トークン (偽の通知を送れる。bot トークンは bot を招待したすべてのチャンネルに送れるので、招待が通知用のチャンネルだけか、Slack アプリの scope が `chat:write` だけかを人に確かめてもらう)。ロールの ARN は読めても、`sub` が合わないので引き受けられない (分かるのはアカウント ID)
 - 漏れた疑いがあれば、人が Webhook を作り直す (bot トークンなら取り消して入れ直す)
 - environment を使っていない構成 (秘密がリポジトリの secrets、`sub` が `:ref:` の形) なら、守りは「書き込み権限を持つ人を最小に」だけ。environment への移行を勧める (順番は見本の README「既に動いている監査を environment に移す」: environment を作る → スタックを `GitHubEnvironment` と `KeepBranchSubject=true` で更新 → ワークフローに `environment:` を足す → 秘密を移してリポジトリから消す → `KeepBranchSubject=false`)。勧めるときは、非公開のリポジトリでは GitHub の有料プラン (Team など) が要ることを添える。設定を変えるのは人
@@ -119,7 +119,7 @@ gh api repos/OWNER/REPO/actions/permissions/access
 
 ## ワークフローの形
 
-`.github/workflows/` のファイルを読んで確かめる (見本をそのまま写していれば満たす)。
+`.github/workflows/` のファイルを読んで確かめる (`arata repo init` が書き出したままなら満たす。`--diff` で揃っているかが分かる)。
 
 - ワークフローの先頭は `permissions: {}`。権限はジョブごとに書き、監査は `id-token: write` と `contents: read` だけ
 - `uses:` は 40 桁の commit SHA で固定し、版をコメントに書く

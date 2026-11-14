@@ -1,0 +1,6 @@
+  schedule:
+    # 時刻は UTC。毎時ちょうどは GitHub の定時実行が混み、遅れたり落ちたりするので避ける。
+    # daily を UTC 0 時台の後半にするのは、Logs Insights のスキャンの範囲が半分ほどになるため (arata doctor の cost の行の案内)。
+    # 「UTC 0 時 + 窓 (24h) + ingest_delay (15m) + 余裕 15 分」= 00:30 より後ならよい。遅れは費用を増やさない。
+    - cron: '40 0 * * *'   # daily (JST 09:40)
+    - cron: '10 1 * * 1'   # weekly (月曜 JST 10:10)。下の PROFILE の文字列と揃える

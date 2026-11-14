@@ -13,6 +13,8 @@
 | Go の依存の固定と待機 | `go mod verify`、`tools/agegate` | go.sum との不一致、公開から 7 日未満 |
 | npm の依存の固定と待機 | `--frozen-lockfile`、`minimumReleaseAge`、`scripts/agegate.ts` | ロックとの不一致、公開から 7 日未満 |
 | 脆弱性 | govulncheck (Go)、osv-scanner (pnpm) | 既知の脆弱性。週次でも回す |
+| 書き出す Terraform の provider の固定と待機 | `tools/tfprovidergate` (`supply-chain.yml` の `terraform`) | `arata repo init` が書き出す lock の provider の版が、公開から 7 日未満・公開日を確かめられない |
+| 書き出す Terraform の形と、秘密の箱の安全 | `terraform fmt` / `validate`、偽の GitHub API への apply (`go test ./internal/repoinit`。ADR 0059) | 形の誤り、lock のハッシュと合わない provider、既にある秘密への書き込み |
 | 評価 | OpenSSF Scorecard | 公開後に結果を公開する (落ちない) |
 
 ## 点検の結果
@@ -27,7 +29,7 @@
 | 式の埋め込み | `run` への埋め込みは無し (env 経由)。タグの名前が `make` の引数に入っていた | release で版の形だけを通すようにした |
 | キャッシュの汚染 | release が `setup-go` の既定のキャッシュを使っていた | release と検査で切った |
 | release の権限 | 書き込みと署名の権限のジョブでテストとビルドを動かしていた | ジョブを分けた |
-| Dependabot の範囲 | `examples/github-actions` が外れていた | 足した |
+| Dependabot の範囲 | `examples/github-actions` が外れていた | 足した (いまは `arata repo init` の出力の `examples/audit-repo`。ADR 0059) |
 | Go の依存 | `go.sum` あり、7 日待機は強制済み | 変更なし |
 | pnpm の依存 | ロックあり、待機は強制済み、pnpm 本体は sha512 で固定。install スクリプトは既定で止まる | 間接の依存の直接参照の禁止などを足した |
 | Actions の 7 日待機 | Dependabot のみ | CI で強制した |
@@ -86,6 +88,22 @@ Dependabot が上げないもの (公開から 7 日以上の版を選ぶ):
 
 - `go run` の道具 (`supply-chain.yml` の `env`、`release.yml` の govulncheck): 版を変える。公開日は CI の agegate が確かめる
 - zizmor・osv-scanner (`supply-chain.yml`)、syft (`release.yml`): 版と sha256 を一緒に変える。公開日は CI で確かめないのでレビューで見る
+- Terraform 本体 (`supply-chain.yml` の `terraform` のジョブ。ADR 0059): 版と sha256 を一緒に変える。Go のモジュールでも action でもないので agegate・actionsgate の対象外で、
+  公開日は CI で確かめない。PR の本文に、公式のリリースの公開日と、公式の配布元の `SHA256SUMS` の値を書いてレビューで見る
+
+  ```bash
+  gh api repos/hashicorp/terraform/releases/tags/v<版> --jq .published_at
+  curl -fsS https://releases.hashicorp.com/terraform/<版>/terraform_<版>_SHA256SUMS | grep linux_arm64
+  ```
+- Terraform の provider (`integrations/github`。`arata repo init` が書き出す `github/` が固定する版): `internal/repoinit` の `ProviderVersion` を変え、
+  lock の雛形 (`internal/repoinit/templates/github/terraform.lock.hcl`) を 4 つの環境のハッシュで作り直し、見本を `-update` で作り直す。
+  公開日は CI の `tools/tfprovidergate` が、レジストリの公開日を読んで確かめる (7 日以上)
+
+  ```bash
+  # 空のディレクトリに、新しい版を書いた github/main.tf を置いて
+  terraform providers lock -platform=linux_amd64 -platform=linux_arm64 -platform=darwin_amd64 -platform=darwin_arm64
+  go test ./internal/repoinit -run TestExampleIsTheOutput -update && make test-terraform
+  ```
 
 ```bash
 gh release view <tag> -R <owner>/<repo> --json publishedAt,assets --jq '.publishedAt, (.assets[] | [.name, .digest] | @tsv)'

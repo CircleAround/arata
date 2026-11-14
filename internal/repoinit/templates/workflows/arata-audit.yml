@@ -1,24 +1,17 @@
-# arata と aratam を GitHub Actions で定期実行する見本 (複数の AWS アカウントを 1 つのリポジトリで監査する形)。
-# 1 つのアカウントだけなら arata-audit.yml を使う。違いは matrix と、監査ロールの取り出し方だけ。
-# 利用者のリポジトリの .github/workflows/ に写して使う (arata のリポジトリの CI では動かさない)。
-# 用意するもの・費用・注意は同じディレクトリの README.md。例の値はすべて架空。
+# arata と aratam を GitHub Actions で定期実行する (アカウントごとに 1 つのジョブ。matrix)。
+# arata repo init が書き出したファイル (ADR 0059)。手で直さない: 版を上げる・アカウントを足すときは、
+# 同じ引数で arata repo init --force を流して書き直し、PR の差分で確かめる (このリポジトリの README.md)。
+# コメントの「説明書」は、arata のリポジトリの examples/github-actions/README.md。
 #
-# 利用者のリポジトリに置くもの (アカウントごとに 1 つのディレクトリ。名前は matrix の account と同じ):
-#   aws/prod/arata.yaml         store: s3://example-arata-store/prod と aws.profile: arata-audit を書く
-#   aws/prod/aratam.yaml        name: (通知に出す監査対象の名前) をアカウントごとに変える
-#   aws/prod/allowlist.yaml
-#   aws/prod/aratam-context.md  (任意。llm.context_file)
-#   aws/staging/...             同じ形
+# このリポジトリに置くもの (アカウントごとに 1 つのディレクトリ。名前は matrix の account と同じ):
+#   aws/<アカウント>/arata.yaml         store: s3://@@STORE_BUCKET@@/<アカウント> と aws.profile: arata-audit
+#   aws/<アカウント>/aratam.yaml        name: (通知に出す監査対象の名前) はアカウントごとに違う
+#   aws/<アカウント>/allowlist.yaml
+#   aws/<アカウント>/aratam-context.md  (任意。llm.context_file)
 name: arata-audit
 
 on:
-  schedule:
-    # 時刻は UTC。毎時ちょうどは GitHub の定時実行が混み、遅れたり落ちたりするので避ける。
-    # daily を UTC 0 時台の後半にするのは、Logs Insights のスキャンの範囲が半分ほどになるため (arata doctor の cost の行の案内)。
-    # 「UTC 0 時 + 窓 (24h) + ingest_delay (15m) + 余裕 15 分」= 00:30 より後ならよい。遅れは費用を増やさない。
-    - cron: '40 0 * * *'   # daily (JST 09:40)
-    - cron: '10 1 * * 1'   # weekly (月曜 JST 10:10)。下の PROFILE の文字列と揃える
-  workflow_dispatch:
+@@SCHEDULE@@  workflow_dispatch:
     inputs:
       profile:
         description: 実行するプロファイル
@@ -44,14 +37,14 @@ defaults:
     shell: bash     # -eo pipefail で動く
 
 env:
-  ARATA_VERSION: v0.14.0       # v0.14.0 以降にする (送り方の判別に aratam config check --format json が要る)。固定し、上げるときは PR で
-  AWS_REGION: ap-northeast-1
+  ARATA_VERSION: @@ARATA_VERSION@@       # この一式を書き出した arata の版。上げるときは、新しい版の arata repo init --force で書き直す
+  AWS_REGION: @@AWS_REGION@@
 
 jobs:
   audit:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    # 秘密は environment の secrets に置き、environment のデプロイできるブランチを main だけにする (README「実行するリポジトリと環境を堅くする」の 5)。
+    # 秘密は environment の secrets に置き、environment のデプロイできるブランチを main だけにする (説明書「実行するリポジトリと環境を堅くする」の 5)。
     # ほかのブランチのジョブには秘密が渡らない。OIDC の sub は repo:…:environment:audit になる (runner.yaml の GitHubEnvironment=audit と組)。
     environment: audit
     # アカウントごとに 1 つのジョブ。1 つが失敗してもほかは続ける。
@@ -59,7 +52,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        account: [prod, staging]
+        account: [@@ACCOUNTS@@]
     # 同じストアへの同時実行を止める。走っている run は中断しない (中断すると収集を捨てることになる)。
     # 止めきれなくても、後から終わったほうが STORE_CONFLICT で失敗するだけで、ストアは壊れない (ADR 0034)。
     # ストアはアカウントごとなので、group もアカウントごとにする。
@@ -74,7 +67,7 @@ jobs:
       ACCOUNT: ${{ matrix.account }}
       ARATA_CONFIG_DIR: aws/${{ matrix.account }}
       ARATA_TARGET: ${{ matrix.account }}   # 監査対象の名前。最後の alert の連絡に出す
-      ARATA_STORE_URL: s3://example-arata-store/${{ matrix.account }}   # aws/<account>/arata.yaml の store: と同じ値
+      ARATA_STORE_URL: s3://@@STORE_BUCKET@@/${{ matrix.account }}   # aws/<account>/arata.yaml の store: と同じ値
       PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.profile || (github.event.schedule == '10 1 * * 1' && 'weekly' || 'daily') }}
     steps:
       - id: checkout
@@ -84,7 +77,7 @@ jobs:
 
       # バイナリは認証より先に取る。OIDC が失敗しても aratam で「実行されていない」と知らせるため。
       # 照合の SHA256SUMS は同じリリースのものなので、壊れた取得は防げるがリリース自体のすり替えは防げない。
-      # 公開リポジトリのリリースなら gh attestation verify で来歴も確かめられる (arata の README「来歴の検証」)。
+      # 公開リポジトリのリリースなら gh attestation verify で来歴も確かめられる (arata の 説明書「来歴の検証」)。
       - id: install
         name: arata と aratam を取得する
         env:
@@ -102,6 +95,22 @@ jobs:
           done
           echo "$dir" >>"$GITHUB_PATH"
 
+      # 秘密が「仮の値」のままなら、ここで秘密の名前を出して止める (ADR 0059)。仮の値は、github/secrets の Terraform が
+      # 秘密の箱を作るときに入れる決まった文字列。形が合わずに偶然止まることに頼らない。
+      # 止めるのは、必ず使う 2 つ (実行用ロールと監査ロール) だけ。ARATA_ALERT_WEBHOOK (定時の通知が送れなかったときの別の経路) は、
+      # 使うかどうかを利用者が選ぶので、仮の値のままなら警告だけを出す (ふだん使われないので、ここで出さないと気づけない)。
+      # Slack の秘密は notify で確かめる (aratam.yaml が使うものだけが渡る)。渡すのは比べるためだけで、値は出さない。
+      - id: secrets
+        name: 秘密に仮の値が残っていないことを確かめる
+        timeout-minutes: 2
+        env:
+          ARATA_RUNNER_ROLE_ARN: ${{ secrets.ARATA_RUNNER_ROLE_ARN }}
+          ARATA_AUDIT_ROLE_ARNS: ${{ secrets.ARATA_AUDIT_ROLE_ARNS }}
+          ARATA_ALERT_WEBHOOK: ${{ secrets.ARATA_ALERT_WEBHOOK }}
+        run: |
+          .github/scripts/arata-secret-check.sh ARATA_RUNNER_ROLE_ARN ARATA_AUDIT_ROLE_ARNS
+          .github/scripts/arata-secret-check.sh --warn ARATA_ALERT_WEBHOOK
+
       # 実行用ロール。権限は監査ロールの引き受けとストアのバケットの読み書きだけにする。
       # ロールの ARN はアカウント ID を含むので secrets に置く (secrets はログで自動的に隠される)。
       - id: aws
@@ -116,7 +125,7 @@ jobs:
       # 2 つの認証を分ける:
       #   監査対象: arata.yaml の aws.profile: arata-audit → 実行用ロールから、そのアカウントの読み取り専用ロールへ連鎖する
       #   ストア:   arata.yaml の store_profile は書かない → SDK の標準の連鎖で実行用ロールのまま書く
-      # 監査ロールの ARN は 1 つの secret に JSON でまとめ ({"prod": "arn:...", "staging": "arn:..."})、ここで名前から取り出す。
+      # 監査ロールの ARN は 1 つの secret に JSON でまとめ ({"<アカウント>": "arn:...", ...})、ここで名前から取り出す。
       # secrets[...] の動的な参照は使わない (ジョブにすべての secrets が渡ってしまう)。
       # 取り出した ARN は secret の一部で、自動では隠れないので ::add-mask:: で隠す。jq の出力とエラーはログに出さない。
       - id: aws-config
@@ -210,7 +219,7 @@ jobs:
       # どちらもジョブは失敗 (赤) のままにする。
       # Slack への送り方 (bot か webhook) を aratam.yaml から読む。下の notify に、その送り方の secret だけを渡すため。
       # 読むのは `aratam config check --format json` の .slack.method (機械が読む出力)。人向けの出力の行を grep で読まない
-      # (文言は版をまたいで変わり、判別が黙って外れる)。bot / webhook 以外なら、ここで止まる (README「Slack への送り方を判別する」)。
+      # (文言は版をまたいで変わり、判別が黙って外れる)。bot / webhook 以外なら、ここで止まる (説明書「Slack への送り方を判別する」)。
       # 判別は .github/scripts/arata-slack-method.sh の 1 か所。試しの送信 (arata-notify-test.yml) と PR の検査 (arata-check.yml) も同じものを呼ぶ。
       - id: slack-method
         name: Slack への送り方を判別する
@@ -218,8 +227,10 @@ jobs:
         timeout-minutes: 2
         run: |
           method="$(.github/scripts/arata-slack-method.sh "$ARATA_CONFIG_DIR/aratam.yaml")"
-          echo "slack method=$method"
+          urgent="$(.github/scripts/arata-slack-method.sh --urgent-webhook "$ARATA_CONFIG_DIR/aratam.yaml")"
+          echo "slack method=$method urgent_webhook=$urgent"
           echo "method=$method" >>"$GITHUB_OUTPUT"
+          echo "urgent_webhook=$urgent" >>"$GITHUB_OUTPUT"
 
       - id: notify
         name: aratam notify
@@ -227,13 +238,17 @@ jobs:
         if: always() && steps.install.outcome == 'success' && !inputs.dry_run
         timeout-minutes: 5
         env:
-          # 判別した送り方の secret だけを渡す (使わないほうは空)。Webhook の方式なら上の 2 つ、bot トークンの方式なら下の 1 つ
-          # (README の「bot トークンで送る」。チャンネル ID は aratam.yaml に書く。秘密ではない)。
+          # aratam.yaml が使う secret だけを渡す (使わないものは空)。Webhook の方式なら上の 2 つ、bot トークンの方式なら下の 1 つ
+          # (説明書の「bot トークンで送る」。チャンネル ID は aratam.yaml に書く。秘密ではない)。
+          # 緊急用の Webhook は、aratam.yaml が別に持つとき (slack.urgent_webhook_env が空でない) だけ渡す。
+          # 使わない秘密の箱は、仮の値のままでも、消してあってもよい (渡らないので、下の検査にも掛からない)。
           # 判別に失敗していれば 3 つとも空で、aratam は CONFIG_INVALID (終了コード 2) で止まる。そのことは最後の alert が知らせる。
           ARATAM_SLACK_WEBHOOK: ${{ steps.slack-method.outputs.method == 'webhook' && secrets.ARATAM_SLACK_WEBHOOK || '' }}
-          ARATAM_SLACK_URGENT_WEBHOOK: ${{ steps.slack-method.outputs.method == 'webhook' && secrets.ARATAM_SLACK_URGENT_WEBHOOK || '' }}
+          ARATAM_SLACK_URGENT_WEBHOOK: ${{ steps.slack-method.outputs.method == 'webhook' && steps.slack-method.outputs.urgent_webhook == 'true' && secrets.ARATAM_SLACK_URGENT_WEBHOOK || '' }}
           ARATAM_SLACK_BOT_TOKEN: ${{ steps.slack-method.outputs.method == 'bot' && secrets.ARATAM_SLACK_BOT_TOKEN || '' }}
         run: |
+          # 渡された秘密 (= aratam.yaml が使うもの) が仮の値のままなら、名前を出して止める (終了コード 1。Slack には何も届かないので、最後の alert が知らせる)
+          .github/scripts/arata-secret-check.sh ARATAM_SLACK_WEBHOOK ARATAM_SLACK_URGENT_WEBHOOK ARATAM_SLACK_BOT_TOKEN
           log="$RUNNER_TEMP/aratam.log"
           status=0
           aratam notify -c "$ARATA_CONFIG_DIR/aratam.yaml" --in "$RUNNER_TEMP/arata-out" >"$log" 2>&1 || status=$?
@@ -259,7 +274,7 @@ jobs:
             aws s3 cp "$file" "$ARATA_STORE_URL/reports/waf-proposals.md" --only-show-errors >/dev/null 2>&1
           fi
 
-      # 定時の実行で、Slack に何も届かなかったときに、別の経路で知らせる (README「定時の通知が送れなかったとき」)。
+      # 定時の実行で、Slack に何も届かなかったときに、別の経路で知らせる (説明書「定時の通知が送れなかったとき」)。
       # 通知そのものが壊れると (設定の誤り、secret の入れ替え忘れ、送り方の判別の失敗、バイナリが取れない)、aratam は知らせられない。
       # 送るのは「監査対象の名前・プロファイル・失敗した段階の id・この実行の URL」だけ。指摘の中身・件数・ログの文は送らない。
       # 失敗した段階は toJSON(steps) の outcome から拾う (id は、このファイルに書いた名前。値は見ない)。
@@ -270,7 +285,7 @@ jobs:
         if: failure() && github.event_name == 'schedule' && steps.notify.outputs.delivered != 'true'
         timeout-minutes: 3
         env:
-          # 定時の通知とは別の Webhook (別のチャンネルか、{"text": "..."} を受け取る別の仕組み)。README の Secrets
+          # 定時の通知とは別の Webhook (別のチャンネルか、{"text": "..."} を受け取る別の仕組み)。説明書の Secrets
           ALERT_WEBHOOK: ${{ secrets.ARATA_ALERT_WEBHOOK }}
           STEPS: ${{ toJSON(steps) }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -278,8 +293,9 @@ jobs:
           # id は英小文字・数字・ハイフンのものだけを拾う (このファイルの id の形)。outcome のほかの値・outputs は読まない
           failed="$(jq -r '[to_entries[] | select(.value.outcome == "failure") | .key | select(test("^[a-z0-9-]{1,40}$"))] | join(", ")' <<<"$STEPS" 2>/dev/null)" || failed=""
           echo "failed steps: ${failed:-unknown}"
-          if [ -z "${ALERT_WEBHOOK:-}" ]; then
-            echo "::error::ARATA_ALERT_WEBHOOK が無いので、通知が送れなかったことを知らせられない"
+          # 無い・仮の値のまま (使わない利用者の箱) なら、送らずに終わる。ジョブは、元の失敗で赤のまま
+          if [ -z "${ALERT_WEBHOOK:-}" ] || ! .github/scripts/arata-secret-check.sh ALERT_WEBHOOK 2>/dev/null; then
+            echo "::error::ARATA_ALERT_WEBHOOK が無い (か、仮の値のまま) ので、通知が送れなかったことを知らせられない"
             exit 1
           fi
           text="arata の定時の通知を送れていません。対象: $ARATA_TARGET / プロファイル: $PROFILE / 失敗した段階: ${failed:-不明} / $RUN_URL"

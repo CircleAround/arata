@@ -1,0 +1,270 @@
+# arata の設定 (arata config init が書き出した雛形)。監査対象ごとに 1 ファイル。allowlist.yaml と一緒に git 管理する。
+#
+# arata は実行時に暗黙の既定を持たない: 実行されるのは profiles に書いたチェックだけ。
+# 新しい版で増えたチェックや変わった既定値は arata config init --diff -c <この設定> で、
+# 実際に効いているチェックとパラメータは arata profiles -c <この設定> で確かめる。
+# 手順: arata config init → (この設定を編集) → arata doctor → arata init → arata run
+
+name: staging                                    # レポートに出す監査対象の名前
+store: s3://example-arata-store/staging          # ストア (JSONL 原本 + SQLite)。ワークフローの ARATA_STORE_URL と同じ値
+# store_profile: staging-store                   # s3:// のバケットの認証。省略時は SDK の標準の連鎖 (実行用ロール。aws.profile は使わない)
+# store_region: ap-northeast-1                   # s3:// のバケットのリージョン。省略時は aws.region
+allowlist: allowlist.yaml                        # 既知リスト。相対パスはこの設定ファイルから。無ければ空として扱う
+audit_account: "111122223333"                    # 監査する側のアカウント (このアカウントのロールが監査対象の読み取り専用ロールを引き受ける)。監査対象と同じアカウントなら none
+# 既知リストの principals に同じ ID が account: で要る (arata config init が書いた。無いと unknown_assume_role が監査そのものを high で報告する)。
+# arata config check / arata doctor が食い違いを確かめる
+
+aws:
+  region: ap-northeast-1
+  profile: arata-audit                           # ワークフローが書くプロファイル。監査の読み取りは、このプロファイルのロール (読み取り専用ロール) で行う
+
+sources:
+  - id: trail
+    kind: cloudtrail-lookup                      # CloudTrail を API 経由で取得 (CloudWatch Logs 配信が無くても動く)
+    # regions: [ap-northeast-1, us-east-1]       # 省略時は [aws.region, us-east-1]。IAM・ConsoleLogin・STS の一部は us-east-1 にしか記録されない
+    # ingest_delay: 15m                          # 記録の遅れの見込み。run は窓の前をこの分だけ引き直す (0 で引き直さない)
+  - id: trail_unused_regions
+    kind: cloudtrail-unused-regions              # ふだん使わないリージョンの書き込み → unused_region_activity。LookupEvents は無料
+    # 対象 = アカウントで有効なリージョン (account:ListRegions) − 上の cloudtrail-lookup の regions。regions は書かない
+  # 費用の急増 → cost_anomaly。AWS Cost Anomaly Detection のモニター (無料) を作ってから有効にする (無ければ skip)。
+  # Cost Explorer の API は 1 リクエスト 0.01 USD (1 回の run で約 2 回。daily で月 0.6 USD ほど。arata doctor の cost に出る)
+  # - id: cost_anomaly
+  #   kind: cost-anomaly                         # Cost Explorer の API は us-east-1 だけ (regions は書かない)
+
+  # アカウント単位の状態 (週次チェック用)。取るたびに丸ごと置き換える。プロファイルが必要とする run (weekly) でだけ取る。
+  # 一部の権限が無ければ、そのソースのチェックだけ skip される (coverage と doctor に不足 action が出る)。
+  - id: iam
+    kind: iam-credential-report                  # 認証情報レポート → credential_hygiene
+    # iam:GenerateCredentialReport は書き込み系 (レポートの生成のみ)。拒否されても 4 時間以内に生成済みのレポートがあれば使う
+  - id: guardduty
+    kind: guardduty                              # → guardduty_findings。無効なら skip (無効であることは posture が報告)
+    # regions: [ap-northeast-1]                  # 省略時は aws.region。使っているリージョンを並べる
+  - id: access_analyzer
+    kind: access-analyzer                        # → access_analyzer。アナライザーが無ければ skip
+  - id: posture
+    kind: posture                                # → posture (CloudTrail・GuardDuty・ルート MFA・S3・パスワードポリシー・ALB の WAF)
+  # - id: waf_config
+  #   kind: waf-config                           # WebACL の設定 → waf_review (下の wafv2 のソースも要る)。REGIONAL は regions、CLOUDFRONT は us-east-1
+
+  # アプリ層 (CloudWatch Logs): ロググループ → 形式プロファイル → 正規化レコード。取得は Logs Insights の集計クエリだけ。
+  # 足したら arata doctor で解釈率とクエリを確かめる。
+  # - id: nginx_prod
+  #   kind: cloudwatch-logs
+  #   log_group: /my-app/nginx/access.log
+  #   format: nginx_access                       # nginx_access / alb_access → http_access、wafv2 → waf_action
+  #   # stream_prefix: web/                      # 混在ストリームはストリーム名で絞る
+  #   # expected_match_rate: 0.8                 # 解釈率の閾値。混在ストリームは下げる
+  #   # max_scan_gb: 5                           # 1 回の収集でスキャンしてよい量 (既定 0 = 無制限)
+  #   # ingest_delay: 5m                         # 取り込みの遅れの見込み
+  # - id: rails_app
+  #   kind: cloudwatch-logs
+  #   log_group: /my-app/rails
+  #   format: json                               # JSON 行ログ。対応表 (ip と path は必須)
+  #   fields: { ip: remote_ip, method: method, path: path, status: status }
+  #   # sample_lines: false                      # FORMAT_MISMATCH のログに行の例を添えない (個人情報を含み得るログ)
+  # - id: rails_lines
+  #   kind: cloudwatch-logs
+  #   log_group: /my-app/rails
+  #   format: request_lines                      # 1 リクエストが複数行のログを request_id でまとめる → http_access。書き方は arata help ai request_lines
+  #   request:
+  #     id: '(?:^| -- : )\[(?P<request_id>[A-Za-z0-9_@-]{1,255})\] ' # まとめる鍵。前の区切りまで含めて書く (最初の角括弧を取らない)
+  #     # max_duration: 60s                      # 問い合わせ範囲の後ろに足す余白
+  #     lines:
+  #       - { name: started, regex: 'Started (?P<method>[A-Z]+) "(?P<path>[^"?]*)[^"]*" for (?P<ip>\S+) at ' }
+  #       - { name: completed, regex: 'Completed (?P<status>\d{3}) ' }
+  #       - { name: no_route, regex: 'ActionController::RoutingError', set: { status: 404 } }
+  #     # ユーザー ID の要るチェック用。アプリに足す行 (actor / auth) の形と出し方は arata help ai user_id。書かなければ読まない
+  #     # user_id:                               # ユーザー ID の取り方 (書いたソースは http_user も出す。ID が 0 件の run では、ユーザー ID の要るチェックは skip)
+  #     #   from: app_line                       # none | app_line (アプリが出す行) | debug_sql (消えうる取り方。doctor が warn を出し続ける)
+  #     #   regex: ' -- : \[[A-Za-z0-9_@-]{1,255}\] actor kind=(?P<user_kind>[a-z_]{1,32}) id=(?P<user_id>[A-Za-z0-9_-]{1,64})(?: by=(?P<by_kind>[a-z_]{1,32}):(?P<by_id>[A-Za-z0-9_-]{1,64}))?$'
+  #     # auth:                                  # ログインの結果の行。正規表現はどちらも $ で終える (行の途中の同じ並びを読まない)
+  #     #   regex: ' -- : \[[A-Za-z0-9_@-]{1,255}\] auth result=(?P<auth_result>success|failure|impersonate) kind=(?P<auth_kind>[a-z_]{1,32}) id=(?P<auth_id>[A-Za-z0-9_-]{1,64})(?: via=(?P<auth_via>password|remember))?(?: by=(?P<auth_by_kind>[a-z_]{1,32}):(?P<auth_by_id>[A-Za-z0-9_-]{1,64}))?(?: reason=(?P<auth_reason>[a-z_]{1,64}))?$'
+  #   # expected_complete_rate: 0.8              # まとめられた割合 (最初の行のあるリクエスト / request_id の数) の閾値
+  # アプリのログの中身 → log_hygiene (下の checks.log_hygiene に sources・kinds を書くまで読まれない)
+  # - id: app_prod
+  #   kind: cloudwatch-logs
+  #   log_group: /my-app/rails
+  #   format: text                               # 行を解釈しない。log_hygiene だけが読む (他の形式のソースも log_hygiene.sources に書ける)
+  #   max_scan_gb: 5                             # weekly の run ごとに窓 (7 日) 分を 1 回読む
+  # - id: waf
+  #   kind: cloudwatch-logs
+  #   log_group: aws-waf-logs-my-app
+  #   format: wafv2
+  #   max_scan_gb: 50                            # WAF のログは大きい。必ず設定する (目安は arata doctor の cost の推奨値)
+  #   # strip_path_prefix: /prod                 # API Gateway の REST API はパスの前にステージ名が付く。探索パス・パスの群の判定の前に外す
+  #   # resources: ["app/app-alb/*"]             # 集計する資源 (ログの httpSourceId。glob 可)。WebACL を staging と共有するとき本番だけを見る。費用は減らない
+
+# チェック一覧 (周期 / 型 / 必要なレコード)。event 型は窓内の出来事、state 型は今の状態を報告する。
+#   root_usage              hourly  event  trail_event     ルートユーザーの利用 (critical)
+#   unknown_assume_role     hourly  event  trail_event     allowlist に無い呼び出し元の AssumeRole (high)
+#   oidc_assume_role        hourly  event  trail_event     OIDC でのロールの引き受け (GitHub Actions など) を allowlist の oidc_subjects と比べる。既知のロールに知らない入り口から (high)、知らないロール (medium)、既知の入り口の回数が平常帯超え (low / medium)
+#   new_principal           daily   state  principal_seen  allowlist にもベースラインにも無い主体 (medium)
+#   iam_changes             daily   event  trail_event     IAM の変更。deploy タグの主体なら info。アクセスキーの作成と、外の主体を信頼する信頼ポリシーは deploy タグでも下げない。誰でも (*) を信頼する形は high (medium / high)
+#   access_denied           daily   event  trail_event     拒否された API 呼び出しの急増。種類が多ければ権限の列挙の兆候 (medium / high)
+#   defense_evasion         daily   event  trail_event     監査・検知の仕組み (CloudTrail・GuardDuty・ログなど) を止める・弱める操作。deploy タグの主体なら 1 段下げる (critical / high)
+#   public_exposure         daily   event  trail_event     セキュリティグループ・S3・RDS・スナップショットなどを外部に開く設定変更。deploy タグでも下げない (high / medium / low)
+#   principal_new_source    daily   event  trail_event,principal_seen  既知の主体が初めての送信元 (/24・/48)・リージョンから使われた (アクセスキーの漏洩の典型)。導入直後は報告しない (low / medium / high)
+#   secret_access           daily   event  trail_event     秘匿値 (Secrets Manager・SSM SecureString) の初めての読み手・一括読み出し (low / medium / high)
+#   login_bruteforce        daily   event  http_access     sign-in 失敗の IP 別件数が平常帯超え (medium)
+#   probe_paths             daily   event  http_access     機密パス探索の 403/404 が平常帯超え (low)
+#   endpoint_abuse          daily   event  http_access     設定した画面への多数の IP からの短時間の集中・「A のあと B」の連鎖がふだん超え。endpoints が空なら何もしない (medium / low)
+#   unused_region_activity  daily   event  unused_region_event  ふだん使わないリージョン (有効なリージョン − cloudtrail-lookup の regions) での書き込み。計算資源の作成は critical、試行は medium。deploy タグの主体なら 1 段下げる (critical / high / medium)
+#   cost_anomaly            daily   event  cost_anomaly    AWS Cost Anomaly Detection の費用の異常を予想に対する増加の割合で (medium / high)。費用の削減の提案はしない
+#   waf_block_trend         daily   event  waf_action      WAF の新しく鳴り始めたルール・Top IP の入れ替わり (low)
+#   ai_path_usage           daily   event  principal_seen  allowlist で tags: [ai] の主体の利用を主体 × 送信元 IP で毎回 1 行 (info。自己監査)
+#   credential_hygiene      weekly  state  iam_credential_report  未使用のアクセスキー・MFA 無しのコンソールユーザー・ルートのアクセスキー (medium / high)
+#   guardduty_findings      weekly  state  guardduty       GuardDuty の findings。新規と件数の増加 (重大度は GuardDuty 準拠)
+#   posture                 weekly  state  posture_item    CloudTrail 証跡と検証・GuardDuty 有効・ルート MFA・S3 Public Access Block・パスワードポリシー・インターネット向けの ALB の WAF (high / medium)
+#   access_analyzer         weekly  state  access_analyzer  IAM Access Analyzer の外部アクセス findings (公開は high、他は medium)
+#   waf_review              weekly  state  waf_config      WAF の修正提案の候補を report.json の proposals に (正規の画面での大量 BLOCK は low の finding にも)
+#   log_hygiene             weekly  state  log_hygiene     アプリのログに残った秘密の値・署名付き URL・隠されていない送信項目・本番の debug の、種類ごとの行数 (値は取り出さない)。sources と kinds が空なら何も読まない (high / medium / low)
+# 必要なレコードを出すソースが無いチェックは skip される (coverage に理由が出る)。http_access / waf_action は cloudwatch-logs が出す。
+profiles:
+  hourly:                                        # 発生そのものが異常な事象の早期検知。Logs Insights を使うチェックは入れない (費用)
+    window: 1h
+    # max_catchup: 7d                            # cron が遅れた時に前回の窓の終わりから追いつく上限
+    checks:
+      - root_usage              # ルートユーザーの利用 (critical)
+      - unknown_assume_role     # allowlist に無い呼び出し元の AssumeRole (high)
+      - oidc_assume_role        # OIDC でのロールの引き受け (GitHub Actions など) を allowlist の oidc_subjects と比べる。既知のロールに知らない入り口から (high)、知らないロール (medium)、既知の入り口の回数が平常帯超え (low / medium)
+  daily:                                         # 前兆・試行の発見と平常帯との比較。hourly を回さない運用でも拾えるよう hourly のチェックも入れる
+    window: 24h
+    # max_catchup: 7d                            # cron が遅れた時に前回の窓の終わりから追いつく上限
+    checks:
+      - root_usage              # ルートユーザーの利用 (critical)
+      - unknown_assume_role     # allowlist に無い呼び出し元の AssumeRole (high)
+      - oidc_assume_role        # OIDC でのロールの引き受け (GitHub Actions など) を allowlist の oidc_subjects と比べる。既知のロールに知らない入り口から (high)、知らないロール (medium)、既知の入り口の回数が平常帯超え (low / medium)
+      - new_principal           # allowlist にもベースラインにも無い主体 (medium)
+      - iam_changes             # IAM の変更。deploy タグの主体なら info。アクセスキーの作成と、外の主体を信頼する信頼ポリシーは deploy タグでも下げない。誰でも (*) を信頼する形は high (medium / high)
+      - access_denied           # 拒否された API 呼び出しの急増。種類が多ければ権限の列挙の兆候 (medium / high)
+      - defense_evasion         # 監査・検知の仕組み (CloudTrail・GuardDuty・ログなど) を止める・弱める操作。deploy タグの主体なら 1 段下げる (critical / high)
+      - public_exposure         # セキュリティグループ・S3・RDS・スナップショットなどを外部に開く設定変更。deploy タグでも下げない (high / medium / low)
+      - principal_new_source    # 既知の主体が初めての送信元 (/24・/48)・リージョンから使われた (アクセスキーの漏洩の典型)。導入直後は報告しない (low / medium / high)
+      - secret_access           # 秘匿値 (Secrets Manager・SSM SecureString) の初めての読み手・一括読み出し (low / medium / high)
+      - login_bruteforce        # sign-in 失敗の IP 別件数が平常帯超え (medium)
+      - probe_paths             # 機密パス探索の 403/404 が平常帯超え (low)
+      - endpoint_abuse          # 設定した画面への多数の IP からの短時間の集中・「A のあと B」の連鎖がふだん超え。endpoints が空なら何もしない (medium / low)
+      - unused_region_activity  # ふだん使わないリージョン (有効なリージョン − cloudtrail-lookup の regions) での書き込み。計算資源の作成は critical、試行は medium。deploy タグの主体なら 1 段下げる (critical / high / medium)
+      - cost_anomaly            # AWS Cost Anomaly Detection の費用の異常を予想に対する増加の割合で (medium / high)。費用の削減の提案はしない
+      - waf_block_trend         # WAF の新しく鳴り始めたルール・Top IP の入れ替わり (low)
+      - ai_path_usage           # allowlist で tags: [ai] の主体の利用を主体 × 送信元 IP で毎回 1 行 (info。自己監査)
+    # overrides:                                 # このプロファイルでだけ判定のパラメータを変える (書かなければ checks: の値)
+    #   login_bruteforce: { min_count: 50 }      # 集計条件 (paths / methods / statuses など) は変えられない
+  weekly:                                        # 設定不備・衛生状態の差分
+    window: 7d
+    # max_catchup: 7d                            # cron が遅れた時に前回の窓の終わりから追いつく上限
+    checks:
+      - credential_hygiene      # 未使用のアクセスキー・MFA 無しのコンソールユーザー・ルートのアクセスキー (medium / high)
+      - guardduty_findings      # GuardDuty の findings。新規と件数の増加 (重大度は GuardDuty 準拠)
+      - posture                 # CloudTrail 証跡と検証・GuardDuty 有効・ルート MFA・S3 Public Access Block・パスワードポリシー・インターネット向けの ALB の WAF (high / medium)
+      - access_analyzer         # IAM Access Analyzer の外部アクセス findings (公開は high、他は medium)
+      - waf_review              # WAF の修正提案の候補を report.json の proposals に (正規の画面での大量 BLOCK は low の finding にも)
+      - log_hygiene             # アプリのログに残った秘密の値・署名付き URL・隠されていない送信項目・本番の debug の、種類ごとの行数 (値は取り出さない)。sources と kinds が空なら何も読まない (high / medium / low)
+
+# チェックのパラメータ (すべてのプロファイルに効く)。下の値はこの版の既定値。
+checks:
+  login_bruteforce:
+    paths: [/users/sign_in, /login, /signin]     # sign-in の送信先。前方一致ではなく完全一致 (クエリ文字列は除いて比べる)。Devise のスコープ付きパス (/admin/users/sign_in など) は実際のパスに合わせる。集計条件なので overrides では変えられない
+    methods: [POST]                              # sign-in 試行とみなす HTTP メソッド
+    failure_statuses: [401, 403, 422]            # 失敗とみなすステータス (Devise の再表示は、生成された initializer の既定なら 422、古い initializer のままなら 200。arata help ai logs の「よく詰まる点」。成功は 302 / 303)
+    baseline_days: 14                            # 平常帯 = その IP 自身の直近 baseline_days 日の中央値 × factor
+    factor: 3                                    # 平常帯の倍率
+    min_count: 20                                # 平常帯の下限 (中央値 0 の IP もこの件数までは鳴らさない)
+    min_baseline_days: 7                         # 「初出」判定に要る、データのある過去日数 (導入直後に全部が初出になるのを防ぐ)
+    top_ip_min_count: 5                          # その日の最多 IP が初出なら、この件数以上で報告
+  probe_paths:
+    paths: [/.env, /.git/, /.aws/, /.ssh/, /wp-login.php, /wp-admin, /xmlrpc.php, /phpmyadmin, /pma, /server-status, /actuator, /config.json, /backup, /.DS_Store] # 機密パスの接頭辞。集計条件なので overrides では変えられない
+    exclude_paths: []                            # 対象から外す接頭辞 (正規の管理画面など)
+    statuses: [403, 404]                         # 探索とみなすステータス
+    baseline_days: 14                            # 平常帯の日数
+    factor: 3                                    # 平常帯の倍率
+    min_count: 10                                # 平常帯の下限
+    min_baseline_days: 7                         # 「初出」判定に要る過去日数
+    top_ip_min_count: 5                          # その日の最多 IP が初出なら、この件数以上で報告
+  waf_block_trend:
+    top_n: 5                                     # BLOCK 件数の Top IP の入れ替わりを見る数
+    min_count: 10                                # Top IP の新顔として報告する BLOCK 件数の下限
+    new_rule_min_count: 1                        # 新しく鳴り始めたルールとして報告する BLOCK 件数の下限
+    baseline_days: 14                            # 過去と比べる日数
+    min_baseline_days: 7                         # 「初出」判定に要る過去日数
+  waf_review:
+    top_paths: 50                                # wafv2 の BLOCK / 許可された探索のパスを日ごとに残す数 (件数の多い順)。集計条件なので overrides では変えられない
+    rate_path_groups: [/login, /api/]            # 1 IP あたりの件数を分けて測るパスの接頭辞 (どれにも当たらなければ「その他」)。集計条件
+    trusted_cidrs: []                            # 監視・開発会社などの正規の送信元 (例 [203.0.113.0/24])。wafv2 の新しい集計と候補から外す。集計条件
+    expected_high_rate_paths: []                 # リクエストが多いのが仕様のパスの接頭辞 (決済など)。レート制限の候補から外す (observation には残る)
+    days: 7                                      # 候補を作るのに見る直近の日数 (daily が貯めた日次集計を読む。weekly は wafv2 を引かない)
+    min_distinct_ips: 10                         # 誤検知の疑いに要る異なり IP 数 (日ごとの最大。下限の見積もり)
+    finding_distinct_ips: 50                     # 誤検知の疑いを low の finding にもする異なり IP 数
+    min_count: 10                                # すり抜けている探索の件数の下限。誤検知の observation (異なり IP が足りない) の件数の下限にも使う
+    rate_factor: 10                              # レート制限が無いとみなす条件: 1 IP の 5 分あたりの最大が p99 のこの倍を超える
+    rate_margin: 3                               # 提案する limit = max(p99 × rate_margin, rate_floor) (5 分あたり)
+    rate_floor: 100                              # 提案する limit の下限
+    rate_loose_factor: 10                        # 既存のレート制限が観測の最大のこの倍より高ければ緩すぎる (p99 より低ければ厳しすぎる)
+    unused_days: 30                              # 使われていないルールとみなす一致 0 の日数 (この日数分のデータが要る)
+    max_proposals: 20                            # 候補の種類ごとに出す上限 (根拠の強い順)
+    challenge_min_distinct_ips: 10               # 正規の画面への Challenge / CAPTCHA の提案に要る、出した異なり IP (日ごとの最大)
+    challenge_solve_ratio: 0.5                   # 同じ提案に要る、解かれた割合 (解いた IP / 出した IP) の下限。高い = 人が解いている
+    challenge_top_rules: 10                      # Challenge / CAPTCHA の状況 (challenge_impact) を毎回載せるルールの数
+  access_denied:
+    error_codes: [AccessDenied, AccessDeniedException, UnauthorizedOperation, Client.UnauthorizedOperation] # 拒否とみなす CloudTrail の errorCode (完全一致)。events に残す条件なので overrides では変えられない。後から足したコードは過去分が無いので平常帯 0 から始まる
+    min_distinct_apis: 5                         # 拒否された API の種類がこれ以上 (かつ平常帯超え) で報告 (medium)
+    high_distinct_apis: 20                       # 種類がこれ以上なら high (列挙ツールは数十種類を叩く)
+    baseline_days: 14                            # 平常帯 = その主体自身の直近 baseline_days 日の中央値 × factor (件数・種類それぞれ)
+    factor: 3                                    # 平常帯の倍率
+    min_count: 50                                # 件数の条件の下限 (同じ API を叩き続ける設定ミスなど。medium 止まり)
+    min_baseline_days: 7                         # 平常帯を使うのに要る、拒否のある過去日数 (それ未満は平常帯 0 として絶対の閾値だけで判定)
+  defense_evasion:
+    min_log_retention_days: 90                   # ロググループの保持期間の下限。PutRetentionPolicy でこれより短くしたら報告 (arata の監査対象のロググループなら critical)
+    trail_buckets: []                            # CloudTrail の証跡の宛先バケット (例 [example-trail-bucket])。バケットポリシーの削除・ライフサイクルの設定を報告する。保存済みの CreateTrail / UpdateTrail の宛先も自動で加わる
+  public_exposure:
+    sensitive_ports: [22, 3389, 3306, 5432, 1433, 1521, 6379, 11211, 27017, 9200, 5601, 2375] # 0.0.0.0/0・::/0 に開けたら high にするポート (範囲が重なれば該当。全ポートは常に high、他のポートは low)
+  principal_new_source:
+    baseline_days: 30                            # 「初めて」とみなすために比べる過去の日数 (送信元は /24・/48、リージョンは書き込みのあったもの)
+    min_baseline_days: 15                        # 判定に要る、CloudTrail を収集し終えた過去日数 (活動の無い日も数える (導入直後は報告しない。既定は baseline_days の半分)
+    min_writes: 5                                # 新しい送信元からの書き込みがこれ以上なら medium (未満は low。allowlist の dynamic_source: true の主体は low を出さない)
+  secret_access:
+    baseline_days: 14                            # 「主体 × 秘匿値」の初出と、一括読み出しの平常帯に使う過去の日数
+    min_baseline_days: 7                         # 初出の判定に要る、CloudTrail を収集し終えた過去日数 (活動の無い日も数える (導入直後は初出を報告しない。一括読み出しは報告する)
+    factor: 3                                    # 一括読み出しの平常帯 = その主体の日ごとの異なる秘匿値の数の中央値 × factor
+    min_distinct: 10                             # 1 日に読んだ異なる秘匿値の数がこれを超えたら一括読み出し (high)。GetParametersByPath はパス単位で 1 と数える
+  oidc_assume_role:
+    baseline_days: 14                            # 既知の入り口の回数の平常帯 = その組 (プロバイダ・sub・ロール) 自身の直近 baseline_days 日の日次の回数の中央値 × factor
+    factor: 3                                    # 平常帯の倍率
+    min_count: 20                                # 平常帯の下限 (1 日の回数がこれ以下なら、中央値が小さくても報告しない)
+    min_baseline_days: 7                         # 回数の判定に要る、CloudTrail を収集し終えた過去日数 (導入直後は回数を判定しない。既知リストとの比較は導入直後からする)
+    medium_ratio: 3                              # 回数が平常帯のしきい値のこの倍を超えたら medium (超えただけなら low)
+  endpoint_abuse:
+    endpoints: []                                # 見る画面 (例 [{ name: signup, paths: [/signup], methods: [POST] }])。空なら何もしない。paths は glob (* は 1 区間、** は 0 区間以上、:id は数字か UUID)。sources: [<ソース ID>] で数えるソースを選ぶ (http_access のみ)。集計条件
+    window: 10m                                  # 集計の時間幅 (1 日を割り切る 1m〜1h)。集計条件
+    baseline_days: 14                            # 平常帯 = 過去 baseline_days 日の全部の時間幅の p99
+    min_baseline_days: 7                         # 平常帯を使うのに要る、ログを収集した過去日数 (足りない間は min_* の絶対の閾値だけで判定)
+    factor: 3                                    # 閾値 = 平常帯 × factor (と min_* の大きいほう)
+    min_distinct_ips: 10                         # 時間幅ごとの異なり IP 数の下限 (分散した集中。medium)
+    min_count: 20                                # 時間幅ごとの件数の下限 (量。low)
+    ua_concentration: {min_ips: 5}               # 同じ UA が min_ips 以上の IP にまたがり平常帯も超えたら根拠に添える (単独では報告しない。UA はハッシュだけ保存)
+    follow_ups: []                               # 「A のあと B」の連鎖 (例 [{ from: signup, to: message, within: 30m, min_ips: 5 }])。集計条件
+    exclude_paths: []                            # endpoints に当たっても数えないパス (glob)。集計条件
+  unused_region_activity:
+    compute_apis: ['ec2:RunInstances', 'ec2:RequestSpotInstances', 'ec2:RequestSpotFleet', 'ec2:CreateFleet', 'lambda:CreateFunction', 'ecs:CreateCluster', 'ecs:RunTask', 'ecs:CreateService', 'eks:CreateCluster', 'eks:CreateNodegroup', 'batch:CreateComputeEnvironment', 'sagemaker:CreateNotebookInstance', 'sagemaker:CreateTrainingJob', 'lightsail:CreateInstances', 'autoscaling:CreateAutoScalingGroup'] # 計算資源の作成とみなす操作 (<サービス>:<操作>。Lambda の版の接尾辞は吸収)。成功は critical、失敗 (試行) は medium
+    ignore_event_sources: [iam.amazonaws.com, sts.amazonaws.com, signin.amazonaws.com, organizations.amazonaws.com, support.amazonaws.com, health.amazonaws.com, ce.amazonaws.com] # 数えない eventSource (グローバルサービス。記録が us-east-1 に入るので、us-east-1 を cloudtrail-lookup の regions に入れていないときの誤報を防ぐ)
+  cost_anomaly:
+    lookback_days: 7                             # 直近何日に終わった (続いている) 異常を引くか。問い合わせの条件
+    min_impact_usd: 10                           # 影響額 (USD) がこれ未満は割合が大きくても報告しない (1 USD → 5 USD の +400% のような誤報を防ぐ)。問い合わせの絞り込みにも使う
+    medium_impact_ratio: 0.5                     # 予想に対する増加の割合 (影響額 / 予想額) がこれ以上で medium (0.5 = 予想の 1.5 倍)。固定の金額ではなく比で見る
+    high_impact_ratio: 1                         # これ以上で high (1.0 = 予想の 2 倍)
+  credential_hygiene:
+    unused_days: 90                              # アクセスキーを未使用とみなす日数 (最終使用、使われていなければ作成・ローテーションから)
+  posture:
+    min_password_length: 14                      # IAM パスワードポリシーの最小文字数の下限
+  log_hygiene:
+    sources: []                                  # 見る cloudwatch-logs のソースの id (例 [app_prod])。空なら何も読まない。weekly の run ごとに 1 本、種類ごとの行数だけを数える。集計条件
+    kinds: []                                    # 数える種類: secret_aws_access_key / secret_slack_token / secret_private_key / presigned_url_long_term_key / presigned_url / unfiltered_param / debug_sql。集計条件
+    param_fields: []                             # unfiltered_param が見る送信項目の名前 (例 [name, address, tel]。1〜64 字の英数字・_・-、32 個まで)。集計条件
+
+# 保持期間 (prune は後続の版)。
+retention:
+  raw_jsonl: 365d                                # 原本
+  events: 90d
+  metrics: 400d                                  # 前年同月比較のため 13 か月
+  findings: 180d                                 # resolved から
+  runs: 400d

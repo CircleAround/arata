@@ -1,0 +1,29 @@
+# aratam の設定 (aratam config init が書き出した雛形)。暗黙の既定は持たないので、全項目をここで明示する。
+# 使い方: arata run ... --out <dir> の後に aratam notify --in <dir> を実行する (docs/aratam.md)。
+
+name: prod                        # 通知に出す監査対象の名前 (report.json の name と違えば警告)
+max_age: 26h                      # report.json がこれより古ければ「実行されていない」と緊急用に通知する
+urgent_severity: high             # この重大度以上 (critical | high | medium | low) の新規・変化・再発は緊急用に送る
+on_quiet: short                   # 新規・変化・再発が無く、取れなかったソースも無いとき。short = 1 行だけ送る | silent = 送らない
+timezone: UTC                     # 通知に出す時刻のタイムゾーン (IANA 名。例 Asia/Tokyo)。表示だけを変える。日付だけの値 (日次集計の日、期間レポートの期間) は UTC の日のまま
+
+llm:
+  provider: none                  # bedrock | claude-cli | none (後続で openai-api)。none は LLM を呼ばず report.md を整形して送る
+  model: ""                       # bedrock: 推論プロファイル ID (必須)。claude-cli: 空なら claude の既定のモデル
+  region: ""                      # bedrock: リージョン (必須。例 us-east-1)
+  profile: ""                     # bedrock: AWS の名前付きプロファイル。空なら標準の認証チェーン
+  timeout: 120s                   # LLM 呼び出し 1 回の時間切れ。失敗時の再試行は 1 回まで
+  command: ""                     # claude-cli: claude の実行ファイル。空なら PATH から探す (cron の PATH が狭いなら絶対パスで書く)
+  context_file: ""                # この監査対象の前提 (Markdown。決済画面はリクエストが多い、など) のパス。LLM に参考として渡す。空なら使わない。相対パスは設定ファイル基準。16 KiB まで
+
+slack:
+  # 送り方は次の 2 つのうち 1 つ。使わないほうの項目は "" にする (両方を書くと設定エラー)。
+  #   Incoming Webhook: webhook_env (と urgent_webhook_env)。チャンネルごとに URL (秘密) が要る
+  #   bot トークン: bot_token_env と channel (と urgent_channel)。秘密はトークン 1 つで、送り先はチャンネル ID (秘密ではない) で書く
+  webhook_env: ARATAM_SLACK_WEBHOOK                 # 通常用の Webhook URL を入れる環境変数の名前。URL は設定ファイルに書かない
+  urgent_webhook_env: ARATAM_SLACK_URGENT_WEBHOOK   # 緊急用。空にすると通常用に送り、冒頭に urgent_mention を付ける
+  bot_token_env: ""                                 # bot トークン (xoxb-...) を入れる環境変数の名前 (例 ARATAM_SLACK_BOT_TOKEN)。トークンは設定ファイルに書かない。要る scope は chat:write だけ
+  channel: ""                                       # bot トークンの通常用のチャンネル ID (例 C0123456789。名前ではなく ID)。bot をチャンネルに招待しておく
+  urgent_channel: ""                                # bot トークンの緊急用のチャンネル ID。空にすると channel に送り、冒頭に urgent_mention を付ける
+  urgent_mention: "<!channel>"                      # 緊急用を通常用に送るときのメンション (空なら付けない)
+  format: blocks                                    # blocks = Block Kit (見出し・件数・まず対応・まとめて確認) | text = mrkdwn の本文だけ (v0.3.0 までの書式)

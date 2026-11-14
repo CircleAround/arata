@@ -10,7 +10,7 @@ import (
 )
 
 // 版 1 で持つスキーマ。足したらここにも足す (ファイルを置き忘れた・消したことに気づく)。
-var want = []string{"arata-config-check", "aratam-config-check", "aratam-doctor", "aratam-dry-run", "config-diff", "doctor", "help-ai", "log", "profiles", "rebuild", "report", "report-period", "review"}
+var want = []string{"arata-config-check", "aratam-config-check", "aratam-doctor", "aratam-dry-run", "config-diff", "doctor", "help-ai", "log", "profiles", "rebuild", "repo-diff", "report", "report-period", "review"}
 
 func TestNames(t *testing.T) {
 	got := Names()

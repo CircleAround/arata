@@ -9,19 +9,21 @@ import (
 	"testing"
 )
 
-// repoWithMethodScript は、送り方を判別するスクリプトを写した、利用者のリポジトリのつもりのディレクトリ。
+// repoWithMethodScript は、一式のスクリプト (.github/scripts) を置いた、利用者のリポジトリのつもりのディレクトリ。
 func repoWithMethodScript(t *testing.T) string {
 	t.Helper()
-	body, err := os.ReadFile(methodScript)
-	if err != nil {
-		t.Fatal(err)
-	}
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, filepath.Dir(methodScriptPath)), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, methodScriptPath), body, 0o755); err != nil {
-		t.Fatal(err)
+	for src, dst := range map[string]string{methodScript: methodScriptPath, secretScript: secretScriptPath} {
+		body, err := os.ReadFile(src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, dst), body, 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return dir
 }
@@ -51,14 +53,14 @@ func TestAuditDetectsTheSlackMethod(t *testing.T) {
 		}
 		for method, exit := range map[string]int{"bot": 0, "webhook": 0, "email": 1} {
 			t.Run(method, func(t *testing.T) {
-				bin := fakeBin(t, "aratam", fmt.Sprintf(`echo '{"ok":true,"slack":{"method":%q},"rows":[]}'`+"\n", method))
+				bin := fakeBin(t, "aratam", fmt.Sprintf(`echo '{"ok":true,"slack":{"method":%q,"urgent_webhook":%v},"rows":[]}'`+"\n", method, method == "webhook"))
 				out, code, tmp := runStepIn(t, repoWithMethodScript(t), s.Run, bin)
 				if code != exit {
 					t.Fatalf("exit %d, want %d\n%s", code, exit, out)
 				}
 				want := ""
 				if exit == 0 {
-					want = "method=" + method + "\n"
+					want = fmt.Sprintf("method=%s\nurgent_webhook=%v\n", method, method == "webhook")
 				}
 				if got := output(t, tmp); got != want {
 					t.Errorf("GITHUB_OUTPUT %q, want %q", got, want)
@@ -68,12 +70,18 @@ func TestAuditDetectsTheSlackMethod(t *testing.T) {
 	})
 }
 
-// notify には、判別した送り方の secret だけを渡す (bot なら Webhook の URL を、webhook なら bot トークンを、ジョブに出さない)。
+// notify には、aratam.yaml が使う secret だけを渡す (bot なら Webhook の URL を、webhook なら bot トークンを、ジョブに出さない)。
+// 緊急用の Webhook は、aratam.yaml が別に持つとき (.slack.urgent_webhook) だけ渡す。
+// 使わない秘密は空で渡るので、その箱が仮の値のままでも (消してあっても)、検査にも aratam にも届かない (ADR 0059)。
 func TestNotifyGetsOnlyTheSecretsOfTheMethod(t *testing.T) {
 	forEachWorkflow(t, func(t *testing.T, w *workflow, text string) {
 		env := stepByID(t, w, "notify").Env
-		for k, method := range map[string]string{"ARATAM_SLACK_WEBHOOK": "webhook", "ARATAM_SLACK_URGENT_WEBHOOK": "webhook", "ARATAM_SLACK_BOT_TOKEN": "bot"} {
-			want := fmt.Sprintf("${{ steps.slack-method.outputs.method == '%s' && secrets.%s || '' }}", method, k)
+		for k, cond := range map[string]string{
+			"ARATAM_SLACK_WEBHOOK":        "steps.slack-method.outputs.method == 'webhook'",
+			"ARATAM_SLACK_URGENT_WEBHOOK": "steps.slack-method.outputs.method == 'webhook' && steps.slack-method.outputs.urgent_webhook == 'true'",
+			"ARATAM_SLACK_BOT_TOKEN":      "steps.slack-method.outputs.method == 'bot'",
+		} {
+			want := fmt.Sprintf("${{ %s && secrets.%s || '' }}", cond, k)
 			if env[k] != want {
 				t.Errorf("%s: %q, want %q", k, env[k], want)
 			}
@@ -211,11 +219,10 @@ func TestAlertTellsWhichTargetWasNotNotified(t *testing.T) {
 			}
 		})
 	})
-	// 対象の名前は、1 つのアカウントの形ではワークフローの env、複数の形では matrix のアカウント
-	single, _ := load(t, singleFile)
+	// 対象の名前は matrix のアカウント
 	multi, _ := load(t, multiFile)
-	if single.Env["ARATA_TARGET"] == "" || multi.Jobs["audit"].Env["ARATA_TARGET"] != "${{ matrix.account }}" {
-		t.Errorf("ARATA_TARGET: %q, %q", single.Env["ARATA_TARGET"], multi.Jobs["audit"].Env["ARATA_TARGET"])
+	if multi.Jobs["audit"].Env["ARATA_TARGET"] != "${{ matrix.account }}" {
+		t.Errorf("ARATA_TARGET: %q", multi.Jobs["audit"].Env["ARATA_TARGET"])
 	}
 }
 

@@ -1,0 +1,3 @@
+  # 定時 (schedule) はまだ入れていない。最初の PR で定時まで入れると、ベースラインの収集 (arata init) の前に監査が走り、
+  # 溜まっていた指摘が一度に通知される。導入の流れ (arata help ai onboarding) が済んでから、同じ引数に --schedule --force を
+  # 足して書き直し、PR で入れる (README.md の 8)。

@@ -86,7 +86,8 @@ make fuzz            # ファズテストの探索 (対象ごとに 30 秒。FUZ
 make build-local     # bin/arata (このホスト向け)
 go build -o bin/aratam ./cmd/aratam
 go list -m -json all | go run ./tools/agegate -days 7   # 依存の待機期間チェック (CI と同じ)
-GITHUB_TOKEN=$(gh auth token) go run ./tools/actionsgate -days 7 -lock .github/workflows/actions.lock .github/workflows examples/github-actions   # Actions の検査 (CI と同じ)
+GITHUB_TOKEN=$(gh auth token) go run ./tools/actionsgate -days 7 -lock .github/workflows/actions.lock .github/workflows examples/audit-repo/.github/workflows   # Actions の検査 (CI と同じ)
+make test-terraform  # arata repo init が書き出す Terraform を、fmt / validate と偽の GitHub API への apply で確かめる (terraform が要る。実際の GitHub には繋がない)
 go run ./cmd/arata help ai                               # LLM 向けの使い方
 ```
 
@@ -95,12 +96,15 @@ go run ./cmd/arata help ai                               # LLM 向けの使い�
 - `cmd/arata`, `cmd/aratam` — CLI (標準 flag の上の `internal/subcmd`)
 - `internal/config` 設定 / `internal/collect` 収集 (cloudtrail, cwlogs, account) / `internal/store` JSONL + SQLite /
   `internal/checks` チェック / `internal/engine` run の流れ / `internal/report` レポート (`schema` は標準ライブラリだけ) /
-  `internal/allowlist` 既知リスト / `internal/scaffold` 雛形 / `internal/notify`・`internal/llm`・`internal/slack` aratam
+  `internal/allowlist` 既知リスト / `internal/scaffold` 雛形 / `internal/repoinit` 監査を回すリポジトリの一式 (`arata repo init`) / `internal/aratamscaffold` aratam の雛形の本文 / `internal/notify`・`internal/llm`・`internal/slack` aratam
 - `docs/ai/*.md` はバイナリに埋め込まれる。変えたらテストのゴールデンも変わる。新しいチェックを足したら `docs/ai/playbooks/<check>.md` (対処手順。ADR 0025) も書く (無ければテストが落ちる)
 - 新しいチェックを足す・重大度や条件を変えるときは、攻撃の事例の対応表 (`docs/threats.md`、本文は `docs/ai/threats/<id>.md`。ADR 0058) も直す。そのチェックで見える公開の事例 (出典の URL と日付を自分で読んで確かめたもの) を足すか、playbook の「関連する事例」に「対応する公開の事例はまだ無い」と書く (無ければテストが落ちる)
 - ログの `code` は `internal/codes` に足す (各パッケージに文字列で書かない)。足したら文書の表 (`docs/ai/index.md`・`docs/design.md`・`docs/aratam.md`) にも足す。
   ERROR のログには必ず code を付ける。消す・名前を変えるのは互換を壊す変更 (どれもテストが確かめる。ADR 0054)
 - `schemas/*.schema.json` は機械が読む出力の JSON Schema。バイナリに埋め込まれる。型 (`internal/jsonschema` が読む) から作るので手で編集せず、
   型を直してその型のパッケージのテストを `-update` で流す。新しい `--format json` を足したら、型・スキーマ・`schematest` のテストも足す (ADR 0054)
-- `tools/agegate`・`tools/actionsgate`・`tools/wordscan` CI 用。`examples/` は架空の値の設定例
+- `tools/agegate`・`tools/actionsgate`・`tools/tfprovidergate`・`tools/wordscan` CI 用。`examples/` は架空の値の設定例
+- `examples/audit-repo` は `arata repo init` の出力そのもの (ADR 0059)。**手で直さない**。雛形 (`internal/repoinit/templates`) を直し、
+  `go test ./internal/repoinit -run TestExampleIsTheOutput -update` で作り直す (テストが 1 バイトの違いも落とす)。ワークフローの中身のテストは `examples/github-actions`。
+  Terraform を変えたら `make test-terraform` も通す
 - `deploy/iam/readonly-role.yaml` 顧客に配る読み取り専用ロール (素の CFN) / `deploy/github-actions/runner.yaml` GitHub Actions の実行の仕組み (素の CFN。ADR 0040) / `deploy/slack/app-manifest.yaml` aratam の通知用の Slack アプリの manifest (scope は chat:write だけ。`internal/slack/manifest_test.go` が固定) / `deploy/sandbox` 試験環境 (CDK、pnpm、Node 24。Go とは独立。ADR 0020)

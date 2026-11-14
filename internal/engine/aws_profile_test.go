@@ -40,7 +40,7 @@ func fakeSTS(t *testing.T) (*httptest.Server, func() []string) {
 }
 
 // actionsEnv は configure-aws-credentials が実行用ロールの認証情報を環境変数に置き、
-// examples/github-actions/arata-audit.yml が AWS_CONFIG_FILE を書いた状態を再現する。
+// arata repo init が書き出す arata-audit.yml (見本は examples/audit-repo) が AWS_CONFIG_FILE を書いた状態を再現する。
 func actionsEnv(t *testing.T, stsURL string) {
 	t.Helper()
 	cfg := filepath.Join(t.TempDir(), "aws-config")

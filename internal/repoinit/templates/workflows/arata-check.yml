@@ -1,0 +1,138 @@
+# PR で設定 (arata.yaml・aratam.yaml) と allowlist.yaml の形を検査する。
+# allowlist.yaml の書き間違い (主体の指定が 2 つ、expires の日付の形、未知のキーなど) を、マージの前に止める。
+# マージ後に気づくと、次の定時の監査が設定エラーで止まる (aratam が「実行されていない」と知らせる)。
+# arata repo init が書き出したファイル (ADR 0059)。手で直さない: 版を上げる・アカウントを足すときは、
+# 同じ引数で arata repo init --force を流して書き直し、PR の差分で確かめる (このリポジトリの README.md)。
+# コメントの「説明書」は、arata のリポジトリの examples/github-actions/README.md。
+# 使い方は説明書の「PR で設定を検査する」。ジョブの名前 (check) は、main のルールセットの必須のチェックの名前 (github/main.tf)。
+#
+# AWS にも Slack にも繋がない。認証も secrets も使わないので、権限は contents: read だけ。
+# 検査するのはリポジトリの中の arata.yaml と aratam.yaml のすべて。
+#
+# 定時の監査と同じ版の arata / aratam で、同じ判別を、マージの前に流す:
+#   - versions: arata を使うワークフローの ARATA_VERSION が、すべて同じ版に固定されている
+#   - check:    その版で全部の設定に config check をかけ、aratam.yaml ごとに Slack への送り方を判別する (定時の監査と同じスクリプト)
+# 版を上げる PR・設定を直す PR・スクリプトを直す PR のどれでも、「定時の実行で初めて判別が外れる」ことを、ここで止める。
+name: arata-check
+
+on:
+  # paths では絞らない。必須のチェックにしたとき、絞ると対象外の PR で結果待ちのままになる
+  pull_request:
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash     # -eo pipefail で動く
+
+env:
+  ARATA_VERSION: @@ARATA_VERSION@@       # 監査のワークフローと同じ版 (下の versions が確かめる)
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read    # 設定ファイルの checkout
+    steps:
+      - id: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # arata を使うワークフロー (ARATA_VERSION を持つもの) が、すべてこのワークフローと同じ版であること。
+      # 片方だけ版を上げると、PR の検査は新しい版で通り、定時の実行は古い版で動く (検査した意味が無くなる)。
+      # YAML として読む (yq は GitHub の実行環境に入っている)。行を grep で読むと、コメントや別の場所の同じ文字列に当たる。
+      # 版は v1.2.3 の形だけを認める (分岐やタグの名前で、固定されていない版を指させない)。読んだ値はログに出さない。
+      - id: versions
+        name: ARATA_VERSION が揃っていることを確かめる
+        run: |
+          if ! [[ "$ARATA_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::このワークフローの ARATA_VERSION は v1.2.3 の形で固定する"
+            exit 1
+          fi
+          status=0
+          count=0
+          for file in .github/workflows/*.yml .github/workflows/*.yaml; do
+            [ -f "$file" ] || continue
+            if ! [[ "$file" =~ ^\.github/workflows/[A-Za-z0-9._-]+$ ]]; then
+              echo "::error::.github/workflows に、名前に使えない文字を含むファイルがある"
+              status=1
+              continue
+            fi
+            if ! version="$(yq -r '.env.ARATA_VERSION' "$file" 2>/dev/null)"; then
+              echo "::error file=$file::YAML として読めない"
+              status=1
+              continue
+            fi
+            # ARATA_VERSION を持たないワークフロー (yq は null と出す) は、arata を使わないものとして見ない
+            if [ -z "$version" ] || [ "$version" = null ]; then
+              continue
+            fi
+            count=$((count + 1))
+            if [ "$version" != "$ARATA_VERSION" ]; then
+              echo "::error file=$file::ARATA_VERSION が arata-check.yml の $ARATA_VERSION と違う (arata を使うワークフローは同じ版に揃える)"
+              status=1
+            fi
+          done
+          if [ "$count" -eq 0 ]; then
+            echo "::error::ARATA_VERSION を持つワークフローが見つからない"
+            exit 1
+          fi
+          echo "ARATA_VERSION=$ARATA_VERSION のワークフロー: $count"
+          exit "$status"
+
+      # 照合の SHA256SUMS は同じリリースのものなので、壊れた取得は防げるがリリース自体のすり替えは防げない。
+      # 公開リポジトリのリリースなら gh attestation verify で来歴も確かめられる (arata の 説明書「来歴の検証」)。
+      - id: install
+        name: arata と aratam を取得する
+        env:
+          # arata のリポジトリは公開なので、Release は github.token で読める (ほかのトークンは要らない)
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          dir="$RUNNER_TEMP/arata-bin"
+          mkdir -p "$dir"
+          gh release download "$ARATA_VERSION" -R CircleAround/arata -D "$dir" \
+            -p arata-linux-amd64 -p aratam-linux-amd64 -p SHA256SUMS
+          cd "$dir"
+          for name in arata aratam; do
+            grep " ${name}-linux-amd64\$" SHA256SUMS | sha256sum --check --strict --quiet -
+            install -m 0755 "${name}-linux-amd64" "$name"
+          done
+          echo "$dir" >>"$GITHUB_PATH"
+
+      # 出力はそのまま出す。検査の結果に出るのは PR のファイルの中身 (行番号と項目) で、PR を読める人には元から見えている。
+      # 標準エラーの JSON のログは同じ内容の繰り返しなので出さない。
+      # 設定が 1 つも見つからなければ失敗にする (置き場所を変えたのに、何も検査しないまま通るのを防ぐ)。
+      # aratam.yaml は、形の検査のあとに Slack への送り方も判別する (定時の監査・試しの送信と同じ .github/scripts/arata-slack-method.sh)。
+      # bot / webhook 以外なら失敗にする。秘密は使わない (判別は設定の形だけで決まる)。
+      - id: check
+        name: arata config check / aratam config check
+        run: |
+          status=0
+          count=0
+          while IFS= read -r file; do
+            count=$((count + 1))
+            case "$file" in
+              */aratam.yaml) tool=aratam ;;
+              *) tool=arata ;;
+            esac
+            echo "== $tool config check -c $file"
+            if ! "$tool" config check -c "$file" </dev/null 2>/dev/null; then
+              status=1
+              continue
+            fi
+            if [ "$tool" = aratam ]; then
+              if method="$(.github/scripts/arata-slack-method.sh "$file" </dev/null)" &&
+                urgent="$(.github/scripts/arata-slack-method.sh --urgent-webhook "$file" </dev/null)"; then
+                echo "slack method: $method (urgent_webhook: $urgent)"
+              else
+                status=1
+              fi
+            fi
+          done < <(find . -path ./.git -prune -o -type f \( -name arata.yaml -o -name aratam.yaml \) -print | sort)
+          if [ "$count" -eq 0 ]; then
+            echo "::error::arata.yaml / aratam.yaml が見つからない"
+            exit 1
+          fi
+          exit "$status"

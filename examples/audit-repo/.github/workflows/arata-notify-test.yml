@@ -1,0 +1,132 @@
+# Slack への送信だけを確かめる (workflow_dispatch)。監査 (arata run) は回さず、aratam test-notify で試験メッセージを 1 通送る。
+# 新しい通知先 (チャンネル) を足したとき、Webhook や bot トークンを入れ替えたときに、environment の secrets と
+# リポジトリの aratam.yaml の組み合わせで届くかを確かめる。
+# arata repo init が書き出したファイル (ADR 0059)。手で直さない: 版を上げる・アカウントを足すときは、
+# 同じ引数で arata repo init --force を流して書き直し、PR の差分で確かめる (このリポジトリの README.md)。
+# コメントの「説明書」は、arata のリポジトリの examples/github-actions/README.md。
+# 使い方・注意は説明書の「Slack への送信だけを確かめる」。
+#
+# AWS には繋がない。test-notify は aratam.yaml を読んで Slack に送るだけで、LLM (Bedrock など) も呼ばない。
+# OIDC も実行用ロールも要らないので、権限は contents: read だけ。ストアにも触れないので、監査との排他も要らない。
+name: arata-notify-test
+run-name: arata-notify-test ${{ inputs.route }} (${{ inputs.account }})
+
+on:
+  workflow_dispatch:
+    inputs:
+      account:
+        description: アカウント (aws/ の下のディレクトリの名前。その aratam.yaml の通知先に送る)
+        type: choice
+        options: [prod, staging]   # arata-audit.yml の matrix.account と同じ並び
+        required: true
+      route:
+        description: 'normal = 通常用に 1 通 / urgent = 緊急用に 1 通 (メンションが付くなら、それも届く)'
+        type: choice
+        options: [normal, urgent]
+        required: true
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash     # -eo pipefail で動く
+
+env:
+  ARATA_VERSION: v0.15.0       # arata-audit.yml と同じ版 (定時の通知と同じ aratam で確かめる。PR の検査 arata-check.yml が揃っていることを確かめる)
+
+jobs:
+  notify-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    # 秘密は environment の secrets に置き、environment のデプロイできるブランチを main だけにする (説明書「実行するリポジトリと環境を堅くする」の 5)。
+    # ほかのブランチのジョブには秘密が渡らない。OIDC は使わない (実行用ロールは引き受けない)。
+    environment: audit
+    permissions:
+      contents: read    # 設定ファイルの checkout
+    env:
+      ACCOUNT: ${{ inputs.account }}
+      ARATA_CONFIG_DIR: aws/${{ inputs.account }}
+      # inputs は run に埋め込まず、env で渡す (式の埋め込みはスクリプトの注入になる)
+      ROUTE: ${{ inputs.route }}
+    steps:
+      # API からの実行は画面の選択肢を通らないので、choice の値も確かめる。
+      - id: validate
+        name: 入力を確かめる
+        run: |
+          fail() {
+            echo "::error::$1"
+            exit 1
+          }
+          [[ "$ACCOUNT" =~ ^[a-z0-9][a-z0-9-]*$ ]] || fail "account は小文字の英数字とハイフン"
+          case "$ROUTE" in
+            normal | urgent) ;;
+            *) fail "route は normal / urgent" ;;
+          esac
+
+      - id: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # 照合の SHA256SUMS は同じリリースのものなので、壊れた取得は防げるがリリース自体のすり替えは防げない。
+      # 公開リポジトリのリリースなら gh attestation verify で来歴も確かめられる (arata の 説明書「来歴の検証」)。
+      - id: install
+        name: arata と aratam を取得する
+        env:
+          # arata のリポジトリは公開なので、Release は github.token で読める (ほかのトークンは要らない)
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          dir="$RUNNER_TEMP/arata-bin"
+          mkdir -p "$dir"
+          gh release download "$ARATA_VERSION" -R CircleAround/arata -D "$dir" \
+            -p arata-linux-amd64 -p aratam-linux-amd64 -p SHA256SUMS
+          cd "$dir"
+          for name in arata aratam; do
+            grep " ${name}-linux-amd64\$" SHA256SUMS | sha256sum --check --strict --quiet -
+            install -m 0755 "${name}-linux-amd64" "$name"
+          done
+          echo "$dir" >>"$GITHUB_PATH"
+
+      # 送り方の判別は、定時の監査と同じスクリプト (定時の通知と同じ判別で送って、初めて定時の通知の確認になる)。
+      # bot / webhook 以外なら、ここで止まる。
+      - id: slack-method
+        name: Slack への送り方を判別する
+        timeout-minutes: 2
+        run: |
+          method="$(.github/scripts/arata-slack-method.sh "$ARATA_CONFIG_DIR/aratam.yaml")"
+          urgent="$(.github/scripts/arata-slack-method.sh --urgent-webhook "$ARATA_CONFIG_DIR/aratam.yaml")"
+          echo "slack method=$method urgent_webhook=$urgent"
+          echo "method=$method" >>"$GITHUB_OUTPUT"
+          echo "urgent_webhook=$urgent" >>"$GITHUB_OUTPUT"
+
+      # secrets の渡し方は監査の notify と同じにする (同じ secrets と同じ aratam.yaml で送って、初めて定時の通知の確認になる)。
+      # ログの方針も監査と同じ: 出力は実行環境の一時ファイルに書き、Actions には INFO 以外の level / code / source だけを出す。
+      # 失敗の見分け: CONFIG_INVALID = 設定の誤りか、secret が空 (終了コード 2) / SEND_FAILED = Slack が受け取らなかった (終了コード 5)。
+      # bot トークンの方式の SEND_FAILED には、Slack の error コードだけを足して出す (not_in_channel = bot をそのチャンネルに招待する、など。説明書)。
+      # コードは、ログの slack_error (機械が読む項目。aratam schema log) から読む。人向けの error の文からは切り出さない。
+      # slack_error を出すのは v0.15.0 以降の aratam。それより前の版では、この 1 行 (slack error=…) が出ないだけで、ほかは同じに動く。
+      # aratam が形を確かめた値で、ここでも形を確かめてから出す。チャンネル ID・案内の文・Webhook の応答の本文は出さない。
+      - id: test-notify
+        name: aratam test-notify
+        timeout-minutes: 3
+        env:
+          # aratam.yaml が使う secret だけを渡す (使わないものは空)。Webhook の方式なら上の 2 つ (緊急用は、aratam.yaml が別に持つときだけ)、
+          # bot トークンの方式なら下の 1 つ。使わない秘密の箱は、仮の値のままでも、消してあってもよい
+          ARATAM_SLACK_WEBHOOK: ${{ steps.slack-method.outputs.method == 'webhook' && secrets.ARATAM_SLACK_WEBHOOK || '' }}
+          ARATAM_SLACK_URGENT_WEBHOOK: ${{ steps.slack-method.outputs.method == 'webhook' && steps.slack-method.outputs.urgent_webhook == 'true' && secrets.ARATAM_SLACK_URGENT_WEBHOOK || '' }}
+          ARATAM_SLACK_BOT_TOKEN: ${{ steps.slack-method.outputs.method == 'bot' && secrets.ARATAM_SLACK_BOT_TOKEN || '' }}
+        run: |
+          # 渡された秘密 (= aratam.yaml が使うもの) が仮の値のままなら、名前を出して止める (監査の notify と同じ)
+          .github/scripts/arata-secret-check.sh ARATAM_SLACK_WEBHOOK ARATAM_SLACK_URGENT_WEBHOOK ARATAM_SLACK_BOT_TOKEN
+          log="$RUNNER_TEMP/aratam.log"
+          args=(test-notify -c "$ARATA_CONFIG_DIR/aratam.yaml")
+          if [ "$ROUTE" = urgent ]; then
+            args+=(--urgent)
+          fi
+          status=0
+          aratam "${args[@]}" >"$log" 2>&1 || status=$?
+          jq -Rc 'fromjson? | objects | select(.level != "INFO") | {level, code, source}' "$log" || true
+          jq -Rr 'fromjson? | objects | select(.code == "SEND_FAILED") | .slack_error | strings
+            | select(test("^[a-z0-9_]{1,64}$")) | "slack error=\(.)"' "$log" || true
+          echo "aratam exit=$status"
+          exit "$status"
