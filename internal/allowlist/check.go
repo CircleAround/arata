@@ -11,7 +11,7 @@ import (
 // EntryError は Parse が 1 つの項目 (principals[2] など) で見つけた検証エラー。
 // 文言は従来どおり「principals[2]: …」。Check が項目の行番号を引くために、節と番号を持つ。
 type EntryError struct {
-	Section string // principals / source_ips / secrets_access / assume_destinations
+	Section string // principals / source_ips / secrets_access / assume_destinations / oidc_subjects
 	Index   int
 	Err     error
 }
@@ -48,6 +48,9 @@ type Problem struct {
 //
 //   - assume_destinations の、at の時点で期限の切れた項目は警告にする。run は止まらないが、その行き先への引き受けは次の run から high で
 //     報告される (契約が続くなら期限を延ばし、終わったなら項目を消す)。principals の期限切れは見ない (従来どおり。期限切れは finding で知らせる)
+//
+//   - oidc_subjects (ADR 0055) の、同じ入り口を書いた項目 (プロバイダ・ロール・リポジトリ・refs / environments の集合・pull_request が同じ) と、
+//     期限の切れた項目も警告にする (期限が切れると、その入り口からの引き受けは次の run から報告される)
 //
 // エラーがあれば List は nil。
 func Check(b []byte, at time.Time) (*List, []Problem) {
@@ -86,6 +89,21 @@ func Check(b []byte, at time.Time) (*List, []Problem) {
 		if !e.active(at) {
 			out = append(out, Problem{Line: lines[i], Warn: true, Msg: fmt.Sprintf(
 				"assume_destinations[%d]: expired on %s: account %s (assuming roles there is reported as high again; extend expires if the work continues, or remove the entry)", i, e.Expires, e.Account)})
+		}
+	}
+	lines = entryLines(b, "oidc_subjects")
+	for i := range l.OIDCSubjects {
+		e := &l.OIDCSubjects[i]
+		for j := 0; j < i; j++ {
+			if sameOIDCSubject(&l.OIDCSubjects[j], e) {
+				out = append(out, Problem{Line: lines[i], Warn: true, Msg: fmt.Sprintf(
+					"oidc_subjects[%d]: duplicate of oidc_subjects[%d] (line %d): %s (merge the entries)", i, j, lines[j], e.Subject())})
+				break
+			}
+		}
+		if !e.active(at) {
+			out = append(out, Problem{Line: lines[i], Warn: true, Msg: fmt.Sprintf(
+				"oidc_subjects[%d]: expired on %s: %s (assuming the role from there is reported again; extend expires if it is still in use, or remove the entry)", i, e.Expires, e.Subject())})
 		}
 	}
 	return l, out

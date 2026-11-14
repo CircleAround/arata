@@ -192,6 +192,8 @@ type List struct {
 	SecretsAccess []SecretsAccessEntry `yaml:"secrets_access"`
 	// AssumeDestinations は、外向きの引き受けで行き先として既知のアカウント (ADR 0047)。principals (呼び出し元) とは別。
 	AssumeDestinations []DestinationEntry `yaml:"assume_destinations"`
+	// OIDCSubjects は、OIDC でのロールの引き受けの既知の入り口 (ADR 0055)。principals (主体の承認) とは別。
+	OIDCSubjects []OIDCSubjectEntry `yaml:"oidc_subjects"`
 
 	byARN map[string]*PrincipalEntry
 	// broad は account / arn_pattern のエントリ
@@ -304,6 +306,11 @@ func Parse(b []byte) (*List, error) {
 	for i := range l.AssumeDestinations {
 		if err := l.AssumeDestinations[i].validate(); err != nil {
 			return nil, entryErr("assume_destinations", i, "%w", err)
+		}
+	}
+	for i := range l.OIDCSubjects {
+		if err := l.OIDCSubjects[i].validate(); err != nil {
+			return nil, entryErr("oidc_subjects", i, "%w", err)
 		}
 	}
 	for i := range l.SourceIPs {
