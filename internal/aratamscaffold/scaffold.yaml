@@ -17,13 +17,14 @@ llm:
   context_file: ""                # この監査対象の前提 (Markdown。決済画面はリクエストが多い、など) のパス。LLM に参考として渡す。空なら使わない。相対パスは設定ファイル基準。16 KiB まで
 
 slack:
-  # 送り方は次の 2 つのうち 1 つ。使わないほうの項目は "" にする (両方を書くと設定エラー)。
-  #   Incoming Webhook: webhook_env (と urgent_webhook_env)。チャンネルごとに URL (秘密) が要る
-  #   bot トークン: bot_token_env と channel (と urgent_channel)。秘密はトークン 1 つで、送り先はチャンネル ID (秘密ではない) で書く
-  webhook_env: ARATAM_SLACK_WEBHOOK                 # 通常用の Webhook URL を入れる環境変数の名前。URL は設定ファイルに書かない
-  urgent_webhook_env: ARATAM_SLACK_URGENT_WEBHOOK   # 緊急用。空にすると通常用に送り、冒頭に urgent_mention を付ける
-  bot_token_env: ""                                 # bot トークン (xoxb-...) を入れる環境変数の名前 (例 ARATAM_SLACK_BOT_TOKEN)。トークンは設定ファイルに書かない。要る scope は chat:write だけ
-  channel: ""                                       # bot トークンの通常用のチャンネル ID (例 C0123456789。名前ではなく ID)。bot をチャンネルに招待しておく
-  urgent_channel: ""                                # bot トークンの緊急用のチャンネル ID。空にすると channel に送り、冒頭に urgent_mention を付ける
+  # 送り方は bot トークン (chat.postMessage)。秘密はトークン 1 つで、送り先はチャンネル ID (秘密ではない) で書く。
+  # Slack アプリは deploy/slack/app-manifest.yaml から作る (scope は chat:write だけ)。bot は、送り先のチャンネルに招待しておく。
+  bot_token_env: ARATAM_SLACK_BOT_TOKEN             # bot トークン (xoxb-...) を入れる環境変数の名前。トークンは設定ファイルに書かない
+  channel: ""                                       # 必須。通常用のチャンネル ID (例 C0123456789。名前ではなく ID)
+  urgent_channel: ""                                # 緊急用のチャンネル ID。空にすると channel に送り、冒頭に urgent_mention を付ける
   urgent_mention: "<!channel>"                      # 緊急用を通常用に送るときのメンション (空なら付けない)
   format: blocks                                    # blocks = Block Kit (見出し・件数・まず対応・まとめて確認) | text = mrkdwn の本文だけ (v0.3.0 までの書式)
+  # 非推奨 (ADR 0061): Incoming Webhook の方式。動き続けるが、config check と doctor が警告を出す。新しく使わない (空のままにする)。
+  # bot の項目 (bot_token_env / channel / urgent_channel) と両方を書くと設定エラー。
+  webhook_env: ""                                   # 通常用の Webhook URL を入れる環境変数の名前
+  urgent_webhook_env: ""                            # 緊急用の Webhook URL を入れる環境変数の名前

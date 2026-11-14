@@ -93,7 +93,19 @@ func newCLI(t *testing.T) *cli {
 		"ARATAM_SLACK_URGENT_WEBHOOK": c.hook.srv.URL + urgentPath,
 	}
 	// 既存のテストは mrkdwn の本文 (text) で確かめる。Block Kit は blocks_test.go で確かめる
-	body := strings.Replace(string(notify.Scaffold()), "name: example", "name: acme", 1)
+	// 既存のテストは Webhook の方式 (非推奨。ADR 0061) で確かめる: 動き続けることを固定する。bot トークンの方式は useBot() で切り替える
+	body := string(notify.Scaffold())
+	for _, r := range [][2]string{
+		{"name: example", "name: acme"},
+		{"bot_token_env: ARATAM_SLACK_BOT_TOKEN", `bot_token_env: ""`},
+		{`webhook_env: "" `, "webhook_env: ARATAM_SLACK_WEBHOOK "},
+		{`urgent_webhook_env: "" `, "urgent_webhook_env: ARATAM_SLACK_URGENT_WEBHOOK "},
+	} {
+		if !strings.Contains(body, r[0]) {
+			t.Fatalf("scaffold lacks %q", r[0])
+		}
+		body = strings.Replace(body, r[0], r[1], 1)
+	}
 	body = strings.Replace(body, "format: blocks", "format: text", 1)
 	if err := os.WriteFile(c.cfg, []byte(body), 0o600); err != nil {
 		t.Fatal(err)

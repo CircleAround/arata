@@ -82,6 +82,8 @@ const (
 	BotTokenUnset       = "BOT_TOKEN_UNSET" // #nosec G101 -- ログの code の名前で、秘密の値ではない
 	SlackAuthFailed     = "SLACK_AUTH_FAILED"
 	SlackScopeMissing   = "SLACK_SCOPE_MISSING"
+	// 非推奨の設定 (動き続ける。設定を直す必要がある)
+	SlackWebhookDeprecated = "SLACK_WEBHOOK_DEPRECATED"
 )
 
 // コマンドの名前。
@@ -161,6 +163,7 @@ var All = []Code{
 	{BotTokenUnset, aratamOnly, "slack.bot_token_env の環境変数が無い (doctor)"},
 	{SlackAuthFailed, aratamOnly, "bot トークンを確かめられない (doctor の auth.test)"},
 	{SlackScopeMissing, aratamOnly, "bot トークンの scope に chat:write が無い (doctor。警告)"},
+	{SlackWebhookDeprecated, aratamOnly, "Slack への送り方が Incoming Webhook (非推奨。動き続ける。config check と doctor の警告。ADR 0061)"},
 	{LLMUnavailable, aratamOnly, "LLM に繋がらない (doctor)"},
 }
 

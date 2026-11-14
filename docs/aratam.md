@@ -14,7 +14,7 @@ arata 設計書 9-1 章 (「report.json から通知までの LLM の仕事」) 
 | 配置 | 同じリポジトリの `cmd/aratam`。リリースには arata と aratam のバイナリを並べる。report.json の形と `docs/ai` の版が arata とずれない |
 | 権限 | arata は AWS の読み取りロールだけ、aratam は LLM と通知の鍵だけを持つ。別の OS ユーザーで動かしてもよい |
 | LLM | `bedrock` と `claude-cli` (`claude -p`) に対応する。将来 `openai-api`。`none` (LLM を使わず report.md を整形して送る) も選べる |
-| 通知先 | Slack。送り方は Incoming Webhook か、bot トークンとチャンネル ID (`chat.postMessage`) のどちらか 1 つ (4-1 章)。通常用と緊急用の 2 つまで。SNS などは後続 |
+| 通知先 | Slack。送り方は bot トークンとチャンネル ID (`chat.postMessage`)。Incoming Webhook の方式は非推奨で、動き続ける (4-1 章、ADR 0061)。通常用と緊急用の 2 つまで。SNS などは後続 |
 | 秘密 | 環境変数で受け取る。置き場所 (GitHub の secret、Secrets Manager など) と取り出し方は実行環境に任せる (4-2 章、ADR 0044) |
 | 書式 | Block Kit (`slack.format: blocks`。3-4 章、ADR 0029)。`text` で v0.3.0 までの mrkdwn の本文も選べる |
 | 依存 | 標準の `net/http` で書く。例外は Bedrock で、AWS SDK (`service/bedrockruntime`) を使ってよい (arata が AWS SDK の core を既に持つため増分が小さい) |
@@ -375,20 +375,21 @@ llm:
   # context_file: aratam-context.md  # この監査対象の前提 (Markdown。ADR 0024)
 
 slack:
-  # 送り方は 2 つのうち 1 つ (4-1 章)。使わないほうは "" にする
-  webhook_env: ARATAM_SLACK_WEBHOOK            # Incoming Webhook の通常用。URL は設定ファイルに書かず環境変数で渡す
-  urgent_webhook_env: ARATAM_SLACK_URGENT_WEBHOOK   # 省略時は通常用に送り、冒頭にメンションを付ける
-  bot_token_env: ""               # bot トークン (xoxb-...) を入れる環境変数の名前。トークンは設定ファイルに書かない
-  channel: ""                     # bot トークンの通常用のチャンネル ID (C0123456789 の形。秘密ではない)
-  urgent_channel: ""              # bot トークンの緊急用のチャンネル ID。空なら channel に送り、冒頭にメンションを付ける
+  # 送り方は bot トークン (4-1 章)
+  bot_token_env: ARATAM_SLACK_BOT_TOKEN   # bot トークン (xoxb-...) を入れる環境変数の名前。トークンは設定ファイルに書かない
+  channel: C0123456789            # 通常用のチャンネル ID (秘密ではない)
+  urgent_channel: ""              # 緊急用のチャンネル ID。空なら channel に送り、冒頭にメンションを付ける
   urgent_mention: "<!channel>"
   format: blocks                  # blocks (Block Kit) | text (mrkdwn の本文。v0.3.0 までの書式)
+  # 非推奨 (ADR 0061): Incoming Webhook の方式。動き続けるが、新しく使わない。bot の項目と両方を書くと設定エラー
+  webhook_env: ""                 # 通常用の Webhook URL を入れる環境変数の名前
+  urgent_webhook_env: ""          # 緊急用。空なら通常用に送り、冒頭にメンションを付ける
 ```
 
-- Webhook の URL と bot トークンは秘密なので設定ファイルに書かせない (環境変数の名前だけを書く。4-2 章)。チャンネル ID は秘密ではないので値を書く。
+- bot トークン (と、非推奨の Webhook の URL) は秘密なので設定ファイルに書かせない (環境変数の名前だけを書く。4-2 章)。チャンネル ID は秘密ではないので値を書く。
 
 決定 (実装順 1):
-- 必須: `name`, `max_age`, `urgent_severity` (critical | high | medium | low), `on_quiet`, `llm.provider`, `slack.webhook_env` (bot トークンの方式なら `slack.bot_token_env` と `slack.channel`。4-1 章)。
+- 必須: `name`, `max_age`, `urgent_severity` (critical | high | medium | low), `on_quiet`, `llm.provider`, `slack.bot_token_env` と `slack.channel` (非推奨の Webhook の方式なら `slack.webhook_env`。4-1 章)。
   `llm.timeout` は provider が `none` 以外なら必須、`bedrock` は `llm.model` と `llm.region` も必須。`claude-cli` の `model` は省略可 (claude 側の既定)。
   `slack.urgent_webhook_env` と `slack.urgent_mention` は省略可。未知のキーは誤記とみなして設定エラーにする (arata と同じ)。
 - `timezone` は省略可で、無ければ UTC (これまでの表示のまま)。雛形には `timezone: UTC` と明示する (4-3 章)。
@@ -408,27 +409,45 @@ slack:
 - 雛形 (`config init`) の `llm.provider` は `none` にする。LLM の鍵を用意する前でも notify が動き、まず規則だけの通知で流れを確かめられるように。
   `max_age` などの書式は arata の設定と同じ (`time.ParseDuration` と `d` = 日)。
 
-### 4-1. Slack への送り方 (Incoming Webhook と bot トークン)
+### 4-1. Slack への送り方 (bot トークン。Incoming Webhook は非推奨)
 
-監査対象ごとに通知先のチャンネルを分けると、Incoming Webhook ではチャンネルごとに URL (秘密) が要り、対象が増えるたびに秘密が増える。
-bot トークンなら秘密は 1 つで、送り先はチャンネル ID (秘密ではない) を設定に書けばよい。
+送り方は、bot トークンとチャンネル ID (`chat.postMessage`)。秘密はトークン 1 つで、送り先はチャンネル ID (秘密ではない) を設定に書く。
+監査対象ごとに通知先のチャンネルを分けても、秘密は増えない。
 
 ```yaml
 slack:
-  webhook_env: ""
-  urgent_webhook_env: ""
   bot_token_env: ARATAM_SLACK_BOT_TOKEN   # 環境変数の名前。値 (xoxb-...) は実行環境が入れる
   channel: C0123456789                    # 通常用のチャンネル ID
   urgent_channel: C0123456780             # 緊急用。空なら channel に送り、冒頭に urgent_mention を付ける
   urgent_mention: "<!channel>"
   format: blocks
+  webhook_env: ""                         # 非推奨の Webhook の 2 つは空のまま
+  urgent_webhook_env: ""
 ```
 
-- 決定 (両方を残す): Webhook の方式はそのまま残し、bot トークンの方式を並べて足す。既にある設定を変えずに動かし続けるため (後方互換)。
-  Webhook は 1 つのチャンネルにしか投稿できない鍵で、チャンネルが 1〜2 個の利用者には今も一番狭い権限になる。Slack アプリを作れない利用者もいる。
-  新しい項目 (`bot_token_env`・`channel`・`urgent_channel`) は省略可で、無ければ Webhook の方式。`slack.format` のときのように必須にはしない
-  (必須にすると、Webhook で動いている設定がすべて更新を要する)。雛形 (`config init`) は全項目を空の値で明示し、`config check` と `doctor` は使う方式を出す。
-  aratam の `config init` に `--diff` は無い (arata だけ)。要るなら別に足す
+- 決定 (bot にそろえ、Webhook は非推奨にする。ADR 0061。これまでの「両方を残す」を置き換える): 勧める送り方・雛形 (`config init`)・監査を回すリポジトリの一式が書き出す送り方は、
+  bot トークンの方式だけにする。Incoming Webhook の方式 (`webhook_env`・`urgent_webhook_env`) は**非推奨**で、**当面は動くまま残す** (送る中身・振り分け・終了コードは変えない)。
+  - 理由: Webhook は、送り先が URL を作ったときのチャンネルに固定され (チャンネルごとに秘密が要る)、投稿の識別子 (`ts`) が返らないので、自分の投稿を後から消せない・更新できない・
+    スレッドを続けられない。2 つの方式を並べると、一式・文書・雛形が 2 通りになる。**Slack が Webhook を非推奨にしているのではない** (arata としての判断)
+  - `aratam config check` と `aratam doctor` は、Webhook の方式の設定に warn の行 (`slack`。code は `SLACK_WEBHOOK_DEPRECATED`) を出す。動き続けるので、ng にはしない
+    (終了コードは変えない)。doctor は、ほかの warn と同じく標準エラーのログにも出す。機械は、これまでどおり `config check --format json` の `.slack.method` で送り方を読める
+  - `notify` と `test-notify` は、この警告を出さない。定時の実行のたびに同じ行が出ると、ログの「INFO 以外」の行が毎日 1 行増え、ほかの警告が埋もれる。
+    気づく場所は、設定を直すとき (`config check`。PR の検査でも流れる) と、点検のとき (`doctor`)
+  - 外す (動かなくする) 時期は決めていない。外すときは、別の ADR で決め、Release の本文で知らせる
+  - 雛形 (`config init`) は bot の方式で、`channel` は空で書き出す (送り先は利用者にしか決められない)。`channel` を書くまで、`config check` は通らない。
+    bot の項目 (`bot_token_env`・`channel`・`urgent_channel`) は、これまでどおり省略可で、無ければ Webhook の方式として読む (v0.5 までの設定は、変更なしで動く)。
+    aratam の `config init` に `--diff` は無い (arata だけ)。要るなら別に足す
+- **Webhook から bot トークンへ移す**:
+  1. Slack アプリを manifest (`deploy/slack/app-manifest.yaml`) から作り、ワークスペースに入れる。bot を、通知のチャンネル (通常用と、分けるなら緊急用) に招待する
+  2. トークン (`xoxb-…`) を、実行環境の秘密に入れる (`ARATAM_SLACK_BOT_TOKEN`)
+  3. `aratam.yaml` の `slack` の節を直す: `webhook_env` と `urgent_webhook_env` を `""` に、`bot_token_env: ARATAM_SLACK_BOT_TOKEN` と `channel` (分けるなら `urgent_channel`) を書く
+  4. `aratam config check` → `aratam doctor` → `aratam test-notify` (と `--urgent`) で、届くことを見る
+  5. 届いたら、Webhook の秘密を実行環境から消し、Slack の側で Webhook の URL を取り消す
+- **気をつける点 (トークンで書ける範囲)**: bot のトークンは、bot が入っているどのチャンネルにも書ける。Webhook が 1 つのチャンネルにしか書けないのと比べて、漏れたときに書ける範囲が広い。
+  読むことはできない (scope は `chat:write` だけ)。bot が入っていないチャンネルには書けない (`chat:write.public` を使わない)。
+  範囲は、会社 (監査を任される組織) ごとにリポジトリと Slack アプリを分けることで閉じる。同じトークンを複数の会社の実行環境に置かない。bot を招待するのは、通知に使うチャンネルだけにする
+- 今後 (ADR 0061。まだ作らない): bot にそろえると投稿の `ts` が返るので、日次のまとめへのスレッド (指摘の詳細) と、対応済みになったときの更新 (`chat.update`) が作れる。
+  作るときは、状態の持ち方を別の ADR で決める (今は、下の「送る中身は同じ」のとおり、スレッド・更新・削除をしない)
 - 決定 (どちらか 1 つ): Webhook の項目 (`webhook_env`・`urgent_webhook_env`) と bot の項目の両方が書かれていたら設定エラーにする。
   片方を優先する規則にすると、移行の途中の設定で、意図しないチャンネルに送ったり緊急の通知が古い Webhook に流れたりする。通常用は bot・緊急用は Webhook という混在も受け付けない
 - 決定 (チャンネルは ID で書く): `C0123456789` の形 (`[CGD]` + 英大文字と数字 8〜20 字) だけを受け付け、名前 (`#general`) は設定エラーにする。
@@ -625,6 +644,7 @@ aratam test-notify [-c aratam.yaml] # Slack に試験メッセージを 1 通送
 | `BOT_TOKEN_UNSET` | slack.bot_token_env の環境変数が無い (doctor) |
 | `SLACK_AUTH_FAILED` | bot トークンを確かめられない (doctor の auth.test) |
 | `SLACK_SCOPE_MISSING` | bot トークンの scope に chat:write が無い (doctor。警告) |
+| `SLACK_WEBHOOK_DEPRECATED` | Slack への送り方が Incoming Webhook (非推奨。動き続ける。config check と doctor の警告。ADR 0061) |
 | `LLM_UNAVAILABLE` | LLM に繋がらない (doctor) |
 
 - 決定 (arata の ADR 0054): `SEND_FAILED` の行には、Slack の Web API が error コードを返したとき、`slack_error` (例 `not_in_channel`) を付ける。

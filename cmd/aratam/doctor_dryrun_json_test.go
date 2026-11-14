@@ -49,7 +49,7 @@ func TestDoctorJSON(t *testing.T) {
 	}
 	delete(c.env, "ARATAM_SLACK_WEBHOOK")
 	out = c.doctorJSON(2)
-	if out.OK || !hasRow(out, "ng", "webhook", "WEBHOOK_UNSET") || strings.Join(c.codes(), ",") != "WEBHOOK_UNSET,URGENT_WEBHOOK_UNSET" {
+	if out.OK || !hasRow(out, "ng", "webhook", "WEBHOOK_UNSET") || strings.Join(c.codes(), ",") != "SLACK_WEBHOOK_DEPRECATED,WEBHOOK_UNSET,URGENT_WEBHOOK_UNSET" {
 		t.Fatalf("%+v %v", out, c.codes())
 	}
 	if code := c.run("doctor", "-c", c.cfg, "--format", "yaml"); code != 2 || c.stdout.Len() != 0 {

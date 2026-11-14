@@ -105,7 +105,8 @@ func TestConfigCheckJSONWarning(t *testing.T) {
 	c.editConfig("provider: none", "provider: claude-cli")
 	c.editConfig(`context_file: ""`, "context_file: none.md")
 	out := c.checkJSON(0)
-	if !out.OK || len(out.Rows) != 2 || out.Rows[1].Status != "warn" || out.Rows[1].Item != "context" || out.Rows[1].Code != "CONTEXT_UNREADABLE" {
+	// Webhook の方式なので、非推奨の警告の行 (ADR 0061) が先にある
+	if !out.OK || len(out.Rows) != 3 || out.Rows[2].Status != "warn" || out.Rows[2].Item != "context" || out.Rows[2].Code != "CONTEXT_UNREADABLE" {
 		t.Fatalf("%+v", out)
 	}
 }

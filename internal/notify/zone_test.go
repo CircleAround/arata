@@ -82,11 +82,11 @@ func TestZoneSpan(t *testing.T) {
 
 func TestConfigTimezone(t *testing.T) {
 	// 雛形は timezone を明示する (暗黙の既定を持たない。ADR 0014)
-	if !strings.Contains(string(Scaffold()), "\ntimezone: UTC") {
+	if !strings.Contains(webhookScaffold(), "\ntimezone: UTC") {
 		t.Fatal("the scaffold must state timezone")
 	}
 	load := func(old, new string) (*Config, error) {
-		body := string(Scaffold())
+		body := webhookScaffold()
 		if !strings.Contains(body, old) {
 			t.Fatalf("scaffold lacks %q", old)
 		}

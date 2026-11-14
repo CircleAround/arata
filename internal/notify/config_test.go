@@ -19,7 +19,7 @@ func writeConfig(t *testing.T, body string) string {
 
 // 雛形はそのまま読めて、全項目を明示している。
 func TestScaffoldLoads(t *testing.T) {
-	c, err := LoadConfig(writeConfig(t, string(Scaffold())))
+	c, err := LoadConfig(writeConfig(t, webhookScaffold()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +28,7 @@ func TestScaffoldLoads(t *testing.T) {
 		t.Fatalf("%+v", c)
 	}
 	for _, key := range []string{"name:", "max_age:", "urgent_severity:", "on_quiet:", "provider:", "model:", "region:", "profile:", "timeout:", "command:", "context_file:", "webhook_env:", "urgent_webhook_env:", "urgent_mention:", "format:"} {
-		if !strings.Contains(string(Scaffold()), "\n"+key) && !strings.Contains(string(Scaffold()), " "+key) {
+		if !strings.Contains(webhookScaffold(), "\n"+key) && !strings.Contains(webhookScaffold(), " "+key) {
 			t.Errorf("scaffold must state %s", key)
 		}
 	}
@@ -42,7 +42,7 @@ func TestScaffoldLoads(t *testing.T) {
 }
 
 func TestConfigErrors(t *testing.T) {
-	base := string(Scaffold())
+	base := webhookScaffold()
 	cases := []struct {
 		name, from, to, want string
 	}{
@@ -86,7 +86,7 @@ func TestConfigErrors(t *testing.T) {
 // Webhook の URL を設定ファイルに貼った誤りは弾き、エラーに URL を出さない。
 func TestWebhookURLInConfigIsRejectedWithoutEcho(t *testing.T) {
 	url := "https://hooks.slack.example/services/T000/B000/secret-token"
-	body := strings.Replace(string(Scaffold()), "urgent_webhook_env: ARATAM_SLACK_URGENT_WEBHOOK", "urgent_webhook_env: "+url, 1)
+	body := strings.Replace(webhookScaffold(), "urgent_webhook_env: ARATAM_SLACK_URGENT_WEBHOOK", "urgent_webhook_env: "+url, 1)
 	_, err := LoadConfig(writeConfig(t, body))
 	if err == nil || !strings.Contains(err.Error(), "slack.urgent_webhook_env must be the name of an environment variable") || strings.Contains(err.Error(), "secret-token") {
 		t.Fatalf("%v", err)
@@ -111,7 +111,7 @@ func TestParseDuration(t *testing.T) {
 func TestLoadContext(t *testing.T) {
 	load := func(t *testing.T, contextFile string, files map[string]string) (string, string, error) {
 		t.Helper()
-		p := writeConfig(t, strings.Replace(string(Scaffold()), `context_file: ""`, "context_file: "+contextFile, 1))
+		p := writeConfig(t, strings.Replace(webhookScaffold(), `context_file: ""`, "context_file: "+contextFile, 1))
 		for name, body := range files {
 			if err := os.WriteFile(filepath.Join(filepath.Dir(p), name), []byte(body), 0o600); err != nil {
 				t.Fatal(err)
@@ -153,7 +153,7 @@ func TestLoadContext(t *testing.T) {
 // botScaffold は雛形を bot トークンの方式に書き換えたもの (Webhook の 2 つを空にし、トークンの環境変数とチャンネル ID を書く)。
 func botScaffold(t *testing.T) string {
 	t.Helper()
-	body := string(Scaffold())
+	body := webhookScaffold()
 	for _, r := range [][2]string{
 		{"webhook_env: ARATAM_SLACK_WEBHOOK ", `webhook_env: "" `},
 		{"urgent_webhook_env: ARATAM_SLACK_URGENT_WEBHOOK ", `urgent_webhook_env: "" `},
@@ -172,11 +172,11 @@ func botScaffold(t *testing.T) string {
 // 雛形は新しいキー (bot トークンの方式) も明示する。空のままなら Webhook の方式。
 func TestScaffoldStatesBotKeys(t *testing.T) {
 	for _, key := range []string{"bot_token_env:", "channel:", "urgent_channel:"} {
-		if !strings.Contains(string(Scaffold()), "\n  "+key) {
+		if !strings.Contains(webhookScaffold(), "\n  "+key) {
 			t.Errorf("scaffold must state %s", key)
 		}
 	}
-	c, err := LoadConfig(writeConfig(t, string(Scaffold())))
+	c, err := LoadConfig(writeConfig(t, webhookScaffold()))
 	if err != nil || c.Slack.Method() != SlackWebhook || c.Slack.BotTokenEnv != "" || c.Slack.Channel != "" || c.Slack.UrgentChannel != "" {
 		t.Fatalf("%+v %v", c, err)
 	}
@@ -185,7 +185,7 @@ func TestScaffoldStatesBotKeys(t *testing.T) {
 // v0.5 までの設定 (新しいキーが無い) は変更なしで読める (後方互換)。
 func TestConfigWithoutBotKeysStillLoads(t *testing.T) {
 	var kept []string
-	for _, line := range strings.Split(string(Scaffold()), "\n") {
+	for _, line := range strings.Split(webhookScaffold(), "\n") {
 		t := strings.TrimSpace(line)
 		if strings.HasPrefix(t, "bot_token_env:") || strings.HasPrefix(t, "channel:") || strings.HasPrefix(t, "urgent_channel:") {
 			continue
@@ -242,7 +242,7 @@ func TestBotConfig(t *testing.T) {
 
 // どちらの方式も書いていなければ、両方の書き方を案内する。
 func TestNoSlackMethod(t *testing.T) {
-	body := strings.Replace(string(Scaffold()), "webhook_env: ARATAM_SLACK_WEBHOOK ", `webhook_env: "" `, 1)
+	body := strings.Replace(webhookScaffold(), "webhook_env: ARATAM_SLACK_WEBHOOK ", `webhook_env: "" `, 1)
 	body = strings.Replace(body, "urgent_webhook_env: ARATAM_SLACK_URGENT_WEBHOOK ", `urgent_webhook_env: "" `, 1)
 	_, err := LoadConfig(writeConfig(t, body))
 	if err == nil || !strings.Contains(err.Error(), "slack.webhook_env is required") || !strings.Contains(err.Error(), "slack.bot_token_env") {
@@ -266,5 +266,38 @@ func TestBotTokenInConfigIsRejectedWithoutEcho(t *testing.T) {
 	_, err := LoadConfig(writeConfig(t, strings.Replace(botScaffold(t), "bot_token_env: ARATAM_SLACK_BOT_TOKEN", "bot_token_env: "+token, 1)))
 	if err == nil || !strings.Contains(err.Error(), "slack.bot_token_env must be the name of an environment variable") {
 		t.Fatalf("%v", err)
+	}
+}
+
+// webhookScaffold は雛形を Webhook の方式 (非推奨。ADR 0061) に書き換えたもの。Webhook の方式が動き続けることのテストに使う。
+func webhookScaffold() string {
+	body := string(Scaffold())
+	for _, r := range [][2]string{
+		{"bot_token_env: ARATAM_SLACK_BOT_TOKEN", `bot_token_env: ""`},
+		{`webhook_env: "" `, "webhook_env: ARATAM_SLACK_WEBHOOK "},
+		{`urgent_webhook_env: "" `, "urgent_webhook_env: ARATAM_SLACK_URGENT_WEBHOOK "},
+	} {
+		if !strings.Contains(body, r[0]) {
+			panic("scaffold lacks " + r[0])
+		}
+		body = strings.Replace(body, r[0], r[1], 1)
+	}
+	return body
+}
+
+// 雛形は bot トークンの方式 (ADR 0061)。チャンネル ID は利用者にしか決められないので空で、書くまで読めない。
+func TestScaffoldIsBot(t *testing.T) {
+	body := string(Scaffold())
+	for _, want := range []string{"\n  bot_token_env: ARATAM_SLACK_BOT_TOKEN ", "\n  channel: \"\" ", "\n  webhook_env: \"\" ", "\n  urgent_webhook_env: \"\" ", "非推奨"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("scaffold lacks %q", want)
+		}
+	}
+	if _, err := LoadConfig(writeConfig(t, body)); err == nil || !strings.Contains(err.Error(), "slack.channel is required") {
+		t.Fatalf("the scaffold must not load until the channel is written: %v", err)
+	}
+	c, err := LoadConfig(writeConfig(t, strings.Replace(body, `  channel: ""`, "  channel: C0123456789", 1)))
+	if err != nil || c.Slack.Method() != SlackBot || c.Slack.BotTokenEnv != "ARATAM_SLACK_BOT_TOKEN" || c.Slack.WebhookEnv != "" || c.Slack.UrgentChannel != "" {
+		t.Fatalf("%+v %v", c, err)
 	}
 }
