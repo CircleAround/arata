@@ -63,7 +63,7 @@
 | [0037](0037-sast-and-untrusted-log-values.md) | 静的解析を CI で常に回し、ログ由来の値と LLM の出力を信用しない前提で通知を組み立てる | 採用 |
 | [0038](0038-source-catchup-and-reported-after-staging.md) | 失敗したソースはソースごとの位置から追いつき、報告済みの印は出力の準備の後に付ける | 採用 |
 | [0039](0039-actions-lock-with-sha-pins.md) | Actions のロックファイルを、uses の SHA 固定と併用して `--no-narrow` で作る | 採用 |
-| [0040](0040-github-actions-runner-template.md) | GitHub Actions の実行の仕組みは素の CloudFormation で配り、信頼は `sub` の完全一致に絞る | 採用 |
+| [0040](0040-github-actions-runner-template.md) | GitHub Actions の実行の仕組みは素の CloudFormation で配り、信頼は `sub` の完全一致に絞る | 採用 (environment の扱いは 0057 で置き換え) |
 | [0041](0041-fuzz-untrusted-input.md) | 信用できない入力を解釈する箇所を、Go 標準のファズテストで確かめる | 採用 |
 | [0042](0042-offline-config-check-and-triage-workflow.md) | 設定と allowlist の形はオフラインの `config check` で PR の時点に確かめ、finding の片付けは Actions の手動実行で行う | 採用 |
 | [0043](0043-vulnerability-fix-exempt-from-cooldown.md) | 脆弱性の修正版は、条件を満たせば 7 日の待機の対象外にする | 採用 |
@@ -78,3 +78,4 @@
 | [0052](0052-actor-and-auth-lines.md) | アプリに足してもらう行は actor と auth の 2 種類にし、行末まで固定した正規表現で読んで、値の形を規則で絞る | 採用 |
 | [0053](0053-readonly-role-denied-log-groups.md) | 読み取り専用ロールに、読ませないロググループの名前を受けるパラメータを足し、中身を読む操作を明示の Deny で止める | 採用 |
 | [0054](0054-machine-readable-output-schemas.md) | 機械が読む出力は `--format json` で出し、Go の型から作った JSON Schema とテストで固定する (人向けの出力を機械で読ませない) | 採用 |
+| [0057](0057-runner-github-environment.md) | 実行の仕組みを GitHub の environment に対応させ、見本は秘密を environment に置く (`sub` は environment、ブランチは `ref` で絞る) | 採用 |

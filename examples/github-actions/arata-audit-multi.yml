@@ -51,6 +51,9 @@ jobs:
   audit:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    # 秘密は environment の secrets に置き、environment のデプロイできるブランチを main だけにする (README「実行するリポジトリと環境を堅くする」の 5)。
+    # ほかのブランチのジョブには秘密が渡らない。OIDC の sub は repo:…:environment:audit になる (runner.yaml の GitHubEnvironment=audit と組)。
+    environment: audit
     # アカウントごとに 1 つのジョブ。1 つが失敗してもほかは続ける。
     # 名前は小文字の英数字とハイフンだけにする (設定のディレクトリ・ストアの prefix・排他の名前に使う)。
     strategy:

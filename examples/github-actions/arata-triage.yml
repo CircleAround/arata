@@ -53,6 +53,9 @@ jobs:
   triage:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    # 秘密は environment の secrets に置き、environment のデプロイできるブランチを main だけにする (README「実行するリポジトリと環境を堅くする」の 5)。
+    # ほかのブランチのジョブには秘密が渡らない。OIDC の sub は repo:…:environment:audit になる (runner.yaml の GitHubEnvironment=audit と組)。
+    environment: audit
     # 定時の監査 (arata-audit-multi.yml) と同じ group にして、同じストアへは順番に書く。
     # 監査が走っていれば終わるまで待つ。走っている run は中断しない。
     # 止めきれなくても、後から終わったほうが STORE_CONFLICT で失敗するだけで、ストアは壊れない (ADR 0034)。
