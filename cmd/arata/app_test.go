@@ -14,6 +14,8 @@ import (
 	"github.com/CircleAround/arata/internal/collect/account/accounttest"
 	"github.com/CircleAround/arata/internal/collect/cloudtrail/cloudtrailtest"
 	"github.com/CircleAround/arata/internal/collect/cwlogs/cwlogstest"
+	"github.com/CircleAround/arata/internal/engine"
+	"github.com/CircleAround/arata/internal/jsonschema/schematest"
 )
 
 // appConfig は trail + nginx (http_access) + waf (waf_action) の設定。
@@ -87,6 +89,7 @@ func TestDoctor(t *testing.T) {
 		if code := c.run("doctor", "--config", c.cfg, "--format", "json"); code != 2 {
 			t.Fatalf("exit %d\n%s%s", code, c.stdout, c.stderr)
 		}
+		schematest.Conforms(t, engine.DoctorSchema, c.stdout.Bytes(), &engine.DoctorResult{})
 		var res struct {
 			Rows []struct {
 				Source, Item, Status, Code, Detail string
@@ -320,6 +323,7 @@ func TestDoctorWAF(t *testing.T) {
 		if code := c.run(append([]string{"doctor", "--config", c.cfg, "--format", "json"}, args...)...); code != 0 {
 			t.Fatalf("exit %d\n%s%s", code, c.stdout, c.stderr)
 		}
+		schematest.Conforms(t, engine.DoctorSchema, c.stdout.Bytes(), &engine.DoctorResult{})
 		var res struct {
 			Rows []struct{ Source, Item, Status, Detail string }
 		}

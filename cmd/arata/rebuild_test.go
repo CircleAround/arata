@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/CircleAround/arata/internal/collect/cloudtrail/cloudtrailtest"
+	"github.com/CircleAround/arata/internal/jsonschema/schematest"
 )
 
 func TestRebuildCommand(t *testing.T) {
@@ -36,6 +37,7 @@ func TestRebuildCommand(t *testing.T) {
 	if code := c.run("rebuild", "--config", c.cfg, "--from-scratch", "--format", "json"); code != 0 {
 		t.Fatalf("rebuild --from-scratch: exit %d\n%s", code, c.stderr)
 	}
+	schematest.Conforms(t, rebuildSchema, c.stdout.Bytes(), &rebuildOutput{})
 	var res map[string]any
 	if err := json.Unmarshal(c.stdout.Bytes(), &res); err != nil {
 		t.Fatalf("json: %v\n%s", err, c.stdout)

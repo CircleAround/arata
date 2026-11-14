@@ -76,11 +76,20 @@ type Section struct {
 	Body  string `json:"body"`
 }
 
-// Doc は `--format json` の形。
+// help ai --format json のスキーマの名前と版 (ADR 0054)。名前は `arata schema <名前>` の名前。
+const (
+	DocSchema        = "help-ai"
+	DocSchemaVersion = 1
+)
+
+// Doc は `--format json` の形。本文 (Body) は文書そのもので、文言は固定しない。
 type Doc struct {
-	Topic    string    `json:"topic"`
-	Title    string    `json:"title"`
-	Sections []Section `json:"sections"`
+	// Schema と SchemaVersion はスキーマの名前と版 (ADR 0054)。
+	Schema        string    `json:"schema" jsonschema:"const=help-ai"`
+	SchemaVersion int       `json:"schema_version" jsonschema:"const=1"`
+	Topic         string    `json:"topic"`
+	Title         string    `json:"title"`
+	Sections      []Section `json:"sections"`
 }
 
 // Lookup は sub ("" / "report" / "approve" / "runtime" / "onboarding" / "logs" / "request_lines" / "user_id" / "playbook" / "playbook <check>") の文書を返す。
@@ -120,7 +129,7 @@ func (t Topic) Markdown() string {
 
 // Parse は本文を # 見出しと ## セクションに分ける。コードブロック内の # は見出しとみなさない。
 func (t Topic) Parse() Doc {
-	d := Doc{Topic: t.Name, Sections: []Section{}}
+	d := Doc{Schema: DocSchema, SchemaVersion: DocSchemaVersion, Topic: t.Name, Sections: []Section{}}
 	var cur *Section
 	var body []string
 	flush := func() {

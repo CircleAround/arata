@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:arata:schema:rebuild:1",
+  "title": "rebuild",
+  "description": "arata rebuild --format json の出力。raw から作り直した表ごとの件数と、引き継いだもの・読み飛ばしたもの",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "rebuild"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "database": {
+      "type": "string"
+    },
+    "from_scratch": {
+      "type": "boolean"
+    },
+    "principal_status": {
+      "type": "string"
+    },
+    "carried_over": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "files": {
+      "type": "integer"
+    },
+    "records": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer"
+      }
+    },
+    "malformed": {
+      "type": "integer"
+    },
+    "unknown_kinds": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer"
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "backup": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "schema_version",
+    "database",
+    "from_scratch",
+    "principal_status",
+    "carried_over",
+    "files",
+    "records",
+    "malformed",
+    "unknown_kinds",
+    "warnings"
+  ]
+}

@@ -13,7 +13,16 @@ import (
 )
 
 // rebuildOutput は rebuild の結果 (--format json)。
+// rebuild --format json のスキーマの名前と版 (ADR 0054)。名前は `arata schema <名前>` の名前。
+const (
+	rebuildSchema        = "rebuild"
+	rebuildSchemaVersion = 1
+)
+
 type rebuildOutput struct {
+	// Schema と SchemaVersion はスキーマの名前と版 (ADR 0054)。
+	Schema          string         `json:"schema" jsonschema:"const=rebuild"`
+	SchemaVersion   int            `json:"schema_version" jsonschema:"const=1"`
 	Database        string         `json:"database"`
 	FromScratch     bool           `json:"from_scratch"`
 	PrincipalStatus string         `json:"principal_status"` // 引き継ぎなら carried_over、--from-scratch なら unknown / baseline
@@ -61,7 +70,7 @@ raw に無いもの (runs・findings・finding_events・meta・主体の状態 a
 				d.Engine.Logger.Warn("rebuilt from raw only: findings, runs and their history start empty; every open finding is reported again as new on the next run",
 					"principal_status", principalStatus(o))
 			}
-			out := rebuildOutput{Database: res.Database, FromScratch: res.FromScratch, PrincipalStatus: principalStatus(o), CarriedOver: []string{},
+			out := rebuildOutput{Schema: rebuildSchema, SchemaVersion: rebuildSchemaVersion, Database: res.Database, FromScratch: res.FromScratch, PrincipalStatus: principalStatus(o), CarriedOver: []string{},
 				Files: res.Files, Records: map[string]int{}, Malformed: res.Malformed, UnknownKinds: res.UnknownKinds, Warnings: res.Warnings, Backup: res.Backup}
 			if !o.FromScratch {
 				out.CarriedOver = carriedOver

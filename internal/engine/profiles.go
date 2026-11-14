@@ -34,13 +34,22 @@ type ProfileView struct {
 
 // ProfilesView は全 profile の表示と、どの profile にも入っていないチェック。
 type ProfilesView struct {
-	Profiles []ProfileView `json:"profiles"`
-	Unused   []string      `json:"unused_checks"`
+	// Schema と SchemaVersion はスキーマの名前と版 (ADR 0054)。
+	Schema        string        `json:"schema" jsonschema:"const=profiles"`
+	SchemaVersion int           `json:"schema_version" jsonschema:"const=1"`
+	Profiles      []ProfileView `json:"profiles"`
+	Unused        []string      `json:"unused_checks"`
 }
+
+// profiles --format json のスキーマの名前と版 (ADR 0054)。
+const (
+	ProfilesSchema        = "profiles"
+	ProfilesSchemaVersion = 1
+)
 
 // Profiles は設定で実際に効いているプロファイルの中身を返す。省略記法 (default-*) は展開済み。
 func Profiles(cfg *config.Config, reg *checks.Registry) ProfilesView {
-	out := ProfilesView{Profiles: []ProfileView{}, Unused: UnusedChecks(cfg, reg)}
+	out := ProfilesView{Schema: ProfilesSchema, SchemaVersion: ProfilesSchemaVersion, Profiles: []ProfileView{}, Unused: UnusedChecks(cfg, reg)}
 	if out.Unused == nil {
 		out.Unused = []string{}
 	}

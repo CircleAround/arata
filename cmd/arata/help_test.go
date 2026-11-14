@@ -7,6 +7,7 @@ import (
 
 	"github.com/CircleAround/arata/docs/ai"
 	"github.com/CircleAround/arata/internal/engine"
+	"github.com/CircleAround/arata/internal/jsonschema/schematest"
 )
 
 // TestRootHelp は引数なしの arata の出力を固定する。人向けの 5 行手順 (config init → doctor → init → run → review) と AI 向けの入口が最初に見えること。
@@ -59,6 +60,7 @@ func TestHelpAI(t *testing.T) {
 	if code := c.run("help", "ai", "report", "--format", "json"); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
+	schematest.Conforms(t, ai.DocSchema, c.stdout.Bytes(), &ai.Doc{})
 	var doc struct {
 		Topic    string
 		Sections []struct{ Title, Body string }

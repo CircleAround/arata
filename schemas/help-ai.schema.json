@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:arata:schema:help-ai:1",
+  "title": "help-ai",
+  "description": "arata help ai [topic] --format json の出力。LLM 向けの文書を節ごとに分けたもの。本文 (body) の文言は固定しない",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "help-ai"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "topic": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "sections": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Section"
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "schema_version",
+    "topic",
+    "title",
+    "sections"
+  ],
+  "$defs": {
+    "Section": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "body"
+      ]
+    }
+  }
+}
