@@ -14,7 +14,7 @@
 | npm の依存の固定と待機 | `--frozen-lockfile`、`minimumReleaseAge`、`scripts/agegate.ts` | ロックとの不一致、公開から 7 日未満 |
 | 脆弱性 | govulncheck (Go)、osv-scanner (pnpm) | 既知の脆弱性。週次でも回す |
 | 書き出す Terraform の provider の固定と待機 | `tools/tfprovidergate` (`supply-chain.yml` の `terraform`) | `arata repo init` が書き出す lock の provider の版が、公開から 7 日未満・公開日を確かめられない |
-| 書き出す Terraform の形と、秘密の箱の安全 | `terraform fmt` / `validate`、偽の GitHub API への apply (`go test ./internal/repoinit`。ADR 0059) | 形の誤り、lock のハッシュと合わない provider、既にある秘密への書き込み |
+| 書き出す Terraform の形 | `terraform fmt` / `validate` (`go test ./internal/repoinit`。ADR 0059・0060。Terraform は秘密に触れないので、plan も apply もしない) | 形の誤り、lock のハッシュと合わない provider |
 | 評価 | OpenSSF Scorecard | 公開後に結果を公開する (落ちない) |
 
 ## 点検の結果

@@ -29,10 +29,11 @@
    ここで面倒だった手順を、4 の配り方の材料にする
 3. **ファズテスト**: 信用できない入力 (LLM の出力・ログの行・CloudTrail・利用者のファイル) の解釈 (作業中)
 4. **使うための道具の配り方** (2 の後):
-   - 実装済み (ADR 0059): `arata repo init` が、監査を回すリポジトリの一式 (ワークフロー、GitHub の設定の Terraform、秘密の箱、アカウントごとの設定の雛形) を書き出す。
-     見本 (`examples/audit-repo`) はその出力そのもの。**実際の GitHub では確かめていない**: `github/` の apply (空のリポジトリに `auto_init` とルールセットを当てた後の最初の PR、
-     `sha_pinning_required` と許可の一覧、個人のリポジトリの `allow_forking`)、秘密の取り込みと `ignore_changes` が偽の API と同じに動くこと。最初の利用で確かめる
-   - 次: GitHub の設定が宣言からずれていないかを、読み取りだけで確かめる (`arata repo check`)。1 アカウント用の形 (`arata/`) から移る手順
+   - 実装済み (ADR 0059・0060): `arata repo init` が、監査を回すリポジトリの一式 (ワークフロー、GitHub の設定の Terraform、アカウントごとの設定の雛形) を書き出す。
+     見本 (`examples/audit-repo`) はその出力そのもの。秘密は書き出さず、`arata repo check --github` が、足りない秘密の名前と登録のコマンドを出す (秘密の箱はやめた)。
+     送り方は bot だけ (ADR 0061)。**実際の GitHub と Slack では確かめていない**: `github/` の apply (空のリポジトリに `auto_init` とルールセットを当てた後の最初の PR、
+     `sha_pinning_required` と許可の一覧、個人のリポジトリの `allow_forking`)、`repo check --github` が読む API の応答の形と要る権限、`gh secret set` のコマンド、知らせの `chat.postMessage`。最初の利用で確かめる
+   - 次: GitHub の設定の残り (ルールセット、Actions の許可、非公開、fork の禁止) が宣言からずれていないかを `arata repo check --github` に足す。1 アカウント用の形 (`arata/`) から移る手順
    - 元の案: バイナリに雛形とテンプレートを入れ、`arata scaffold github-actions` (名前は仮) で書き出す。バイナリの版と雛形の版が必ず揃い、`config init --diff` のように新しい版との差分も見せられる
    - 同じテンプレートを Release にも添付する (来歴証明と `SHA256SUMS` で本物か確かめられる)
    - 利用者が増えたら、取得と照合をまとめた action (`setup-arata` など) を足す。ワークフロー全体の共有 (reusable workflow) は OIDC の信頼の条件が arata 側のワークフローになり分かりにくいので採らない

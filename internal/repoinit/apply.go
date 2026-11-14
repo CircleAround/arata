@@ -40,6 +40,7 @@ const maxExisting = 1 << 20
 func Apply(dir string, files []File, force bool) ([]Result, error) {
 	results := make([]Result, len(files))
 	write := make([]bool, len(files))
+	var missing []string
 	for i, f := range files {
 		cur, exists, err := readTarget(dir, f.Path)
 		if err != nil {
@@ -49,6 +50,7 @@ func Apply(dir string, files []File, force bool) ([]Result, error) {
 		switch {
 		case !exists:
 			r.Action, write[i] = Created, true
+			missing = append(missing, f.Missing...)
 		case f.Kind == Seed:
 			r.Action = Kept
 		case cur != nil && bytes.Equal(cur, f.Body):
@@ -59,6 +61,10 @@ func Apply(dir string, files []File, force bool) ([]Result, error) {
 			r.Action = Differs
 		}
 		results[i] = r
+	}
+	if len(missing) > 0 {
+		// 新しく作る aratam.yaml のチャンネル ID が足りない。空の値で書き出さない (ADR 0060)。1 つも書かない
+		return nil, &MissingArgsError{Args: missing}
 	}
 	for i, f := range files {
 		if !write[i] {
@@ -132,4 +138,29 @@ func writeFile(path string, body []byte, mode fs.FileMode) error {
 		return err
 	}
 	return os.Rename(tmp.Name(), path)
+}
+
+// MissingArgsError は、新しく作るファイルに要る引数が足りないこと。
+type MissingArgsError struct{ Args []string }
+
+func (e *MissingArgsError) Error() string {
+	return "missing arguments for the files to create: " + strings.Join(e.Args, " ") + " (there are no defaults; nothing was written)"
+}
+
+// NewAccounts は、aws/<アカウント>/aratam.yaml がまだ無いアカウント (新しく作るので、チャンネル ID が要る) を、accounts の順で返す。
+func NewAccounts(dir string, accounts []string) ([]string, error) {
+	var out []string
+	for _, a := range accounts {
+		if !accountRE.MatchString(a) {
+			continue // 形の誤りは Validate が出す
+		}
+		_, exists, err := readTarget(dir, "aws/"+a+"/aratam.yaml")
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			out = append(out, a)
+		}
+	}
+	return out, nil
 }

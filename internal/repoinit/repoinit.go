@@ -1,5 +1,5 @@
-// Package repoinit は、監査を回すリポジトリ (GitHub Actions で arata と aratam を定時に動かすリポジトリ) の一式を作る
-// (`arata repo init`。ADR 0059)。
+// Package repoinit は、監査を回すリポジトリ (GitHub Actions で arata と aratam を定時に動かすリポジトリ) の一式を作り (`arata repo init`。ADR 0059)、
+// 今ある一式と GitHub の設定を、読むだけで確かめる (`arata repo check`。ADR 0060)。
 //
 // 一式は、バイナリに埋め込んだ雛形 (templates/) に、形を確かめた引数を決まった印の置換で差し込んで作る。
 // 条件や繰り返しを持つテンプレートの言語は使わない (GitHub の式 ${{ }} と区切りがぶつかる)。
@@ -32,10 +32,6 @@ const (
 	// 4 つの環境 (linux / darwin の amd64・arm64) のハッシュで作り直す (docs/supply-chain.md)。
 	ProviderVersion = "6.13.0"
 
-	// Placeholder は秘密の箱に入れる仮の値。秘密ではない。ARN・JSON・URL・トークンのどの形でもなく、
-	// ワークフローはこの値を見たら秘密の名前を出して止まる (.github/scripts/arata-secret-check.sh)。
-	Placeholder = "arata-placeholder-not-set-yet"
-
 	// Environment は GitHub の environment の名前。ワークフロー・Terraform・runner.yaml の GitHubEnvironment で同じ文字列にする (ADR 0057)。
 	Environment = "audit"
 
@@ -45,15 +41,27 @@ const (
 	maxAccounts = 100
 )
 
-// SecretNames はワークフローが使う秘密の名前 (秘密の箱を作る名前)。ワークフローの secrets.* と同じであることをテストで固定する。
+// SecretNames は、この一式のワークフローが使う秘密の名前 (ADR 0060)。どの引数でも同じ 3 つ。
+// ワークフローの secrets.* と同じであることをテストで固定する。arata repo check --github は、この名前が environment にあることを確かめる。
 var SecretNames = []string{
 	"ARATAM_SLACK_BOT_TOKEN",
-	"ARATAM_SLACK_URGENT_WEBHOOK",
-	"ARATAM_SLACK_WEBHOOK",
-	"ARATA_ALERT_WEBHOOK",
 	"ARATA_AUDIT_ROLE_ARNS",
 	"ARATA_RUNNER_ROLE_ARN",
 }
+
+// FormerSecretNames は、これまでの一式 (手で写す見本、ADR 0059 の秘密の箱) が使っていて、この一式が使わない秘密の名前。
+// リポジトリの (environment でない) 秘密に残っていれば、arata repo check --github は ng にする (SecretNames と同じ扱い)。
+var FormerSecretNames = []string{
+	"ARATAM_SLACK_URGENT_WEBHOOK",
+	"ARATAM_SLACK_WEBHOOK",
+	"ARATA_ALERT_WEBHOOK",
+}
+
+// 引数の「分けない」「知らせない」を表す語 (ADR 0060)。書かないことでは表さない (決めていないことと区別できない)。
+const (
+	SameChannel = "same" // --urgent-channel: 緊急用を分けない (通常用に、メンション付きで送る)
+	NoAlert     = "none" // --alert-channel: 定時の通知が送れなかったことを知らせない
+)
 
 // Params は一式を決める引数。既定値は持たない (ADR 0014 と同じく、暗黙の値を一式に埋めない)。
 type Params struct {
@@ -65,6 +73,14 @@ type Params struct {
 	Region       string   // AWS のリージョン
 	Schedule     bool     // 監査のワークフローに定時を入れる
 	Version      string   // arata の版 (vX.Y.Z)
+
+	// AlertChannel は、定時の通知が送れなかったことを知らせるチャンネル ID か、NoAlert (知らせない)。ワークフローに入る (生成物)。
+	AlertChannel string
+	// Channels と UrgentChannels は、アカウントの名前 → チャンネル ID (UrgentChannels は SameChannel も)。
+	// 新しく作る aws/<アカウント>/aratam.yaml に書く。書き出した後は aratam.yaml だけが持つ (README のコマンドに載せない。ADR 0060)。
+	// aratam.yaml が既にあるアカウントの分は、無くてよい。
+	Channels       map[string]string
+	UrgentChannels map[string]string
 }
 
 // 引数の形。値は YAML・HCL・シェル・Markdown の中にそのまま入るので、引用符・空白・改行・$ ・{ などは、形の時点で入らない。
@@ -74,6 +90,8 @@ var (
 	accountRE = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
 	bucketRE  = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
 	regionRE  = regexp.MustCompile(`^[a-z]{2}(?:-[a-z]{1,16}){1,3}-[0-9]$`)
+	// channelRE は Slack のチャンネル ID の形 (aratam の slack.channel と同じ。テストで固定する)
+	channelRE = regexp.MustCompile(`^[CGD][A-Z0-9]{8,20}$`)
 	versionRE = regexp.MustCompile(`^v(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})$`)
 )
 
@@ -82,6 +100,40 @@ var yamlWords = map[string]bool{"true": true, "false": true, "null": true, "yes"
 
 // Validate は引数の形を確かめる。通らなければ、一式は 1 つも作らない。
 func (p Params) Validate() error {
+	if err := p.ValidateBase(); err != nil {
+		return err
+	}
+	seen := map[string]bool{}
+	for _, a := range p.Accounts {
+		seen[a] = true
+	}
+	// チャンネル ID はエラーに写さない (チャンネルの欄にトークンを貼った誤りのため。aratam と同じ)
+	if p.AlertChannel != NoAlert && !channelRE.MatchString(p.AlertChannel) {
+		return errors.New("--alert-channel is required: the Slack channel ID (such as C0123456789; not a channel name) that is told when a scheduled notification could not be sent, or none")
+	}
+	for _, m := range []struct {
+		flag   string
+		values map[string]string
+		same   bool
+	}{{"--channel", p.Channels, false}, {"--urgent-channel", p.UrgentChannels, true}} {
+		for a, id := range m.values {
+			if !seen[a] {
+				return fmt.Errorf("%s: %q is not one of --accounts", m.flag, printableArg(a))
+			}
+			if !channelRE.MatchString(id) && (!m.same || id != SameChannel) {
+				hint := ""
+				if m.same {
+					hint = ", or same"
+				}
+				return fmt.Errorf("%s %s=...: must be a Slack channel ID such as C0123456789 (not a channel name such as #general)%s", m.flag, a, hint)
+			}
+		}
+	}
+	return nil
+}
+
+// ValidateBase は、チャンネル ID のほかの引数の形を確かめる (対話でチャンネル ID を聞く前に、ほかの引数の誤りを先に出す)。
+func (p Params) ValidateBase() error {
 	if !ownerRE.MatchString(p.Owner) {
 		return fmt.Errorf("--owner %q: must be a GitHub organization or user name (letters, digits and hyphens, at most 39 characters)", p.Owner)
 	}
@@ -119,6 +171,17 @@ func (p Params) Validate() error {
 	return nil
 }
 
+// printableArg は、形を通らなかった引数をエラーに出すときに、長さを切り、制御文字を置き換える。
+func printableArg(s string) string {
+	if len(s) > 40 {
+		s = s[:40]
+	}
+	return printable(s)
+}
+
+// ValidChannel は s がチャンネル ID の形か。
+func ValidChannel(s string) bool { return channelRE.MatchString(s) }
+
 // Kind はファイルの種類。
 type Kind string
 
@@ -135,6 +198,9 @@ type File struct {
 	Body []byte
 	Mode fs.FileMode
 	Kind Kind
+	// Missing は、このファイルを新しく作るのに足りない引数 (Seed の aratam.yaml のチャンネル ID)。
+	// 空でなければ、Apply はこのファイルを作らずにエラーにする (既にあるなら、書き直さないので要らない)。
+	Missing []string
 }
 
 // 生成物の一覧。雛形のパス → 書き出すパス。
@@ -146,20 +212,16 @@ var generated = []struct {
 	{"workflows/arata-triage.yml", ".github/workflows/arata-triage.yml", 0o644},
 	{"workflows/arata-notify-test.yml", ".github/workflows/arata-notify-test.yml", 0o644},
 	{"workflows/arata-check.yml", ".github/workflows/arata-check.yml", 0o644},
-	{"scripts/arata-slack-method.sh", ".github/scripts/arata-slack-method.sh", 0o755},
-	{"scripts/arata-secret-check.sh", ".github/scripts/arata-secret-check.sh", 0o755},
 	{"github/main.tf", "github/main.tf", 0o644},
 	{"github/terraform.lock.hcl", "github/.terraform.lock.hcl", 0o644},
-	{"github/secrets/main.tf", "github/secrets/main.tf", 0o644},
-	{"github/terraform.lock.hcl", "github/secrets/.terraform.lock.hcl", 0o644},
 	{"README.md", "README.md", 0o644},
 	{"gitignore", ".gitignore", 0o644},
 }
 
 // managedDirs は、一式に無いファイルを --diff が「この版の一式に無い」(extra) として出すディレクトリと、その対象の名前。
-//   - .github/workflows と .github/scripts: 名前が arata- で始まるファイル (古い版の一式の残り)
+//   - .github/workflows と .github/scripts: 名前が arata- で始まるファイル (古い版の一式の残り。この版は .github/scripts を書き出さない)
 //   - github と github/secrets: .tf のファイル (Terraform は同じ root の .tf を全部当てるので、手で作った宣言が残っていると、
-//     書き出した宣言と二重になる・緩い設定が当たる)
+//     書き出した宣言と二重になる・緩い設定が当たる。github/secrets は、これまでの版の「秘密の箱」で、この版は書き出さない。ADR 0060)
 var managedDirs = []struct {
 	dir   string
 	match func(name string) bool
@@ -170,15 +232,22 @@ var managedDirs = []struct {
 	{"github/secrets", func(n string) bool { return strings.HasSuffix(n, ".tf") }},
 }
 
-// Command は、この一式を書き出すコマンド (README に載せる。--out は . にする)。
-func (p Params) Command() string {
-	s := fmt.Sprintf("arata repo init --owner %s --repo %s --accounts %s --audit-account %s --store-bucket %s --region %s",
-		p.Owner, p.Repo, strings.Join(p.Accounts, ","), p.AuditAccount, p.StoreBucket, p.Region)
+// args は、一式 (生成物) を決める引数を、コマンドの引数の形で返す。チャンネル ID のうち aratam.yaml に入るもの (--channel・--urgent-channel) は入れない
+// (書き出した後は aratam.yaml だけが持つ。ADR 0060)。
+func (p Params) args() string {
+	s := fmt.Sprintf("--owner %s --repo %s --accounts %s --audit-account %s --store-bucket %s --region %s --alert-channel %s",
+		p.Owner, p.Repo, strings.Join(p.Accounts, ","), p.AuditAccount, p.StoreBucket, p.Region, p.AlertChannel)
 	if p.Schedule {
 		s += " --schedule"
 	}
 	return s + " --out ."
 }
+
+// Command は、この一式を書き出すコマンド (README に載せる。--out は . にする)。
+func (p Params) Command() string { return "arata repo init " + p.args() }
+
+// CheckCommand は、この一式を確かめるコマンド (README と、PR の検査のワークフローに載せる)。
+func (p Params) CheckCommand() string { return "arata repo check " + p.args() }
 
 // Files は一式を返す (パスの順)。引数の形が通らなければ、何も返さない。
 // today は既知リストの approved_at にだけ使う (UTC の日付)。
@@ -194,9 +263,36 @@ func Files(p Params, reg *checks.Registry, today time.Time) ([]File, error) {
 	if err != nil {
 		return nil, err
 	}
-	names := make([]string, len(SecretNames))
-	for i, n := range SecretNames {
-		names[i] = `    "` + n + `",`
+	// 知らせ (定時の通知が送れなかったことを、bot で知らせる) の有無で、断片を選ぶ。断片の中の印は、先に埋める
+	alert := p.AlertChannel != NoAlert
+	fragment := func(name string) (string, error) {
+		if !alert {
+			return "", nil
+		}
+		b, err := templates.ReadFile("templates/workflows/" + name)
+		if err != nil {
+			return "", err
+		}
+		send, err := templates.ReadFile("templates/workflows/alert-send.txt")
+		if err != nil {
+			return "", err
+		}
+		return strings.NewReplacer("@@ALERT_SEND@@", string(send), "@@ALERT_CHANNEL@@", p.AlertChannel).Replace(string(b)), nil
+	}
+	alertStep, err := fragment("alert-on.txt")
+	if err != nil {
+		return nil, err
+	}
+	notifyTestAlert, err := fragment("notify-test-alert-on.txt")
+	if err != nil {
+		return nil, err
+	}
+	routes, routesCase, routesText, routeAlertText, routeAlertReadme, alertText := "normal, urgent", "normal | urgent", "normal / urgent", "", "", "この一式は、知らせを使わない設定です"
+	if alert {
+		routes, routesCase, routesText = "normal, urgent, alert", "normal | urgent | alert", "normal / urgent / alert"
+		routeAlertText = " / alert = 知らせのチャンネルに 1 通 (定時の通知が送れなかったときの知らせの確認。アカウントによらない)"
+		routeAlertReadme = "・知らせ (`alert`) "
+		alertText = "`" + p.AlertChannel + "`。定時の通知が送れなかったときに、ここへ知らせます"
 	}
 	quoted := make([]string, len(p.Accounts))
 	for i, a := range p.Accounts {
@@ -212,9 +308,16 @@ func Files(p Params, reg *checks.Registry, today time.Time) ([]File, error) {
 		"@@OWNER@@", p.Owner,
 		"@@REPO@@", p.Repo,
 		"@@PROVIDER_VERSION@@", ProviderVersion,
-		"@@PLACEHOLDER@@", Placeholder,
-		"@@SECRET_NAMES@@", strings.Join(names, "\n"),
 		"@@COMMAND@@", p.Command(),
+		"@@CHECK_COMMAND@@", p.CheckCommand(),
+		"@@ALERT_STEP@@", alertStep,
+		"@@NOTIFY_TEST_ALERT@@", notifyTestAlert,
+		"@@ROUTES@@", routes,
+		"@@ROUTES_CASE@@", routesCase,
+		"@@ROUTES_TEXT@@", routesText,
+		"@@ROUTE_ALERT_TEXT@@", routeAlertText,
+		"@@ROUTE_ALERT_README@@", routeAlertReadme,
+		"@@ALERT_TEXT@@", alertText,
 	)
 	var files []File
 	for _, g := range generated {
@@ -238,7 +341,7 @@ func Files(p Params, reg *checks.Registry, today time.Time) ([]File, error) {
 			File{Path: dir + "arata.yaml", Mode: 0o644, Kind: Seed, Body: scaffold.GenerateWith(reg, scaffold.Options{
 				AuditAccount: p.AuditAccount, Name: a, Store: "s3://" + p.StoreBucket + "/" + a, Region: p.Region, Profile: AuditProfile,
 			})},
-			File{Path: dir + "aratam.yaml", Mode: 0o644, Kind: Seed, Body: aratamscaffold.Named(a)},
+			aratamSeed(p, a),
 		)
 		if !none {
 			// 監査する側のアカウントを既知リストに書く (config init と同じ。ADR 0045)。none なら書かない
@@ -251,4 +354,49 @@ func Files(p Params, reg *checks.Registry, today time.Time) ([]File, error) {
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	return files, nil
+}
+
+// aratamSeed は、アカウントの aratam.yaml (bot トークンの方式。ADR 0060・0061)。チャンネル ID が足りなければ、Missing に足りない引数を入れる。
+func aratamSeed(p Params, account string) File {
+	f := File{Path: "aws/" + account + "/aratam.yaml", Mode: 0o644, Kind: Seed}
+	channel, urgent := p.Channels[account], p.UrgentChannels[account]
+	if channel == "" {
+		f.Missing = append(f.Missing, "--channel "+account+"=<channel ID>")
+	}
+	if urgent == "" {
+		f.Missing = append(f.Missing, "--urgent-channel "+account+"=<channel ID>|"+SameChannel)
+	}
+	if urgent == SameChannel {
+		urgent = ""
+	}
+	f.Body = aratamscaffold.Bot(account, channel, urgent)
+	return f
+}
+
+// ParseAssignments は、引数の「<アカウント>=<値>」のカンマ区切り (--channel・--urgent-channel) を読む。空なら nil。
+// 形 (アカウントが --accounts にあるか、値がチャンネル ID か) は Validate が確かめる。ここでは、組の形と重複だけを見る。
+// エラーに値は写さない (チャンネルの欄にトークンを貼った誤りのため)。
+func ParseAssignments(flag, s string) (map[string]string, error) {
+	if s == "" {
+		return nil, nil
+	}
+	parts := strings.Split(s, ",")
+	if len(parts) > maxAccounts {
+		return nil, fmt.Errorf("%s: at most %d accounts", flag, maxAccounts)
+	}
+	out := make(map[string]string, len(parts))
+	for _, part := range parts {
+		account, value, ok := strings.Cut(part, "=")
+		if !ok || account == "" || value == "" || strings.Contains(value, "=") {
+			return nil, fmt.Errorf("%s: each item must be <account>=<value>, separated by commas (for example prod=C0123456789)", flag)
+		}
+		if !accountRE.MatchString(account) {
+			return nil, fmt.Errorf("%s: %q is not an account name", flag, printableArg(account))
+		}
+		if _, dup := out[account]; dup {
+			return nil, fmt.Errorf("%s: %q appears twice", flag, account)
+		}
+		out[account] = value
+	}
+	return out, nil
 }

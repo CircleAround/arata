@@ -263,6 +263,10 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
 | `MATCH_RATE_HISTORY_UNAVAILABLE` | 決定 (ADR 0054): 直近の解釈率を読めず、急落 (`FORMAT_DRIFT`) の判定をしていない (警告)。続くと「見ていない」状態が隠れるので、INFO にしない |
 | `INIT_INCOMPLETE` / `ALLOWLIST_MISSING` | 決定 (ADR 0054): init が途中で止まった・前の init が終わっていない (警告) / allowlist のファイルが無く、空として扱った (警告) |
 | `REBUILD_WARNING` / `REBUILT_FROM_SCRATCH` | 決定 (ADR 0054): rebuild の警告 (読み飛ばした行など) / raw だけから作り直した。次の run で未解決の指摘がすべて new として再報告される (影響が別なので code を分ける。警告) |
+| `REPO_SET_DIFFERS` / `REPO_NOTIFY_MISMATCH` | 決定 (ADR 0060): `repo check` のファイルの検査。一式がこの版の一式と揃っていない (生成物の違い・残りもの・ワークフローの使う秘密・アカウントの設定が無い) / `aratam.yaml` が、ワークフローの渡す秘密 (bot トークン) で送る設定でない |
+| `REPO_ENVIRONMENT_MISSING` / `REPO_ENVIRONMENT_OPEN` / `REPO_ENVIRONMENT_PROTECTED` | 決定 (ADR 0060): `repo check --github`。environment が無い / デプロイできるブランチが既定のブランチだけでない / レビュー担当か待ち時間が付いている (警告) |
+| `REPO_SECRET_MISSING` / `REPO_SECRET_UNUSED` / `REPO_SECRET_OUTSIDE_ENVIRONMENT` | 決定 (ADR 0060): `repo check --github`。使う秘密が environment に無い / 使わない秘密が残っている (警告) / リポジトリの (environment でない) 秘密が残っている (この一式の名前なら ng、ほかは警告) |
+| `GITHUB_API_FAILED` | 決定 (ADR 0060): `repo check --github` が GitHub の API を読めなかった (応答の本文は出さない) |
 | `CHECK_UNUSED` | 決定: どのプロファイルにも入っていないチェックがある (警告。run / evaluate / doctor が出す。3 章、ADR 0014) |
 
 決定 (ADR 0054): ログの行で機械が読んでよい (安定な) 項目は、`time`・`level` (`DEBUG` / `INFO` / `WARN` / `ERROR`。大文字)・`code`・`source`・`run_id` と、
@@ -646,7 +650,7 @@ cmd/aratam/                LLM 要約と通知 (arata の出力だけを読む�
 cmd/arata-lambda/          Lambda ハンドラ (同じ internal を呼ぶ。runtime provided.al2023, arm64)
 internal/config/              YAML 読み込み・検証・既定値
 internal/scaffold/            設定の雛形 (config init) と雛形との差分 (決定: config と checks の両方を使うので別パッケージ)
-internal/repoinit/            監査を回すリポジトリの一式 (repo init) と、今ある一式との差分。雛形 (templates/) を埋め込む (9 章、ADR 0059)
+internal/repoinit/            監査を回すリポジトリの一式 (repo init) と、今ある一式との差分、一式と GitHub の設定の検査 (repo check)。雛形 (templates/) を埋め込む (9 章、ADR 0059・0060)
 internal/aratamscaffold/      aratam の設定の雛形の本文 (標準ライブラリだけ。aratam config init と arata repo init が使う。ADR 0059)
 internal/store/               Store インターフェース、sqlite 実装、jsonl 書き出し、backend (dir / s3)
 internal/collect/             Collector インターフェース
@@ -1331,9 +1335,14 @@ arata は LLM を使わず候補だけを作り、aratam の LLM は候補を文
 ```
 arata config init --audit-account <12 桁の ID>|none [--by NAME] [--out FILE|-] [--force] | --diff
                                # 推奨設定の雛形を書き出す (既定 ./arata.yaml。監査する側のアカウントは必須。ID なら既知リストにも書く。ADR 0045) / 雛形との差分 (3 章、ADR 0014)
-arata repo init --owner O --repo R --accounts a,b --audit-account <12 桁の ID>|none --store-bucket B --region REGION --out DIR
+arata repo init --owner O --repo R --accounts a,b --audit-account <12 桁の ID>|none --store-bucket B --region REGION
+                --alert-channel <チャンネル ID>|none [--channel a=<ID>,…] [--urgent-channel a=<ID>|same,…] --out DIR
                 [--schedule] [--force] | --diff [--format text|json]
-                               # 監査を回すリポジトリの一式を書き出す / 今ある一式とこの版の一式を比べる (9 章、ADR 0059)。違いがあれば終了コード 1
+                               # 監査を回すリポジトリの一式を書き出す / 今ある一式とこの版の一式を比べる (9 章、ADR 0059・0060)。違いがあれば終了コード 1。
+                               # チャンネル ID は、端末から打って足りないときだけ聞く。端末でなければ CONFIG_INVALID
+arata repo check <repo init と同じ引数> [--github] [--format table|json]
+                               # 一式 (手元のファイル) と、--github なら GitHub の environment と秘密の名前を、読むだけで確かめる (9 章、ADR 0060)。
+                               # 足りない秘密には、登録のコマンドを出す。ng があれば終了コード 2 (warn だけなら 0)
 arata config check [--format text|json]   # 設定と allowlist.yaml の形をオフラインで検査 (AWS・ストアに繋がない。問題があれば終了コード 2。3 章、ADR 0042)
 arata profiles  [--format table|json]   # プロファイルごとに実際に効いているチェックとパラメータ、その由来
 arata init      [--window 7d | --resume]   # ストア作成、設定検証、ベースライン収集 (findings は出さない)
@@ -1475,7 +1484,7 @@ arata rebuild   [--from-scratch [--baseline]] [--format text|json]   # raw JSONL
 決定 (GitHub Actions のワークフロー。`arata repo init` が書き出す): 認証は OIDC の実行用ロール 1 つから分ける。監査は `aws.profile` で読み取り専用ロールへ連鎖し、ストアは `store_profile` を書かず実行用ロールのまま書く (`credential_source` は `role_arn` なしでは使えない)。
 Actions のログには arata / aratam の `level`・`code`・`source` と終了コードだけを出す。`::add-mask::` で値を列挙する案は、監査の結果に何が出るかを列挙できないので採らない。
 
-決定 (監査を回すリポジトリの一式。ADR 0059): GitHub Actions で動かすリポジトリの一式 (ワークフロー、送り方の判別と秘密の検査のスクリプト、GitHub の設定の Terraform、
+決定 (監査を回すリポジトリの一式。ADR 0059・0060): GitHub Actions で動かすリポジトリの一式 (ワークフロー、GitHub の設定の Terraform、
 アカウントごとの設定の雛形、README) は `arata repo init` が引数から書き出す。見本 (`examples/audit-repo`) は、決まった架空の引数での出力そのもので、テストが雛形との一致を固定する。
 - 決定: 引数に既定値は無い。値は YAML・HCL・シェルに入るので、書く前に形で絞る (`internal/repoinit` の `Validate`。アカウントの名前は、引用符なしの YAML で文字列にならない語
   (`true`・`null` など) と、数字で始まるものも拒む)。差し込みは決まった印 (`@@…@@`) の置換だけで、テンプレートの言語は使わない。ファズテストが、形を通った引数なら生成物が YAML として読め、
@@ -1492,27 +1501,43 @@ Actions のログには arata / aratam の `level`・`code`・`source` と終了
 - 決定 (GitHub の設定の Terraform): provider (`integrations/github`) は完全な版で固定し、lock (linux / darwin の amd64・arm64) を一緒に書き出す。宣言はセキュリティに効く項目だけ
   (非公開、fork の禁止、main のルールセット、Actions の許可と SHA の固定、`GITHUB_TOKEN` の既定、environment `audit` のデプロイできるブランチ)。ほかは `ignore_changes`。
   リポジトリは `prevent_destroy`。当てるのは人が手元で、state も手元
-- 決定 (秘密の箱): `github/secrets/` は別の root。`for_each` は決まった名前の全部で、既にある名前は data source の一覧から `import` で取り込み、無い名前だけを仮の値で作る。
-  `ignore_changes = [value]` と `prevent_destroy`。「一覧に無い名前だけを作る」形は、作った次の plan で箱を消すので採らない。
-  仮の値は決まった 1 つの文字列 (`internal/repoinit` の `Placeholder`) で、ワークフローは秘密を使う前に比べ、一致したら秘密の名前を出して止まる (`.github/scripts/arata-secret-check.sh`)。
-  空は通す (使わない秘密は空で渡る。無い秘密は、使う step がそれぞれの理由で止まる)
-- 決定 (使わない箱では止めない): 箱は 6 つ全部作るが、使う秘密は構成で違う (Webhook か bot トークンか、緊急用の Webhook を別に持つか、失敗の連絡を使うか)。
-  使わない箱の仮の値で実行を止めると、Webhook だけの利用者・緊急用を持たない利用者が毎回止まる。確かめるのは「使う秘密」だけにする
-  - 必ず使う 2 つ (`ARATA_RUNNER_ROLE_ARN`・`ARATA_AUDIT_ROLE_ARNS`) は、実行用ロールを引き受ける前に止める
-  - Slack の秘密は、アカウントの `aratam.yaml` が使うものだけを notify に渡す (式で選ぶ。使わないものは空)。送り方は `.slack.method`、緊急用の Webhook は
-    `.slack.urgent_webhook` (`aratam config check --format json` に足した真偽値。必ず出す。環境変数の名前は出さない) で判別する。渡した秘密だけを仮の値と比べる。
-    使わない秘密は step に渡らないので、最小の権限にもなる。`urgent_webhook` が読めなければ止める (この項目を知らない古い aratam を、「緊急用なし」と決めつけない)
-  - `ARATA_ALERT_WEBHOOK` は、使うかどうかを設定から判別できない (aratam の設定ではなく、ワークフローだけが使う)。仮の値のままなら、止めずに警告を出す
-    (ADR 0059 は「ジョブの最初に確かめる」としていた。確かめる場所は同じで、止める代わりに警告にした。ふだん使われない秘密なので、何も出さないと気づけない)。
-    連絡を送る段階は、仮の値を「無い」と同じに扱う (仮の値の URL に送らない)
-  - 却下: 使わない箱を作らない (構成を Terraform に持たせる) 案は、アカウントごとに送り方が違う構成を宣言に写すことになり、`aratam.yaml` と二重になる
+- 決定 (秘密は書き出さない・登録しない。ADR 0060。ADR 0059 の「秘密の箱」を置き換える): Terraform は environment とデプロイできるブランチまでで、秘密に触れない。
+  最初は、秘密は 1 つも登録されていない。足りない名前と、そのまま打てる登録のコマンド (`gh secret set <名前> --env audit -R <owner>/<repo>`) は `arata repo check --github` が出し、人が打つ。
+  仮の値で箱を作る形は、仮の値が残る (一覧からは本物と見分けられない)・作成が上書きの API で本物の値を置き換え得る・使わない箱のための検査が増える、ので採らない
+- 決定 (送り方は bot だけ。秘密は 3 つ。ADR 0060・0061): 書き出す `aratam.yaml` は bot トークンの方式だけで、ワークフローが使う秘密は、どの引数でも
+  `ARATA_RUNNER_ROLE_ARN`・`ARATA_AUDIT_ROLE_ARNS`・`ARATAM_SLACK_BOT_TOKEN` の 3 つ (`internal/repoinit` の `SecretNames`)。送り方を実行のときに判別しない (スクリプトは書き出さない)。
+  認証に使う 2 つが空 (未登録) なら、実行用ロールを引き受ける前に、名前を出して止める。トークンが空なら、aratam が `CONFIG_INVALID` で止まる
+- 決定 (チャンネル ID。ADR 0060): 決めるのはチャンネル ID だけで、既定値は無い。「分けない」は `same`、「知らせない」は `none` と書かせる (書かないことを既定にしない)。
+  通常用・緊急用 (`--channel`・`--urgent-channel`) は、`aratam.yaml` を新しく作るアカウントにだけ要り、書き出した後は `aratam.yaml` だけが持つ (README のコマンドにも、ワークフローにも入れない。
+  変えるときは `aratam.yaml` の 1 行を直す。書き換えるコマンドは作らない)。空のまま書き出さない: 足りなければ、1 つも書かずに止まる。
+  知らせのチャンネル (`--alert-channel`) はワークフローに入るので、README のコマンドに載る
+- 決定 (対話): 端末 (標準入力が文字デバイスで、`/dev/null` でない) から打って、チャンネル ID が足りないときだけ聞く。端末でなければ聞かずに `CONFIG_INVALID` (CI や LLM が、黙って既定で進まない)。
+  判定は標準ライブラリだけ (依存を足さない)。聞き直しは 3 回までで、形の合う答えが無ければ何も書かない。問いは標準出力に出す (標準エラーは JSON のログだけ)。
+  打った値は写さない。`--diff` と `repo check` は聞かない
+- 決定 (定時の通知が送れなかったことの知らせ。ADR 0060): 別の Webhook をやめ、同じ bot トークンで `chat.postMessage` を `curl` で直接呼ぶ (aratam を通さない)。
+  トークンは標準入力のヘッダーで渡し (引数に書かない)、応答の `ok` が `true` のときだけ届いたとみなす。`error` は形の合うコードだけをログに出す。
+  送る部分は、監査の `alert` と、試しの通知の `route: alert` で同じ断片 (テストが一致を固定する)。`--alert-channel none` なら、段階ごと書き出さない。
+  引き受けること: トークンそのものが使えないとき (未登録・失効) は、知らせも届かない (定時の前に `repo check --github` と `arata-notify-test` で確かめる)
+- 決定 (`arata repo check`。ADR 0060): 引数は `repo init` と同じ。何も書かない。出力は doctor と同じ ok / warn / ng / skip の行で、`--format json` のスキーマは `repo-check`
+  (`missing_secrets` に、足りない秘密のコマンド・値の形・取得元)。ng があれば終了コード 2、warn だけなら 0。ng と warn の行は、標準エラーにも code 付きで出す
+  - ファイルの検査 (いつも): この版の一式との差 (`--diff` と同じ比べ方。`github/` の下は `terraform` の項目)、ワークフローが参照する秘密 (YAML として読み、式 `${{ }}` の中の
+    `secrets.<名前>` だけを拾う。`secrets[…]`・`toJSON(secrets)`・`secrets: inherit` は ng)、アカウントごとの `aratam.yaml` が bot トークンの方式か (違えば、`slack` の節に書く行を出す)。
+    `aratam.yaml` は arata が自分で読む (`slack` の項目だけ。`internal/notify` につながない)。aratam の判別と同じであることは、テストが固定する
+  - GitHub の検査 (`--github` のときだけ): 呼ぶのは決まった 5 つの GET (リポジトリ、environment、デプロイできるブランチ、environment の秘密の一覧、リポジトリの秘密の一覧)。
+    鍵は環境変数 `GITHUB_TOKEN` (無ければ `GH_TOKEN`) だけから受け取り、`gh` は起動しない。向き先は `https://api.github.com` に固定 (環境変数では変えない)。リダイレクトは追わない。
+    応答は信用しない: 1 MiB・10 ページまで、秘密の名前は形の合うものだけを出力とコマンドに運ぶ (ファズで固定)。応答の本文・日時・鍵は出さない。
+    一覧を読めなかったときは、API の失敗 (`GITHUB_API_FAILED`) にし、「足りない秘密」としては出さない
+  - リポジトリの (environment でない) 秘密は、この一式と、これまでの一式の名前なら ng (どのブランチのジョブにも渡り、environment の守りを抜ける)、ほかは warn
+  - `repo init` は、書き出しの最後に同じファイルの検査を流し、ng があれば表を出して終了コード 2 (Webhook の `aratam.yaml` を持ち込んだときに、その場で分かる)
+  - PR の検査 (`arata-check.yml`) は、書き出したときの引数で `arata repo check` を流す (`--github` は付けない)
 - 決定 (監査のリポジトリは会社ごと): 監査のリポジトリは、会社 (監査を任される組織) ごとに 1 つにすることを勧める。実行用ロール・リポジトリ・秘密の 1 組が複数の会社に届くと、
   乗っ取りや取り違え (ある会社の指摘が別の会社の Slack に届く) の被害が全部の会社に及ぶ。1 つのリポジトリで複数のアカウントを回す matrix の形は残す (同じ会社の prod / staging など)。
   実行用ロールも会社ごとに分ける: `runner.yaml` を、スタックの名前と `RoleName` を変えて別のスタックにし、OIDC プロバイダは `OIDCProviderArn` で共有し、`AuditRoleArns` はその会社のロールだけにする。
   ストアのバケットは、スタックごとに別に作られる (テンプレートは必ずバケットを作るので、別のスタックの実行用ロールからは読み書きできない)。手順は、書き出す README の 1。
   Slack の bot トークンは、リポジトリごとの environment に置く (アカウントごとのトークンを 1 つの JSON にまとめる案は採らない。リポジトリを分ければ要らない)。
   残ること: 同じアカウントに置いた実行用ロールは、既知リストの `account:` では見分けられない (絞るのは読み取り専用ロールの信頼ポリシー)。同じ bot トークンを複数のリポジトリに置けば、被害は分かれない
-- 決定 (`--diff` が見る残りもの): `.github/workflows`・`.github/scripts` の `arata-` で始まるファイルに加えて、`github`・`github/secrets` の `.tf` も「この版の一式に無い」として出す。
+- 決定 (`--diff` と `repo check` が見る残りもの): `.github/workflows`・`.github/scripts` の `arata-` で始まるファイルに加えて、`github`・`github/secrets` の `.tf` も「この版の一式に無い」として出す
+  (`.github/scripts` と `github/secrets` は、この版は書き出さない。これまでの版の残りを見つけるために見る。ADR 0060)。
   Terraform は同じ root の `.tf` を全部当てるので、手で作った宣言が残っていると、書き出した宣言と二重になる・緩い設定が当たる (ADR 0059 の一覧に足した)
 - 決定 (既にあるリポジトリ): `import` ブロックは `github/` に書かない (無いリソースの取り込みはエラーになり、新しく作る場合に通らない)。取り込みは、書き出す README の
   「既にあるリポジトリを取り込む」の `terraform import` で人が行う。古い state は使わず、新しい state に取り込み直す (古い state のまま当てると、宣言の名前が違うリソースを消す計画になる)。
@@ -1551,7 +1576,7 @@ Actions のログには arata / aratam の `level`・`code`・`source` と終了
   確かめる `gh api` は読み取りだけを載せ、設定を変えるのは人とする (テストが書き込みの例を拒む)。
   見本が前提を満たすこと (secrets か OIDC を使う見本は定時と手動だけ、action は 2 つだけ、secrets か OIDC を使うジョブは `environment: audit` で動き、PR の検査には付けない) はテストで固定する
 - 決定 (secrets と environment。ADR 0057): リポジトリの secrets は書き込み権限のある人 (と、そのアカウントを乗っ取った人) なら別のブランチのワークフローで読み出せる。
-  読み出されて困るのは Webhook (bot トークンの方式ならトークン。`docs/aratam.md` 4-1 章)。見本は、秘密を GitHub の environment (`audit`) の secrets に置き、
+  読み出されて困るのは Slack の bot トークン (`docs/aratam.md` 4-1 章)。見本は、秘密を GitHub の environment (`audit`) の secrets に置き、
   デプロイできるブランチを main だけにする。秘密か OIDC を使うジョブに `environment: audit` を付け、実行用ロールも同じ environment に絞る (`GitHubEnvironment`)。
   秘密の守りは GitHub の側の設定 (デプロイできるブランチ) だけなので、確かめ方を README と `arata help ai runtime` に書く。
   非公開のリポジトリで environment を使えないプランのときは、environment を使わない形 (これまでの形。書き込み権限を持つ人を最小にすることで守る) を残す

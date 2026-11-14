@@ -13,7 +13,8 @@ import (
 
 // 例の値はすべて架空。
 var repoArgs = []string{"repo", "init", "--owner", "example-org", "--repo", "security-audit", "--accounts", "prod,staging",
-	"--audit-account", "111122223333", "--store-bucket", "example-arata-store", "--region", "ap-northeast-1"}
+	"--audit-account", "111122223333", "--store-bucket", "example-arata-store", "--region", "ap-northeast-1",
+	"--alert-channel", "C0123456782", "--channel", "prod=C0123456789,staging=C0123456781", "--urgent-channel", "prod=C0123456780,staging=same"}
 
 // withVersion は、このテストの間だけバイナリの版を差し替える (ビルド時に -ldflags で埋まる値)。
 func withVersion(t *testing.T, v string) {
@@ -35,7 +36,7 @@ func TestRepoInitWritesTheSetOfThisVersion(t *testing.T) {
 	if code := c.repo("--out", out); code != 0 {
 		t.Fatalf("exit %d: %s%s", code, c.stdout, c.stderr)
 	}
-	for _, p := range []string{".github/workflows/arata-audit.yml", ".github/scripts/arata-slack-method.sh", "github/main.tf", "github/secrets/main.tf",
+	for _, p := range []string{".github/workflows/arata-audit.yml", ".github/workflows/arata-check.yml", "github/main.tf",
 		"github/.terraform.lock.hcl", "aws/prod/arata.yaml", "aws/prod/allowlist.yaml", "aws/staging/aratam.yaml", "README.md", ".gitignore"} {
 		if _, err := os.Stat(filepath.Join(out, p)); err != nil {
 			t.Error(err)
@@ -120,7 +121,7 @@ func TestRepoInitDiffJSON(t *testing.T) {
 		status[f.Path] = f.Status
 	}
 	if got.OK || got.Schema != "repo-diff" || got.SchemaVersion != 1 ||
-		status[".github/workflows/arata-audit.yml"] != "differs" || status[".github/scripts/arata-slack-method.sh"] != "same" || status["aws/prod/arata.yaml"] != "present" {
+		status[".github/workflows/arata-audit.yml"] != "differs" || status["github/main.tf"] != "same" || status["aws/prod/arata.yaml"] != "present" {
 		t.Fatalf("%+v", got)
 	}
 	// --diff は何も書かない
@@ -166,8 +167,21 @@ func TestRepoInitRejectsBadArguments(t *testing.T) {
 		"bad owner":        replace("--owner", "example-org/security-audit"),
 		"bad account":      replace("--accounts", "prod,,staging"),
 		"injection":        replace("--repo", "x\"\n${{ secrets.X }}"),
-		"bad format":       append(append([]string{}, repoArgs...), "--diff", "--format", "yaml"),
-		"force with diff":  append(append([]string{}, repoArgs...), "--diff", "--force"),
+		// チャンネル ID に既定は無い (ADR 0060)。端末でなければ聞かずに止まる (newCLI は端末でない)
+		"no alert channel":      drop("--alert-channel"),
+		"no channel":            drop("--channel"),
+		"no urgent channel":     drop("--urgent-channel"),
+		"one channel missing":   replace("--channel", "prod=C0123456789"),
+		"channel name":          replace("--channel", "prod=#general,staging=C0123456781"),
+		"channel token":         replace("--channel", "prod=xoxb-0000-not-a-channel,staging=C0123456781"),
+		"channel other account": replace("--channel", "prod=C0123456789,staging=C0123456781,dev=C0123456783"),
+		"channel twice":         replace("--channel", "prod=C0123456789,prod=C0123456781"),
+		"channel without =":     replace("--channel", "C0123456789"),
+		"urgent keyword":        replace("--urgent-channel", "prod=none,staging=same"),
+		"alert same":            replace("--alert-channel", "same"),
+		"alert name":            replace("--alert-channel", "#alerts"),
+		"bad format":            append(append([]string{}, repoArgs...), "--diff", "--format", "yaml"),
+		"force with diff":       append(append([]string{}, repoArgs...), "--diff", "--force"),
 	}
 	for name, args := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -178,6 +192,10 @@ func TestRepoInitRejectsBadArguments(t *testing.T) {
 			}
 			if _, err := os.Stat(out); err == nil {
 				t.Fatal("nothing may be written")
+			}
+			// 貼り間違えたトークンを、エラーに写さない
+			if strings.Contains(c.stderr.String(), "xoxb-0000") {
+				t.Fatalf("the error carries the value: %s", c.stderr)
 			}
 		})
 	}

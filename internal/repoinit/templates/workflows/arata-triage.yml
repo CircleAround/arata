@@ -1,6 +1,6 @@
 # finding の ack / snooze / resolve を Actions の画面から行う (workflow_dispatch)。
 # ストアが S3 にあり、手元にストアを書ける認証を持たない運用で使う。
-# arata repo init が書き出したファイル (ADR 0059)。手で直さない: 版を上げる・アカウントを足すときは、
+# arata repo init が書き出したファイル (ADR 0059・0060)。手で直さない: 版を上げる・アカウントを足すときは、
 # 同じ引数で arata repo init --force を流して書き直し、PR の差分で確かめる (このリポジトリの README.md)。
 # コメントの「説明書」は、arata のリポジトリの examples/github-actions/README.md。
 # 使い方・注意は説明書の「finding を片付ける」。
@@ -122,13 +122,17 @@ jobs:
           done
           echo "$dir" >>"$GITHUB_PATH"
 
-      # 秘密が「仮の値」のままなら、ここで秘密の名前を出して止める (監査と同じスクリプト。ADR 0059)。値は出さない。
+      # 実行用ロールの秘密が未登録 (空) なら、ここで秘密の名前を出して止める (監査と同じ。ADR 0060)。値は出さない。
       - id: secrets
-        name: 秘密に仮の値が残っていないことを確かめる
+        name: 秘密が登録されていることを確かめる
         timeout-minutes: 2
         env:
           ARATA_RUNNER_ROLE_ARN: ${{ secrets.ARATA_RUNNER_ROLE_ARN }}
-        run: .github/scripts/arata-secret-check.sh ARATA_RUNNER_ROLE_ARN
+        run: |
+          if [ -z "${ARATA_RUNNER_ROLE_ARN:-}" ]; then
+            echo "::error::秘密 ARATA_RUNNER_ROLE_ARN が未登録。手元で arata repo check --github を流し、出たコマンドで登録する (README.md の 4)"
+            exit 1
+          fi
 
       # 実行用ロール (監査と同じ step)。信頼は 1 つのブランチだけなので、このワークフローは main で動かす (説明書)。
       # ack / snooze / resolve が触るのはストアだけで、監査対象のアカウントには問い合わせない。

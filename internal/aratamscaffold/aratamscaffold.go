@@ -38,3 +38,44 @@ func Named(name string) []byte {
 	out = append(out, field...)
 	return append(out, scaffold[start+width:]...)
 }
+
+// channelLine と urgentChannelLine は、雛形のチャンネル ID の行の先頭 (値は空)。Bot が差し替える (雛形に 1 回ずつ現れることをテストで固定する)。
+const (
+	channelLine       = `  channel: ""`
+	urgentChannelLine = `  urgent_channel: ""`
+)
+
+// Bot は name とチャンネル ID を書き入れた雛形を返す (`arata repo init`。ADR 0060)。
+// channel は通常用、urgent は緊急用のチャンネル ID。urgent が空なら、緊急用の行は雛形のまま (空 = 通常用にメンション付きで送る)。
+// 値は呼び出し側が形 (チャンネル ID の形) を確かめてから渡す。行のコメントの桁は変えない (値は、雛形の空白に収まる長さ)。
+func Bot(name, channel, urgent string) []byte {
+	out := Named(name)
+	out = setQuoted(out, channelLine, channel)
+	if urgent != "" {
+		out = setQuoted(out, urgentChannelLine, urgent)
+	}
+	return out
+}
+
+// setQuoted は、`<key>: ""` の行の値を `"<value>"` にする。値の分だけ、コメントの前の空白を減らす (最低 1 つは残す)。
+func setQuoted(body []byte, line, value string) []byte {
+	start := bytes.Index(body, []byte(line))
+	if start < 0 {
+		return body
+	}
+	rest := body[start+len(line):]
+	pad := 0
+	for pad < len(rest) && rest[pad] == ' ' {
+		pad++
+	}
+	keep := pad - len(value)
+	if keep < 1 {
+		keep = 1
+	}
+	out := append([]byte(nil), body[:start]...)
+	out = append(out, line[:len(line)-1]...) // 閉じる引用符の前まで
+	out = append(out, value...)
+	out = append(out, '"')
+	out = append(out, bytes.Repeat([]byte(" "), keep)...)
+	return append(out, rest[pad:]...)
+}

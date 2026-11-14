@@ -1,0 +1,19 @@
+          # ここから下は、arata-audit.yml の alert と arata-notify-test.yml の alert で同じ (同じ送り方で確かめて、初めて確認になる)。
+          # トークンは秘密なので、ヘッダーは標準入力で渡し (引数に書かない)、curl の出力もエラーも出さない。前後の空白 (secret の末尾の改行) は除く。
+          token="$(printf '%s' "${SLACK_BOT_TOKEN:-}" | tr -d '[:space:]')"
+          if [ -z "$token" ]; then
+            echo "::error::ARATAM_SLACK_BOT_TOKEN が未登録なので、知らせを送れない (手元で arata repo check --github)"
+            exit 1
+          fi
+          body="$RUNNER_TEMP/arata-alert.json"
+          jq -n --arg channel "$ALERT_CHANNEL" --arg text "$text" '{channel: $channel, text: $text, unfurl_links: false, unfurl_media: false}' >"$body"
+          resp="$(printf 'Authorization: Bearer %s\n' "$token" |
+            curl --silent --fail --max-time 20 --retry 2 -H @- -H 'Content-Type: application/json; charset=utf-8' \
+              --data-binary "@$body" https://slack.com/api/chat.postMessage 2>/dev/null)" || resp=""
+          # Slack は失敗でも HTTP 200 を返す。応答の ok が true のときだけ、届いたとみなす
+          if [ "$(jq -r '.ok == true' <<<"$resp" 2>/dev/null)" != true ]; then
+            # error は、決まった形 (英小文字・数字・_) のときだけ出す (not_in_channel = bot を知らせのチャンネルに招待する、など)。応答の本文は出さない
+            err="$(jq -r '.error | strings | select(test("^[a-z0-9_]{1,64}$"))' <<<"$resp" 2>/dev/null)" || err=""
+            echo "::error::知らせを送れなかった (slack error=${err:-unknown})"
+            exit 1
+          fi

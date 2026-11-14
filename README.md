@@ -404,7 +404,7 @@ arata report --from 2026-10-01 --to 2026-12-31 --out /tmp/arata-q4
 
 ### S3 ストア (任意)
 
-GitHub Actions のように毎回消える環境で定期実行するときだけ使います。`dir://` のままなら準備は要りません。 監査を回すリポジトリの一式 (ワークフロー、GitHub の設定の Terraform、アカウントごとの設定の雛形) は `arata repo init` で書き出します (ADR 0059)。手順と理由は [examples/github-actions](examples/github-actions/README.md)、書き出される一式の見本は [examples/audit-repo](examples/audit-repo) にあります。OIDC プロバイダ・バケット・実行用ロールは [deploy/github-actions/runner.yaml](deploy/github-actions/runner.yaml) (素の CloudFormation) で置けます。
+GitHub Actions のように毎回消える環境で定期実行するときだけ使います。`dir://` のままなら準備は要りません。 監査を回すリポジトリの一式 (ワークフロー、GitHub の設定の Terraform、アカウントごとの設定の雛形) は `arata repo init` で書き出し、揃っているか・秘密が足りているかは `arata repo check [--github]` で確かめます (読むだけ。足りない秘密の登録のコマンドを出します。ADR 0059・0060)。手順と理由は [examples/github-actions](examples/github-actions/README.md)、書き出される一式の見本は [examples/audit-repo](examples/audit-repo) にあります。OIDC プロバイダ・バケット・実行用ロールは [deploy/github-actions/runner.yaml](deploy/github-actions/runner.yaml) (素の CloudFormation) で置けます。
 
 ```yaml
 store: s3://example-arata-store/my-service
@@ -450,7 +450,7 @@ cmd/aratam/             arata の出力を要約して通知するコマンド (
 internal/subcmd/        標準の flag の上の小さなコマンド層 (arata と aratam が共有)
 internal/config/        YAML 設定
 internal/scaffold/      設定の雛形 (config init) と雛形との差分
-internal/repoinit/      監査を回すリポジトリの一式 (repo init) と、今ある一式との差分。雛形は templates/ に埋め込む (ADR 0059)
+internal/repoinit/      監査を回すリポジトリの一式 (repo init) と、今ある一式との差分、一式と GitHub の設定の検査 (repo check)。雛形は templates/ に埋め込む (ADR 0059・0060)
 internal/store/         Store インターフェース、SQLite + JSONL の dir バックエンド、それを出し入れする s3 バックエンド
 internal/collect/       Collector インターフェース、cloudtrail/ (LookupEvents)、cwlogs/ (Logs Insights・形式プロファイル)、account/ (認証情報レポート・GuardDuty・Access Analyzer・姿勢)
 internal/record/        正規化レコード (trail_event, principal_seen, metric)

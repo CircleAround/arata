@@ -50,6 +50,16 @@ const (
 	AllowlistMissing            = "ALLOWLIST_MISSING"
 	RebuildWarning              = "REBUILD_WARNING"
 	RebuiltFromScratch          = "REBUILT_FROM_SCRATCH"
+	// arata repo check (監査を回すリポジトリの一式と、GitHub の設定。ADR 0060)
+	RepoSetDiffers               = "REPO_SET_DIFFERS"
+	RepoNotifyMismatch           = "REPO_NOTIFY_MISMATCH"
+	RepoEnvironmentMissing       = "REPO_ENVIRONMENT_MISSING"
+	RepoEnvironmentOpen          = "REPO_ENVIRONMENT_OPEN"
+	RepoEnvironmentProtected     = "REPO_ENVIRONMENT_PROTECTED"
+	RepoSecretMissing            = "REPO_SECRET_MISSING"             // #nosec G101 -- ログの code の名前で、秘密の値ではない
+	RepoSecretUnused             = "REPO_SECRET_UNUSED"              // #nosec G101 -- ログの code の名前で、秘密の値ではない
+	RepoSecretOutsideEnvironment = "REPO_SECRET_OUTSIDE_ENVIRONMENT" // #nosec G101 -- ログの code の名前で、秘密の値ではない
+	GitHubAPIFailed              = "GITHUB_API_FAILED"
 )
 
 // arata と aratam の両方が出す code。
@@ -140,6 +150,15 @@ var All = []Code{
 	{AllowlistMissing, arataOnly, "allowlist のファイルが無く、空として扱った (警告)"},
 	{RebuildWarning, arataOnly, "rebuild の警告 (読み飛ばした行など)"},
 	{RebuiltFromScratch, arataOnly, "raw だけから作り直した。次の run で未解決の指摘がすべて new として再報告される (警告)"},
+	{RepoSetDiffers, arataOnly, "監査を回すリポジトリの一式が、この版の一式と揃っていない (生成物の違い・残りもの・ワークフローの使う秘密・アカウントの設定が無い。repo check)"},
+	{RepoNotifyMismatch, arataOnly, "aratam.yaml が、一式のワークフローの渡す秘密 (bot トークン) で送る設定でない (repo check)"},
+	{RepoEnvironmentMissing, arataOnly, "GitHub の environment が無い (repo check --github)"},
+	{RepoEnvironmentOpen, arataOnly, "environment のデプロイできるブランチが、既定のブランチだけになっていない (repo check --github)"},
+	{RepoEnvironmentProtected, arataOnly, "environment にレビュー担当か待ち時間が付いている (定時の実行が止まる。repo check --github。警告)"},
+	{RepoSecretMissing, arataOnly, "一式の使う秘密が environment に登録されていない (repo check --github)"},
+	{RepoSecretUnused, arataOnly, "一式の使わない秘密が environment に残っている (repo check --github。警告)"},
+	{RepoSecretOutsideEnvironment, arataOnly, "リポジトリの (environment でない) 秘密が残っている (どのブランチのジョブにも渡る。repo check --github)"},
+	{GitHubAPIFailed, arataOnly, "GitHub の API を読めなかった (認証・権限・リポジトリの名前。repo check --github)"},
 
 	{InputMissing, aratamOnly, "report.json が無い・読めない (その旨を緊急用に送る)"},
 	{InputInvalid, aratamOnly, "report.json を解釈できない・知らない版 (その旨を緊急用に送る)"},

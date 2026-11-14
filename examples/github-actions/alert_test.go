@@ -9,24 +9,11 @@ import (
 	"testing"
 )
 
-// repoWithMethodScript は、一式のスクリプト (.github/scripts) を置いた、利用者のリポジトリのつもりのディレクトリ。
-func repoWithMethodScript(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, filepath.Dir(methodScriptPath)), 0o750); err != nil {
-		t.Fatal(err)
-	}
-	for src, dst := range map[string]string{methodScript: methodScriptPath, secretScript: secretScriptPath} {
-		body, err := os.ReadFile(src)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, dst), body, 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return dir
-}
+// exampleVersion は、見本の一式を書き出した版 (ワークフローの ARATA_VERSION)。
+const exampleVersion = "v0.15.0"
+
+// exampleRepo は見本の一式 (arata repo init の出力そのもの)。
+const exampleRepo = "../audit-repo"
 
 func output(t *testing.T, tmp string) string {
 	t.Helper()
@@ -34,59 +21,75 @@ func output(t *testing.T, tmp string) string {
 	return string(b)
 }
 
-// 定時の監査は、送り方を 1 つのスクリプトで判別し、その結果を notify に渡す。判別できなければ、その段階で止まる。
-func TestAuditDetectsTheSlackMethod(t *testing.T) {
+// 送り方を、実行のときに判別しない (ADR 0060)。notify には bot トークンだけを渡す。Webhook の秘密も、判別のスクリプトも、仮の値の検査も無い。
+// aratam.yaml が bot トークンの方式であることは、PR の検査の arata repo check が確かめる。
+func TestNotifyGetsOnlyTheBotToken(t *testing.T) {
 	forEachWorkflow(t, func(t *testing.T, w *workflow, text string) {
-		s := stepByID(t, w, "slack-method")
-		// arata が失敗しても判別する (notify は「実行されていない」を送る)。試しの実行では通知しないので、判別もしない
-		if s.If != "always() && steps.install.outcome == 'success' && !inputs.dry_run" || s.If != stepByID(t, w, "notify").If {
-			t.Errorf("slack-method must run whenever notify runs: %q", s.If)
+		n := stepByID(t, w, "notify")
+		if len(n.Env) != 1 || n.Env["ARATAM_SLACK_BOT_TOKEN"] != "${{ secrets.ARATAM_SLACK_BOT_TOKEN }}" {
+			t.Errorf("notify env: %v", n.Env)
 		}
-		if !strings.Contains(s.Run, methodScriptPath+` "$ARATA_CONFIG_DIR/aratam.yaml"`) {
-			t.Errorf("slack-method must call the shared script:\n%s", s.Run)
+		// arata が失敗しても通知する (「実行されていない」を送る)。試しの実行では通知しない
+		if n.If != "always() && steps.install.outcome == 'success' && !inputs.dry_run" {
+			t.Errorf("notify if: %q", n.If)
 		}
-		// 人向けの出力を読む書き方を、見本に残さない
-		for _, bad := range []string{"config check |", "grep 'slack", `grep "slack`, "slack bot$", "slack webhook$"} {
-			if strings.Contains(text, bad) {
-				t.Errorf("the workflow must not read the human output of config check: %q", bad)
+		for _, s := range steps(t, w) {
+			if s.ID == "slack-method" {
+				t.Error("the workflow must not detect the method at run time")
 			}
 		}
-		for method, exit := range map[string]int{"bot": 0, "webhook": 0, "email": 1} {
-			t.Run(method, func(t *testing.T) {
-				bin := fakeBin(t, "aratam", fmt.Sprintf(`echo '{"ok":true,"slack":{"method":%q,"urgent_webhook":%v},"rows":[]}'`+"\n", method, method == "webhook"))
-				out, code, tmp := runStepIn(t, repoWithMethodScript(t), s.Run, bin)
-				if code != exit {
-					t.Fatalf("exit %d, want %d\n%s", code, exit, out)
-				}
-				want := ""
-				if exit == 0 {
-					want = fmt.Sprintf("method=%s\nurgent_webhook=%v\n", method, method == "webhook")
-				}
-				if got := output(t, tmp); got != want {
-					t.Errorf("GITHUB_OUTPUT %q, want %q", got, want)
-				}
-			})
+		for _, bad := range []string{"arata-slack-method", "arata-secret-check", ".github/scripts", "WEBHOOK", "config check |", "grep 'slack"} {
+			if strings.Contains(text, bad) {
+				t.Errorf("the workflow must not mention %q", bad)
+			}
 		}
 	})
 }
 
-// notify には、aratam.yaml が使う secret だけを渡す (bot なら Webhook の URL を、webhook なら bot トークンを、ジョブに出さない)。
-// 緊急用の Webhook は、aratam.yaml が別に持つとき (.slack.urgent_webhook) だけ渡す。
-// 使わない秘密は空で渡るので、その箱が仮の値のままでも (消してあっても)、検査にも aratam にも届かない (ADR 0059)。
-func TestNotifyGetsOnlyTheSecretsOfTheMethod(t *testing.T) {
-	forEachWorkflow(t, func(t *testing.T, w *workflow, text string) {
-		env := stepByID(t, w, "notify").Env
-		for k, cond := range map[string]string{
-			"ARATAM_SLACK_WEBHOOK":        "steps.slack-method.outputs.method == 'webhook'",
-			"ARATAM_SLACK_URGENT_WEBHOOK": "steps.slack-method.outputs.method == 'webhook' && steps.slack-method.outputs.urgent_webhook == 'true'",
-			"ARATAM_SLACK_BOT_TOKEN":      "steps.slack-method.outputs.method == 'bot'",
-		} {
-			want := fmt.Sprintf("${{ %s && secrets.%s || '' }}", cond, k)
-			if env[k] != want {
-				t.Errorf("%s: %q, want %q", k, env[k], want)
+// 認証に使う秘密が未登録 (空) なら、AWS に行く前に、秘密の名前と「arata repo check --github」を出して止まる (ADR 0060)。
+// 秘密は、最初は 1 つも登録されていない。値は出さない。
+func TestWorkflowsStopOnUnregisteredSecretsBeforeAWS(t *testing.T) {
+	for file, names := range map[string][]string{multiFile: {"ARATA_RUNNER_ROLE_ARN", "ARATA_AUDIT_ROLE_ARNS"}, triageFile: {"ARATA_RUNNER_ROLE_ARN"}} {
+		w, _ := load(t, file)
+		all := steps(t, w)
+		pos := map[string]int{}
+		for i, s := range all {
+			pos[s.ID] = i
+		}
+		s := stepByID(t, w, "secrets")
+		if pos["secrets"] > pos["aws"] || pos["secrets"] < pos["checkout"] {
+			t.Errorf("%s: the check must run after checkout and before the AWS credentials", file)
+		}
+		if len(s.Env) != len(names) {
+			t.Errorf("%s: secrets env: %v", file, s.Env)
+		}
+		var set []string
+		for _, n := range names {
+			if s.Env[n] != "${{ secrets."+n+" }}" {
+				t.Errorf("%s: %s = %q", file, n, s.Env[n])
+			}
+			set = append(set, n+"=arn:aws:iam::123456789012:role/example-secret-value")
+		}
+		out, code, _ := runStep(t, s.Run, t.TempDir(), set...)
+		if code != 0 || strings.Contains(out, "example-secret-value") {
+			t.Errorf("%s: registered secrets must pass without printing them: exit %d\n%s", file, code, out)
+		}
+		// 1 つでも空なら止まり、その名前を全部出す
+		for i, missing := range names {
+			env := append([]string{}, set...)
+			env[i] = missing + "="
+			out, code, _ := runStep(t, s.Run, t.TempDir(), env...)
+			if code != 1 || !strings.Contains(out, "::error::秘密 "+missing+" が未登録") || !strings.Contains(out, "arata repo check --github") || strings.Contains(out, "example-secret-value") {
+				t.Errorf("%s: %s unset: exit %d\n%s", file, missing, code, out)
 			}
 		}
-	})
+		out, code, _ = runStep(t, s.Run, t.TempDir())
+		for _, n := range names {
+			if code != 1 || !strings.Contains(out, "秘密 "+n+" が未登録") {
+				t.Errorf("%s: nothing registered: exit %d\n%s", file, code, out)
+			}
+		}
+	}
 }
 
 // notify は、Slack に何かが届いた終了コード (0・3・4) のときだけ delivered の印を出す。終了コードはそのまま。
@@ -105,18 +108,28 @@ func TestNotifyMarksWhatWasDelivered(t *testing.T) {
 	})
 }
 
-// fakeCurl は引数と標準入力を記録する。
-func fakeCurl(t *testing.T, exit int) string {
+// fakeToken は偽の bot トークン (実際の Slack には接続しない)。
+const fakeToken = "xoxb-0000-FAKE-TOKEN"
+
+// fakeCurl は、引数・標準入力 (ヘッダー)・--data-binary @<file> の中身を記録し、response を標準出力に出す。
+// 標準エラーと応答には、ログに出てはいけない文字列を入れてある。
+func fakeCurl(t *testing.T, exit int, response string) string {
 	t.Helper()
 	return fakeBin(t, "curl", fmt.Sprintf(`printf '%%s\n' "$@" >"$RUNNER_TEMP/curl-args"
-cat >"$RUNNER_TEMP/curl-body"
-echo 'curl: (22) error for https://alerts.example/hook/SECRET' >&2
-echo 'response body SECRET'
+cat >"$RUNNER_TEMP/curl-stdin"
+for a in "$@"; do
+  case "$a" in
+    @-) ;;
+    @*) cat "${a#@}" >"$RUNNER_TEMP/curl-body" ;;
+  esac
+done
+echo 'curl: (22) error LEAK-IN-STDERR' >&2
+printf '%%s' %q
 exit %d
-`, exit))
+`, response, exit))
 }
 
-const alertURL = "https://alerts.example/hook/SECRET"
+const alertChannel = "C0123456782" // 見本の --alert-channel
 
 // steps の JSON (toJSON(steps))。outputs には、送らない値が入っている。
 const stepsJSON = `{
@@ -124,18 +137,58 @@ const stepsJSON = `{
   "install": {"outcome": "success", "conclusion": "success", "outputs": {}},
   "aws": {"outcome": "success", "conclusion": "success", "outputs": {"aws-account-id": "123456789012"}},
   "audit": {"outcome": "failure", "conclusion": "failure", "outputs": {"detail": "arn:aws:iam::123456789012:role/x alice@example.com"}},
-  "slack-method": {"outcome": "success", "conclusion": "success", "outputs": {"method": "bot"}},
   "notify": {"outcome": "failure", "conclusion": "failure", "outputs": {}},
   "save-proposals": {"outcome": "skipped", "conclusion": "skipped", "outputs": {}},
   "Bad Id <!channel>": {"outcome": "failure", "conclusion": "failure", "outputs": {}}
 }`
 
 func alertEnv(kv ...string) []string {
-	return append([]string{"ALERT_WEBHOOK=" + alertURL, "STEPS=" + stepsJSON, "ARATA_TARGET=prod", "PROFILE=weekly",
+	return append([]string{"SLACK_BOT_TOKEN=" + fakeToken, "ALERT_CHANNEL=" + alertChannel, "STEPS=" + stepsJSON, "ARATA_TARGET=prod", "PROFILE=weekly",
 		"RUN_URL=https://github.example/acme/audit/actions/runs/42"}, kv...)
 }
 
-// 定時の実行で Slack に何も届かなかったら、最後の段階が別の経路で知らせる。送るのは対象・プロファイル・失敗した段階の id・実行の URL だけ。
+// checkAlertCall は、偽の curl が受け取ったものを確かめる: chat.postMessage へ、トークンは標準入力のヘッダーで (引数に書かない)、本文は JSON。
+func checkAlertCall(t *testing.T, tmp, wantText string) {
+	t.Helper()
+	args, _ := os.ReadFile(filepath.Join(tmp, "curl-args"))
+	lines := strings.Split(strings.TrimSpace(string(args)), "\n")
+	if lines[len(lines)-1] != "https://slack.com/api/chat.postMessage" || !strings.Contains(string(args), "--fail") || !strings.Contains(string(args), "--max-time") {
+		t.Errorf("curl args:\n%s", args)
+	}
+	if strings.Contains(string(args), fakeToken) || strings.Contains(string(args), "hooks.slack.com") {
+		t.Errorf("the token must not be in the arguments (and no webhook):\n%s", args)
+	}
+	if header, _ := os.ReadFile(filepath.Join(tmp, "curl-stdin")); string(header) != "Authorization: Bearer "+fakeToken+"\n" {
+		t.Errorf("the header on stdin: %q", header)
+	}
+	body, _ := os.ReadFile(filepath.Join(tmp, "curl-body"))
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil || len(payload) != 4 || payload["channel"] != alertChannel ||
+		payload["unfurl_links"] != false || payload["unfurl_media"] != false {
+		t.Fatalf("payload: %v\n%s", err, body)
+	}
+	if payload["text"] != wantText {
+		t.Errorf("text:\n%s\nwant:\n%s", payload["text"], wantText)
+	}
+	for _, value := range []string{"123456789012", "alice@example.com", "<!channel>", "outputs", fakeToken} {
+		if strings.Contains(string(body), value) {
+			t.Errorf("the message carries %q:\n%s", value, body)
+		}
+	}
+}
+
+// noLeak は、ログにトークン・curl の出力・応答の本文・outputs の値が出ていないことを確かめる。
+func noLeak(t *testing.T, out string) {
+	t.Helper()
+	for _, secret := range []string{fakeToken, "LEAK-IN", "123456789012", "alice@example.com", "Bearer", `"ok"`} {
+		if strings.Contains(out, secret) {
+			t.Errorf("the log leaked %q:\n%s", secret, out)
+		}
+	}
+}
+
+// 定時の実行で Slack に何も届かなかったら、最後の段階が、同じ bot トークンで知らせのチャンネルへ送る (ADR 0060)。
+// 送るのは対象・プロファイル・失敗した段階の id・実行の URL だけ。Slack は失敗でも HTTP 200 を返すので、応答の ok を見る。
 func TestAlertTellsWhichTargetWasNotNotified(t *testing.T) {
 	forEachWorkflow(t, func(t *testing.T, w *workflow, text string) {
 		a := stepByID(t, w, "alert")
@@ -143,76 +196,80 @@ func TestAlertTellsWhichTargetWasNotNotified(t *testing.T) {
 		if a.If != "failure() && github.event_name == 'schedule' && steps.notify.outputs.delivered != 'true'" {
 			t.Errorf("if: %q", a.If)
 		}
-		if a.Env["ALERT_WEBHOOK"] != "${{ secrets.ARATA_ALERT_WEBHOOK }}" || a.Env["STEPS"] != "${{ toJSON(steps) }}" ||
+		if len(a.Env) != 4 || a.Env["SLACK_BOT_TOKEN"] != "${{ secrets.ARATAM_SLACK_BOT_TOKEN }}" || a.Env["ALERT_CHANNEL"] != alertChannel || a.Env["STEPS"] != "${{ toJSON(steps) }}" ||
 			a.Env["RUN_URL"] != "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" {
 			t.Errorf("env: %v", a.Env)
 		}
-		// 通知用の secret は渡さない (別の経路)。報告のファイルも読まない
-		for k := range a.Env {
-			if strings.HasPrefix(k, "ARATAM_") {
-				t.Errorf("alert must not get %s", k)
-			}
-		}
-		for _, bad := range []string{"arata-out", "report.json", "report.md", ".log", "$RUNNER_TEMP"} {
+		// aratam を通さない (バイナリが取れない・設定が壊れているときにも送る)。報告のファイルも読まない
+		for _, bad := range []string{"aratam ", "arata-out", "report.json", "report.md", ".log", "hooks.slack.com", "WEBHOOK"} {
 			if strings.Contains(a.Run, bad) {
-				t.Errorf("alert must not read the audit output: %q", bad)
+				t.Errorf("alert must not use %q", bad)
 			}
 		}
 		if a.TimeoutMinutes == 0 || a.ContinueOnErr != nil {
 			t.Errorf("alert needs a timeout and must fail loudly")
 		}
+		want := "arata の定時の通知を送れていません。対象: prod / プロファイル: weekly / 失敗した段階: audit, notify / https://github.example/acme/audit/actions/runs/42"
 
 		t.Run("sends", func(t *testing.T) {
-			out, code, tmp := runStep(t, a.Run, fakeCurl(t, 0), alertEnv()...)
+			out, code, tmp := runStep(t, a.Run, fakeCurl(t, 0, `{"ok":true,"channel":"C0123456782","ts":"1.2","message":{"text":"LEAK-IN-RESPONSE"}}`), alertEnv()...)
 			if code != 0 {
 				t.Fatalf("exit %d\n%s", code, out)
 			}
-			body, _ := os.ReadFile(filepath.Join(tmp, "curl-body"))
-			var payload map[string]string
-			if err := json.Unmarshal(body, &payload); err != nil || len(payload) != 1 {
-				t.Fatalf("payload must be {\"text\": ...}: %v\n%s", err, body)
-			}
-			want := "arata の定時の通知を送れていません。対象: prod / プロファイル: weekly / 失敗した段階: audit, notify / https://github.example/acme/audit/actions/runs/42"
-			if payload["text"] != want {
-				t.Errorf("text:\n%s\nwant:\n%s", payload["text"], want)
-			}
-			args, _ := os.ReadFile(filepath.Join(tmp, "curl-args"))
-			if !strings.HasSuffix(strings.TrimSpace(string(args)), alertURL) || !strings.Contains(string(args), "--fail") || !strings.Contains(string(args), "--max-time") {
-				t.Errorf("curl args:\n%s", args)
-			}
-			// ログには、段階の id だけ。URL・outputs の値・curl の出力は出さない
+			checkAlertCall(t, tmp, want)
+			// ログには、段階の id だけ
 			if !strings.Contains(out, "failed steps: audit, notify") {
 				t.Errorf("log:\n%s", out)
 			}
-			for _, secret := range []string{"SECRET", "alerts.example", "123456789012", "alice@example.com", "response body", "channel"} {
-				if strings.Contains(out, secret) {
-					t.Errorf("the log leaked %q:\n%s", secret, out)
+			noLeak(t, out)
+		})
+		// secret の末尾の改行や空白は除く (ヘッダーを壊さない)
+		t.Run("token with a trailing newline", func(t *testing.T) {
+			out, code, tmp := runStep(t, a.Run, fakeCurl(t, 0, `{"ok":true}`), alertEnv("SLACK_BOT_TOKEN="+fakeToken+" \n")...)
+			if code != 0 {
+				t.Fatalf("exit %d\n%s", code, out)
+			}
+			checkAlertCall(t, tmp, want)
+		})
+		// Slack は失敗でも HTTP 200 を返す。ok が true でなければ失敗にし、error のコードだけを出す
+		for name, tc := range map[string]struct {
+			exit      int
+			response  string
+			wantError string
+		}{
+			"not in channel":     {0, `{"ok":false,"error":"not_in_channel","LEAK-IN-RESPONSE":1}`, "slack error=not_in_channel"},
+			"invalid auth":       {0, `{"ok":false,"error":"invalid_auth"}`, "slack error=invalid_auth"},
+			"odd error":          {0, `{"ok":false,"error":"LEAK-IN-RESPONSE <!channel>"}`, "slack error=unknown"},
+			"ok is a string":     {0, `{"ok":"true"}`, "slack error=unknown"},
+			"no ok":              {0, `{}`, "slack error=unknown"},
+			"not json":           {0, `<html>LEAK-IN-RESPONSE</html>`, "slack error=unknown"},
+			"empty":              {0, ``, "slack error=unknown"},
+			"curl fails":         {22, ``, "slack error=unknown"},
+			"curl fails with ok": {22, `{"ok":true}`, "slack error=unknown"},
+		} {
+			t.Run(name, func(t *testing.T) {
+				out, code, _ := runStep(t, a.Run, fakeCurl(t, tc.exit, tc.response), alertEnv()...)
+				if code != 1 || !strings.Contains(out, "::error::知らせを送れなかった ("+tc.wantError+")") {
+					t.Errorf("exit %d\n%s", code, out)
 				}
-			}
-			for _, value := range []string{"123456789012", "alice@example.com", "channel", "method", "outputs"} {
-				if strings.Contains(string(body), value) {
-					t.Errorf("the message carries %q:\n%s", value, body)
+				noLeak(t, out)
+			})
+		}
+		// トークンが未登録 (空) なら、送らずに、名前を出して失敗する (知らせは、トークンが使えないときには届かない。ADR 0060)
+		for name, token := range map[string]string{"no token": "", "blank token": " \n"} {
+			t.Run(name, func(t *testing.T) {
+				out, code, tmp := runStep(t, a.Run, fakeCurl(t, 0, `{"ok":true}`), alertEnv("SLACK_BOT_TOKEN="+token)...)
+				if code != 1 || !strings.Contains(out, "::error::ARATAM_SLACK_BOT_TOKEN が未登録") {
+					t.Errorf("exit %d\n%s", code, out)
 				}
-			}
-		})
-		t.Run("send fails", func(t *testing.T) {
-			out, code, _ := runStep(t, a.Run, fakeCurl(t, 22), alertEnv()...)
-			if code != 1 || !strings.Contains(out, "::error::") || strings.Contains(out, "SECRET") || strings.Contains(out, "alerts.example") {
-				t.Errorf("exit %d\n%s", code, out)
-			}
-		})
-		t.Run("no webhook", func(t *testing.T) {
-			out, code, tmp := runStep(t, a.Run, fakeCurl(t, 0), alertEnv("ALERT_WEBHOOK=")...)
-			if code != 1 || !strings.Contains(out, "::error::ARATA_ALERT_WEBHOOK") {
-				t.Errorf("exit %d\n%s", code, out)
-			}
-			if _, err := os.Stat(filepath.Join(tmp, "curl-args")); err == nil {
-				t.Errorf("curl must not run without a URL")
-			}
-		})
+				if _, err := os.Stat(filepath.Join(tmp, "curl-args")); err == nil {
+					t.Errorf("curl must not run without a token")
+				}
+			})
+		}
 		// steps が読めなくても、対象と URL は知らせる
 		t.Run("unreadable steps", func(t *testing.T) {
-			out, code, tmp := runStep(t, a.Run, fakeCurl(t, 0), alertEnv("STEPS={not json")...)
+			out, code, tmp := runStep(t, a.Run, fakeCurl(t, 0, `{"ok":true}`), alertEnv("STEPS={not json")...)
 			body, _ := os.ReadFile(filepath.Join(tmp, "curl-body"))
 			if code != 0 || !strings.Contains(string(body), "失敗した段階: 不明 / https://") || !strings.Contains(string(body), "対象: prod") {
 				t.Errorf("exit %d\n%s\n%s", code, out, body)

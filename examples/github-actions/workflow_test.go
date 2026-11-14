@@ -286,8 +286,10 @@ func testSecretsReachOnlyTheStepsThatNeedThem(t *testing.T, w *workflow, text st
 				continue
 			}
 			want := map[string]string{"GH_TOKEN": "install", "AUDIT_ROLE_ARNS": "aws-config",
-				// 仮の値のままでないことを確かめる step (比べるだけで、値は出さない。secrets_test.go)
-				"ARATA_RUNNER_ROLE_ARN": "secrets", "ARATA_AUDIT_ROLE_ARNS": "secrets", "ARATA_ALERT_WEBHOOK": "secrets", "ARATAM_SLACK_WEBHOOK": "notify", "ARATAM_SLACK_URGENT_WEBHOOK": "notify", "ARATAM_SLACK_BOT_TOKEN": "notify", "ALERT_WEBHOOK": "alert"}[k]
+				// 未登録 (空) でないことを確かめる step (空かどうかを見るだけで、値は出さない。alert_test.go)
+				"ARATA_RUNNER_ROLE_ARN": "secrets", "ARATA_AUDIT_ROLE_ARNS": "secrets",
+				// bot トークンは、通知と、通知が送れなかったことの知らせにだけ渡す (ADR 0060)
+				"ARATAM_SLACK_BOT_TOKEN": "notify", "SLACK_BOT_TOKEN": "alert"}[k]
 			if want != s.ID {
 				t.Errorf("secret %s must not be given to step %q", k, s.ID)
 			}
@@ -301,9 +303,19 @@ func testSecretsReachOnlyTheStepsThatNeedThem(t *testing.T, w *workflow, text st
 			}
 		}
 	}
-	n := stepByID(t, w, "notify")
-	if n.Env["ARATAM_SLACK_WEBHOOK"] == "" || n.Env["ARATAM_SLACK_URGENT_WEBHOOK"] == "" || n.Env["ARATAM_SLACK_BOT_TOKEN"] == "" {
-		t.Errorf("notify needs both webhooks and the bot token (each only for its method): %v", n.Env)
+	// ワークフローが参照する秘密は、どの一式でも同じ 3 つ (ADR 0060)。Webhook の秘密は出てこない
+	got := map[string]bool{}
+	for _, m := range regexp.MustCompile(`secrets\.(\w+)`).FindAllStringSubmatch(text, -1) {
+		got[m[1]] = true
+	}
+	for _, n := range []string{"ARATA_RUNNER_ROLE_ARN", "ARATA_AUDIT_ROLE_ARNS", "ARATAM_SLACK_BOT_TOKEN"} {
+		if !got[n] {
+			t.Errorf("the audit must use %s", n)
+		}
+		delete(got, n)
+	}
+	if len(got) != 0 {
+		t.Errorf("the audit uses other secrets: %v", got)
 	}
 }
 
@@ -329,7 +341,7 @@ func testNotifyRunsWhenAuditFails(t *testing.T, w *workflow, text string) {
 		order[s.ID] = i
 	}
 	// バイナリは認証より先に取る (OIDC が失敗しても aratam で知らせるため)
-	if !(order["install"] < order["aws"] && order["aws"] < order["audit"] && order["audit"] < order["slack-method"] && order["slack-method"] < order["notify"] &&
+	if !(order["install"] < order["aws"] && order["aws"] < order["audit"] && order["audit"] < order["notify"] &&
 		order["notify"] < order["save-proposals"] && order["save-proposals"] < order["alert"] && order["alert"] == len(order)-1) {
 		t.Errorf("step order: %v", order)
 	}
@@ -359,7 +371,7 @@ func testRunScriptsParse(t *testing.T, w *workflow, text string) {
 // runStep は Actions と同じ bash の起動で step のスクリプトを動かす。PATH の先頭は偽の実行ファイルの置き場所。
 func runStep(t *testing.T, script, bin string, env ...string) (string, int, string) {
 	t.Helper()
-	return runStepIn(t, repoWithMethodScript(t), script, bin, env...)
+	return runStepIn(t, t.TempDir(), script, bin, env...)
 }
 
 // runStepIn は dir をカレントディレクトリ (checkout したリポジトリのつもり) にして step を動かす。

@@ -67,5 +67,10 @@ CI は `.github/workflows/fuzz.yml` が週 1 回と手動 (`workflow_dispatch`�
 | | `FuzzRequestValidate` | 設定の `request:` (`request_lines`。LLM が書く) | 受け付けた設定は、鍵のキャプチャが `request_id` だけ、行のキャプチャが決まった名前だけで、どれも RE2 で読め、ip と path が同じ行にあり、同じ項目を 2 つの行が取り出さず、`set` は 100〜599 の status だけ |
 | | `FuzzRequestUserValidate` | 設定の `request.user_id`・`request.auth` の正規表現 (ADR 0052) | 受け付けた正規表現は RE2 で読め、決まった名前のキャプチャだけを持ち (必須のものがある。by は 2 つとも)、どの入力に対しても一致が入力の終わりで終わる (行の途中の同じ並びを読まない) |
 | `internal/collect/account` | `FuzzParseCredentialReport` | 認証情報レポートの CSV | 行の形 (日時は RFC 3339 の UTC か空、キーは 2 本まで) |
+| `internal/repoinit` | `FuzzFiles` | `arata repo init` の引数 (YAML・HCL・シェル・Markdown に入る。チャンネル ID の引数を含む) | 形を通らない引数では 1 つも書かない。形を通れば、ワークフローは YAML として読め、参照する秘密は決まった 3 つだけで、値は決まった場所にだけ入る。チャンネル ID が足りなければ、空で書き出さずに足りない引数を返す (ADR 0059・0060) |
+| | `FuzzLineDiff` | 今ある一式のファイル (利用者のもの) | 行の差分に、制御文字と不正な UTF-8 が残らない |
+| | `FuzzWorkflowSecrets` | ワークフローの YAML (利用者のリポジトリ) | 返す秘密の名前は、形の合うものだけ・重複なし・名前の順で、入力に現れるものだけ (ADR 0060) |
+| | `FuzzAratamSlack` | aratam.yaml の slack 節 (利用者が育てるファイル) | 送り方は bot か webhook のどちらか (aratam と同じ判別)。エラーに中身を写さない |
+| | `FuzzGitHubSecretList` | GitHub の API の応答 (秘密の名前の一覧。偽の API) | 出力とコマンドに運ぶ名前は、秘密の名前の形だけ。出すコマンドは `gh secret set` / `gh secret delete` の決まった形だけ。読めない一覧を「足りない秘密」にしない。応答の本文と鍵を出さない |
 
 新しく信用できない入力を解釈する関数を足したら、ここにファズテストも足す。性質は「パニックしない」だけにせず、その関数が守る規則を書く。
