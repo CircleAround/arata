@@ -35,7 +35,7 @@ LLM の役割は「危険の判定を代行する」ことではなく「人が�
 |---|---|---|
 | `arata config init --audit-account <12 桁の ID>\|none [--out FILE]` | 推奨設定の雛形を書き出す (既定は `./arata.yaml`。`--out -` で標準出力。既存ファイルは `--force` 無しでは上書きしない)。`--audit-account` は必須で、既定は無い: 別のアカウントのロールが読み取り専用ロールを引き受けて監査するならそのアカウントの ID (allowlist.yaml にも `account:` で書く)、外から監査しないなら `none`。どちらかは人に確かめる (推測で選ばない) | 人の指示があれば |
 | `arata config init --diff` | 今の設定とこの版の雛形の差分 (入っていないチェック、既定値と違う値、未知のキー、選んでいない `audit_account`) | よい (読み取りのみ) |
-| `arata config check` | 設定と allowlist.yaml の形をオフラインで検査 (AWS・ストアに繋がない。`ok` / `warn` / `ng` と「ファイル:行」。問題があれば終了コード 2)。allowlist.yaml を編集したら実行する | よい (読み取りのみ) |
+| `arata config check [--format json]` | 設定と allowlist.yaml の形をオフラインで検査 (AWS・ストアに繋がない。`ok` / `warn` / `ng` と「ファイル:行」。問題があれば終了コード 2)。allowlist.yaml を編集したら実行する | よい (読み取りのみ) |
 | `arata profiles [--format json]` | プロファイルごとに実際に走るチェックとパラメータ、その由来 (overrides / checks: / 既定値) | よい (読み取りのみ) |
 | `arata doctor` | 権限・ロググループ・形式の解釈率を検査 | よい (読み取りのみ) |
 | `arata init [--window 7d] [--resume]` | ベースライン収集 (findings は出さない) | 人の指示があれば |

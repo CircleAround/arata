@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:arata:schema:aratam-dry-run:1",
+  "title": "aratam-dry-run",
+  "description": "aratam notify --dry-run --format json の出力。送らずに、送るはずだった通知を順に並べたもの。payload は Slack に送る中身そのもので、形は Slack の仕様に従う (このスキーマでは縛らない)",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "aratam-dry-run"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "messages": {
+      "description": "送るはずだった通知 (送る順)。送るものが無ければ空",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/dryRunMessage"
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "schema_version",
+    "messages"
+  ],
+  "$defs": {
+    "dryRunDestination": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "description": "webhook = Incoming Webhook、channel = bot トークンの方式のチャンネル",
+          "type": "string",
+          "enum": [
+            "webhook",
+            "channel"
+          ]
+        },
+        "target": {
+          "description": "実際に送る先。緊急用の通知でも、緊急用の送り先が無ければ normal (通常用に送る)",
+          "type": "string",
+          "enum": [
+            "normal",
+            "urgent"
+          ]
+        },
+        "channel": {
+          "description": "チャンネル ID (bot トークンの方式だけ。秘密ではない)。Webhook の URL は秘密なので出さない",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "target"
+      ]
+    },
+    "dryRunMessage": {
+      "type": "object",
+      "properties": {
+        "route": {
+          "description": "規則で決まった送り先の種類 (通常用 / 緊急用)",
+          "type": "string",
+          "enum": [
+            "normal",
+            "urgent"
+          ]
+        },
+        "destination": {
+          "$ref": "#/$defs/dryRunDestination"
+        },
+        "payload": {
+          "description": "Slack に送る中身そのもの (text と、slack.format: blocks なら blocks)"
+        }
+      },
+      "required": [
+        "route",
+        "destination",
+        "payload"
+      ]
+    }
+  }
+}

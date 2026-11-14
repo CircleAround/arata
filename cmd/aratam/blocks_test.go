@@ -59,10 +59,12 @@ func TestNotifyDryRunFormat(t *testing.T) {
 	if code := c.run("notify", "-c", c.cfg, "--in", in, "--dry-run", "--format", "json"); code != 0 {
 		t.Fatalf("exit %d %s", code, c.stderr)
 	}
-	_, body, ok := strings.Cut(c.stdout.String(), "---\n")
-	var p payload
-	if !ok || json.Unmarshal([]byte(body), &p) != nil || len(p.Blocks) == 0 {
-		t.Fatalf("%s", c.stdout)
+	// 全体が 1 つの JSON で、Slack に送る payload は messages[].payload (ADR 0054)
+	var doc struct {
+		Messages []struct{ Payload payload }
+	}
+	if err := json.Unmarshal(c.stdout.Bytes(), &doc); err != nil || len(doc.Messages) != 1 || len(doc.Messages[0].Payload.Blocks) == 0 {
+		t.Fatalf("%v\n%s", err, c.stdout)
 	}
 	if code := c.run("notify", "-c", c.cfg, "--in", in, "--dry-run", "--format", "html"); code != 2 {
 		t.Fatalf("bad --format: exit %d", code)

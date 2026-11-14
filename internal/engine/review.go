@@ -35,11 +35,20 @@ func (t ApproveTarget) Subject() string {
 }
 
 // ReviewItem は review の 1 行。
+// review --format json のスキーマの名前と版 (ADR 0054)。名前は `arata schema <名前>` の名前。
+//
+// 決定 (ADR 0054): 出力の最上位は ReviewItem の配列のまま、版 1 として固定する。配列には schema / schema_version の項目を足せないが、
+// オブジェクトで包むのは互換を壊す変更で、この出力は playbook が LLM に読ませている。包むのは、ほかの理由で版を上げるときに一緒に行う。
+const (
+	ReviewSchema        = "review"
+	ReviewSchemaVersion = 1
+)
+
 type ReviewItem struct {
 	ID          string         `json:"id"`
 	Check       string         `json:"check"`
 	Key         string         `json:"key"`
-	Severity    string         `json:"severity"`
+	Severity    string         `json:"severity" jsonschema:"enum=critical|high|medium|low|info"`
 	Status      string         `json:"status"`
 	Summary     string         `json:"summary"`
 	FirstSeen   string         `json:"first_seen"`
@@ -86,6 +95,10 @@ func (e *Engine) Review(ctx context.Context, statuses []string) ([]ReviewItem, e
 	for _, f := range fs {
 		it := ReviewItem{ID: f.ID, Check: f.Check, Key: f.Key, Severity: f.Severity, Status: f.Status, Summary: f.Summary,
 			FirstSeen: f.FirstSeen.UTC().Format(time.RFC3339), LastSeen: f.LastSeen.UTC().Format(time.RFC3339), Data: f.Data}
+		if it.Data == nil {
+			// 必須の項目を null で出さない (ADR 0054)
+			it.Data = map[string]any{}
+		}
 		if !f.SnoozeUntil.IsZero() {
 			it.SnoozeUntil = f.SnoozeUntil.UTC().Format(time.RFC3339)
 		}

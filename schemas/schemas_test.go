@@ -10,7 +10,7 @@ import (
 )
 
 // 版 1 で持つスキーマ。足したらここにも足す (ファイルを置き忘れた・消したことに気づく)。
-var want = []string{"aratam-config-check", "doctor", "help-ai", "log", "profiles", "rebuild", "report", "report-period"}
+var want = []string{"arata-config-check", "aratam-config-check", "aratam-doctor", "aratam-dry-run", "config-diff", "doctor", "help-ai", "log", "profiles", "rebuild", "report", "report-period", "review"}
 
 func TestNames(t *testing.T) {
 	got := Names()
@@ -72,7 +72,7 @@ func TestWrite(t *testing.T) {
 	}
 	for _, bad := range []string{"none", "../schemas", "report.schema.json", "report/"} {
 		err := Write(&bytes.Buffer{}, bad)
-		if err == nil || !strings.Contains(err.Error(), "aratam-config-check, doctor, help-ai, log, profiles, rebuild, report, report-period") {
+		if err == nil || !strings.Contains(err.Error(), "arata-config-check, aratam-config-check, aratam-doctor") {
 			t.Errorf("%q: want an error that lists the names, got %v", bad, err)
 		}
 	}

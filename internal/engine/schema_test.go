@@ -16,4 +16,7 @@ func TestOutputSchemasAreFixed(t *testing.T) {
 		Description: "arata doctor --format json の出力。権限・ロググループ・解釈率などの検査の行と、必要な IAM action。読み方は arata help ai logs"}, *updateSchemas)
 	schematest.Golden(t, schematest.Spec{Name: ProfilesSchema, Version: ProfilesSchemaVersion, Versioned: true, Type: ProfilesView{},
 		Description: "arata profiles --format json の出力。プロファイルごとに実際に走るチェックとパラメータ (由来つき)、どのプロファイルにも入っていないチェック"}, *updateSchemas)
+	// 最上位が配列の出力は、今の形を版 1 として固定する (schema / schema_version の項目は持てない)
+	schematest.Golden(t, schematest.Spec{Name: ReviewSchema, Version: ReviewSchemaVersion, Type: []ReviewItem{},
+		Description: "arata review --format json の出力。未対応の finding の配列 (最上位が配列。schema の項目は無い)。data の中身はチェックごとで、このスキーマでは縛らない"}, *updateSchemas)
 }

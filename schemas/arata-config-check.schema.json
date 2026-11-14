@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:arata:schema:arata-config-check:1",
+  "title": "arata-config-check",
+  "description": "arata config check --format json の出力。設定と allowlist.yaml の形の検査の結果。AWS にもストアにも繋がずに出す",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "arata-config-check"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "ok": {
+      "description": "ng の行が無い (終了コード 0)。warn だけなら true",
+      "type": "boolean"
+    },
+    "rows": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/configCheckRow"
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "schema_version",
+    "ok",
+    "rows"
+  ],
+  "$defs": {
+    "configCheckRow": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "description": "ng が 1 つでもあれば終了コード 2",
+          "type": "string",
+          "enum": [
+            "ok",
+            "warn",
+            "ng",
+            "skip"
+          ]
+        },
+        "item": {
+          "description": "検査した項目 (config = 設定ファイル、allowlist = 既知リスト、audit_account = 監査する側のアカウントと既知リストの食い違い)。開いた語彙",
+          "type": "string"
+        },
+        "path": {
+          "description": "その行が指すファイル (カレントディレクトリの下なら相対パス)。検査していない行 (skip) には無い",
+          "type": "string"
+        },
+        "line": {
+          "description": "ファイルの中の行 (分かるときだけ)",
+          "type": "integer"
+        },
+        "message": {
+          "description": "人向けの文。文言は固定しない (機械で読まない)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "item",
+        "message"
+      ]
+    }
+  }
+}

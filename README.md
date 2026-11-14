@@ -83,7 +83,7 @@ aratam config check --format json           # 同じ検査を機械が読む形�
 aratam doctor                               # Webhook の環境変数 (bot トークンなら auth.test) と LLM の疎通 (送信はしない)
 aratam test-notify                          # Slack に試験メッセージを 1 通 (--urgent で緊急用)
 aratam notify --in /var/lib/arata/out/daily --dry-run   # 送らずに標準出力へ (LLM は呼ぶ。--llm none で呼ばない)
-aratam notify --in /var/lib/arata/out/daily --dry-run --format json   # Slack に送る payload (blocks) そのもの
+aratam notify --in /var/lib/arata/out/daily --dry-run --format json   # 全体が 1 つの JSON。Slack に送る payload (blocks) そのものは .messages[].payload
 ```
 
 #### bot トークンで送る

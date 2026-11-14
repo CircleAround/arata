@@ -319,7 +319,13 @@ LLM に求める出力:
     `challenge_impact` (observation) は「*Challenge / CAPTCHA*」の節に 1 ルール 1 行 (「`ルール` Challenge 900 件・解かれた 5%・GET 以外 40」。割合は解釈しない)
 - 静か (`on_quiet: short`): header `✅ arata <profile> — <name>` と 1 行。入力の問題: header `⚠️ arata の出力が無いか古い — <name>`、理由・code・入力のパス
 - `--dry-run`: `--format text` (既定) は人が読む簡易表示 (`[通知] <text>`、header は `# `、divider は `---`、context は `(小) `、fields は ` | ` でつなぐ)。
-  `--format json` は Slack に送る payload そのもの (bot トークンの方式では、これに `channel` を足して送る)。`--format` は `--dry-run` のときだけ指定できる
+  `--format json` は、全体が 1 つの JSON (`aratam schema aratam-dry-run`)。送るはずだった通知が `messages` に送る順で並び、Slack に送る payload そのものは
+  `messages[].payload` (bot トークンの方式では、これに `channel` を足して送る)。`--format` は `--dry-run` のときだけ指定できる
+  - 決定 (arata の ADR 0054): v0.13.0 までは「`--- route: … ---`」の行と payload が交互に並び、全体としては JSON ではなかった (jq にそのまま渡せない)。
+    機械が読む出力として成り立たせるために形を変えた (**互換を壊す変更**。版 1 はこの形から始める)。`messages[].route` (normal / urgent)、
+    `messages[].destination.kind` (webhook / channel)・`target` (実際に送る先。緊急用の送り先が無ければ normal)・`channel` (bot の方式のチャンネル ID) を出す。
+    Webhook の URL は出さない。送るものが無ければ `messages` は空の配列。入力が無いときも、送るはずだった「実行されていない」の通知を並べる (終了コードは 4 のまま)。
+    `payload` の形は Slack の仕様に従うので、スキーマでは縛らない。text の出力は変えていない
 
 ### 3-5. finding の ID の表示
 
@@ -536,8 +542,9 @@ aratam config check [-c aratam.yaml] [--format text|json]
                # 設定の形をオフラインで検査 (Slack・LLM に繋がない。問題があれば終了コード 2)。--format json は機械が読む形
 aratam schema [名前]                 # 機械が読む出力の JSON Schema (引数なしで名前の一覧。arata schema と同じものを出す)
 aratam notify  --in <dir> [-c aratam.yaml] [--dry-run [--format text|json]] [--force]
-               # --dry-run は送らずに標準出力へ。LLM は呼ぶ (--llm none で呼ばない)。--format json は送る payload そのもの
-aratam doctor  [-c aratam.yaml]   # LLM に短い問い合わせを 1 回、Webhook の環境変数の有無 (bot トークンなら auth.test) を確認 (送信はしない)
+               # --dry-run は送らずに標準出力へ。LLM は呼ぶ (--llm none で呼ばない)。--format json は全体が 1 つの JSON (送る payload は messages[].payload)
+aratam doctor  [-c aratam.yaml] [--format table|json]
+               # LLM に短い問い合わせを 1 回、Webhook の環境変数の有無 (bot トークンなら auth.test) を確認 (送信はしない)。--format json は機械が読む形
 aratam test-notify [-c aratam.yaml] # Slack に試験メッセージを 1 通送る
 ```
 
@@ -561,6 +568,9 @@ aratam test-notify [-c aratam.yaml] # Slack に試験メッセージを 1 通送
     開いた語彙 (版を上げずに値が足される): `llm.provider`、`slack.format`、`rows[].item`、`rows[].code`
   - 秘密は出さない。秘密ではないが判別に要らない値 (チャンネル ID、環境変数の名前) も出さない (PR の CI のログに出る)
   - text の出力は変えない (同じ行を、同じ内容から書く)
+- 決定 (arata の ADR 0054): `doctor --format json` (`aratam schema aratam-doctor`) は、table と同じ行を `rows` (`status`・`item`・`code`・`detail`) に出し、
+  ng の行が無ければ `ok: true`。終了コードと標準エラーの code は table と同じ。設定を読めないときは何も出さずに終了コード 2 (標準エラーに `CONFIG_INVALID`。
+  設定の形を機械で確かめるのは `config check --format json`)
 - 決定 (arata の ADR 0054): aratam は、report.json の `schema_version` が自分の知る版より大きければ、中身を読まずに `INPUT_INVALID` として扱う
   (「aratam を arata と同じ版に上げる」と緊急用に送る。終了コード 4)。版が上がるのは項目が消える・意味が変わるときで、古い aratam が読み違えたまま通知しないため。
   項目の無い報告 (足す前の arata の出力) は版 1 として読む。知らない項目は今までどおり無視する
