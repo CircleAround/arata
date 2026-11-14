@@ -329,7 +329,7 @@ LLM に求める出力:
 
 ### 3-5. finding の ID の表示
 
-通知を見た人や別の仕組みが、指摘を triage (`arata ack / snooze / resolve <ID>`、`examples/github-actions/arata-triage.yml` の `finding_id`) や作業の記録に結びつけられるよう、
+通知を見た人や別の仕組みが、指摘を triage (`arata ack / snooze / resolve <ID>`、`arata repo init` が書き出す `arata-triage.yml` の `finding_id`) や作業の記録に結びつけられるよう、
 finding を 1 件ずつ出す行に ID を出す。組み立ては `internal/notify/blocks.go` の `idTag` / `groupIDLine`。
 
 - 決定: 表記は `` `id: 7f16a4507445` `` (コード表記)。blocks と text で同じにし、行の末尾に置く (概要より目立たせない。Slack ではコード表記の中身をそのまま写せる)。

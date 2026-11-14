@@ -51,7 +51,7 @@ LLM の役割は「危険の判定を代行する」ことではなく「人が�
 | `arata help ai request_lines` | 1 リクエストが複数行のアプリのログ (Rails の既定のログなど) を `format: request_lines` で読む設定の書き方と確かめ方 | よい (読み取りのみ) |
 | `arata help ai user_id` | ユーザー ID の要るチェックのために、アプリへ足す 2 種類の行 (actor / auth) の形・出し方と、`request.user_id` / `request.auth` の書き方 | よい (読み取りのみ) |
 | `arata help ai playbook [<check>]` / `arata help ai threats [<id>]` | チェックごとの対処手順 / 公開された攻撃の事例と、arata で見えるもの・見えないものの対応表 | よい (読み取りのみ) |
-| `arata help ai runtime` | GitHub Actions で動かす環境 (リポジトリの設定・OIDC の信頼・secrets) のチェックリストと、`context_file` の下書きの手順 | よい (読み取りのみ) |
+| `arata help ai runtime` | GitHub Actions で動かす環境 (リポジトリの設定・OIDC の信頼・secrets) のチェックリストと、`context_file` の下書きの手順。リポジトリの一式を書き出す `arata repo init` と、この版の一式と比べる `arata repo init … --diff --format json` (読み取りのみ。スキーマは `arata schema repo-diff`) の使い方もここ | よい (読み取りのみ) |
 
 ## 終了コード
 

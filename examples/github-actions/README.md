@@ -1,15 +1,26 @@
 # GitHub Actions で定期実行する
 
-サーバーを持たずに arata と aratam を定期実行する見本です。[arata-audit.yml](arata-audit.yml) を自分のリポジトリの `.github/workflows/` に写して使います。
-実行環境は毎回消えるので、ストアは S3 に置きます (README「S3 ストア」、ADR 0034)。ここの値はすべて架空です。
-複数の AWS アカウントを 1 つのリポジトリで監査するなら [arata-audit-multi.yml](arata-audit-multi.yml) を使います (下の「複数のアカウントを 1 つのリポジトリで監査する」)。
+サーバーを持たずに arata と aratam を定期実行する形です。監査を回すリポジトリの一式は、**`arata repo init` で書き出します** (ADR 0059)。
+この文書は、その一式の手順の理由と、設定の点検のしかたを説明します。実行環境は毎回消えるので、ストアは S3 に置きます (README「S3 ストア」、ADR 0034)。ここの値はすべて架空です。
 
-| 見本 | いつ動くか | すること |
-|---|---|---|
-| [arata-audit.yml](arata-audit.yml) / [arata-audit-multi.yml](arata-audit-multi.yml) | 定時 (と手動) | 監査して Slack に通知する |
-| [arata-triage.yml](arata-triage.yml) | 手動 (Actions の画面) | finding を ack / snooze / resolve する (下の「finding を片付ける」) |
-| [arata-check.yml](arata-check.yml) | PR | 設定と allowlist.yaml の形を検査する (下の「PR で設定を検査する」) |
-| [arata-notify-test.yml](arata-notify-test.yml) | 手動 (Actions の画面) | 監査をせずに、Slack へ試験メッセージを 1 通送る (下の「Slack への送信だけを確かめる」) |
+```sh
+arata repo init --owner example-org --repo security-audit --accounts prod,staging --audit-account 111122223333 \
+  --store-bucket example-arata-store --region ap-northeast-1 --out ./security-audit
+```
+
+書き出される一式の見本が [examples/audit-repo](../audit-repo) です (上の引数に `--schedule` を足した出力そのもの。arata のテストが、雛形と 1 バイトも違わないことを固定しています)。
+置く順番は、書き出される [README.md](../audit-repo/README.md) にあります。
+
+| 書き出すもの | 中身 |
+|---|---|
+| [arata-audit.yml](../audit-repo/.github/workflows/arata-audit.yml) | 定時 (と手動) に、アカウントごとに監査して Slack に通知する |
+| [arata-triage.yml](../audit-repo/.github/workflows/arata-triage.yml) | 手動 (Actions の画面) で、finding を ack / snooze / resolve する (下の「finding を片付ける」) |
+| [arata-check.yml](../audit-repo/.github/workflows/arata-check.yml) | PR で、設定と allowlist.yaml の形を検査する (下の「PR で設定を検査する」) |
+| [arata-notify-test.yml](../audit-repo/.github/workflows/arata-notify-test.yml) | 手動で、監査をせずに Slack へ試験メッセージを 1 通送る (下の「Slack への送信だけを確かめる」) |
+| [.github/scripts/](../audit-repo/.github/scripts) | Slack への送り方の判別 (下の「Slack への送り方を判別する」) と、秘密が仮の値のままでないことの検査 |
+| [github/](../audit-repo/github) | GitHub の設定の Terraform (非公開、fork の禁止、main の保護、Actions の許可、environment `audit`)。下の「GitHub の設定を Terraform で当てる」 |
+| [github/secrets/](../audit-repo/github/secrets) | 秘密の箱の Terraform (秘密の名前を仮の値で作る。既にある秘密には書かない) |
+| [aws/<アカウント>/](../audit-repo/aws) | アカウントごとの `arata.yaml`・`allowlist.yaml`・`aratam.yaml` の雛形 (`arata config init`・`aratam config init` と同じ) |
 
 ```
 schedule → OIDC で実行用ロール ┬→ 読み取り専用ロールへ連鎖 → 監査対象 (読むだけ)
@@ -17,15 +28,21 @@ schedule → OIDC で実行用ロール ┬→ 読み取り専用ロールへ連
          → arata run → aratam notify → Slack
 ```
 
-arata の版は v0.14.0 以降を使います (見本は、Slack への送り方を `aratam config check --format json` で判別します。この出力は v0.14.0 から)。
-
-ワークフローのほかに、[scripts/arata-slack-method.sh](scripts/arata-slack-method.sh) を自分のリポジトリの `.github/scripts/` に写します (実行できる権限のまま。
-`git update-index --chmod=+x` で付けられます)。定時の監査・試しの送信・PR の検査が、Slack への送り方の判別にこの 1 つを呼びます (下の「Slack への送り方を判別する」)。
+- **ワークフローの版は、書き出した arata の版**です (`ARATA_VERSION`)。版を上げるとき・アカウントを足すとき・定時を有効にするときは、
+  同じ引数に `--force` を足して書き直し、PR の差分で確かめます。書き直すのは生成物 (`.github/`、`github/`、`README.md`、`.gitignore`) だけで、
+  `aws/<アカウント>/` は、どの指定でも書き直しません
+- **既にあるファイルは上書きしません**。無いファイルだけを作り、中身の違う生成物があれば一覧を出して終了コード 1 で終わります
+- `arata repo init --diff` は、何も書かずに、今ある一式とこの版の一式を比べます (差があれば終了コード 1。機械で読むなら `--format json`。スキーマは `arata schema repo-diff`)
+- **定時は最初は入りません**。導入の流れ (手順 5・6) が済んでから、`--schedule --force` で入れます。最初から入れると、ベースラインの収集の前に監査が走ります
+- アカウントが 1 つでも、同じ形です (`--accounts` に名前を 1 つ書きます。matrix の要素が 1 つになるだけです)。
+  以前の見本にあった 1 アカウント用の形 (`arata/` に設定を置く `arata-audit.yml`) は、持つのをやめました。その形で動いている監査は、そのまま動き続けます
 
 ## 用意するもの
 
 設定ファイルを置くリポジトリは **非公開** にしてください。allowlist にはアカウント ID や ARN が入り、Actions のログもリポジトリを読める人に見えます。
-このリポジトリは、ストアへの書き込み・Slack の Webhook・監査対象の読み取りロールへの入口を持ちます。fork の禁止、main の保護、Actions の設定などの前提は、下の「実行するリポジトリと環境を堅くする」にまとめています。手順 1〜7 と合わせて設定してください。
+このリポジトリは、ストアへの書き込み・Slack の Webhook・監査対象の読み取りロールへの入口を持ちます。fork の禁止、main の保護、Actions の設定などの前提は、
+書き出される `github/` の Terraform が宣言します (下の「GitHub の設定を Terraform で当てる」)。Terraform に無い項目と点検のしかたは、「実行するリポジトリと環境を堅くする」にまとめています。
+下の手順の番号は、この文書の中のものです (書き出される README.md の「置く順番」が、全体の順番です)。
 
 ### 1. 実行の仕組み (OIDC プロバイダ・ストアのバケット・実行用ロール)
 
@@ -52,7 +69,7 @@ aws cloudformation describe-stacks --stack-name arata-runner --query 'Stacks[0].
 | `GitHubRepository` (必須) | 設定ファイルを置くリポジトリ。OIDC トークンの `sub` の `repo:` の部分と同じ形で書く (下の注意) |
 | `AuditRoleArns` (必須) | 手順 2 で作る読み取り専用ロールの ARN。まだ無くてよい (名前は既定で `arata-readonly`)。複数ならカンマ区切り |
 | `OIDCProviderArn` | アカウントに GitHub の OIDC プロバイダが既にあれば、その ARN。空なら作る |
-| `GitHubEnvironment` | (勧める) GitHub の environment の名前。見本は `audit`。指定すると、ジョブに `environment: audit` を付けたワークフローだけが引き受けられる。空なら environment を使わない (下の注意) |
+| `GitHubEnvironment` | (勧める) GitHub の environment の名前。書き出す一式は `audit` (固定)。指定すると、ジョブに `environment: audit` を付けたワークフローだけが引き受けられる。空なら environment を使わない (下の注意) |
 | `GitHubBranch` | 既定は `main`。定時実行は既定のブランチでだけ動く。`GitHubEnvironment` が空なら `sub` に、指定したときは `ref` の条件に使う |
 | `GitHubWorkflowRef` | (任意) ワークフローのファイルまで絞る。下の注意 |
 | `KeepBranchSubject` | (移行のときだけ) `true` の間は、environment の `sub` とこれまでのブランチの `sub` の両方を受ける。既定は `false` (下の「既に動いている監査を environment に移す」) |
@@ -80,7 +97,7 @@ aws cloudformation describe-stacks --stack-name arata-runner --query 'Stacks[0].
 - **`GitHubWorkflowRef`**: 指定すると、トークンの `job_workflow_ref` が完全に一致するワークフローだけが引き受けられます
   (例 `example-org/security-audit/.github/workflows/arata-audit.yml@refs/heads/main`)。同じリポジトリの `main` にある別のワークフローからは使えなくなります。
   既定は空です (GitHub の文書は、再利用しないワークフローでのこの値を定めていないため。設計書 9 章)
-- **`GitHubEnvironment`**: 見本のワークフローは、秘密か OIDC を使うジョブに `environment: audit` を付けています (秘密を environment に置き、main のジョブにだけ渡すため。
+- **`GitHubEnvironment`**: 書き出すワークフローは、秘密か OIDC を使うジョブに `environment: audit` を付けています (秘密を environment に置き、main のジョブにだけ渡すため。
   下の「実行するリポジトリと環境を堅くする」の 5)。ジョブに `environment:` を付けると、`sub` は `repo:...:environment:<名前>` に変わり、ブランチは `sub` に入らなくなります。
   `GitHubEnvironment=audit` を指定すると、信頼の条件は次の 3 つの完全一致になります (ADR 0057)
   - `sub` = `repo:<GitHubRepository>:environment:audit` (その environment を参照するジョブだけ)
@@ -89,7 +106,7 @@ aws cloudformation describe-stacks --stack-name arata-runner --query 'Stacks[0].
 
   名前は GitHub の設定と、大文字・小文字まで同じに書きます (小文字の英数字とハイフンにしておくと取り違えません)。
   **environment を使えない・使わないとき** (非公開のリポジトリで GitHub Free のとき。environment の secrets と保護は効きません) は、`GitHubEnvironment` を書かず、
-  写したワークフローから `environment: audit` の行を消します。信頼はブランチの `sub` の形になり、秘密はリポジトリの secrets に置きます (5 の「environment を使えないとき」)
+  書き出したワークフローから `environment: audit` の行を消します (生成物を手で直すことになるので、`arata repo init --diff` は差を出し続け、`--force` は行を戻します)。信頼はブランチの `sub` の形になり、秘密はリポジトリの secrets に置きます (5 の「environment を使えないとき」)
 - **environment と `GitHubWorkflowRef`**: `GitHubWorkflowRef` は environment のときにも効きます。実行用ロールを使うワークフローが監査の 1 つだけなら、指定を勧めます
   (environment を参照する、main の別のワークフローからも引き受けられなくなります)
 - **スタックを消しても、バケットと OIDC プロバイダは残ります** (監査の状態を失わないため・プロバイダはアカウントで共有されるため)。作り直すときは `OIDCProviderArn` に残ったプロバイダを渡します
@@ -159,19 +176,23 @@ aws cloudformation deploy --stack-name arata-readonly \
 
 ### 3. 設定ファイル
 
-`arata/` に `arata.yaml`・`aratam.yaml`・`allowlist.yaml` を置きます (任意で `llm.context_file` のファイル)。
-`arata.yaml` と `allowlist.yaml` は `arata config init` で作ります。監査する側のアカウント (実行の仕組みを置いたアカウント) の指定は必須です (手順 2 の 2 つの場合)。
+アカウントごとに、`aws/<名前>/` に `arata.yaml`・`aratam.yaml`・`allowlist.yaml` を置きます (任意で `llm.context_file` のファイル)。
+`arata repo init` が、`--accounts` に書いた名前ごとに雛形を書き出します (中身は `arata config init`・`aratam config init` と同じで、
+`name`・`store`・`aws.region`・`aws.profile` は引数から記入済みです)。監査する側のアカウント (実行の仕組みを置いたアカウント) の指定は必須です (手順 2 の 2 つの場合)。
 
 ```sh
-arata config init --audit-account 111122223333 --out arata/arata.yaml   # 別のアカウントから監査する: arata/allowlist.yaml にも書く
-arata config init --audit-account none --out arata/arata.yaml           # 同じアカウントの中で動かす: 実行用ロールを arn: で allowlist に足す
+arata repo init … --audit-account 111122223333 …   # 別のアカウントから監査する: 各アカウントの allowlist.yaml にも書く
+arata repo init … --audit-account none …           # 同じアカウントの中で動かす: 実行用ロールを arn: で allowlist に足す
 ```
+
+`--audit-account` は全アカウントに同じ値が入ります。実行の仕組みと同じアカウントの監査対象が 1 つだけあるときは、ID で書き出してから、
+そのアカウントの `arata.yaml` の `audit_account` を `none` にし、`allowlist.yaml` の `account:` の項目を実行用ロールの `arn:` に直します (`arata config check` が食い違いを確かめます)。
 
 選んだ結果は `arata.yaml` の `audit_account` に残り、PR の `arata config check` (下の「PR で設定を検査する」) が、allowlist に書き忘れていないかを確かめます。
 
 ```yaml
-# arata/arata.yaml
-store: s3://example-arata-store/example   # 手順 1 の出力 StoreUrl (の下の prefix)。ワークフローの ARATA_STORE_URL と同じ値
+# aws/prod/arata.yaml (arata repo init が記入済み)
+store: s3://example-arata-store/prod      # 手順 1 の出力 StoreUrl の下の、アカウントの名前の prefix。ワークフローの ARATA_STORE_URL と同じ値
 aws:
   region: ap-northeast-1
   profile: arata-audit                    # ワークフローが書くプロファイル。監査の読み取りはこのロールで行う
@@ -181,7 +202,7 @@ aws:
 バケットを別のロールで書くときだけ、ワークフローの AWS の設定に `[profile arata-store]` (`role_arn` と `credential_source = Environment`) を足して `store_profile: arata-store` と書きます。`credential_source` は `role_arn` なしでは使えません。
 
 ```yaml
-# arata/aratam.yaml (抜粋)
+# aws/prod/aratam.yaml (抜粋)
 max_age: 26h
 on_quiet: short            # 死活監視を兼ねるので silent にしない
 timezone: Asia/Tokyo       # 通知に出す時刻のゾーン (表示だけ。書かなければ UTC)
@@ -196,7 +217,7 @@ bot トークンで送るなら (手順 4 の「bot トークンで送る」)、
 チャンネル ID は秘密ではないので、設定に書きます。
 
 ```yaml
-# arata/aratam.yaml (抜粋。bot トークンの方式)
+# aws/prod/aratam.yaml (抜粋。bot トークンの方式)
 slack:
   webhook_env: ""
   urgent_webhook_env: ""
@@ -213,7 +234,7 @@ LLM で要約するなら `provider: bedrock` にします。実行用ロール�
 ```
 
 ```yaml
-# arata/aratam.yaml (抜粋)
+# aws/prod/aratam.yaml (抜粋)
 llm:
   provider: bedrock
   model: <推論プロファイル ID>   # BedrockInferenceProfileArn の末尾と同じもの (ARN をそのまま書いてもよい)
@@ -229,6 +250,7 @@ llm:
 ### 4. environment と Secrets
 
 秘密は、リポジトリの secrets ではなく **environment の secrets** に置きます。先に environment を作ります (設定できるのは、リポジトリの admin を持つ人です)。
+書き出される `github/` の Terraform を当てると、下の 1・2・4 の状態になります (「GitHub の設定を Terraform で当てる」)。画面で作るときは、次のとおりです。
 
 1. リポジトリの Settings → Environments → 「New environment」で `audit` を作ります (手順 1 の `GitHubEnvironment` と同じ名前)
 2. 「Deployment branches and tags」を「Selected branches and tags」にし、`main` だけを足します。**これを忘れると、どのブランチのジョブにも秘密が渡ります**
@@ -246,31 +268,34 @@ gh api repos/example-org/security-audit/environments/audit/deployment-branch-pol
 | 名前 | 中身 |
 |---|---|
 | `ARATA_RUNNER_ROLE_ARN` | 実行用ロールの ARN (手順 1 の出力 `RunnerRoleArn`) |
-| `ARATA_AUDIT_ROLE_ARN` | 読み取り専用ロールの ARN (手順 2 の出力 `RoleArn`) |
+| `ARATA_AUDIT_ROLE_ARNS` | 読み取り専用ロールの ARN (手順 2 の出力 `RoleArn`) を、アカウントの名前から引く JSON (下の「アカウントを足す」) |
 | `ARATAM_SLACK_WEBHOOK` | 通常用の Webhook |
 | `ARATAM_SLACK_URGENT_WEBHOOK` | 緊急用の Webhook |
 | `ARATA_ALERT_WEBHOOK` | 定時の通知が送れなかったことを知らせる、別の Webhook (下の「定時の通知が送れなかったとき」) |
+
+書き出される `github/secrets/` の Terraform は、これらの名前を **仮の値** で先に作ります (秘密の箱)。値を入れる人は、画面で名前を迷いません。
+既にある秘密には書きません (下の「GitHub の設定を Terraform で当てる」)。仮の値が残っている秘密を使おうとしたワークフローは、秘密の名前を出して止まります。
 
 **Slack の疎通を確かめる**: Webhook を environment の secrets に入れたら、同じ URL で手元から試験メッセージを 1 通送ります。チャンネルと Webhook の対応 (通常用と緊急用の取り違え) は、送ってみないと分かりません。
 
 ```sh
 read -rs ARATAM_SLACK_WEBHOOK && export ARATAM_SLACK_WEBHOOK                  # 貼り付けて Enter (シェルの履歴に残さない)
 read -rs ARATAM_SLACK_URGENT_WEBHOOK && export ARATAM_SLACK_URGENT_WEBHOOK
-aratam doctor -c arata/aratam.yaml                  # 送らない。Webhook の環境変数があるかと、LLM の疎通を見る
-aratam test-notify -c arata/aratam.yaml             # 実際に送る。通常用のチャンネルに 1 通
-aratam test-notify -c arata/aratam.yaml --urgent    # 実際に送る。緊急用のチャンネルに 1 通
+aratam doctor -c aws/prod/aratam.yaml                  # 送らない。Webhook の環境変数があるかと、LLM の疎通を見る
+aratam test-notify -c aws/prod/aratam.yaml             # 実際に送る。通常用のチャンネルに 1 通
+aratam test-notify -c aws/prod/aratam.yaml --urgent    # 実際に送る。緊急用のチャンネルに 1 通
 ```
 
 - `doctor` は Slack に何も送りません (届くかは分かりません)。`test-notify` は本当に届くので、チャンネルの人に一言伝えてから実行します
-- secrets に入れた値そのものは、[arata-notify-test.yml](arata-notify-test.yml) を Actions の画面から実行して確かめられます (監査は回りません。下の「Slack への送信だけを確かめる」)。
+- secrets に入れた値そのものは、[arata-notify-test.yml](../audit-repo/.github/workflows/arata-notify-test.yml) を Actions の画面から実行して確かめられます (監査は回りません。下の「Slack への送信だけを確かめる」)。
   最初の `workflow_dispatch` の実行 (手順 5 の最後) でも確かめられます。`on_quiet: short` なら、新規が無くても 1 行届きます。
-  決定: 監査のワークフローに test-notify 用の入力は足しません。入力を増やすと監査のワークフローの分岐が増えるためです。送信だけを確かめる手段は、別の見本にしました
-  (試しの実行の入力 `dry_run` は監査のワークフローに足しています。監査と同じ認証・設定・版で動かす必要があり、別の見本にすると同じ step を二重に持つためです。下の「定時の前に試す」)
+  決定: 監査のワークフローに test-notify 用の入力は足しません。入力を増やすと監査のワークフローの分岐が増えるためです。送信だけを確かめる手段は、別のワークフローにしました
+  (試しの実行の入力 `dry_run` は監査のワークフローに足しています。監査と同じ認証・設定・版で動かす必要があり、別のワークフローにすると同じ step を二重に持つためです。下の「定時の前に試す」)
 
 #### bot トークンで送る (secret は 1 つ)
 
 Webhook はチャンネルごとに URL (秘密) が要ります。bot トークンなら秘密は 1 つで、送り先はチャンネル ID を `aratam.yaml` に書くだけです。
-監査対象ごとにチャンネルを分けるとき (下の「複数のアカウント」) に向きます。Webhook の 2 つの secret の代わりに、次の 1 つを置きます。
+監査対象ごとにチャンネルを分けるとき (下の「アカウントを足す」) に向きます。Webhook の 2 つの secret の代わりに、次の 1 つを置きます。
 
 | 名前 | 中身 |
 |---|---|
@@ -284,19 +309,19 @@ Slack アプリは、利用する組織が manifest から自分で作ります 
 2. 「Install to Workspace」で入れ、「OAuth & Permissions」の Bot User OAuth Token を secret `ARATAM_SLACK_BOT_TOKEN` に入れます
 3. 通知先のチャンネルで `/invite @arata` を実行します (緊急用のチャンネルを分けるなら、そちらでも)。招待していないチャンネルには送れません
 4. チャンネル ID (チャンネルの詳細の一番下。`C0123456789` の形) を `aratam.yaml` の `slack.channel` / `urgent_channel` に書きます (手順 3)
-5. ワークフローは直しません。見本は `aratam.yaml` から送り方を判別し、bot トークンの方式なら `ARATAM_SLACK_BOT_TOKEN` だけを notify に渡します
+5. ワークフローは直しません。ワークフローは `aratam.yaml` から送り方を判別し、bot トークンの方式なら `ARATAM_SLACK_BOT_TOKEN` だけを notify に渡します
    (下の「Slack への送り方を判別する」)
 
 ```sh
 read -rs ARATAM_SLACK_BOT_TOKEN && export ARATAM_SLACK_BOT_TOKEN   # 貼り付けて Enter (シェルの履歴に残さない)
-aratam doctor -c arata/aratam.yaml                  # 送らない。auth.test でトークンが有効かと、LLM の疎通を見る
-aratam test-notify -c arata/aratam.yaml             # 実際に送る。通常用のチャンネルに 1 通
-aratam test-notify -c arata/aratam.yaml --urgent    # 実際に送る。緊急用のチャンネルに 1 通
+aratam doctor -c aws/prod/aratam.yaml                  # 送らない。auth.test でトークンが有効かと、LLM の疎通を見る
+aratam test-notify -c aws/prod/aratam.yaml             # 実際に送る。通常用のチャンネルに 1 通
+aratam test-notify -c aws/prod/aratam.yaml --urgent    # 実際に送る。緊急用のチャンネルに 1 通
 ```
 
 - `doctor` は投稿しないので、bot がチャンネルにいるかは分かりません (`chat:write` だけでは調べられません)。`test-notify` が `not_in_channel` で失敗したら、
   そのチャンネルで `/invite @arata` を実行します。`channel_not_found` は、チャンネル ID の誤りか、招待していない非公開チャンネルです
-- トークンを手元に持たない人は、[arata-notify-test.yml](arata-notify-test.yml) で同じことを確かめられます (下の「Slack への送信だけを確かめる」)
+- トークンを手元に持たない人は、[arata-notify-test.yml](../audit-repo/.github/workflows/arata-notify-test.yml) で同じことを確かめられます (下の「Slack への送信だけを確かめる」)
 - 同じワークスペースの複数のチャンネルに送るなら、アプリもトークンも 1 つです。監査対象ごとに `aratam.yaml` のチャンネル ID を変えるだけです。
   別の組織と Slack Connect で共有するチャンネルも、招待すれば同じアプリで送れます
 - トークンのローテーションは有効にしません (manifest は無効にしてあります)。有効にするとトークンが 12 時間で切れますが、aratam は更新の仕組みを持ちません
@@ -310,8 +335,8 @@ aratam test-notify -c arata/aratam.yaml --urgent    # 実際に送る。緊急�
 
 ```sh
 # ~/.aws/config に同じ名前の arata-audit のプロファイルを用意し、ストアを書ける認証を標準の連鎖で渡す
-AWS_PROFILE=example-store-writer arata doctor -c arata/arata.yaml
-AWS_PROFILE=example-store-writer arata init -c arata/arata.yaml
+AWS_PROFILE=example-store-writer arata doctor -c aws/prod/arata.yaml
+AWS_PROFILE=example-store-writer arata init -c aws/prod/arata.yaml
 ```
 
 `store: s3://` のまま実行するので、結果はそのままバケットへ置かれ、次のワークフローの run が続きから動きます。実行できたら `workflow_dispatch` で 1 回動かして確かめます (その前に手順 6 と、LLM を使うなら手順 7)。
@@ -321,7 +346,7 @@ AWS_PROFILE=example-store-writer arata init -c arata/arata.yaml
   - 例: CloudTrail のみ・有効なリージョン 17 のアカウントで、既定の 7 日分が約 20 分 (約 1.1 万件)。2 回目以降の daily は Actions で約 3 分
 - **手元の認証の期限で止まり得ます**: 収集は読み取りの認証 (`arata-audit` のプロファイル) を、結果の保存はストアを書く認証を使います。
   どちらも期限が収集より短いと途中で切れます。自動で更新される認証 (`role_arn` を書いたプロファイルや IAM Identity Center のプロファイル) を使うか、期限に収まる `--window` にします
-  - 読み取りの認証だけが切れたとき: その日の収集が失敗して止まり (終了コード 3)、終わった日までをストアに確定します。認証を取り直して `arata init --resume -c arata/arata.yaml` で続きから再開できます
+  - 読み取りの認証だけが切れたとき: その日の収集が失敗して止まり (終了コード 3)、終わった日までをストアに確定します。認証を取り直して `arata init --resume -c aws/prod/arata.yaml` で続きから再開できます
   - ストアを書く認証も切れていたとき: 最後の保存ができず、**その実行で収集した分は失われます** (メッセージで知らせます。S3 のストアは実行の最後にまとめて書き戻すため)。
     `arata init --resume` (保存済みの init が無ければ `arata init`) でやり直します
 - **中断しても続きから再開できます**: Ctrl-C (SIGINT) や SIGTERM で止めると、終わった日までをストアに確定して終了コード 3 で終わります。
@@ -338,13 +363,13 @@ AWS_PROFILE=example-store-writer arata init -c arata/arata.yaml
 
 ```sh
 out=$(mktemp -d)
-AWS_PROFILE=example-store-writer arata run -c arata/arata.yaml --profile daily --out "$out/daily"
-aratam notify -c arata/aratam.yaml --in "$out/daily" --dry-run --llm none    # 送らずに、通知になる内容を標準出力へ
-AWS_PROFILE=example-store-writer arata review -c arata/arata.yaml            # 未対応の一覧
+AWS_PROFILE=example-store-writer arata run -c aws/prod/arata.yaml --profile daily --out "$out/daily"
+aratam notify -c aws/prod/aratam.yaml --in "$out/daily" --dry-run --llm none    # 送らずに、通知になる内容を標準出力へ
+AWS_PROFILE=example-store-writer arata review -c aws/prod/arata.yaml            # 未対応の一覧
 
 # weekly も同じ (アカウントの今の状態を見るチェックは weekly にあり、最初は多くなりやすい)
-AWS_PROFILE=example-store-writer arata run -c arata/arata.yaml --profile weekly --out "$out/weekly"
-aratam notify -c arata/aratam.yaml --in "$out/weekly" --dry-run --llm none
+AWS_PROFILE=example-store-writer arata run -c aws/prod/arata.yaml --profile weekly --out "$out/weekly"
+aratam notify -c aws/prod/aratam.yaml --in "$out/weekly" --dry-run --llm none
 ```
 
 - **手元の run もストアに確定します** (`store: s3://` のまま実行するため)。ここで出た finding は報告済みになり、以後の定時の実行は「新規」としては報せません
@@ -354,7 +379,7 @@ aratam notify -c arata/aratam.yaml --in "$out/weekly" --dry-run --llm none
   確認が済んだものは `arata ack`、直したものは `arata resolve`、後で直すものは `arata snooze --until` にします。直すべきものは、ここで担当を決めます
 - `$out` には ARN などが入っています。見終わったら消します
 - 通知の本文には上限があり、多いときは情報の行や理由文から削って収めます (全文はストアの `reports/`)。それでも最初の 1 通が長くなるのは変わらないので、この手順を踏みます
-- 決定: 見本のワークフローに「通知しない」入力は足しません。手順 5 で手元にストアを書ける認証が既にあり、同じ場所で続けて行えること、
+- 決定: ワークフローに「通知しない」入力は足しません。手順 5 で手元にストアを書ける認証が既にあり、同じ場所で続けて行えること、
   Actions で動かすと中身を見る場所が無いこと (ログと Summary には finding の中身を出さない方針です) が理由です
 
 ### 7. 監査対象の前提 (LLM を使うとき)
@@ -364,7 +389,7 @@ aratam が LLM に「この監査対象の前提」として渡す Markdown で�
 判定 (重大度・緊急用に送るか) は規則が決めるので、前提を書いても変わりません。
 
 ```yaml
-# arata/aratam.yaml (抜粋)
+# aws/prod/aratam.yaml (抜粋)
 llm:
   context_file: aratam-context.md   # 設定ファイルと同じディレクトリに置く (16 KiB まで)
 ```
@@ -384,6 +409,53 @@ llm:
 最初の収集と最初の run (手順 5・6) の後なら、AI (LLM) に下書きさせられます。`arata help ai runtime` を読ませ、`arata review` の結果と、読み取り専用ロールで読める構成から下書きを PR にさせて、
 **人が事実を確かめてマージします**。事実が変わったら (デプロイの方式、送信元、ロールの入れ替え) PR で直します。古い前提は、LLM に誤った安心を書かせます。
 `aratam config check` (下の「PR で設定を検査する」) が、ファイルが読めるかと大きさを確かめます。
+
+## GitHub の設定を Terraform で当てる
+
+`arata repo init` は、GitHub の側の設定を Terraform (`integrations/github` の provider) の宣言として書き出します。画面で 1 つずつ設定すると、
+付け忘れても動くので気づけません (environment の「デプロイできるブランチ」を忘れると、どのブランチのジョブにも秘密が渡ります)。
+宣言にしておけば、何が設定されるかを plan で先に読めます。**当てるのは、リポジトリの admin を持つ人が手元で**行います。書き込みのできる鍵を CI に置きません。
+
+```sh
+export GITHUB_TOKEN="$(gh auth token)"       # 認証は環境変数で渡す。ファイルに書かない
+terraform -chdir=github init
+terraform -chdir=github plan                 # 何が変わるかを読む
+terraform -chdir=github apply
+terraform -chdir=github/secrets init         # 秘密の箱は、github/ の後 (environment が要る)
+terraform -chdir=github/secrets plan         # 「作る」と出た名前が、まだ無いことを確かめる
+terraform -chdir=github/secrets apply
+```
+
+**`github/` が宣言するもの** (セキュリティに効く項目だけ。説明・トピック・マージの方式などは宣言に持たず、画面で自由に変えられます)
+
+| 設定 | 中身 | 点検 (下の節) |
+|---|---|---|
+| リポジトリ | 非公開、fork の禁止。新しく作るときは最初のコミット付き (空のリポジトリには PR を出せないため) | 1 |
+| main のルールセット | PR 必須、削除と force push の禁止、必須のチェック (`check` = `arata-check.yml`)。迂回できる主体は置かない | 4 |
+| Actions の許可 | GitHub 製と `aws-actions/configure-aws-credentials` だけ。commit SHA の固定を必須 | 6 |
+| `GITHUB_TOKEN` | 既定は read。Actions に PR を承認させない | 6 |
+| environment `audit` | デプロイできるブランチは `main` だけ。レビュー担当と待ち時間は付けない | 5 |
+
+- リポジトリが既にあるときは、先に `terraform -chdir=github import github_repository.audit <リポジトリの名前>` で取り込みます (取り込まずに当てると、「同じ名前がある」というエラーで止まります)
+- リポジトリには `prevent_destroy` を付けています。`terraform destroy` でリポジトリを消しません
+- PR の承認の数は変数です (既定は 0。`-var required_approving_review_count=1`)。2 人以上で運用するなら 1 以上を勧めます
+- **宣言に無いもの**は、下の節の `gh api` で点検します: fork の PR へのワークフローの権限 (2)、OIDC の `sub` の ID 入りの形 (3)、組織の fork の設定 (1)、書き込み権限を持つ人 (4)
+- provider は完全な版で固定し、`.terraform.lock.hcl` (linux と darwin の amd64・arm64 のハッシュ) を一緒に書き出します。版を上げるのは arata の側で、新しい版の `arata repo init --force` で届きます
+- state は手元に残ります (`.gitignore` 済み)。別の人が当てるときは、`import` で取り込み直します
+- main の保護と environment は、非公開のリポジトリでは GitHub の有料プランが要ります。Terraform を使わないときは、下の節の手順を画面で行います
+
+**`github/secrets/` (秘密の箱)** は、ワークフローが使う秘密の名前を、environment `audit` に **仮の値** で作ります。**既にある秘密には書きません**。
+
+- 既にある名前は、`import` で state に取り込むだけです (読むだけで、値は state に入りません)。一覧に無い名前だけを作ります
+- 値の変更は見ません (`ignore_changes`)。人が本物の値を入れた後に当て直しても、何も変わりません。`prevent_destroy` で、`terraform destroy` でも消しません
+- state を失っても、もう一度当てれば、全部の名前が「既にある」になり、取り込むだけで終わります
+- **計画を見てから承認するまでの間に、同じ名前の秘密を入れないでください**。一覧を読むのは計画のときなので、その後に入った秘密は、仮の値で置き換わります。値を入れるのは、箱を作った後です
+- 仮の値は決まった 1 つの文字列で、秘密ではありません。ワークフローは、秘密を使う前にこの文字列と比べ、一致したら秘密の名前を出して止まります
+  (`.github/scripts/arata-secret-check.sh`)。定時の通知が送れなかったことを知らせる `ARATA_ALERT_WEBHOOK` は、ふだん使われないので、監査のジョブの最初に確かめます。
+  Slack の秘密は、使う送り方のものだけを確かめます (Webhook の方式なら、bot トークンの箱は仮の値のままでかまいません)
+- 箱を使わないなら、`github/secrets/` を当てずに、画面か `gh secret set --env audit <名前>` で値を入れます
+
+arata のテストは、この Terraform を偽の GitHub API に当てて、「既にある秘密に 1 度も書き込まない」ことを確かめています (実際の GitHub では確かめていません。ADR 0059)。
 
 ## 実行するリポジトリと環境を堅くする
 
@@ -418,7 +490,7 @@ gh api repos/example-org/security-audit/actions/permissions/fork-pr-workflows-pr
 - `run_workflows_from_fork_pull_requests: false` (`send_write_tokens_to_workflows`・`send_secrets_and_variables` も `false`)。
   fork を禁止していれば fork の PR は来ませんが、禁止が外れたときの 2 段目として閉じておきます (Settings → Actions → General → 「Fork pull request workflows」。組織で無効なら、リポジトリでは有効にできません)
 - **`pull_request_target` を使いません** (`workflow_run` も)。PR の内容を、secrets を持つ文脈で動かす経路になります
-- `pull_request` で動かすのは [arata-check.yml](arata-check.yml) の形に留めます。権限は `contents: read` だけで、secrets も OIDC も使いません。
+- `pull_request` で動かすのは [arata-check.yml](../audit-repo/.github/workflows/arata-check.yml) の形に留めます。権限は `contents: read` だけで、secrets も OIDC も使いません。
   secrets か OIDC を使うワークフロー (監査、finding の片付け) は、定時と手動でだけ動かします
 
 ### 3. OIDC の信頼は、ID 入りの `sub` で 1 つの environment と 1 つのブランチに絞る
@@ -474,12 +546,12 @@ gh api repos/example-org/security-audit/keys --jq '.[] | {title, read_only}'
 リポジトリの secrets は、**どのブランチのワークフローからも読めます**。書き込み権限のある人 (と、その人のアカウントを乗っ取った人) は、ブランチにワークフローを足して push すれば、
 main の保護を通らずに読み出せます。乗っ取ったアカウントでワークフローを書き換え、CI の秘密を持ち出す攻撃は、実際に広く起きています。
 
-見本は、秘密を **GitHub の environment (`audit`) の secrets** に置きます (手順 4)。
+書き出す一式は、秘密を **GitHub の environment (`audit`) の secrets** に置きます (手順 4)。
 
 - environment の secrets は、その environment を参照するジョブにしか渡りません。デプロイできるブランチを main だけにすると、ほかのブランチのジョブは environment を使えず、
   始まる前に止まります (秘密も OIDC のトークンも渡りません)
-- 見本のうち、秘密か OIDC を使うジョブ (監査、finding の片付け、Slack への送信のテスト) は `environment: audit` を付けています。
-  PR の検査 ([arata-check.yml](arata-check.yml)) は秘密も OIDC も使わないので、付けていません (付けると PR のブランチで動けません)
+- ワークフローのうち、秘密か OIDC を使うジョブ (監査、finding の片付け、Slack への送信のテスト) は `environment: audit` を付けています。
+  PR の検査 ([arata-check.yml](../audit-repo/.github/workflows/arata-check.yml)) は秘密も OIDC も使わないので、付けていません (付けると PR のブランチで動けません)
 - 実行用ロールも、同じ environment に絞ります (手順 1 の `GitHubEnvironment=audit`)。environment の `sub` にはブランチが入らないので、`runner.yaml` は `ref` の条件でもブランチに絞ります。
   デプロイできるブランチの設定が外れても、ほかのブランチからは実行用ロールを引き受けられません (**秘密のほうは、この設定だけが守りです**)
 - 読み出されて困るのは Slack の Webhook か bot トークンです (偽の通知を送れます。bot トークンは、bot を招待したすべてのチャンネルに送れます)。漏れた疑いがあれば Webhook を作り直します
@@ -509,16 +581,16 @@ gh api repos/example-org/security-audit/actions/secrets --jq '[.secrets[].name]'
 
 #### environment を使えないとき
 
-非公開のリポジトリで GitHub Free のときは、environment の secrets と保護が効きません。このときは次の形にします (これまでの見本と同じ守りです)。
+非公開のリポジトリで GitHub Free のときは、environment の secrets と保護が効きません。このときは次の形にします (environment を使う前の見本と同じ守りです)。
 
 - `runner.yaml` に `GitHubEnvironment` を書かない (信頼は `sub` = `repo:...:ref:refs/heads/main` の 1 つ)
-- 写したワークフローから `environment: audit` の行を消す (残すと、実行用ロールを引き受けられません)
+- 書き出したワークフローから `environment: audit` の行を消す (残すと、実行用ロールを引き受けられません)。`github/` の Terraform は当てません (environment を作るため)
 - 秘密はリポジトリの secrets に置く。守りは 4 の「書き込み権限を持つ人を最小に」だけになり、書き込み権限のある人は別のブランチから秘密を読み出せます。
   ロールの ARN は読めても、`sub` が合わないので引き受けられません (分かるのはアカウント ID です)
 
 #### 既に動いている監査を environment に移す
 
-これまでの見本 (environment なし、リポジトリの secrets) で動いている監査を、定時の実行を止めずに移す順番です。
+environment を使う前の見本 (environment なし、リポジトリの secrets) で動いている監査を、定時の実行を止めずに移す順番です。
 `KeepBranchSubject=true` の間は、実行用ロールが environment の `sub` とブランチの `sub` の両方を受けるので、ワークフローを変える前後のどちらでも引き受けられます。
 
 1. **environment を作り、スタックを更新する**。手順 4 の 1・2 のとおり `audit` を作り、デプロイできるブランチを `main` だけにします (秘密はまだ入れなくてかまいません)。
@@ -537,7 +609,7 @@ gh api repos/example-org/security-audit/actions/secrets --jq '[.secrets[].name]'
    秘密は、まだリポジトリの secrets から読まれます (environment を参照するジョブにも、リポジトリの secrets は渡ります)
 3. **秘密を environment に移す**。同じ名前で environment の secrets に入れます (GitHub から値は読み出せないので、ARN はスタックの出力から、Webhook や bot トークンは Slack の設定から用意します。
    この機会に Webhook を作り直す・トークンを入れ直すと、これまでに読み出されていた場合にも備えられます)。
-   同じ名前が両方にあるときは environment の値が使われます。[arata-notify-test.yml](arata-notify-test.yml) で届くことを確かめてから、**リポジトリの secrets を消します**
+   同じ名前が両方にあるときは environment の値が使われます。[arata-notify-test.yml](../audit-repo/.github/workflows/arata-notify-test.yml) で届くことを確かめてから、**リポジトリの secrets を消します**
 4. **移行の期間の許可を外す**。スタックを `KeepBranchSubject=false` で更新し、もう一度、手動の実行で確かめます
 
    ```sh
@@ -569,26 +641,26 @@ gh api repos/example-org/security-audit/actions/permissions/access
 Settings → Actions → General で設定します。
 
 - 許可する action: `allowed_actions: selected` で、GitHub 製 (`github_owned_allowed: true`) と `aws-actions/configure-aws-credentials@*` (`patterns_allowed`) だけ。
-  見本が使う action は `actions/checkout` とこれの 2 つです。action を足すときは、ここにも足します (足さないとワークフローが起動しません)
+  ワークフローが使う action は `actions/checkout` とこれの 2 つです。action を足すときは、ここにも足します (足さないとワークフローが起動しません)
 - 「Require actions to be pinned to a full-length commit SHA」を有効にします (`sha_pinning_required: true`)
 - `GITHUB_TOKEN` の既定は read (`default_workflow_permissions: read`)、「Actions が PR を作成・承認する」は無効 (`can_approve_pull_request_reviews: false`)
 - ほかのリポジトリからワークフローを使わせません (`access` の応答が `none`)
-- checkout は `persist-credentials: false` にします (見本のとおり)。トークンを作業ツリーに残しません
+- checkout は `persist-credentials: false` にします (書き出すワークフローのとおり)。トークンを作業ツリーに残しません
 
-### 7. 見本のワークフローが満たしていること
+### 7. 書き出すワークフローが満たしていること
 
-見本をそのまま写せば、上の前提に合います (arata のリポジトリのテストが固定しています)。書き換えるときは崩さないでください。
+`arata repo init` が書き出すワークフローは、上の前提に合います (arata のリポジトリのテストが固定しています)。生成物は手で直さないでください。
 
 - ワークフローの先頭は `permissions: {}`。権限はジョブごとで、監査と片付けは `id-token: write` と `contents: read`、PR の検査と送信のテストは `contents: read` だけ
-- secrets か OIDC を使う見本は `schedule` と `workflow_dispatch` でだけ動き、`pull_request_target`・`workflow_run` を使わない
+- secrets か OIDC を使うワークフローは `schedule` と `workflow_dispatch` でだけ動き、`pull_request_target`・`workflow_run` を使わない
 - secrets か OIDC を使うジョブは `environment: audit` で動く (名前は式にせず、そのまま書く)。PR の検査には付けない
 - action は 2 つだけで、どちらも commit SHA で固定。checkout は `persist-credentials: false`
 - `run:` に式を埋め込まず、secrets は使う step にだけ渡す
 - 手動実行の `dry_run` では、通知せず、ストアのバケットに何も置かず、結果は件数と重大度だけをログに出す
 
-## 複数のアカウントを 1 つのリポジトリで監査する
+## アカウントを足す
 
-[arata-audit-multi.yml](arata-audit-multi.yml) を使います。アカウントごとにジョブを分け (matrix)、設定・ストアの prefix・排他をアカウントごとにします。1 つのアカウントが失敗しても、ほかは続きます。
+ワークフローは、アカウントごとにジョブを分け (matrix)、設定・ストアの prefix・排他をアカウントごとにします。1 つのアカウントが失敗しても、ほかは続きます。
 
 ```
 aws/
@@ -598,7 +670,7 @@ aws/
 
 ```yaml
 # aws/prod/arata.yaml
-store: s3://example-arata-store/prod      # prefix はディレクトリの名前と同じにする
+store: s3://example-arata-store/prod      # prefix はディレクトリの名前と同じ
 aws:
   region: ap-northeast-1
   profile: arata-audit
@@ -606,12 +678,13 @@ aws:
 
 ```yaml
 # aws/prod/aratam.yaml (抜粋)
-name: prod                                # 通知に出す名前。アカウントごとに変えると Slack で見分けられる
+name: prod                                # 通知に出す名前。アカウントごとに違うので Slack で見分けられる
 ```
 
-1 つのアカウントのときとの違いは次のとおりです。
+アカウントを足すときは、`--accounts` に名前を足して `--force` で書き直します (新しい `aws/<名前>/` が作られ、ワークフローの matrix と選択肢に名前が入ります。既にある `aws/` の設定は変わりません)。
+ほかに要るのは次のとおりです。
 
-- **手順 1**: 実行の仕組みは 1 つです。`AuditRoleArns` に全アカウントの読み取り専用ロールをカンマ区切りで渡し、`StorePrefix` は空のままにします
+- **実行の仕組み**: 1 つのままです。`AuditRoleArns` に全アカウントの読み取り専用ロールをカンマ区切りで渡し、`StorePrefix` は空のままにします
 
   ```sh
   aws cloudformation deploy --stack-name arata-runner \
@@ -623,22 +696,20 @@ name: prod                                # 通知に出す名前。アカウン
       AuditRoleArns=arn:aws:iam::123456789012:role/arata-readonly,arn:aws:iam::444455556666:role/arata-readonly
   ```
 
-- **手順 2**: 監査対象のアカウントごとに、同じ `TrustedPrincipalArn` で 1 回ずつ実行します
-- **ワークフロー**: `matrix.account` にディレクトリの名前を並べます (小文字の英数字とハイフン)。アカウントを足すときは、ディレクトリ・matrix・`AuditRoleArns`・下の secret の 4 か所です
-- **Secrets**: environment は全アカウントで 1 つ (`audit`) です。`ARATA_AUDIT_ROLE_ARN` の代わりに `ARATA_AUDIT_ROLE_ARNS` を 1 つ置きます。名前からロールを引く JSON です
+- **読み取り専用ロール**: 監査対象のアカウントごとに、同じ `TrustedPrincipalArn` で 1 回ずつ実行します
+- **Secrets**: environment は全アカウントで 1 つ (`audit`) です。`ARATA_AUDIT_ROLE_ARNS` は、名前からロールを引く JSON です。足したアカウントの行を足します
 
   ```json
   {"prod": "arn:aws:iam::123456789012:role/arata-readonly", "staging": "arn:aws:iam::444455556666:role/arata-readonly"}
   ```
 
   アカウントごとに secret を分けて `secrets[...]` で選ぶ形にはしません (式で動的に選ぶと、ジョブにすべての secrets が渡ります)
-- **allowlist**: 監査する側のアカウントを、各アカウントの `allowlist.yaml` に書きます。アカウントを足すたびに
-  `arata config init --audit-account 111122223333 --out aws/<名前>/arata.yaml` で作れば書き忘れません (実行の仕組みと同じアカウントの監査対象だけは
-  `--audit-account none` で作り、実行用ロールを `arn:` で足します)。書き忘れると、足したアカウントの最初の監査が `unknown_assume_role` (high) を通知します。
+- **allowlist**: 監査する側のアカウントは、`arata repo init` が各アカウントの `allowlist.yaml` に書きます (実行の仕組みと同じアカウントの監査対象だけは、
+  手順 3 のとおり `none` と実行用ロールの `arn:` に直します)。書き忘れると、足したアカウントの最初の監査が `unknown_assume_role` (high) を通知します。
   `audit_account` を書いた設定なら、PR の `arata config check` が ng で止めます
 - **初回の収集**: アカウントごとに手元で `arata init -c aws/<名前>/arata.yaml` を実行します (ストアはアカウントごとなので、順番でも並べてもかまいません。時間と認証の期限の注意は「初回の収集は手元で」)
 - **Slack**: Webhook は全アカウントで共通です。宛先を分けたいときは、アカウントごとの `aratam.yaml` の `webhook_env` に別の名前を書き、ワークフローの notify の `env` に足します
-  (アカウントを足すたびに secret が増えます)。**bot トークンの方式なら secret は 1 つのまま**で、アカウントごとの `aratam.yaml` の `slack.channel` / `urgent_channel` に
+  (生成物を手で直すことになります。アカウントを足すたびに secret も増えます)。**bot トークンの方式なら secret は 1 つのまま**で、アカウントごとの `aratam.yaml` の `slack.channel` / `urgent_channel` に
   チャンネル ID を書くだけです (手順 4 の「bot トークンで送る」)
 
   ```yaml
@@ -653,8 +724,7 @@ name: prod                                # 通知に出す名前。アカウン
 
 ## finding を片付ける (ack / snooze / resolve)
 
-ストアが S3 にあると、手元にストアを書ける認証が無い人は `arata ack` を実行できません。[arata-triage.yml](arata-triage.yml) を `.github/workflows/` に置くと、Actions の画面から行えます。
-見本は複数のアカウントの形です。1 つのアカウントで使うときの直し方は、ファイルの先頭のコメントにあります。
+ストアが S3 にあると、手元にストアを書ける認証が無い人は `arata ack` を実行できません。[arata-triage.yml](../audit-repo/.github/workflows/arata-triage.yml) で、Actions の画面から行えます。
 
 1. Slack の通知で finding の ID (`id: 0123456789ab` の 12 桁) を確かめます
 2. GitHub の Actions → **arata-triage** → **Run workflow** を開き、ブランチは **main** のまま、次を入れて実行します
@@ -685,7 +755,7 @@ name: prod                                # 通知に出す名前。アカウン
 主体の承認 (approve) はこのワークフローに入れていません。`arata approve` は allowlist.yaml への追記と同時にストアの finding も解消するので、追記の PR がマージされる前に finding が消えてしまいます。
 承認は allowlist.yaml の差分としてレビューします。
 
-1. ブランチを切り、`aws/<名前>/allowlist.yaml` (1 つのアカウントなら `arata/allowlist.yaml`) の `principals` の末尾に項目を足します
+1. ブランチを切り、`aws/<名前>/allowlist.yaml` の `principals` の末尾に項目を足します
 
    ```yaml
      - arn: arn:aws:iam::123456789012:role/github-actions-deploy   # arn / account / arn_pattern のどれか 1 つ
@@ -695,7 +765,7 @@ name: prod                                # 通知に出す名前。アカウン
        tags: [deploy]
    ```
 
-2. PR を作ります。[arata-check.yml](arata-check.yml) が形を検査します
+2. PR を作ります。[arata-check.yml](../audit-repo/.github/workflows/arata-check.yml) が形を検査します
 3. 人が差分を見てマージします
 4. 次の定時の監査が、承認に一致する finding を allowlisted として解消します (`resolve` は要りません)
 
@@ -707,7 +777,7 @@ AI には `arata approve` を実行させません。手元で形を確かめる
 Slack への送り方 (Incoming Webhook か bot トークンか) は `aratam.yaml` で決まります。ワークフローは、その送り方の secret だけを notify に渡します
 (bot トークンの方式のジョブに Webhook の URL を、Webhook の方式のジョブに bot トークンを出しません)。複数のアカウントで送り方が違っていても、同じワークフローで動きます。
 
-判別は [scripts/arata-slack-method.sh](scripts/arata-slack-method.sh) (写した先は `.github/scripts/arata-slack-method.sh`) の 1 か所です。
+判別は [.github/scripts/arata-slack-method.sh](../audit-repo/.github/scripts/arata-slack-method.sh) の 1 か所です。
 
 ```sh
 method="$(aratam config check -c aws/prod/aratam.yaml --format json | jq -r '.slack.method | strings')"
@@ -725,12 +795,12 @@ esac
 - 秘密は要りません (設定の形だけで決まります)。PR の検査でも同じ判別を流せます
 - 読む側の決まり (どの `--format json` でも同じ): 知らない項目は無視する。`schema_version` が知っている版より大きければ止める。
   項目が消える・意味が変わるときは `schema_version` が上がり、arata の Release の本文に書かれます
-- 判別のしかたを変えるときは、このスクリプトだけを直します。3 つのワークフローに同じ処理を書き写すと、片方だけ直して食い違います
+- 判別は、このスクリプトの 1 か所にしています。3 つのワークフローに同じ処理を書くと、片方だけ直して食い違います
 
 ## PR で設定を検査する
 
-[arata-check.yml](arata-check.yml) を `.github/workflows/` に置くと、PR のたびにリポジトリの中の `arata.yaml` と `aratam.yaml` のすべてに
-`arata config check` / `aratam config check` をかけます (1 つのアカウントの形でも、複数のアカウントの形でも、そのまま使えます)。
+[arata-check.yml](../audit-repo/.github/workflows/arata-check.yml) は、PR のたびにリポジトリの中の `arata.yaml` と `aratam.yaml` のすべてに
+`arata config check` / `aratam config check` をかけます。ジョブの名前 (`check`) は、main のルールセットの必須のチェックです (`github/` の Terraform)。
 定時の監査と同じ版の arata / aratam で、同じ判別を、マージの前に流します。
 
 - **版が揃っていること**: arata を使うワークフロー (`env.ARATA_VERSION` を持つもの) が、すべて同じ版 (`v1.2.3` の形) に固定されているかを確かめます。
@@ -759,7 +829,7 @@ esac
 - `window` を短くすると、CloudTrail の読み取りの時間と Logs Insights のスキャン量 (費用) が減ります。前回の実行からの追いつきはしません
 - 結果は Actions のログの「試しの実行の結果 (件数だけ)」に、**件数と重大度だけ**が出ます (新規・変化・再発・解消・未対応の数、最大の重大度、重大度ごとの数、
   取れなかったソースとスキップしたチェックの数、注記の数、見た範囲の時刻)。個々の指摘の中身 (主体・IP・要約) は、ほかの step と同じ理由でログに出しません。
-  中身を読むときは、手元で同じ認証で `arata run -c arata/arata.yaml --profile daily --dry-run --window 1h --out "$(mktemp -d)"` を流して report.md を見ます
+  中身を読むときは、手元で同じ認証で `arata run -c aws/prod/arata.yaml --profile daily --dry-run --window 1h --out "$(mktemp -d)"` を流して report.md を見ます
   (手元の試しの実行もストアに書きません)
 - `notes` が 1 以上なら、見た範囲が定時の実行より狭く、入っていない期間があります (report.md のカバレッジの「注意」)。日次集計を使うチェックは、短い窓では前日を評価しません
 - `aratam notify` は呼びません。arata が失敗しても「実行されていない」は届きません (ジョブは失敗で終わります)。aratam 自身も、試しの実行の報告 (`dry_run: true`) は送りません
@@ -769,7 +839,7 @@ esac
 
 ## Slack への送信だけを確かめる
 
-[arata-notify-test.yml](arata-notify-test.yml) を `.github/workflows/` に置くと、Actions の画面から `aratam test-notify` を実行できます。
+[arata-notify-test.yml](../audit-repo/.github/workflows/arata-notify-test.yml) で、Actions の画面から `aratam test-notify` を実行できます。
 監査 (`arata run`) は回さず、試験メッセージを 1 通送るだけです。environment の secrets と、リポジトリの `aratam.yaml` の組み合わせで届くかが分かります。
 
 使いどころ:
@@ -792,8 +862,7 @@ esac
   ストアにも触れないので、監査が走っている間でも実行できます (finding の状態は変わりません)
 - 送り方の判別と secrets の渡し方は、監査の notify と同じです (同じスクリプトで判別し、その送り方の secret だけを渡します)。
   `ARATA_VERSION` も監査と同じ版にします (PR の検査が、揃っていることを確かめます)
-- `account` の選択肢は、監査の `matrix.account` と同じ並びにします。アカウントを足したら、ここにも足します。
-  1 つのアカウントの形 ([arata-audit.yml](arata-audit.yml)) で使うときの変え方は、見本の先頭のコメントにあります
+- `account` の選択肢は、監査の `matrix.account` と同じ並びです (`arata repo init` が同じ引数から書きます)
 - **main で動かします**。秘密は environment にあり、main のジョブにしか渡りません (「実行するリポジトリと環境を堅くする」の 5)。
   チャンネル ID を足す PR は、マージしてから確かめます (マージの前に確かめたいときは、手元で `aratam test-notify` を実行します。手順 4)
 
@@ -801,7 +870,7 @@ esac
 
 | ログ | 意味 | すること |
 |---|---|---|
-| `CONFIG_INVALID` (終了コード 2) | `aratam.yaml` の誤りか、secret が空 | `aratam config check` (PR の [arata-check.yml](arata-check.yml))、secrets の名前と、ワークフローの `env` の行を確かめる |
+| `CONFIG_INVALID` (終了コード 2) | `aratam.yaml` の誤りか、secret が空 | `aratam config check` (PR の [arata-check.yml](../audit-repo/.github/workflows/arata-check.yml))、secrets の名前と、ワークフローの `env` の行を確かめる |
 | `SEND_FAILED` + `slack error=not_in_channel` | bot がそのチャンネルにいない | そのチャンネルで `/invite @arata` |
 | `SEND_FAILED` + `slack error=channel_not_found` | チャンネル ID の誤りか、招待していない非公開チャンネル | `aratam.yaml` の `slack.channel` / `urgent_channel` を確かめ、bot を招待する |
 | `SEND_FAILED` + `slack error=invalid_auth` / `token_revoked` など | トークンが無効 | トークンを入れ直す (手順 4 の「bot トークンで送る」) |
@@ -832,7 +901,7 @@ code は増えることがあるので、知らない code は「その他の警
 ## 定時の通知が送れなかったとき
 
 通知そのものが壊れると、aratam は知らせられません。`aratam.yaml` の誤り、secret の入れ替え忘れ、送り方の判別の失敗、バイナリが取れない、Slack が受け取らない、のどれでも、Slack には何も届きません。
-見本の最後の段階 (`alert`) は、**定時の実行で Slack に何も届かなかったとき**に、別の Webhook (`ARATA_ALERT_WEBHOOK`) へ 1 行を送ります。
+監査のワークフローの最後の段階 (`alert`) は、**定時の実行で Slack に何も届かなかったとき**に、別の Webhook (`ARATA_ALERT_WEBHOOK`) へ 1 行を送ります。
 
 ```
 arata の定時の通知を送れていません。対象: prod / プロファイル: daily / 失敗した段階: slack-method, notify / https://github.com/…/actions/runs/…
@@ -878,5 +947,5 @@ Actions の artifacts はリポジトリを読める人に見えるので使い�
 - **定時実行は遅れます**。GitHub の負荷が高いと遅れ、落ちることもあります。監査の窓は実行時刻から決まるので、遅れても次の run が続きから引きます
 - **定時実行は止まることがあります**。公開リポジトリでは、活動が 60 日無いと定時実行が無効になります。ワークフローを最後に編集した人が組織から外れた場合も止まることがあります。Slack が届かなくなったら Actions の画面を見てください
 - **時刻の変更**: weekly の `cron` を変えたら、`PROFILE` の式の文字列も揃えます (`github.event.schedule` を文字列で比べているため)
-- **Action の更新**: この見本の SHA は写した時点で固定されます。自分のリポジトリの Dependabot で更新してください
+- **Action の更新**: action の SHA は、書き出した arata の版のものに固定されます。新しい版の `arata repo init --force` で届きます。自分のリポジトリの Dependabot で先に上げると、`arata repo init --diff` が差を出します
 - **取得の照合の限界**: `SHA256SUMS` は同じリリースのものなので、壊れた取得は防げてもリリース自体のすり替えは防げません。arata が公開リポジトリになったら `gh attestation verify` を足せます (README「来歴の検証」)
