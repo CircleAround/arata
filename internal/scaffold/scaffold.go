@@ -164,6 +164,22 @@ func ProfileChecks(reg *checks.Registry, p Profile) []string {
 // auditAccount は監査する側のアカウント (12 桁の ID か none。config.ParseAuditAccount を通した値) で、audit_account に書く。
 // 決定 (ADR 0045): 既定を持たず、呼び出し側 (config init) が必ず選ばせる。
 func Generate(reg *checks.Registry, auditAccount string) []byte {
+	return GenerateWith(reg, Options{AuditAccount: auditAccount})
+}
+
+// Options は雛形に書く値。AuditAccount のほかは、監査を回すリポジトリの一式 (arata repo init。ADR 0059) が引数から埋める。
+// 空なら config init の雛形の例の値 (my-service など) のままにする。
+type Options struct {
+	AuditAccount string // 監査する側のアカウント (12 桁の ID か none)
+	Name         string // name
+	Store        string // store (s3://バケット/prefix)。書くと、dir:// の例の行は出さない
+	Region       string // aws.region
+	Profile      string // aws.profile
+}
+
+// GenerateWith は Options の値を埋めた雛形を返す。値は呼び出し側が形を確かめてから渡す (ここでは引用も検査もしない)。
+func GenerateWith(reg *checks.Registry, o Options) []byte {
+	auditAccount := o.AuditAccount
 	var b strings.Builder
 	w := func(format string, a ...any) { fmt.Fprintf(&b, format, a...) }
 	cm := func(text, comment string) { w("%-48s # %s\n", text, comment) }
@@ -176,11 +192,24 @@ func Generate(reg *checks.Registry, auditAccount string) []byte {
 # 手順: arata config init → (この設定を編集) → arata doctor → arata init → arata run
 
 `)
-	cm("name: my-service", "レポートに出す監査対象の名前")
-	cm("store: dir:///var/lib/arata/my-service", "ストア (JSONL 原本 + SQLite)。書き込める場所にする")
-	cm("# store: s3://example-arata-store/my-service", "毎回消える実行環境 (GitHub Actions など) では S3 に置く (README「S3 ストア」)")
-	cm("# store_profile: my-service-store", "s3:// のバケットの認証。省略時は SDK の標準の連鎖 (aws.profile は使わない)")
-	cm("# store_region: "+config.DefaultRegion, "s3:// のバケットのリージョン。省略時は aws.region")
+	region := config.DefaultRegion
+	if o.Region != "" {
+		region = o.Region
+	}
+	name := "my-service"
+	if o.Name != "" {
+		name = o.Name
+	}
+	cm("name: "+name, "レポートに出す監査対象の名前")
+	if o.Store != "" {
+		cm("store: "+o.Store, "ストア (JSONL 原本 + SQLite)。ワークフローの ARATA_STORE_URL と同じ値")
+		cm("# store_profile: "+name+"-store", "s3:// のバケットの認証。省略時は SDK の標準の連鎖 (実行用ロール。aws.profile は使わない)")
+	} else {
+		cm("store: dir:///var/lib/arata/my-service", "ストア (JSONL 原本 + SQLite)。書き込める場所にする")
+		cm("# store: s3://example-arata-store/my-service", "毎回消える実行環境 (GitHub Actions など) では S3 に置く (README「S3 ストア」)")
+		cm("# store_profile: my-service-store", "s3:// のバケットの認証。省略時は SDK の標準の連鎖 (aws.profile は使わない)")
+	}
+	cm("# store_region: "+region, "s3:// のバケットのリージョン。省略時は aws.region")
 	cm("allowlist: allowlist.yaml", "既知リスト。相対パスはこの設定ファイルから。無ければ空として扱う")
 	if auditAccount == config.AuditAccountNone {
 		cm("audit_account: "+auditAccount, "監査する側のアカウント。none = 外から監査しない (監査対象と同じアカウントの中で動かす・手元の認証で直接動かす)")
@@ -192,12 +221,16 @@ func Generate(reg *checks.Registry, auditAccount string) []byte {
 		w("# arata config check / arata doctor が食い違いを確かめる\n")
 	}
 	w("\naws:\n")
-	w("  region: %s\n", config.DefaultRegion)
-	cm("  # profile: my-service-audit", "AWS SDK の標準認証チェーン (profile / 環境変数 / ロール) に従う")
+	w("  region: %s\n", region)
+	if o.Profile != "" {
+		cm("  profile: "+o.Profile, "ワークフローが書くプロファイル。監査の読み取りは、このプロファイルのロール (読み取り専用ロール) で行う")
+	} else {
+		cm("  # profile: my-service-audit", "AWS SDK の標準認証チェーン (profile / 環境変数 / ロール) に従う")
+	}
 	w("\nsources:\n")
 	w("  - id: trail\n")
 	cm("    kind: "+config.KindCloudTrailLookup, "CloudTrail を API 経由で取得 (CloudWatch Logs 配信が無くても動く)")
-	cm(fmt.Sprintf("    # regions: [%s, %s]", config.DefaultRegion, config.GlobalRegion),
+	cm(fmt.Sprintf("    # regions: [%s, %s]", region, config.GlobalRegion),
 		fmt.Sprintf("省略時は [aws.region, %s]。IAM・ConsoleLogin・STS の一部は %s にしか記録されない", config.GlobalRegion, config.GlobalRegion))
 	cm("    # ingest_delay: "+ctDelay, "記録の遅れの見込み。run は窓の前をこの分だけ引き直す (0 で引き直さない)")
 	w("  - id: trail_unused_regions\n")
@@ -216,7 +249,7 @@ func Generate(reg *checks.Registry, auditAccount string) []byte {
 	w("    # iam:GenerateCredentialReport は書き込み系 (レポートの生成のみ)。拒否されても 4 時間以内に生成済みのレポートがあれば使う\n")
 	w("  - id: guardduty\n")
 	cm("    kind: "+config.KindGuardDuty, "→ guardduty_findings。無効なら skip (無効であることは posture が報告)")
-	cm(fmt.Sprintf("    # regions: [%s]", config.DefaultRegion), "省略時は aws.region。使っているリージョンを並べる")
+	cm(fmt.Sprintf("    # regions: [%s]", region), "省略時は aws.region。使っているリージョンを並べる")
 	w("  - id: access_analyzer\n")
 	cm("    kind: "+config.KindAccessAnalyzer, "→ access_analyzer。アナライザーが無ければ skip")
 	w("  - id: posture\n")

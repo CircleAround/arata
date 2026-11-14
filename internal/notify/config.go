@@ -2,7 +2,6 @@ package notify
 
 import (
 	"bytes"
-	_ "embed"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +16,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/CircleAround/arata/internal/aratamscaffold"
 	"github.com/CircleAround/arata/internal/codes"
 )
 
@@ -281,8 +281,5 @@ func ParseDuration(s string) (time.Duration, error) {
 	return d, nil
 }
 
-//go:embed scaffold.yaml
-var scaffold []byte
-
-// Scaffold は `aratam config init` が書き出す雛形 (全項目を明示する)。
-func Scaffold() []byte { return append([]byte(nil), scaffold...) }
+// Scaffold は `aratam config init` が書き出す雛形 (全項目を明示する)。本文は internal/aratamscaffold にある (arata repo init も使う。ADR 0059)。
+func Scaffold() []byte { return aratamscaffold.Scaffold() }

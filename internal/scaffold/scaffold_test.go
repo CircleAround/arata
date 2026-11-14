@@ -1,6 +1,7 @@
 package scaffold
 
 import (
+	"bytes"
 	"errors"
 	"flag"
 	"os"
@@ -293,4 +294,30 @@ func TestAuditAllowlist(t *testing.T) {
 func TestDiffSchemaIsFixed(t *testing.T) {
 	schematest.Golden(t, schematest.Spec{Name: DiffSchema, Version: DiffSchemaVersion, Type: []DiffItem{},
 		Description: "arata config init --diff --format json の出力。設定とこの版の雛形の差分の配列 (最上位が配列。schema の項目は無い)"}, *update)
+}
+
+// TestGenerateForRepo は、監査を回すリポジトリの一式 (arata repo init。ADR 0059) 向けの雛形を確かめる:
+// name・store・aws.region・aws.profile が引数の値で埋まり、そのまま読み込める。値を渡さなければ config init の雛形と同じ。
+func TestGenerateForRepo(t *testing.T) {
+	reg := checks.NewRegistry()
+	if got, want := GenerateWith(reg, Options{AuditAccount: config.AuditAccountNone}), Generate(reg, config.AuditAccountNone); !bytes.Equal(got, want) {
+		t.Fatal("GenerateWith without values must equal Generate")
+	}
+	body := GenerateWith(reg, Options{AuditAccount: "111122223333", Name: "prod", Store: "s3://example-arata-store/prod", Region: "us-west-2", Profile: "arata-audit"})
+	p := filepath.Join(t.TempDir(), "arata.yaml")
+	if err := os.WriteFile(p, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Name != "prod" || cfg.Store.Bucket != "example-arata-store" || cfg.Store.Prefix != "prod" || cfg.AWS.Region != "us-west-2" || cfg.AWS.Profile != "arata-audit" {
+		t.Fatalf("name=%q store=%+v aws=%+v", cfg.Name, cfg.Store, cfg.AWS)
+	}
+	for _, bad := range []string{"my-service", "dir:///var/lib"} {
+		if strings.Contains(string(body), bad) {
+			t.Errorf("the repo template must not keep the placeholder %q", bad)
+		}
+	}
 }
