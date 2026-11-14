@@ -101,6 +101,7 @@ jobs:
       # 失敗の見分け: CONFIG_INVALID = 設定の誤りか、secret が空 (終了コード 2) / SEND_FAILED = Slack が受け取らなかった (終了コード 5)。
       # bot トークンの方式の SEND_FAILED には、Slack の error コードだけを足して出す (not_in_channel = bot をそのチャンネルに招待する、など。README)。
       # コードは、ログの slack_error (機械が読む項目。aratam schema log) から読む。人向けの error の文からは切り出さない。
+      # slack_error を出すのは v0.15.0 以降の aratam。それより前の版では、この 1 行 (slack error=…) が出ないだけで、ほかは同じに動く。
       # aratam が形を確かめた値で、ここでも形を確かめてから出す。チャンネル ID・案内の文・Webhook の応答の本文は出さない。
       - id: test-notify
         name: aratam test-notify

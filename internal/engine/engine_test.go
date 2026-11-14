@@ -585,7 +585,8 @@ func TestCloudWatchLogsSource(t *testing.T) {
 	if rates := last[0].Stats["match_rates"].(map[string]any); rates["web"] != 0.95 {
 		t.Fatalf("runs.stats: %+v", last[0].Stats)
 	}
-	if codes := h.logCodes(t); len(codes) != 0 {
+	// 偽のログは DescribeLogGroups にロググループを返さないので、範囲を確かめないまま問い合わせた警告だけが出る (前からある WARN に code が付いた)
+	if codes := h.logCodes(t); len(codes) != 1 || codes[0] != "LOG_GROUP_UNVERIFIED" {
 		t.Fatalf("codes: %v", codes)
 	}
 }

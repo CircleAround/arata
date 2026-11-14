@@ -14,7 +14,7 @@ import (
 //
 //   - log スキーマに合う (time・level・msg があり、level は決まった値、code は決まった形)
 //   - code があれば、そのコマンド (tool) の一覧にある
-//   - ERROR の行には code がある
+//   - ERROR と WARN の行には code がある
 func Check(t testing.TB, tool, stderr string) {
 	t.Helper()
 	for _, line := range strings.Split(stderr, "\n") {
@@ -27,8 +27,8 @@ func Check(t testing.TB, tool, stderr string) {
 		if has && !codes.Known(tool, code) {
 			t.Fatalf("log code %q is not in the list of %s (internal/codes): %s", code, tool, line)
 		}
-		if m["level"] == "ERROR" && !has {
-			t.Fatalf("an ERROR line needs a code: %s", line)
+		if (m["level"] == "ERROR" || m["level"] == "WARN") && !has {
+			t.Fatalf("an ERROR / WARN line needs a code (a line that needs no attention is INFO): %s", line)
 		}
 	}
 }

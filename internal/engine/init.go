@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/CircleAround/arata/internal/checks"
+	"github.com/CircleAround/arata/internal/codes"
 	"github.com/CircleAround/arata/internal/collect"
 	"github.com/CircleAround/arata/internal/record"
 	"github.com/CircleAround/arata/internal/report"
@@ -98,7 +99,7 @@ func (e *Engine) Init(ctx context.Context, o InitOptions) (*InitResult, error) {
 		e.log.Info("resuming init", "run_id", run.ID, "from", from.UTC().Format(time.RFC3339), "to", now.UTC().Format(time.RFC3339), "chunks_done", res.ChunksDone)
 	} else {
 		if unfinished {
-			e.log.Warn("previous init did not finish; starting over (use `init --resume` to continue it instead)", "run_id", last.ID, "status", last.Status)
+			e.log.Warn("previous init did not finish; starting over (use `init --resume` to continue it instead)", "code", codes.InitIncomplete, "run_id", last.ID, "status", last.Status)
 		}
 		window := o.Window
 		if window <= 0 {
@@ -151,7 +152,7 @@ func (e *Engine) Init(ctx context.Context, o InitOptions) (*InitResult, error) {
 			if err := e.st.FinishRun(bg, run.ID, "partial", stats); err != nil {
 				return nil, err
 			}
-			e.log.Warn("init stopped; run `arata init --resume` to continue from the failed day",
+			e.log.Warn("init stopped; run `arata init --resume` to continue from the failed day", "code", codes.InitIncomplete,
 				"run_id", run.ID, "chunks_done", res.ChunksDone, "chunks_total", res.ChunksTotal, "done_until", res.DoneUntil.UTC().Format(time.RFC3339), "interrupted", ctx.Err() != nil)
 			return res, nil
 		}
@@ -188,7 +189,7 @@ func (e *Engine) Init(ctx context.Context, o InitOptions) (*InitResult, error) {
 	}
 	res.Complete = true
 	if _, err := os.Stat(e.cfg.Allowlist); errors.Is(err, os.ErrNotExist) {
-		e.log.Warn("allowlist file not found; treating as empty", "path", e.cfg.Allowlist)
+		e.log.Warn("allowlist file not found; treating as empty", "code", codes.AllowlistMissing, "path", e.cfg.Allowlist)
 	}
 	e.log.Info("init finished", "run_id", run.ID, "status", "ok", "records", res.Records, "chunks", res.ChunksTotal)
 	return res, nil

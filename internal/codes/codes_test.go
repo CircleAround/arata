@@ -114,7 +114,7 @@ func TestEveryConstantIsListed(t *testing.T) {
 }
 
 // コードの中で code として渡す値は、このパッケージの定数から来る。文字列の直書きと、別の場所での定義をしない。
-// ERROR のログには必ず code を付ける。
+// ERROR と WARN のログには必ず code を付ける (WARN は運用で気づくべきもの。そうでなければ INFO にする)。
 func TestCodeValuesComeFromThisPackage(t *testing.T) {
 	form := regexp.MustCompile(Pattern)
 	used := map[string]bool{}
@@ -150,9 +150,10 @@ func TestCodeValuesComeFromThisPackage(t *testing.T) {
 			case *ast.CallExpr:
 				checkCodePairs(t, name, x.Args)
 				sel, ok := x.Fun.(*ast.SelectorExpr)
-				if !ok || sel.Sel.Name != "Error" || len(x.Args) == 0 {
+				if !ok || (sel.Sel.Name != "Error" && sel.Sel.Name != "Warn") || len(x.Args) == 0 {
 					return true // err.Error() は引数が無い
 				}
+				level := strings.ToUpper(sel.Sel.Name)
 				hasCode := false
 				for _, a := range x.Args {
 					if s, ok := stringLit(a); ok && s == "code" {
@@ -160,10 +161,10 @@ func TestCodeValuesComeFromThisPackage(t *testing.T) {
 					}
 				}
 				if !hasCode && x.Ellipsis == token.NoPos {
-					t.Errorf("%s: an ERROR log needs a code (line of %q)", name, exprText(x.Args[0]))
+					t.Errorf("%s: an %s log needs a code (line of %q). A line that needs no attention is INFO", name, level, exprText(x.Args[0]))
 				}
 				if !hasCode && x.Ellipsis != token.NoPos && !attrsCarryCode(f, x.Args[len(x.Args)-1]) {
-					t.Errorf("%s: an ERROR log needs a code: the spread attributes do not start from a list with \"code\" (%q)", name, exprText(x.Args[0]))
+					t.Errorf("%s: an %s log needs a code: the spread attributes do not start from a list with \"code\" (%q)", name, level, exprText(x.Args[0]))
 				}
 			}
 			return true

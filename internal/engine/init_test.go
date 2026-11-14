@@ -91,7 +91,8 @@ func TestInitStopsAndResumes(t *testing.T) {
 	if res, _ := e.Init(ctx, InitOptions{Resume: true}); !res.NothingToResume {
 		t.Fatalf("%+v", res)
 	}
-	if codes := h.logCodes(t); len(codes) != 1 || codes[0] != "ACCESS_DENIED" {
+	// 止まった init は、失敗の ERROR と、続きからやり直す案内の WARN (INIT_INCOMPLETE) を出す
+	if codes := h.logCodes(t); len(codes) != 2 || codes[0] != "ACCESS_DENIED" || codes[1] != "INIT_INCOMPLETE" {
 		t.Fatalf("codes: %v", codes)
 	}
 }

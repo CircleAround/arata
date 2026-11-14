@@ -15,6 +15,7 @@ import (
 	cwl "github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs/types"
 
+	"github.com/CircleAround/arata/internal/codes"
 	"github.com/CircleAround/arata/internal/collect"
 	"github.com/CircleAround/arata/internal/config"
 	"github.com/CircleAround/arata/internal/record"
@@ -199,7 +200,7 @@ func (c *Collector) loadGroup(ctx context.Context) {
 	// 名前の前方一致で引くと、完全一致の名前は最も短いので名前順の先頭のページに入る
 	out, err := c.api.DescribeLogGroups(ctx, &cwl.DescribeLogGroupsInput{LogGroupNamePrefix: aws.String(c.src.LogGroup)})
 	if err != nil {
-		c.Logger.Warn("failed to describe log group; querying without range check", "source", c.src.ID, "log_group", c.src.LogGroup,
+		c.Logger.Warn("failed to describe log group; querying without range check", "code", codes.LogGroupUnverified, "source", c.src.ID, "log_group", c.src.LogGroup,
 			"action", ActionDescribeLogGroups, "error", err.Error())
 		return
 	}
@@ -210,7 +211,7 @@ func (c *Collector) loadGroup(ctx context.Context) {
 			return
 		}
 	}
-	c.Logger.Warn("log group not found by DescribeLogGroups; querying without range check", "source", c.src.ID, "log_group", c.src.LogGroup)
+	c.Logger.Warn("log group not found by DescribeLogGroups; querying without range check", "code", codes.LogGroupUnverified, "source", c.src.ID, "log_group", c.src.LogGroup)
 }
 
 // queryRange は [from, to) を Insights が受け付ける範囲にする。
@@ -330,12 +331,12 @@ func (c *Collector) collectFormat(ctx context.Context, w collect.Window, sink co
 			return c.requestMismatch(reason)
 		}
 		if n := c.stats.Requests.StartsUntagged; n > 0 {
-			c.Logger.Warn("first lines without a request id are not counted as requests", "source", c.src.ID, "log_group", c.src.LogGroup, "lines", n)
+			c.Logger.Warn("first lines without a request id are not counted as requests", "code", codes.RequestsUntagged, "source", c.src.ID, "log_group", c.src.LogGroup, "lines", n)
 		}
 		c.warnUsers()
 	}
 	if c.stats.Total == 0 {
-		c.Logger.Warn("no log lines in window; check log_group / stream_prefix", "source", c.src.ID, "log_group", c.src.LogGroup,
+		c.Logger.Warn("no log lines in window; check log_group / stream_prefix", "code", codes.NoLogLines, "source", c.src.ID, "log_group", c.src.LogGroup,
 			"from", from.Format(time.RFC3339), "to", to.Format(time.RFC3339))
 	}
 	for _, day := range sortedDays(lines) {
@@ -483,7 +484,7 @@ func (c *Collector) splitRange(ctx context.Context, q MergedQuery, from, to time
 		}
 		return append(a, b...), nil
 	}
-	c.Logger.Warn("aggregate truncated at row limit; counts are lower bounds", "source", c.src.ID, "query", q.Name, "metrics", strings.Join(q.Metrics, ","), "limit", MaxRows)
+	c.Logger.Warn("aggregate truncated at row limit; counts are lower bounds", "code", codes.AggregateTruncated, "source", c.src.ID, "query", q.Name, "metrics", strings.Join(q.Metrics, ","), "limit", MaxRows)
 	for _, m := range q.Metrics {
 		c.stats.AddTruncated(m)
 	}
@@ -554,7 +555,7 @@ func (c *Collector) mismatch(ctx context.Context, from, to time.Time, rate float
 		rows, err := c.Query(ctx, SampleQuery(c.prof, SampleLines), from, to)
 		c.stats.BytesScanned = c.scanned
 		if err != nil {
-			c.Logger.Warn("failed to fetch sample lines", "source", c.src.ID, "error", err.Error())
+			c.Logger.Info("failed to fetch sample lines", "source", c.src.ID, "error", err.Error())
 		}
 		for _, r := range rows {
 			samples = append(samples, MaskSample(r["@message"]))
@@ -643,7 +644,7 @@ func (c *Collector) start(ctx context.Context, query string, from, to time.Time)
 			}
 			return "", ce
 		}
-		c.Logger.Warn("insights query limit; retrying", "source", c.src.ID, "attempt", attempt+1, "wait", backoff.String())
+		c.Logger.Info("insights query limit; retrying", "source", c.src.ID, "attempt", attempt+1, "wait", backoff.String())
 		if err := c.Sleep(ctx, backoff); err != nil {
 			return "", err
 		}
@@ -667,7 +668,7 @@ func (c *Collector) checkScan(running float64) error {
 
 func (c *Collector) stop(ctx context.Context, id string) {
 	if _, err := c.api.StopQuery(ctx, &cwl.StopQueryInput{QueryId: aws.String(id)}); err != nil {
-		c.Logger.Warn("failed to stop query", "source", c.src.ID, "query_id", id, "error", err.Error())
+		c.Logger.Info("failed to stop query", "source", c.src.ID, "query_id", id, "error", err.Error())
 	}
 }
 
