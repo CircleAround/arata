@@ -14,6 +14,8 @@ import (
 
 	ct "github.com/aws/aws-sdk-go-v2/service/cloudtrail"
 
+	"github.com/CircleAround/arata/internal/codes"
+	"github.com/CircleAround/arata/internal/codes/codestest"
 	"github.com/CircleAround/arata/internal/collect/account"
 	"github.com/CircleAround/arata/internal/collect/account/accounttest"
 	"github.com/CircleAround/arata/internal/collect/cloudtrail"
@@ -118,7 +120,10 @@ func (c *cli) run(args ...string) int {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return execute(ctx, args, d)
+	code := execute(ctx, args, d)
+	// どの実行でも、出したログの行は log スキーマに合い、code は arata の一覧にあり、ERROR には code がある (ADR 0054)
+	codestest.Check(c.t, codes.Arata, c.stderr.String())
+	return code
 }
 
 type noLimit struct{}
@@ -151,21 +156,12 @@ func (c *cli) codes() []string {
 	return codes
 }
 
-var vocabulary = map[string]bool{
-	"FORMAT_MISMATCH": true, "FORMAT_DRIFT": true, "LOG_GROUP_MISSING": true, "ACCESS_DENIED": true, "QUERY_LIMIT": true, "QUERY_INVALID": true,
-	"STORE_LOCKED": true, "STORE_CORRUPT": true, "STORE_CONFLICT": true, "STORE_UNAVAILABLE": true, "INTERRUPTED": true, "RUN_MISSED": true, "COLLECT_FAILED": true, "CONFIG_INVALID": true, "CHECK_UNUSED": true, "REPORT_NOT_FOUND": true,
-}
-
+// assertCodesInVocabulary は、出した code が arata の一覧 (internal/codes) にあることを確かめる (run も毎回確かめている)。
 func (c *cli) assertCodesInVocabulary() {
 	c.t.Helper()
 	for _, code := range c.codes() {
-		if !vocabulary[code] {
+		if !codes.Known(codes.Arata, code) {
 			c.t.Fatalf("log code %q is not in the fixed vocabulary", code)
-		}
-	}
-	for _, code := range engine.Codes {
-		if !vocabulary[code] {
-			c.t.Fatalf("engine.Codes contains %q which is not in the documented vocabulary", code)
 		}
 	}
 }

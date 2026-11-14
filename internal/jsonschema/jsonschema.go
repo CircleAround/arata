@@ -12,7 +12,9 @@
 //   - ポインタ: omitempty があれば省略できる項目、無ければ null を許す項目
 //   - time.Time: string (format: date-time)
 //
-// タグ: `jsonschema:"enum=a|b"` (閉じた語彙。文字列だけ)、`jsonschema:"const=値"` (文字列か整数)、`desc:"説明"`。
+// タグ: `jsonschema:"enum=a|b"` (閉じた語彙。文字列だけ)、`jsonschema:"const=値"` (文字列か整数)、`desc:"説明"`、
+// `jsonschema:"open=名前"` (開いた語彙。既知の値は Options.Open から取り、anyOf で「既知の値」か「形に合う文字列」と書く。
+// 既知の値を機械で引けて、値を足しても古いスキーマで落ちない)。
 // スキーマは開いた形にする (additionalProperties: false を書かない)。読む側が古いスキーマで新しい出力を確かめても、足した項目で落ちない。
 package jsonschema
 
@@ -22,6 +24,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -30,11 +33,19 @@ import (
 // Draft はスキーマの方言。
 const Draft = "https://json-schema.org/draft/2020-12/schema"
 
-// Options はスキーマの見出し。
+// Options はスキーマの見出しと、開いた語彙。
 type Options struct {
 	ID          string
 	Title       string
 	Description string
+	// Open は `jsonschema:"open=名前"` の語彙 (名前ごと)。
+	Open map[string]Vocabulary
+}
+
+// Vocabulary は開いた語彙。Values は今の既知の値、Pattern は値の形 (これから足される値も合う正規表現)。
+type Vocabulary struct {
+	Values  []string
+	Pattern string
 }
 
 // schema は出すキーワード。Verify が読むのもこのキーワードだけ。
@@ -48,6 +59,7 @@ type schema struct {
 	Const                any                `json:"const,omitempty"`
 	Enum                 []string           `json:"enum,omitempty"`
 	Format               string             `json:"format,omitempty"`
+	Pattern              string             `json:"pattern,omitempty"`
 	Properties           properties         `json:"properties,omitempty"`
 	Required             []string           `json:"required,omitempty"`
 	Items                *schema            `json:"items,omitempty"`
@@ -96,6 +108,7 @@ var (
 type generator struct {
 	defs  map[string]*schema
 	types map[string]reflect.Type
+	open  map[string]Vocabulary
 }
 
 // Generate は v の型のスキーマを、整形した JSON (末尾に改行) で返す。v の値は使わない。
@@ -107,7 +120,7 @@ func Generate(v any, o Options) ([]byte, error) {
 	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
-	g := &generator{defs: map[string]*schema{}, types: map[string]reflect.Type{}}
+	g := &generator{defs: map[string]*schema{}, types: map[string]reflect.Type{}, open: o.Open}
 	var root *schema
 	var err error
 	if t.Kind() == reflect.Struct && t != timeType {
@@ -274,7 +287,7 @@ func (g *generator) fields(t reflect.Type, s *schema, seen map[string]bool) erro
 		if f.Type.Kind() == reflect.Pointer && !optional {
 			ps = nullable(ps)
 		}
-		if err := annotate(ps, f); err != nil {
+		if ps, err = g.annotate(ps, f); err != nil {
 			return fmt.Errorf("%s.%s: %w", t, f.Name, err)
 		}
 		s.Properties = append(s.Properties, property{name, ps})
@@ -295,19 +308,28 @@ func nullable(s *schema) *schema {
 	return &schema{AnyOf: []*schema{s, {Type: "null"}}}
 }
 
-// annotate はタグの enum / const / 説明を足す。
-func annotate(s *schema, f reflect.StructField) error {
+// annotate はタグの enum / const / 開いた語彙 / 説明を足したスキーマを返す。
+func (g *generator) annotate(s *schema, f reflect.StructField) (*schema, error) {
 	s.Description = f.Tag.Get("desc")
 	tag := f.Tag.Get("jsonschema")
 	if tag == "" {
-		return nil
+		return s, nil
 	}
 	for _, part := range strings.Split(tag, ",") {
 		key, value, ok := strings.Cut(part, "=")
 		if !ok || value == "" {
-			return fmt.Errorf("jsonschema tag %q: want key=value", part)
+			return nil, fmt.Errorf("jsonschema tag %q: want key=value", part)
 		}
 		switch {
+		case key == "open" && s.Type == "string":
+			v, ok := g.open[value]
+			if !ok || len(v.Values) == 0 {
+				return nil, fmt.Errorf("jsonschema tag %q: Options.Open has no values for %q", part, value)
+			}
+			if _, err := regexp.Compile(v.Pattern); err != nil || v.Pattern == "" {
+				return nil, fmt.Errorf("jsonschema tag %q: the pattern of %q is not a regular expression", part, value)
+			}
+			s = &schema{Description: s.Description, AnyOf: []*schema{{Enum: append([]string(nil), v.Values...)}, {Type: "string", Pattern: v.Pattern}}}
 		case key == "enum" && s.Type == "string":
 			s.Enum = strings.Split(value, "|")
 		case key == "const" && s.Type == "string":
@@ -315,12 +337,12 @@ func annotate(s *schema, f reflect.StructField) error {
 		case key == "const" && s.Type == "integer":
 			n, err := strconv.ParseInt(value, 10, 64)
 			if err != nil {
-				return fmt.Errorf("jsonschema tag %q: %w", part, err)
+				return nil, fmt.Errorf("jsonschema tag %q: %w", part, err)
 			}
 			s.Const = n
 		default:
-			return fmt.Errorf("jsonschema tag %q is not supported on this type", part)
+			return nil, fmt.Errorf("jsonschema tag %q is not supported on this type", part)
 		}
 	}
-	return nil
+	return s, nil
 }

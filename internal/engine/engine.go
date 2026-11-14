@@ -36,6 +36,7 @@ import (
 
 	"github.com/CircleAround/arata/internal/allowlist"
 	"github.com/CircleAround/arata/internal/checks"
+	"github.com/CircleAround/arata/internal/codes"
 	"github.com/CircleAround/arata/internal/collect"
 	"github.com/CircleAround/arata/internal/collect/account"
 	"github.com/CircleAround/arata/internal/collect/cloudtrail"
@@ -49,27 +50,24 @@ import (
 
 // エンジン自身のログの code (設計書 2-2)。収集側の語彙は collect パッケージにある。
 const (
-	CodeStoreLocked  = "STORE_LOCKED"
-	CodeStoreCorrupt = "STORE_CORRUPT"
+	CodeStoreLocked  = codes.StoreLocked
+	CodeStoreCorrupt = codes.StoreCorrupt
 	// CodeStoreConflict は s3:// のストアを別の実行が先に書いた (何も上書きしていない。もう一度実行する)。
-	CodeStoreConflict = "STORE_CONFLICT"
+	CodeStoreConflict = codes.StoreConflict
 	// CodeStoreUnavailable は s3:// のストアに問い合わせられない (権限・通信)。破損ではないので rebuild はしない。
-	CodeStoreUnavailable = "STORE_UNAVAILABLE"
+	CodeStoreUnavailable = codes.StoreUnavailable
 	// CodeInterrupted は SIGINT / SIGTERM で止まった (設定の誤りではない。もう一度実行する)。
-	CodeInterrupted   = "INTERRUPTED"
-	CodeRunMissed     = "RUN_MISSED"
-	CodeConfigInvalid = "CONFIG_INVALID"
+	CodeInterrupted   = codes.Interrupted
+	CodeRunMissed     = codes.RunMissed
+	CodeConfigInvalid = codes.ConfigInvalid
 	// CodeCheckUnused はどのプロファイルにも入っていないチェックがある (警告。設定の雛形と照らして入れ忘れを疑う)。
-	CodeCheckUnused = "CHECK_UNUSED"
+	CodeCheckUnused = codes.CheckUnused
 	// CodeReportNotFound は report で再表示するレポートが無い (そのプロファイルの run がまだ無い)。
-	CodeReportNotFound = "REPORT_NOT_FOUND"
+	CodeReportNotFound = codes.ReportNotFound
 )
 
-// Codes は標準エラーの JSON 行ログに現れ得る code の固定語彙。テストで保証する。
-var Codes = []string{
-	collect.CodeFormatMismatch, collect.CodeFormatDrift, collect.CodeLogGroupMissing, collect.CodeAccessDenied, collect.CodeQueryLimit, collect.CodeQueryInvalid,
-	CodeStoreLocked, CodeStoreCorrupt, CodeStoreConflict, CodeStoreUnavailable, CodeInterrupted, CodeRunMissed, collect.CodeCollectFailed, CodeConfigInvalid, CodeCheckUnused, CodeReportNotFound,
-}
+// Codes は arata の標準エラーの JSON 行ログに現れ得る code (一覧は internal/codes。ADR 0054)。
+var Codes = codes.Names(codes.Arata)
 
 // 終了コード (設計書 8 章)。
 const (
@@ -380,7 +378,7 @@ func Rebuild(ctx context.Context, cfg *config.Config, deps Deps, o store.Rebuild
 	case errors.Is(err, store.ErrS3Unavailable):
 		return nil, storeUnavailable(deps, cfg, err)
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-		deps.Logger.Error("rebuild interrupted; the store is unchanged", "dir", dir, "error", err.Error())
+		deps.Logger.Error("rebuild interrupted; the store is unchanged", "code", CodeInterrupted, "dir", dir, "error", err.Error())
 		return nil, err
 	case errors.Is(err, store.ErrNoDatabase) || !o.FromScratch:
 		deps.Logger.Error("cannot read the existing database to carry over runs, findings and principal status", "code", CodeStoreCorrupt, "dir", dir, "error", err.Error(),

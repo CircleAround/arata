@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:arata:schema:log:1",
+  "title": "log",
+  "description": "標準エラーの構造化ログの 1 行 (arata と aratam で共通)。ここにある項目だけが安定。ほかの属性は人向けで、名前も中身も固定しない。行ごとに schema の項目は出さない",
+  "type": "object",
+  "properties": {
+    "time": {
+      "description": "出した時刻 (RFC 3339)",
+      "type": "string"
+    },
+    "level": {
+      "description": "閉じた語彙 (大文字)",
+      "type": "string",
+      "enum": [
+        "DEBUG",
+        "INFO",
+        "WARN",
+        "ERROR"
+      ]
+    },
+    "msg": {
+      "description": "人向けの文。文言は固定しない (機械で読まない)",
+      "type": "string"
+    },
+    "code": {
+      "description": "何が起きたかを表す固定の語。開いた語彙 (知らない値は、その他の警告・エラーとして扱う)。ERROR の行には必ずある。無い行もある",
+      "anyOf": [
+        {
+          "enum": [
+            "ACCESS_DENIED",
+            "LOG_GROUP_MISSING",
+            "FORMAT_MISMATCH",
+            "FORMAT_DRIFT",
+            "QUERY_LIMIT",
+            "QUERY_INVALID",
+            "STORE_LOCKED",
+            "STORE_CORRUPT",
+            "STORE_CONFLICT",
+            "STORE_UNAVAILABLE",
+            "INTERRUPTED",
+            "RUN_MISSED",
+            "COLLECT_FAILED",
+            "CONFIG_INVALID",
+            "CHECK_UNUSED",
+            "REPORT_NOT_FOUND",
+            "SOURCE_CATCHUP",
+            "SOURCE_CATCHUP_TRUNCATED",
+            "INPUT_MISSING",
+            "INPUT_INVALID",
+            "INPUT_STALE",
+            "SEND_FAILED",
+            "ALREADY_NOTIFIED",
+            "NAME_MISMATCH",
+            "MARK_FAILED",
+            "DRY_RUN_REPORT",
+            "LLM_RETRY",
+            "LLM_FAILED",
+            "LLM_OUTPUT_REJECTED",
+            "LLM_PROPOSALS_FAILED",
+            "LLM_PROPOSAL_REJECTED",
+            "PROPOSALS_FILE_FAILED",
+            "PLAYBOOKS_OMITTED",
+            "CONTEXT_UNREADABLE",
+            "CONTEXT_TOO_LARGE",
+            "WEBHOOK_UNSET",
+            "URGENT_WEBHOOK_UNSET",
+            "BOT_TOKEN_UNSET",
+            "SLACK_AUTH_FAILED",
+            "SLACK_SCOPE_MISSING",
+            "LLM_UNAVAILABLE"
+          ]
+        },
+        {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*$"
+        }
+      ]
+    },
+    "source": {
+      "description": "設定の sources の名前。その行がソースに関するときだけ",
+      "type": "string"
+    },
+    "run_id": {
+      "description": "実行の ID。あるときだけ",
+      "type": "string"
+    },
+    "slack_error": {
+      "description": "SEND_FAILED のとき、Slack の Web API が返した error コード (not_in_channel など。英小文字・数字・_ の 64 文字まで)。bot トークンの方式で、Slack がコードを返したときだけ",
+      "type": "string"
+    }
+  },
+  "required": [
+    "time",
+    "level",
+    "msg"
+  ]
+}

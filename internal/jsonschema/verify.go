@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -13,7 +14,7 @@ import (
 //
 // JSON Schema の検証器ではない。読むのは Generate が出すキーワードだけで、知らないキーワードがあればエラーにする
 // (読めないキーワードを黙って飛ばして「確かめた」ことにしない)。format は確かめない。
-// 確かめるのは、型 (null を出してよい項目か)・必須の項目・enum・const。スキーマに無い項目があることは問わない (スキーマは開いた形)。
+// 確かめるのは、型 (null を出してよい項目か)・必須の項目・enum・const・pattern (Go の正規表現として読む)。スキーマに無い項目があることは問わない (スキーマは開いた形)。
 func Verify(schemaJSON, doc []byte) error {
 	var root map[string]any
 	if err := decodeOne(schemaJSON, &root); err != nil {
@@ -76,6 +77,14 @@ func (c *verifier) check(s map[string]any, v any, at string) error {
 			}
 			if !found {
 				err = fmt.Errorf("%s: %v is not one of %v", at, v, list)
+			}
+		case "pattern":
+			re, cerr := regexp.Compile(fmt.Sprint(kw))
+			if cerr != nil {
+				return fmt.Errorf("%s: pattern: %w", at, cerr)
+			}
+			if str, isStr := v.(string); isStr && !re.MatchString(str) {
+				err = fmt.Errorf("%s: %q does not match %s", at, str, kw)
 			}
 		case "properties":
 			err = c.properties(s, v, at)

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/CircleAround/arata/internal/codes"
 	"github.com/CircleAround/arata/internal/report/schema"
 )
 
@@ -60,9 +61,9 @@ func (e *InputError) Error() string { return e.Code + ": " + e.Reason }
 
 // 入力の問題の code (ログの固定語彙)。
 const (
-	CodeInputMissing = "INPUT_MISSING"
-	CodeInputInvalid = "INPUT_INVALID"
-	CodeInputStale   = "INPUT_STALE"
+	CodeInputMissing = codes.InputMissing
+	CodeInputInvalid = codes.InputInvalid
+	CodeInputStale   = codes.InputStale
 )
 
 // ReadInput は dir の report.json を読み、古さを検査する。

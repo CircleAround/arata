@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/CircleAround/arata/internal/codes"
 	"github.com/CircleAround/arata/internal/report/schema"
 )
 
@@ -23,7 +24,7 @@ import (
 const ProposalsMD = "waf-proposals.md"
 
 // CodeProposalsFileFailed は waf-proposals.md を書けなかったときのログの code (WARN。通知は続ける)。
-const CodeProposalsFileFailed = "PROPOSALS_FILE_FAILED"
+const CodeProposalsFileFailed = codes.ProposalsFileFailed
 
 var proposalKindLabels = map[string]string{
 	"false_positive":     "誤検知の疑い",

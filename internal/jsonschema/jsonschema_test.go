@@ -293,3 +293,67 @@ func TestVerify(t *testing.T) {
 		t.Error("unresolved $ref must be an error")
 	}
 }
+
+type line struct {
+	Level string `json:"level" jsonschema:"enum=INFO|ERROR"`
+	Code  string `json:"code,omitempty" jsonschema:"open=code" desc:"固定の語"`
+}
+
+// 開いた語彙: 既知の値を enum で引けて、形に合う知らない値も通す (値を足しても、古いスキーマで落ちない)。
+func TestGenerateOpenVocabulary(t *testing.T) {
+	o := Options{Open: map[string]Vocabulary{"code": {Values: []string{"B_CODE", "A_CODE"}, Pattern: "^[A-Z][A-Z0-9_]*$"}}}
+	got, err := Generate(line{}, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `    "code": {
+      "description": "固定の語",
+      "anyOf": [
+        {
+          "enum": [
+            "B_CODE",
+            "A_CODE"
+          ]
+        },
+        {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*$"
+        }
+      ]
+    }`
+	if !strings.Contains(string(got), want) {
+		t.Fatalf("got:\n%s", got)
+	}
+	for doc, ok := range map[string]bool{
+		`{"level":"INFO"}`:                      true,
+		`{"level":"ERROR","code":"A_CODE"}`:     true,
+		`{"level":"ERROR","code":"NEW_CODE_2"}`: true, // 足された code
+		`{"level":"ERROR","code":"lower"}`:      false,
+		`{"level":"ERROR","code":""}`:           false,
+		`{"level":"ERROR","code":7}`:            false,
+		`{"level":"WARN"}`:                      false,
+		`{"code":"A_CODE"}`:                     false,
+	} {
+		if err := Verify(got, []byte(doc)); (err == nil) != ok {
+			t.Errorf("%s: %v", doc, err)
+		}
+	}
+	// 語彙を渡し忘れた・形が正規表現でない・文字列でない項目に付けた、はエラー
+	if _, err := Generate(line{}, Options{}); err == nil {
+		t.Error("an open vocabulary without its values must be an error")
+	}
+	if _, err := Generate(line{}, Options{Open: map[string]Vocabulary{"code": {Values: []string{"A"}, Pattern: "("}}}); err == nil {
+		t.Error("a broken pattern must be an error")
+	}
+	if _, err := Generate(line{}, Options{Open: map[string]Vocabulary{"code": {Pattern: "^A$"}}}); err == nil {
+		t.Error("an open vocabulary needs its known values")
+	}
+	if _, err := Generate(struct {
+		N int `json:"n" jsonschema:"open=code"`
+	}{}, o); err == nil {
+		t.Error("open on a number must be an error")
+	}
+	if err := Verify([]byte(`{"type":"string","pattern":"("}`), []byte(`"a"`)); err == nil {
+		t.Error("a broken pattern in the schema must be an error")
+	}
+}

@@ -8,7 +8,10 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"regexp"
 	"time"
+
+	"github.com/CircleAround/arata/internal/codes"
 )
 
 // 終了コード (aratam 設計書 5 章)。
@@ -22,17 +25,17 @@ const (
 
 // ログの code (固定語彙)。
 const (
-	CodeConfigInvalid   = "CONFIG_INVALID"
-	CodeSendFailed      = "SEND_FAILED"
-	CodeAlreadyNotified = "ALREADY_NOTIFIED"
-	CodeNameMismatch    = "NAME_MISMATCH"
-	CodeMarkFailed      = "MARK_FAILED"
-	CodeLLMRetry        = "LLM_RETRY"
-	CodeLLMFailed       = "LLM_FAILED"
+	CodeConfigInvalid   = codes.ConfigInvalid
+	CodeSendFailed      = codes.SendFailed
+	CodeAlreadyNotified = codes.AlreadyNotified
+	CodeNameMismatch    = codes.NameMismatch
+	CodeMarkFailed      = codes.MarkFailed
+	CodeLLMRetry        = codes.LLMRetry
+	CodeLLMFailed       = codes.LLMFailed
 	// CodeLLMOutputRejected は LLM の出力の項目を検査で捨てた (WARN。ADR 0037)。
-	CodeLLMOutputRejected = "LLM_OUTPUT_REJECTED"
+	CodeLLMOutputRejected = codes.LLMOutputRejected
 	// CodeDryRunReport は arata の試しの実行 (dry_run: true) の報告なので送らなかった (WARN。ADR 0049)。
-	CodeDryRunReport = "DRY_RUN_REPORT"
+	CodeDryRunReport = codes.DryRunReport
 )
 
 // FallbackNotice は LLM が使えず原文を送るときに冒頭へ書く注記。
@@ -346,10 +349,29 @@ func callLLM(ctx context.Context, o Options, log *slog.Logger, system string, in
 
 func send(ctx context.Context, o Options, log *slog.Logger, route Route, m Message) bool {
 	if err := o.Sender.Send(ctx, route, m); err != nil {
-		log.Error("通知の送信に失敗しました", "code", CodeSendFailed, "route", string(route), "error", err.Error())
+		log.Error("通知の送信に失敗しました", append([]any{"code", CodeSendFailed, "route", string(route)}, SendErrorAttrs(err)...)...)
 		return false
 	}
 	return true
+}
+
+// slackErrorCode は Slack の error コードの形 (not_in_channel など)。
+var slackErrorCode = regexp.MustCompile(`^[a-z0-9_]{1,64}$`)
+
+// SendErrorAttrs は、送信の失敗 (SEND_FAILED) のログの属性。error (人向けの文) と、Slack の Web API が error コードを返していれば slack_error。
+//
+// 決定 (ADR 0054): 機械が読む値を、人向けの error の文から切り出させない。コードは別の項目 (slack_error) で出す。
+// コードは Slack の応答の値なので、形 (英小文字・数字・_ の 64 文字まで) に合うものだけを出す。合わなければ付けない (error の文には残る)。
+// 送る側のエラーの型は知らずに済むよう、SlackErrorCode() を持つエラーから読む (notify は slack パッケージに依存しない)。
+func SendErrorAttrs(err error) []any {
+	attrs := []any{"error", err.Error()}
+	var coded interface{ SlackErrorCode() string }
+	if errors.As(err, &coded) {
+		if c := coded.SlackErrorCode(); slackErrorCode.MatchString(c) {
+			attrs = append(attrs, "slack_error", c)
+		}
+	}
+	return attrs
 }
 
 // mark は .aratam-notified を書く。書けなくても送信は済んでいるので終了コードは変えず、警告だけ出す (次回は再送になる)。

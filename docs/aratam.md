@@ -584,6 +584,42 @@ aratam test-notify [-c aratam.yaml] # Slack に試験メッセージを 1 通送
 - 決定 (`test-notify`): 既定は通常用、`--urgent` で緊急用に送る (緊急用が無ければ notify と同じく通常用にメンション付き)。送信に失敗したら終了コード 5。
   bot トークンの方式では、届くこと (bot がチャンネルにいること) を確かめる唯一の手段になる。
 
+### 標準エラーのログと code
+
+標準エラーのログは arata と同じ JSON 行で、機械が読んでよい項目も同じ (`time`・`level`・`code`・`source`・`run_id`。スキーマは `aratam schema log`。arata の ADR 0054)。
+`msg` と `error` は人向けで、文言は固定しない。code の一覧は arata と共通の `internal/codes` にあり、この表と一致することをテストで固定する。
+
+| code | 意味 |
+|---|---|
+| `CONFIG_INVALID` | 設定ファイル・引数・環境変数の誤り |
+| `INPUT_MISSING` | report.json が無い・読めない (その旨を緊急用に送る) |
+| `INPUT_INVALID` | report.json を解釈できない・知らない版 (その旨を緊急用に送る) |
+| `INPUT_STALE` | report.json が max_age より古い (その旨を緊急用に送る) |
+| `SEND_FAILED` | Slack への送信に失敗した |
+| `ALREADY_NOTIFIED` | 同じ報告を通知済みなので送らなかった (INFO) |
+| `NAME_MISMATCH` | report.json の name が設定の name と違う (警告) |
+| `MARK_FAILED` | 通知済みの印を書けなかった (次回は再送になる。警告) |
+| `DRY_RUN_REPORT` | arata の試しの実行の報告なので送らなかった (警告) |
+| `LLM_RETRY` | LLM の呼び出しを再試行する (警告) |
+| `LLM_FAILED` | LLM が使えず、規則で組み立てた文か原文 (report.md) を送った |
+| `LLM_OUTPUT_REJECTED` | LLM の出力の項目を検査で捨てた (警告) |
+| `LLM_PROPOSALS_FAILED` | WAF の提案の書き起こしに失敗し、候補をそのまま載せた (警告) |
+| `LLM_PROPOSAL_REJECTED` | WAF の提案の書き起こしの項目を検査で捨てた (警告) |
+| `PROPOSALS_FILE_FAILED` | waf-proposals.md を書けなかった (通知は続ける。警告) |
+| `PLAYBOOKS_OMITTED` | 上限に入らず、LLM に渡さなかった playbook がある (警告) |
+| `CONTEXT_UNREADABLE` | llm.context_file を読めない (前提なしで続ける。警告) |
+| `CONTEXT_TOO_LARGE` | llm.context_file が 16 KiB を超える (前提なしで続ける。警告) |
+| `WEBHOOK_UNSET` | slack.webhook_env の環境変数が無い (doctor) |
+| `URGENT_WEBHOOK_UNSET` | slack.urgent_webhook_env の環境変数が無い (緊急の通知は通常用に送る。警告) |
+| `BOT_TOKEN_UNSET` | slack.bot_token_env の環境変数が無い (doctor) |
+| `SLACK_AUTH_FAILED` | bot トークンを確かめられない (doctor の auth.test) |
+| `SLACK_SCOPE_MISSING` | bot トークンの scope に chat:write が無い (doctor。警告) |
+| `LLM_UNAVAILABLE` | LLM に繋がらない (doctor) |
+
+- 決定 (arata の ADR 0054): `SEND_FAILED` の行には、Slack の Web API が error コードを返したとき、`slack_error` (例 `not_in_channel`) を付ける。
+  機械 (GitHub Actions の見本) は、`error` の文からコードを切り出さずに、この項目を読む。値は英小文字・数字・`_` の 64 文字までの形のものだけを出す
+  (Slack の応答の値をそのままログの項目にしない)。Webhook の方式と、HTTP の状態だけで失敗したときは付かない
+
 ## 6. パッケージ構成
 
 ```

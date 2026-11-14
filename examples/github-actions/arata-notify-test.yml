@@ -100,7 +100,8 @@ jobs:
       # ログの方針も監査と同じ: 出力は実行環境の一時ファイルに書き、Actions には INFO 以外の level / code / source だけを出す。
       # 失敗の見分け: CONFIG_INVALID = 設定の誤りか、secret が空 (終了コード 2) / SEND_FAILED = Slack が受け取らなかった (終了コード 5)。
       # bot トークンの方式の SEND_FAILED には、Slack の error コードだけを足して出す (not_in_channel = bot をそのチャンネルに招待する、など。README)。
-      # コードは aratam が形を確かめた値で、チャンネル ID・案内の文・Webhook の応答の本文は出さない。
+      # コードは、ログの slack_error (機械が読む項目。aratam schema log) から読む。人向けの error の文からは切り出さない。
+      # aratam が形を確かめた値で、ここでも形を確かめてから出す。チャンネル ID・案内の文・Webhook の応答の本文は出さない。
       - id: test-notify
         name: aratam test-notify
         timeout-minutes: 3
@@ -118,8 +119,7 @@ jobs:
           status=0
           aratam "${args[@]}" >"$log" 2>&1 || status=$?
           jq -Rc 'fromjson? | objects | select(.level != "INFO") | {level, code, source}' "$log" || true
-          jq -Rr 'fromjson? | objects | select(.code == "SEND_FAILED") | .error | strings
-            | capture("^slack: chat\\.postMessage (?:failed|returned HTTP [0-9]+): (?<c>[a-z0-9_]{1,64})(?:$| \\(|: )")
-            | "slack error=\(.c)"' "$log" || true
+          jq -Rr 'fromjson? | objects | select(.code == "SEND_FAILED") | .slack_error | strings
+            | select(test("^[a-z0-9_]{1,64}$")) | "slack error=\(.)"' "$log" || true
           echo "aratam exit=$status"
           exit "$status"

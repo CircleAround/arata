@@ -8,6 +8,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/CircleAround/arata/internal/codes"
 	"github.com/CircleAround/arata/internal/notify"
 	"github.com/CircleAround/arata/internal/slack"
 	"github.com/CircleAround/arata/internal/subcmd"
@@ -15,12 +16,12 @@ import (
 
 // doctor の code (固定語彙)。
 const (
-	codeWebhookUnset       = "WEBHOOK_UNSET"
-	codeUrgentWebhookUnset = "URGENT_WEBHOOK_UNSET"
-	codeLLMUnavailable     = "LLM_UNAVAILABLE"
-	codeSlackBotUnset      = "BOT_TOKEN_UNSET"
-	codeSlackAuthFailed    = "SLACK_AUTH_FAILED"
-	codeSlackScopeMissing  = "SLACK_SCOPE_MISSING"
+	codeWebhookUnset       = codes.WebhookUnset
+	codeUrgentWebhookUnset = codes.UrgentWebhookUnset
+	codeLLMUnavailable     = codes.LLMUnavailable
+	codeSlackBotUnset      = codes.BotTokenUnset
+	codeSlackAuthFailed    = codes.SlackAuthFailed
+	codeSlackScopeMissing  = codes.SlackScopeMissing
 )
 
 // doctorPrompt は LLM の疎通確認の問い合わせ。report のデータは渡さない。
@@ -222,7 +223,7 @@ func newTestNotifyCmd(d *Deps, g *globalFlags) *subcmd.Command {
 			lines = append(lines, fmt.Sprintf("aratam の試験通知です (%s、%s)。この通知が届いていれば %s の設定は正しく動いています。", notify.Escape(cfg.Name), label, what))
 			sender := newSlackSender(d, hooks)
 			if err := sender.Send(ctx, route, notify.Message{Text: strings.Join(lines, "\n")}); err != nil {
-				d.Logger.Error("試験通知の送信に失敗しました", "code", notify.CodeSendFailed, "route", string(route), "error", err.Error())
+				d.Logger.Error("試験通知の送信に失敗しました", append([]any{"code", notify.CodeSendFailed, "route", string(route)}, notify.SendErrorAttrs(err)...)...)
 				return &exitError{code: notify.ExitSend}
 			}
 			fmt.Fprintf(d.Stdout, "%s に試験通知を送りました。\n", sent)

@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -495,4 +496,61 @@ func TestEscalatedChangedGoesUrgent(t *testing.T) {
 	if !strings.Contains(s.got[0].text, "medium → high に上昇") {
 		t.Fatalf("text must show the escalation:\n%s", s.got[0].text)
 	}
+}
+
+type codedError struct{ code string }
+
+func (e *codedError) Error() string          { return "slack: chat.postMessage failed: " + e.code }
+func (e *codedError) SlackErrorCode() string { return e.code }
+
+// SendErrorAttrs は、送信の失敗のログの属性。Slack の error コードは、形に合うものだけを slack_error として足す (ADR 0054)。
+func TestSendErrorAttrs(t *testing.T) {
+	attr := func(err error) (string, bool) {
+		a := SendErrorAttrs(err)
+		if len(a) < 2 || a[0] != "error" || a[1] != err.Error() || len(a)%2 != 0 {
+			t.Fatalf("attrs must start with the error text: %v", a)
+		}
+		for i := 2; i+1 < len(a); i += 2 {
+			if a[i] == "slack_error" {
+				return a[i+1].(string), true
+			}
+		}
+		return "", false
+	}
+	if got, ok := attr(&codedError{"not_in_channel"}); !ok || got != "not_in_channel" {
+		t.Errorf("got %q %v", got, ok)
+	}
+	// 包まれていても拾う
+	if got, ok := attr(fmt.Errorf("urgent: %w", &codedError{"token_revoked"})); !ok || got != "token_revoked" {
+		t.Errorf("wrapped: got %q %v", got, ok)
+	}
+	for _, bad := range []string{"", "Not_In_Channel", "a b", "a\nb", "<!channel>", strings.Repeat("a", 65), "コード"} {
+		if got, ok := attr(&codedError{bad}); ok {
+			t.Errorf("%q must not become slack_error (got %q)", bad, got)
+		}
+	}
+	if _, ok := attr(errors.New("slack: webhook returned 500")); ok {
+		t.Error("an error without a code must not carry slack_error")
+	}
+}
+
+// Slack の応答の値がどんな文字列でも、slack_error になるのは「英小文字・数字・_ の 64 文字まで」の値だけ。
+func FuzzSendErrorAttrs(f *testing.F) {
+	for _, s := range []string{"not_in_channel", "", "A", "a b", "a\nb", "<!channel>", strings.Repeat("a", 64), strings.Repeat("a", 65), "\x1b[31m", "ｎｏｔ"} {
+		f.Add(s)
+	}
+	form := regexp.MustCompile(`^[a-z0-9_]{1,64}$`)
+	f.Fuzz(func(t *testing.T, code string) {
+		a := SendErrorAttrs(&codedError{code})
+		if len(a)%2 != 0 || len(a) > 4 {
+			t.Fatalf("attrs: %v", a)
+		}
+		has := len(a) == 4
+		if has && (a[2] != "slack_error" || a[3] != code) {
+			t.Fatalf("attrs: %v", a)
+		}
+		if has != form.MatchString(code) {
+			t.Errorf("%q: slack_error present=%v", code, has)
+		}
+	})
 }

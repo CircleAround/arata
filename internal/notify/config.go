@@ -16,6 +16,8 @@ import (
 	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/CircleAround/arata/internal/codes"
 )
 
 // Config は aratam.yaml (aratam 設計書 4 章)。arata と同じく暗黙の既定を持たず、`aratam config init` の雛形で全項目を明示する。
@@ -116,8 +118,8 @@ const MaxContextBytes = 16 << 10
 
 // context_file を使えないときの code (WARN)。
 const (
-	CodeContextUnreadable = "CONTEXT_UNREADABLE"
-	CodeContextTooLarge   = "CONTEXT_TOO_LARGE"
+	CodeContextUnreadable = codes.ContextUnreadable
+	CodeContextTooLarge   = codes.ContextTooLarge
 )
 
 // ContextPath は context_file のパス (相対なら設定ファイルのディレクトリ基準)。空なら空。

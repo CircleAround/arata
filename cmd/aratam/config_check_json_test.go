@@ -12,9 +12,8 @@ import (
 
 // config check --format json の型から作ったスキーマを、schemas/ のファイルで固定する (ADR 0054)。
 func TestConfigCheckSchemaIsFixed(t *testing.T) {
-	schematest.Golden(t, configCheckSchema, configCheckSchemaVersion,
-		"aratam config check --format json の出力。設定の形の検査の結果と、設定から決まる値 (Slack への送り方など)。Slack にも LLM にも繋がずに出す",
-		configCheckOutput{}, true, *update)
+	schematest.Golden(t, schematest.Spec{Name: configCheckSchema, Version: configCheckSchemaVersion, Versioned: true, Type: configCheckOutput{},
+		Description: "aratam config check --format json の出力。設定の形の検査の結果と、設定から決まる値 (Slack への送り方など)。Slack にも LLM にも繋がずに出す"}, *update)
 }
 
 // checkJSON は config check --format json を流し、出力がスキーマと型に合うことを確かめて返す。

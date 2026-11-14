@@ -58,12 +58,15 @@ jobs:
               status=1
               continue
             fi
-            if ! version="$(yq -r '.env.ARATA_VERSION // ""' "$file" 2>/dev/null)"; then
+            if ! version="$(yq -r '.env.ARATA_VERSION' "$file" 2>/dev/null)"; then
               echo "::error file=$file::YAML として読めない"
               status=1
               continue
             fi
-            [ -n "$version" ] || continue
+            # ARATA_VERSION を持たないワークフロー (yq は null と出す) は、arata を使わないものとして見ない
+            if [ -z "$version" ] || [ "$version" = null ]; then
+              continue
+            fi
             count=$((count + 1))
             if [ "$version" != "$ARATA_VERSION" ]; then
               echo "::error file=$file::ARATA_VERSION が arata-check.yml の $ARATA_VERSION と違う (arata を使うワークフローは同じ版に揃える)"

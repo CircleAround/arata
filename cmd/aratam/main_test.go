@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/CircleAround/arata/internal/codes"
+	"github.com/CircleAround/arata/internal/codes/codestest"
 	"github.com/CircleAround/arata/internal/llm"
 	"github.com/CircleAround/arata/internal/notify"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -136,6 +138,8 @@ func (c *cli) run(args ...string) int {
 			})}, nil
 		},
 	})
+	// どの実行でも、出したログの行は log スキーマに合い、code は aratam の一覧にあり、ERROR には code がある (ADR 0054)
+	codestest.Check(c.t, codes.Aratam, c.stderr.String())
 	for _, out := range []string{c.stdout.String(), c.stderr.String()} {
 		if strings.Contains(out, "secret") || strings.Contains(out, c.hook.srv.URL) || strings.Contains(out, botToken) {
 			c.t.Fatalf("webhook URL or bot token leaked:\n%s", out)
