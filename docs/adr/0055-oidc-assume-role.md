@@ -1,7 +1,7 @@
 # 0055. OIDC でのロールの引き受けを、(プロバイダ, sub, ロール) の組で既知リストと比べる (`oidc_assume_role`)
 
 - 日付: 2026-11-14
-- 状態: 提案
+- 状態: 採用
 
 ## 背景
 
@@ -9,11 +9,15 @@ GitHub のアカウントを乗っ取り、多くのリポジトリのワーク�
 スクリプトは、GitHub の OIDC のトークンで AWS のロールを引き受け、そこからほかのロールへ乗り移り、長期のキーを作り、信頼ポリシーを広げる。
 攻撃者は正規の GitHub の実行環境の中でトークンを作る。既定のブランチの既存のワークフローを書き換える手口では、信頼ポリシーのブランチの条件も通る。
 
-arata は今、OIDC での引き受け (`AssumeRoleWithWebIdentity`) を見ていない。
+**arata は今、OIDC での引き受け (`AssumeRoleWithWebIdentity`) をどのチェックでも見ていない。** コードと記録の形から確かめた事実:
 
-- `unknown_assume_role` は呼び出し元の ARN を既知リストの `principals` と比べる。OIDC の引き受けの記録には呼び出し元の ARN が無いので、
-  主体が空になり、対象から外れている (意図して外したのではなく、形の結果)
-- `new_principal`・`principal_new_source` が見るのは、引き受けた後のロール (のセッション) の活動で、「どのリポジトリのどのブランチから入ったか」は見ない
+- OIDC の引き受けの記録には、呼び出し元の ARN が無い (`userIdentity` に `arn` も `sessionContext.sessionIssuer` も無い)。
+  collector はこの記録の主体 (`PrincipalARN`) を空にする
+- `unknown_assume_role` は主体が空の記録を飛ばす。だから OIDC の引き受けは、知らないリポジトリからのものでも **1 件も報告されない**
+  (意図して外したのではなく、形の結果。対象外と書いた決定もテストも無い)
+- 主体の集計 (`principals`・主体の活動の日次集計) も主体が空の記録を数えない。`new_principal`・`principal_new_source` に引き受けそのものは出ない。
+  この 2 つが見るのは、引き受けた後のロール (のセッション) の活動で、「どのリポジトリのどのブランチから入ったか」は見ない
+- 記録そのものは、注目イベント (`AssumeRole*`) として events に残っている。ただし `sub` とプロバイダは残していない
 
 ### 記録の形 (CloudTrail の `AssumeRoleWithWebIdentity`。実際の記録で確かめた)
 
