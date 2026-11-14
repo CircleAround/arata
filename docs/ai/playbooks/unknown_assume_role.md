@@ -3,7 +3,7 @@
 ## この指摘の意味
 
 allowlist に無い主体 (呼び出し元) が IAM ロールを引き受けた、または引き受けようとした (hourly、high)。
-AWS のサービス主体 (EC2・Lambda などのインスタンスロール) は対象外。
+AWS のサービス主体 (EC2・Lambda などのインスタンスロール) は対象外。OIDC での引き受け (`AssumeRoleWithWebIdentity`。CI など) も対象外で、oidc_assume_role が見る。
 
 ### 呼び出し元がアカウントしか分からないとき (`caller_identity: account_only`)
 
@@ -30,14 +30,14 @@ AWS のサービス主体 (EC2・Lambda などのインスタンスロール) �
 - `destination_status` がある finding は、行き先は既知だが MFA ありと確かめられない (`approved`) か期限切れ (`expired`)。「既知だから問題ない」と書かない
 
 - Key は `<呼び出し元 ARN>-><引き受けたロール ARN>`
-- data: `caller`、`caller_kind`、`caller_identity` (`account_only` のときだけ)、`role_arn`、`direction`・`caller_account`・`role_account` (向きが決まったとき)、`mfa`、`external_account` (そのときのアカウント ID)、`allowlist_status` (unknown / expired)、`count`、`ips`、`event_names` (AssumeRole / AssumeRoleWithWebIdentity / AssumeRoleWithSAML など)、
+- data: `caller`、`caller_kind`、`caller_identity` (`account_only` のときだけ)、`role_arn`、`direction`・`caller_account`・`role_account` (向きが決まったとき)、`mfa`、`external_account` (そのときのアカウント ID)、`allowlist_status` (unknown / expired)、`count`、`ips`、`event_names` (AssumeRole / AssumeRoleWithSAML など)、
   `has_errors` (失敗した引き受けを含む)、`invoked_by` (送信元の IP が無く、AWS のサービス経由のとき。コンソールのスイッチロールなど)
 - `ips` が無いのは、記録の送信元が AWS のサービス名で IP が無いとき (収集で落としているのではない)
 
 ## まず確かめること
 
 1. `arata review --format json` で、同じ呼び出し元の new_principal・access_denied・iam_changes を探す。同じ呼び出し元ならまとめて 1 つの話として書く
-2. 呼び出し元が何者か: 自アカウントの IAM ユーザー / ロール、外部アカウント (SaaS 連携・自社の別アカウント)、OIDC (`AssumeRoleWithWebIdentity`。CI など)、SAML
+2. 呼び出し元が何者か: 自アカウントの IAM ユーザー / ロール、外部アカウント (SaaS 連携・自社の別アカウント)、SAML
 3. 引き受けたロールの信頼ポリシー: `aws iam get-role --role-name <ロール名> --query Role.AssumeRolePolicyDocument`
    (コンソールは IAM > ロール > 対象 > 信頼関係)。Principal に何が書かれているか、`sts:ExternalId` などの条件があるか
 4. `allowlist_status: expired` なら、以前承認した主体の期限切れ。期限の延長でよいかを確かめる
@@ -67,7 +67,7 @@ AWS のサービス主体 (EC2・Lambda などのインスタンスロール) �
 
 ## 判断の分かれ目
 
-- **正規の可能性が高い**: 社員の switch role、CI/CD の OIDC ロール、委託先・SaaS の公開されたアカウント ID からの引き受けで、操作が役割と合う
+- **正規の可能性が高い**: 社員の switch role、委託先・SaaS の公開されたアカウント ID からの引き受けで、操作が役割と合う
 - **要対応**: 知らない外部アカウント、信頼ポリシーが広い (Principal が `*` やアカウント全体で条件が無い)、引き受けた後に IAM の変更・秘匿値の読み取り・大量の拒否がある、
   送信元が業務の場所と合わない
 - 失敗だけ (`has_errors` で成功なし) は、引き受けられてはいないが、誰かが信頼関係を探っている兆候。信頼ポリシーの確認を勧める

@@ -15,6 +15,7 @@ import (
 var keyFields = map[string][]string{
 	"root_usage":          {"count", "ips", "event_names", "last_time"},
 	"unknown_assume_role": {"caller", "count", "ips", "last_time"},
+	"oidc_assume_role":    {"provider", "role_arn", "count", "ips", "run_ids", "last_time"},
 	"new_principal":       {"kind", "count", "ips", "external_account"},
 	"iam_changes":         {"principal", "target", "policy_arn", "count", "ips"},
 	"login_bruteforce":    {"ip", "count", "date", "reason", "threshold"},

@@ -30,6 +30,7 @@ LLM はこの手順に沿って、根拠 (finding の `data`) と利用者の事
 | log_hygiene | アプリのログに残った「載せるべきでない値」 | `arata help ai playbook log_hygiene` |
 | login_bruteforce | sign-in 失敗の急増 | `arata help ai playbook login_bruteforce` |
 | new_principal | 新規の主体 | `arata help ai playbook new_principal` |
+| oidc_assume_role | OIDC でのロールの引き受け (GitHub Actions など) | `arata help ai playbook oidc_assume_role` |
 | posture | アカウントの姿勢 | `arata help ai playbook posture` |
 | principal_new_source | 既知の主体の初めての送信元・リージョン | `arata help ai playbook principal_new_source` |
 | probe_paths | 機密パスの探索 | `arata help ai playbook probe_paths` |

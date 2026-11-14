@@ -15,7 +15,7 @@ arata のチェックは、設定の `sources` に書いた記録からしか動
 
 | ソース (kind。括弧は format) | 出る記録 | 動くチェック (周期) |
 |---|---|---|
-| cloudtrail-lookup | trail_event, principal_seen | root_usage (hourly), unknown_assume_role (hourly), new_principal (daily), iam_changes (daily), access_denied (daily), defense_evasion (daily), public_exposure (daily), principal_new_source (daily), secret_access (daily), ai_path_usage (daily) |
+| cloudtrail-lookup | trail_event, principal_seen | root_usage (hourly), unknown_assume_role (hourly), oidc_assume_role (hourly), new_principal (daily), iam_changes (daily), access_denied (daily), defense_evasion (daily), public_exposure (daily), principal_new_source (daily), secret_access (daily), ai_path_usage (daily) |
 | cloudwatch-logs (alb_access / json / nginx_access / regex / request_lines) | http_access | login_bruteforce (daily), probe_paths (daily), endpoint_abuse (daily) |
 | cloudtrail-unused-regions | unused_region_event | unused_region_activity (daily) |
 | cost-anomaly | cost_anomaly | cost_anomaly (daily) |

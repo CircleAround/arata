@@ -30,6 +30,11 @@ func FuzzParse(f *testing.F) {
 		"assume_destinations:\n  - account: \"*\"\n    note: n\n", "assume_destinations:\n  - account: \"111122223333\"\n    roles: [\"*\"]\n",
 		"assume_destinations: [{account: 111122223333, note: n, roles: [\"arn:aws:iam::999999999999:role/x\"]}]\n", "assume_destinations: &d [*d]\n",
 		"principals:\n  - account: \"111122223333\"\nassume_destinations:\n  - account: \"123456789012\"\n    note: n\n    roles: [\"\\xff\"]\n",
+		oidcYAML,
+		"oidc_subjects:\n  - provider: token.actions.githubusercontent.com\n    role: arn:aws:iam::123456789012:role/*\n    repo: example-org/*\n    refs: [\"*\"]\n    note: n\n",
+		"oidc_subjects:\n  - provider: token.actions.githubusercontent.com\n    role: arn:aws:iam::123456789012:role/x\n    repo: example-org/example-repo\n    note: n\n",
+		"oidc_subjects:\n  - provider: cognito-identity.amazonaws.com\n    role: arn:aws:iam::123456789012:role/x\n    note: n\n    hours: [\"23:30-00:30\", \"\\xff\"]\n    source_ips: [\"::/0\"]\n",
+		"oidc_subjects: &o [*o]\n", "principals:\n  - arn: arn:aws:iam::123456789012:role/gha-deploy\n    tags: [deploy]\noidc_subjects: []\n",
 	} {
 		f.Add([]byte(s))
 	}
@@ -121,6 +126,52 @@ func FuzzParse(f *testing.F) {
 			}
 			if _, st := l.Principal(arn, at); st != StatusUnknown && len(l.Principals) == 0 {
 				t.Fatalf("principals が空なのに、行き先のアカウントの主体が %s になった", st)
+			}
+		}
+		// OIDC の入り口 (oidc_subjects。ADR 0055): プロバイダは名前 (ARN でない)、ロールは glob の無い ARN、note は必須。
+		// GitHub の項目はリポジトリ (glob なし) と、refs / environments / pull_request のどれかを必ず持つ。GitHub 以外は持たない
+		const gh = "token.actions.githubusercontent.com"
+		for i := range l.OIDCSubjects {
+			e := &l.OIDCSubjects[i]
+			if strings.HasPrefix(e.Provider, "arn:") || !oidcRoleRe.MatchString(e.Role) || strings.ContainsAny(e.Role+e.Repo, "*? \t\n") || strings.TrimSpace(e.Note) == "" ||
+				len(e.refs) != len(e.Refs) || len(e.hours) != len(e.Hours) || len(e.nets) != len(e.SourceIPs) {
+				t.Fatalf("oidc_subjects[%d]: 検証が抜けた: %+v", i, e)
+			}
+			entry := len(e.Refs) > 0 || len(e.Environments) > 0 || e.PullRequest
+			if (e.Provider == gh) != entry || (e.Provider == gh) != (e.Repo != "") {
+				t.Fatalf("oidc_subjects[%d]: 入り口の書き方が規則に合わない: %+v", i, e)
+			}
+			// 既知のロールでも、書いていないリポジトリからの引き受けは既知にならない
+			never := OIDCAssume{Provider: e.Provider, Role: e.Role, Repo: "fuzz-org/never-written", Kind: "ref", Ref: "refs/heads/main"}
+			if es, st := l.OIDCSubject(never, at); st != StatusUnknown && e.Provider == gh {
+				for _, x := range es {
+					if !strings.EqualFold(x.Repo, never.Repo) {
+						t.Fatalf("書いていないリポジトリからの引き受けが %s になった: %+v", st, x)
+					}
+				}
+			}
+			// 読めない sub (リポジトリが空) は、GitHub の項目では既知にならない
+			if _, st := l.OIDCSubject(OIDCAssume{Provider: gh, Role: e.Role}, at); st != StatusUnknown {
+				t.Fatalf("読めない sub の引き受けが %s になった", st)
+			}
+		}
+		// 書いていないロールへの引き受けは既知にならない。principals での承認 (ロールを主体として承認) も入り口を既知にしない
+		out := OIDCAssume{Provider: gh, Role: outsider, Repo: "example-org/example-repo", Kind: "ref", Ref: "refs/heads/main"}
+		if es, st := l.OIDCSubject(out, at); st != StatusUnknown || l.OIDCRoleKnown(outsider, at) {
+			found := false
+			for i := range l.OIDCSubjects {
+				found = found || l.OIDCSubjects[i].Role == outsider
+			}
+			if !found {
+				t.Fatalf("書いていないロールが %s になった: %+v", st, es)
+			}
+		}
+		if len(l.OIDCSubjects) == 0 {
+			for i := range l.Principals {
+				a := OIDCAssume{Provider: gh, Role: l.Principals[i].ARN, Repo: "example-org/example-repo", Kind: "ref", Ref: "refs/heads/main"}
+				if _, st := l.OIDCSubject(a, at); st != StatusUnknown || l.OIDCRoleKnown(a.Role, at) {
+					t.Fatalf("principals の承認が OIDC の入り口を既知にした: %s", a.Role)
+				}
 			}
 		}
 		l.SecretExpected(outsider, "arn:aws:secretsmanager:ap-northeast-1:123456789012:secret:prod/db-AbCdEf")

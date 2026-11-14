@@ -113,6 +113,7 @@
       "defense_evasion",
       "iam_changes",
       "new_principal",
+      "oidc_assume_role",
       "principal_new_source",
       "public_exposure",
       "root_usage",

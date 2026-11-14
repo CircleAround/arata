@@ -94,8 +94,8 @@
 公開前の点検 (ADR 0037) で見つけ、公開後に Issue にする項目。高い重大度のものは公開前に直した。
 
 検知の取りこぼし:
-- `unknown_assume_role`: OIDC / SAML の AssumeRole は主体の ARN が無く、報告されない (playbook の記述と合わせる)
-- `iam_changes` の対象外の操作: `CreatePolicyVersion`・`SetDefaultPolicyVersion`・`AddUserToGroup`・`UpdateLoginProfile`・`CreateRole`・`DeactivateMFADevice`・境界の変更など
+- `unknown_assume_role`: SAML の AssumeRole は主体の ARN が無く、報告されない (OIDC は `oidc_assume_role` が見る。ADR 0055)。承認済みの呼び出し元からの、初めてのロールへの引き受けも出ない
+- `iam_changes` の対象外の操作: `CreatePolicyVersion`・`SetDefaultPolicyVersion`・`AddUserToGroup`・`UpdateLoginProfile`・`DeactivateMFADevice`・境界の変更など
 - パスの照合が生の文字列: 大文字小文字、連続スラッシュ、`%xx`、末尾の `/`、絶対 URI の形で `login_bruteforce`・`probe_paths`・`waf_review` の除外をすり抜ける
 - 解釈率が閾値を切るとそのソースの集計を全部止める。ごみの HTTP で検知を止められる。解釈できた行は出し、未解釈の急増を finding にする
 - `ip` を検証していない: X-Forwarded-For を対応させた設定で、許可 IP の騙り、値を変えた閾値の回避、finding の増加が起きる

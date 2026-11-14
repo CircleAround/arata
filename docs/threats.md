@@ -26,7 +26,7 @@
 
 | 事例 | 公開日 | 内容 | 見えるチェック | 本文 |
 |---|---|---|---|---|
-| wfx-loot-2026-11 | 2026-11-12 | 乗っ取った GitHub アカウントから CI の秘密を盗むスクリプトを push する ("wfx-loot") | access_analyzer, iam_changes, new_principal, principal_new_source, unknown_assume_role | `arata help ai threats wfx-loot-2026-11` |
+| wfx-loot-2026-11 | 2026-11-12 | 乗っ取った GitHub アカウントから CI の秘密を盗むスクリプトを push する ("wfx-loot") | access_analyzer, iam_changes, new_principal, oidc_assume_role, principal_new_source, unknown_assume_role | `arata help ai threats wfx-loot-2026-11` |
 | ghostaction-2026-10 | 2026-10-07 | 乗っ取った GitHub アカウントに「Security Audit」のワークフローを足し、secrets と履歴の認証情報を送る (GhostAction) | access_denied, credential_hygiene, principal_new_source, unused_region_activity | `arata help ai threats ghostaction-2026-10` |
 | env-extortion-2024-08 | 2024-08-15 | 公開された .env から得たアクセスキーで、管理者のロールを作り、S3 のデータを消して身代金を求める | access_denied, iam_changes, new_principal, principal_new_source, probe_paths, unused_region_activity | `arata help ai threats env-extortion-2024-08` |
 | lucr-3-2023-09 | 2023-09-20 | ID プロバイダの乗っ取りから AWS に入り、秘匿値を集め、IAM に居座り、検知を止める (LUCR-3 / Scattered Spider) | defense_evasion, iam_changes, new_principal, principal_new_source, secret_access | `arata help ai threats lucr-3-2023-09` |
@@ -58,6 +58,7 @@
 | log_hygiene | 対応する公開の事例はまだ無い |
 | login_bruteforce | 対応する公開の事例はまだ無い |
 | new_principal | wfx-loot-2026-11, env-extortion-2024-08, lucr-3-2023-09 |
+| oidc_assume_role | wfx-loot-2026-11 |
 | posture | 対応する公開の事例はまだ無い |
 | principal_new_source | wfx-loot-2026-11, ghostaction-2026-10, env-extortion-2024-08, lucr-3-2023-09, scarleteel-2023-02 |
 | probe_paths | env-extortion-2024-08 |

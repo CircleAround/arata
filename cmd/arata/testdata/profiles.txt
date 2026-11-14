@@ -8,6 +8,7 @@ profile daily (window 24h, max_catchup 7d)
   iam_changes             daily    event  default-daily
   login_bruteforce        daily    event  default-daily
   new_principal           daily    state  default-daily
+  oidc_assume_role        hourly   event  explicit
   principal_new_source    daily    event  default-daily
   probe_paths             daily    event  default-daily
   public_exposure         daily    event  default-daily
@@ -55,6 +56,11 @@ profile daily (window 24h, max_catchup 7d)
   secret_access.min_baseline_days              既定値     7
   secret_access.factor                         既定値     3
   secret_access.min_distinct                   既定値     10
+  oidc_assume_role.baseline_days               既定値     14
+  oidc_assume_role.factor                      既定値     3
+  oidc_assume_role.min_count                   既定値     20
+  oidc_assume_role.min_baseline_days           既定値     7
+  oidc_assume_role.medium_ratio                既定値     3
   endpoint_abuse.endpoints                     既定値     []
   endpoint_abuse.window                        既定値     10m
   endpoint_abuse.baseline_days                 既定値     14
@@ -74,8 +80,15 @@ profile daily (window 24h, max_catchup 7d)
 
 profile hourly (window 1h, max_catchup 7d)
   CHECK                CADENCE  MODE   VIA
+  oidc_assume_role     hourly   event  explicit
   root_usage           hourly   event  explicit
   unknown_assume_role  hourly   event  explicit
+  PARAM                               ORIGIN  VALUE
+  oidc_assume_role.baseline_days      既定値  14
+  oidc_assume_role.factor             既定値  3
+  oidc_assume_role.min_count          既定値  20
+  oidc_assume_role.min_baseline_days  既定値  7
+  oidc_assume_role.medium_ratio       既定値  3
 
 profile weekly (window 7d, max_catchup 7d)
   CHECK               CADENCE  MODE   VIA

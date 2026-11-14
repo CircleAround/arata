@@ -7,7 +7,7 @@ web     cloudwatch-logs    match_rate  ok      -             0.97 (97/100 行、
 rails   cloudwatch-logs    log_group   ok      -             /app/rails (ap-northeast-1)
 rails   cloudwatch-logs    queries     ok      -             5 本のクエリを Insights が受理 (doctor, http_hits, http_lines, lines, sample)
 rails   cloudwatch-logs    match_rate  ok      -             0.97 (97/100 行、閾値 0.60、形式 json)
--       -                  check       warn    CHECK_UNUSED  どのプロファイルにも入っていない (実行されない): root_usage, unknown_assume_role, credential_hygiene, guardduty_findings, posture, access_analyzer, waf_review, log_hygiene
+-       -                  check       warn    CHECK_UNUSED  どのプロファイルにも入っていない (実行されない): root_usage, unknown_assume_role, oidc_assume_role, credential_hygiene, guardduty_findings, posture, access_analyzer, waf_review, log_hygiene
 -       -                  check       warn    -             cost_anomaly は skip される: no cost_anomaly source (profile daily)
 -       -                  check       warn    -             unused_region_activity は skip される: no unused_region_event source (profile daily)
 -       -                  check       warn    -             waf_block_trend は skip される: no waf_action source (profile daily)

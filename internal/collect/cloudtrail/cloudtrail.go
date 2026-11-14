@@ -274,12 +274,16 @@ func (c *Collector) lookup(ctx context.Context, rc RegionClient, in *ct.LookupEv
 // rawEvent は CloudTrailEvent JSON のうち使うフィールド。
 type rawEvent struct {
 	UserIdentity struct {
-		Type           string `json:"type"`
-		PrincipalID    string `json:"principalId"`
-		ARN            string `json:"arn"`
-		AccountID      string `json:"accountId"`
-		InvokedBy      string `json:"invokedBy"`
-		SessionContext struct {
+		Type        string `json:"type"`
+		PrincipalID string `json:"principalId"`
+		ARN         string `json:"arn"`
+		AccountID   string `json:"accountId"`
+		InvokedBy   string `json:"invokedBy"`
+		// AssumeRoleWithWebIdentity の記録 (type は WebIdentityUser) にある。userName はトークンの sub、identityProvider は OIDC プロバイダ (ADR 0055)。
+		// 文字列でない値でも記録ごと捨てないように any で受ける
+		UserName         any `json:"userName"`
+		IdentityProvider any `json:"identityProvider"`
+		SessionContext   struct {
 			SessionIssuer struct {
 				ARN string `json:"arn"`
 			} `json:"sessionIssuer"`
@@ -358,6 +362,7 @@ func (c *Collector) normalize(raw types.Event) (record.TrailEvent, bool) {
 		}
 	}
 	extractDetail(r.EventSource, r.EventName, r.RequestParameters, e.Data)
+	trustDetail(r.EventSource, r.EventName, r.RequestParameters, e.Data)
 	if v, ok := r.AdditionalEventData["MFAUsed"].(string); ok {
 		e.Data["mfa"] = v
 	}
@@ -381,7 +386,50 @@ func (c *Collector) normalize(raw types.Event) (record.TrailEvent, bool) {
 			e.Data["mfa_serial"] = true
 		}
 	}
+	oidcDetail(r, e.Data)
 	return e, true
+}
+
+// oidcDetail は OIDC でのロールの引き受け (AssumeRoleWithWebIdentity) の記録に、プロバイダと sub から読んだ値を足す (ADR 0055)。
+//
+// 決定:
+//   - 主体 (PrincipalARN) は空のままにする。sub を主体にしない (principals・主体の活動の集計に載せない。見るのは oidc_assume_role だけ)
+//   - プロバイダは名前 (ARN の oidc-provider/ より後ろ。ARN でなければ値そのもの) と、ARN のアカウント。決まった形でなければ unparsed
+//   - sub を読むのは GitHub のプロバイダのときだけ。読めたら各部分 (リポジトリ・ID・種類・ref / environment) を残し、sub そのものは残さない。
+//     読めなければ oidc_sub_form: unparsed だけ。GitHub 以外は not_read (利用者ごとの ID が入るプロバイダがある)
+//   - userAgent の run_id (数字) は、GitHub Actions の実行と名乗るときだけ残す (呼ぶ側が書ける値。判定には使わない)
+//   - roleSessionName は残さない (今までと同じ)
+func oidcDetail(r rawEvent, d map[string]any) {
+	if r.EventSource != "sts.amazonaws.com" || r.EventName != "AssumeRoleWithWebIdentity" {
+		return
+	}
+	idp, _ := r.UserIdentity.IdentityProvider.(string)
+	name, account := record.OIDCProvider(idp)
+	d["oidc_provider"] = name
+	if account != "" {
+		d["oidc_provider_account"] = account
+	}
+	if name != record.GitHubOIDCProvider {
+		d["oidc_sub_form"] = record.OIDCSubNotRead
+		return
+	}
+	if id, ok := record.GitHubRunID(r.UserAgent); ok {
+		d["gha_run_id"] = id
+	}
+	raw, _ := r.UserIdentity.UserName.(string)
+	sub, ok := record.ParseGitHubSub(raw)
+	if !ok {
+		d["oidc_sub_form"] = record.OIDCSubUnparsed
+		return
+	}
+	d["oidc_sub_form"] = record.OIDCSubGitHub
+	d["oidc_repo"] = sub.Repo
+	d["oidc_sub_kind"] = sub.Kind
+	for k, v := range map[string]string{"oidc_owner_id": sub.OwnerID, "oidc_repo_id": sub.RepoID, "oidc_ref": sub.Ref, "oidc_environment": sub.Environment} {
+		if v != "" {
+			d[k] = v
+		}
+	}
 }
 
 // recipientAccountRe は AWS のアカウント ID の形 (12 桁の数字。`$` は末尾の改行にも合うので \z)。

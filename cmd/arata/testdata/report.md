@@ -57,7 +57,7 @@
 
 - 取得できたソース: trail
 - 取得に失敗したソース: なし
-- 実行したチェック: access_denied, ai_path_usage, defense_evasion, iam_changes, new_principal, principal_new_source, public_exposure, root_usage, secret_access, unknown_assume_role
+- 実行したチェック: access_denied, ai_path_usage, defense_evasion, iam_changes, new_principal, oidc_assume_role, principal_new_source, public_exposure, root_usage, secret_access, unknown_assume_role
 - スキップしたチェック:
   - cost_anomaly: no cost_anomaly source
   - endpoint_abuse: no http_access source

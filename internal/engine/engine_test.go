@@ -58,7 +58,7 @@ sources:
 %sprofiles:
   daily:
     window: 24h
-    checks: [default-daily, root_usage, unknown_assume_role]
+    checks: [default-daily, root_usage, unknown_assume_role, oidc_assume_role]
   weekly:
     window: 7d
     checks: [default-weekly]
@@ -212,7 +212,7 @@ func TestInitThenRunTwice(t *testing.T) {
 	if len(r1.Report.Info) != 1 || r1.Report.Info[0].Check != "iam_changes" {
 		t.Fatalf("deploy principal IAM change should be info: %+v", r1.Report.Info)
 	}
-	if strings.Join(r1.Report.Coverage.ChecksRun, ",") != "access_denied,ai_path_usage,defense_evasion,iam_changes,new_principal,principal_new_source,public_exposure,root_usage,secret_access,unknown_assume_role" {
+	if strings.Join(r1.Report.Coverage.ChecksRun, ",") != "access_denied,ai_path_usage,defense_evasion,iam_changes,new_principal,oidc_assume_role,principal_new_source,public_exposure,root_usage,secret_access,unknown_assume_role" {
 		t.Fatalf("checks_run: %v", r1.Report.Coverage.ChecksRun)
 	}
 	e.Close()
@@ -297,7 +297,7 @@ func TestPartialFailureExit3(t *testing.T) {
 	if sf := r.Report.Coverage.SourcesFailed[0]; sf.Source != "trail" || sf.Code != "ACCESS_DENIED" || sf.CoveredFrom != "" {
 		t.Fatalf("sources_failed: %+v", sf)
 	}
-	if len(r.Report.Coverage.ChecksRun) != 0 || len(r.Report.Coverage.ChecksSkipped) != 16 || r.Report.Coverage.ChecksSkipped[0].Reason != "source trail failed" {
+	if len(r.Report.Coverage.ChecksRun) != 0 || len(r.Report.Coverage.ChecksSkipped) != 17 || r.Report.Coverage.ChecksSkipped[0].Reason != "source trail failed" {
 		t.Fatalf("coverage: %+v", r.Report.Coverage)
 	}
 	if codes := h.logCodes(t); strings.Join(codes, ",") != "ACCESS_DENIED" {
@@ -541,7 +541,7 @@ const nginxSource = `  - id: web
 
 const hourlyProfile = `  hourly:
     window: 1h
-    checks: [root_usage, unknown_assume_role]
+    checks: [root_usage, unknown_assume_role, oidc_assume_role]
 `
 
 func linesRows(day string, total, matched int) cwlogstest.Response {

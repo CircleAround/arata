@@ -93,7 +93,7 @@ func NewRegistry() *Registry {
 // NewRegistryFor はアプリ層チェックを設定 (パス・閾値) 付きで登録した Registry を返す。
 func NewRegistryFor(c config.Checks) *Registry {
 	r := &Registry{byName: map[string]Check{}}
-	for _, ch := range []Check{RootUsage{}, UnknownAssumeRole{}, NewPrincipal{}, IAMChanges{}, AccessDenied{Config: c.AccessDenied},
+	for _, ch := range []Check{RootUsage{}, UnknownAssumeRole{}, OIDCAssumeRole{Config: c.OIDCAssumeRole}, NewPrincipal{}, IAMChanges{}, AccessDenied{Config: c.AccessDenied},
 		DefenseEvasion{Config: c.DefenseEvasion, LogBaselineDays: max(c.LoginBruteforce.Baseline.BaselineDays, c.ProbePaths.Baseline.BaselineDays)},
 		PublicExposure{Config: c.PublicExposure},
 		PrincipalNewSource{Config: c.PrincipalNewSource, AccessDenied: c.AccessDenied}, SecretAccess{Config: c.SecretAccess},

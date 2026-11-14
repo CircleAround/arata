@@ -92,7 +92,7 @@ sources:
 
 # 周期ごとの窓と有効チェック。実行されるのはここに書いたチェックだけ (arata profiles で確かめる)。
 # `default-<cadence>` はその周期のチェック全部に展開される (版が上がって増えたチェックも黙って入る。雛形では使わない)。
-# チェック: root_usage (hourly), unknown_assume_role (hourly), new_principal (daily), iam_changes (daily), access_denied (daily),
+# チェック: root_usage (hourly), unknown_assume_role (hourly), oidc_assume_role (hourly), new_principal (daily), iam_changes (daily), access_denied (daily),
 #           defense_evasion / public_exposure (daily), principal_new_source / secret_access (daily),
 #           unused_region_activity / cost_anomaly (daily),
 #           ai_path_usage (daily), login_bruteforce / probe_paths / endpoint_abuse (daily, http_access), waf_block_trend (daily, waf_action),
@@ -102,11 +102,11 @@ sources:
 profiles:
   hourly:
     window: 1h
-    checks: [root_usage, unknown_assume_role]
+    checks: [root_usage, unknown_assume_role, oidc_assume_role]
   daily:
     window: 24h
     # max_catchup: 7d              # cron が遅れた時に前回の窓の終わりから追いつく上限 (既定 7d)
-    checks: [default-daily, root_usage, unknown_assume_role]   # daily だけ運用する場合は hourly のチェックも入れる
+    checks: [default-daily, root_usage, unknown_assume_role, oidc_assume_role]   # daily だけ運用する場合は hourly のチェックも入れる
   weekly:
     window: 7d
     checks: [credential_hygiene, guardduty_findings, posture, access_analyzer, waf_review, log_hygiene]   # waf_review は waf_config と wafv2 のソースが要る (無ければ skip)

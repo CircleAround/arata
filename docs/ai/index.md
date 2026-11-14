@@ -98,7 +98,7 @@ principals:                       # 主体の指定は arn / account / arn_patte
     note: GitHub Actions の OIDC デプロイロール
     approved_by: alice
     approved_at: 2026-10-21
-    tags: [deploy]                # IAM 変更を info に下げる
+    tags: [deploy]                # IAM 変更を info に下げる (アクセスキーの作成と、信頼ポリシーを外へ広げる変更は下げない)
   - account: "111122223333"       # そのアカウントの全主体 (SaaS 連携用)
     note: SaaS の監視連携
   - arn_pattern: arn:aws:iam::123456789012:role/ci-*   # glob (* は / も含む)
@@ -114,9 +114,9 @@ secrets_access:                   # 主体 × 読んでよい秘匿値 (名前�
   - principal: arn:aws:iam::123456789012:role/example-app-task
     secrets: ["prod/app/*"]
 assume_destinations:              # 外向きの引き受けで、行き先として既知のアカウント。そこへの MFA ありの引き受けは unknown_assume_role が報告しない
-  - account: "111122223333"       # principals の account: (呼び出し元の承認) とは別。主体は承認されない
-    note: 運用を受託しているアカウント  # 必須
-    expires: 2027-03-31           # 任意。roles: ["ReadOnly"] でロールに絞れる
+  - { account: "111122223333", note: 運用を受託しているアカウント, expires: 2027-03-31 }   # principals の account: とは別 (主体は承認されない)。note 必須。roles: ["ReadOnly"] でロールに絞れる
+oidc_subjects:                    # OIDC でのロールの引き受け (GitHub Actions など) の既知の入り口。oidc_assume_role が比べる。approve は書かない (人が書く。arata help ai playbook oidc_assume_role)
+  - { provider: token.actions.githubusercontent.com, role: "arn:aws:iam::123456789012:role/github-actions-deploy", repo: example-org/example-repo, refs: ["refs/heads/main"], note: 本番のデプロイ }
 ```
 
 承認の判断基準は `arata help ai approve`。

@@ -39,4 +39,4 @@
 
 ## 予定している改善
 
-無し。OIDC の引き受けの見張りなど、同じ系統の攻撃に向けた予定は `arata help ai threats wfx-loot-2026-11` に書いた。
+無し。同じ系統の攻撃で、OIDC のトークンでロールを引き受ける段階の見え方は `arata help ai threats wfx-loot-2026-11` に書いた。

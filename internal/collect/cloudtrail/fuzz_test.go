@@ -42,6 +42,11 @@ func FuzzNormalizeEvent(f *testing.F) {
 		`{"userIdentity":{"arn":"arn:aws:sts::123456789012:assumed-role/Admin/alice@example.com"}}`,
 		`{"userIdentity":{"type":"IAMUser","arn":"arn:aws:iam::123456789012:user/alice","accountId":"123456789012"},"eventSource":"sts.amazonaws.com","eventName":"AssumeRole","requestParameters":{"roleArn":"arn:aws:iam::111122223333:role/partner-admin","serialNumber":"arn:aws:iam::123456789012:mfa/alice"},"recipientAccountId":"123456789012"}`,
 		`{"eventSource":"sts.amazonaws.com","eventName":"AssumeRole","requestParameters":{"serialNumber":["x"]},"recipientAccountId":"123456789012\n<!here>"}`,
+		`{"userIdentity":{"type":"AssumedRole","arn":"arn:aws:sts::123456789012:assumed-role/gha-deploy/s"},"eventSource":"iam.amazonaws.com","eventName":"UpdateAssumeRolePolicy","requestParameters":{"roleName":"app","policyDocument":"{\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"AWS\":[\"*\",\"111122223333\"]}}]}"}}`,
+		`{"eventSource":"iam.amazonaws.com","eventName":"CreateRole","requestParameters":{"roleName":"app","assumeRolePolicyDocument":{"Statement":{"Effect":"Allow","Principal":{"Federated":["cognito-identity.amazonaws.com",1]}}}}}`,
+		oidcBody(ghProvider, "repo:example-org@1234567/example-repo@7654321:ref:refs/heads/main", "arn:aws:iam::123456789012:role/gha-deploy", ghAgent),
+		oidcBody("cognito-identity.amazonaws.com", "ap-northeast-1:00000000-0000-0000-0000-000000000000", "arn:aws:iam::123456789012:role/app", ""),
+		`{"userIdentity":{"type":"WebIdentityUser","userName":["x"],"identityProvider":{"a":1}},"eventSource":"sts.amazonaws.com","eventName":"AssumeRoleWithWebIdentity","userAgent":"exec-env/GitHubActions md/run_id#1\n<!here>"}`,
 		`{"requestParameters":[],"responseElements":"x","additionalEventData":1,"resources":{}}`, `{"userIdentity":null,"resources":[null,{"ARN":1}]}`, `[]`, `null`, ``,
 	} {
 		f.Add(s)
@@ -91,6 +96,72 @@ func FuzzNormalizeEvent(f *testing.F) {
 		}
 		if v, has := e.Data["mfa_serial"]; has && (v != true || !strings.HasPrefix(e.Name, "AssumeRole")) {
 			t.Fatalf("data.mfa_serial が規則に合わない: %v (%s)", v, e.Name)
+		}
+		// 信頼ポリシーから読んだ値 (ADR 0056): UpdateAssumeRolePolicy / CreateRole にだけ付き、trust_policy は ok か unreadable。
+		// unreadable なら `*` 以外の値を持たない。アカウントは 12 桁の数字だけ
+		_, trustOp := trustPolicyParams[e.Name]
+		trustOp = trustOp && e.EventSource == "iam.amazonaws.com"
+		tp, hasTP := e.Data["trust_policy"]
+		if hasTP != trustOp || hasTP && tp != "ok" && tp != "unreadable" {
+			t.Fatalf("data.trust_policy が規則に合わない: %v (%s %s)", tp, e.EventSource, e.Name)
+		}
+		for _, k := range []string{"trust_wildcard", "trust_has_condition", "trust_accounts", "trust_federated"} {
+			if _, has := e.Data[k]; has && (!trustOp || tp != "ok" && k != "trust_wildcard") {
+				t.Fatalf("data.%s が規則に合わない (trust_policy %v, %s)", k, tp, e.Name)
+			}
+		}
+		if l, ok := e.Data["trust_accounts"].([]string); ok {
+			for _, a := range l {
+				if !trustAccountRe.MatchString(a) {
+					t.Fatalf("data.trust_accounts に 12 桁の数字でない値: %q", a)
+				}
+			}
+		}
+		// OIDC の引き受けから読んだ値 (ADR 0055): AssumeRoleWithWebIdentity にだけ付く。プロバイダは決まった形か unparsed、
+		// sub は読めた各部分だけ (決まった形)。GitHub 以外・読めない sub では各部分を持たない。run_id は数字だけ
+		isOIDC := e.EventSource == "sts.amazonaws.com" && e.Name == "AssumeRoleWithWebIdentity"
+		str := func(k string) string { s, _ := e.Data[k].(string); return s }
+		for k := range e.Data {
+			if (strings.HasPrefix(k, "oidc_") || k == "gha_run_id") && !isOIDC {
+				t.Fatalf("data.%s が AssumeRoleWithWebIdentity でない記録にある (%s)", k, e.Name)
+			}
+		}
+		if isOIDC {
+			p, form := str("oidc_provider"), str("oidc_sub_form")
+			if p != record.OIDCProviderUnparsed && !record.ValidOIDCProvider(p) {
+				t.Fatalf("data.oidc_provider が決まった形でない: %q", p)
+			}
+			if a := str("oidc_provider_account"); a != "" && !recipientAccountRe.MatchString(a) {
+				t.Fatalf("data.oidc_provider_account: %q", a)
+			}
+			switch form {
+			case record.OIDCSubGitHub:
+				sub := record.GitHubSub{Repo: str("oidc_repo"), OwnerID: str("oidc_owner_id"), RepoID: str("oidc_repo_id"), Kind: str("oidc_sub_kind"), Ref: str("oidc_ref"), Environment: str("oidc_environment")}
+				want := sub
+				want.OwnerID, want.RepoID = "", ""
+				if got, ok := record.ParseGitHubSub(sub.Normalized()); !ok || got != want || p != record.GitHubOIDCProvider {
+					t.Fatalf("data の sub の各部分が決まった形でない: %+v", sub)
+				}
+			case record.OIDCSubUnparsed, record.OIDCSubNotRead:
+				for _, k := range []string{"oidc_repo", "oidc_owner_id", "oidc_repo_id", "oidc_sub_kind", "oidc_ref", "oidc_environment"} {
+					if _, has := e.Data[k]; has {
+						t.Fatalf("読んでいない sub の値がある: data.%s", k)
+					}
+				}
+				if (form == record.OIDCSubUnparsed) != (p == record.GitHubOIDCProvider) {
+					t.Fatalf("data.oidc_sub_form %q とプロバイダ %q が合わない", form, p)
+				}
+			default:
+				t.Fatalf("data.oidc_sub_form: %q", form)
+			}
+			if id, has := e.Data["gha_run_id"]; has {
+				if s, _ := id.(string); s == "" || len(s) > 20 || strings.Trim(s, "0123456789") != "" || p != record.GitHubOIDCProvider {
+					t.Fatalf("data.gha_run_id: %v", id)
+				}
+			}
+			if e.PrincipalARN != "" && r0(body).UserIdentity.ARN == "" && r0(body).UserIdentity.SessionContext.SessionIssuer.ARN == "" && r0(body).UserIdentity.Type == "WebIdentityUser" {
+				t.Fatalf("OIDC の引き受けの sub を主体にした: %q", e.PrincipalARN)
+			}
 		}
 		if _, err := json.Marshal(e); err != nil {
 			t.Fatalf("イベントを JSON にできない: %v", err)
@@ -230,4 +301,11 @@ func FuzzPublicStatements(f *testing.F) {
 			}
 		}
 	})
+}
+
+// r0 は本文を rawEvent として読む (読めなければゼロ値)。
+func r0(body string) rawEvent {
+	var r rawEvent
+	_ = json.Unmarshal([]byte(body), &r)
+	return r
 }
