@@ -1,6 +1,6 @@
 // actionsgate は GitHub Actions の参照を確かめる CI 用の小さなツール (ADR 0017・0035)。
 //
-//	go run ./tools/actionsgate -days 7 -lock .github/workflows/actions.lock .github/workflows examples/github-actions
+//	go run ./tools/actionsgate -days 7 -lock .github/workflows/actions.lock .github/workflows examples/audit-repo/.github/workflows
 //
 // 確かめること:
 //   - すべての uses が 40 桁の SHA で固定され、版がコメントに書かれている。コンテナイメージは @sha256: で固定されている

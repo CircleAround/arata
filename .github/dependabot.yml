@@ -10,9 +10,10 @@ updates:
     groups:
       aws-sdk:
         patterns: ["github.com/aws/*"]
-  # /examples/github-actions は利用者が写す見本。.github/workflows の外なので明示する (ADR 0035)
+  # /examples/audit-repo は arata repo init の出力そのもの (ADR 0059)。.github/workflows の外なので明示する (ADR 0035)。
+  # ここへの更新 PR は、そのままではテスト (見本と雛形の一致) が落ちる。同じ変更を internal/repoinit/templates に入れて見本を作り直す
   - package-ecosystem: github-actions
-    directories: ["/", "/examples/github-actions"]
+    directories: ["/", "/examples/audit-repo/.github/workflows"]
     schedule:
       interval: weekly
     cooldown:
