@@ -178,12 +178,35 @@ func TestRunnerTemplateTrustPolicy(t *testing.T) {
 	if eq["token.actions.githubusercontent.com:aud"] != "sts.amazonaws.com" {
 		t.Errorf("aud: %v", eq["token.actions.githubusercontent.com:aud"])
 	}
-	if got := eq["token.actions.githubusercontent.com:sub"]; got != "repo:${GitHubRepository}:ref:refs/heads/${GitHubBranch}" {
-		t.Errorf("sub: %v", got)
+	// sub は Fn::If で 3 通り。environment を指定しないとき (既定) は、これまでと同じブランチの sub の 1 つだけ (ADR 0057)
+	const branchSub = "repo:${GitHubRepository}:ref:refs/heads/${GitHubBranch}"
+	const envSub = "repo:${GitHubRepository}:environment:${GitHubEnvironment}"
+	sub, ok := eq["token.actions.githubusercontent.com:sub"].([]any)
+	if !ok || len(sub) != 3 || sub[0] != "UseEnvironment" || sub[2] != branchSub {
+		t.Fatalf("sub は !If [UseEnvironment, <environment のとき>, %s]: %v", branchSub, eq["token.actions.githubusercontent.com:sub"])
+	}
+	// environment のとき: 既定は environment の sub の 1 つだけ。移行の期間 (KeepBranchSubject=true) だけ、ブランチの sub も並べる
+	inner, ok := sub[1].([]any)
+	if !ok || len(inner) != 3 || inner[0] != "AlsoAllowBranchSubject" || inner[2] != envSub {
+		t.Fatalf("environment のときの sub は !If [AlsoAllowBranchSubject, <両方>, %s]: %v", envSub, sub[1])
+	}
+	if both, ok := inner[1].([]any); !ok || len(both) != 2 || both[0] != envSub || both[1] != branchSub {
+		t.Errorf("移行の期間の sub は environment とブランチの 2 つだけ: %v", inner[1])
+	}
+	// environment の sub にはブランチが入らないので、ref の条件でブランチに絞る。environment を指定しないときは足さない (今と同じ)
+	if ref, ok := eq["token.actions.githubusercontent.com:ref"].([]any); !ok || len(ref) != 3 || ref[0] != "UseEnvironment" || ref[1] != "refs/heads/${GitHubBranch}" || ref[2] != "AWS::NoValue" {
+		t.Errorf("ref は !If [UseEnvironment, refs/heads/${GitHubBranch}, AWS::NoValue]: %v", eq["token.actions.githubusercontent.com:ref"])
+	}
+	conds := dig(t, tpl, "Conditions").(map[string]any)
+	if got, _ := yaml.Marshal(conds["UseEnvironment"]); strings.Join(strings.Fields(string(got)), " ") != "- - GitHubEnvironment - \"\"" {
+		t.Errorf("UseEnvironment は GitHubEnvironment が空でないこと: %s", got)
+	}
+	if got, _ := yaml.Marshal(conds["AlsoAllowBranchSubject"]); strings.Join(strings.Fields(string(got)), " ") != "- KeepBranchSubject - \"true\"" {
+		t.Errorf("AlsoAllowBranchSubject は KeepBranchSubject が true のこと: %s", got)
 	}
 	for k := range eq {
 		switch k {
-		case "token.actions.githubusercontent.com:aud", "token.actions.githubusercontent.com:sub", "token.actions.githubusercontent.com:job_workflow_ref":
+		case "token.actions.githubusercontent.com:aud", "token.actions.githubusercontent.com:sub", "token.actions.githubusercontent.com:job_workflow_ref", "token.actions.githubusercontent.com:ref":
 		default:
 			t.Errorf("想定していない条件キー: %s", k)
 		}
@@ -204,6 +227,10 @@ func TestRunnerTemplateParameterPatterns(t *testing.T) {
 		"GitHubBranch": {
 			ok: []string{"main", "release/1.x"},
 			ng: []string{"", "*", "ma?n", "main:x", "a b"},
+		},
+		"GitHubEnvironment": {
+			ok: []string{"", "audit", "arata-audit_1.x"},
+			ng: []string{"*", "aud?t", "audit:ref:refs/heads/main", "audit%3Ax", "a b", "a/b"},
 		},
 		"GitHubWorkflowRef": {
 			ok: []string{"", "example-org/security-audit/.github/workflows/arata-audit.yml@refs/heads/main"},
@@ -264,6 +291,17 @@ func TestRunnerTemplateParameterPatterns(t *testing.T) {
 	}
 	if got := dig(t, tpl, "Parameters", "GitHubBranch", "Default"); got != "main" {
 		t.Errorf("ブランチの既定は main: %v", got)
+	}
+	// environment は既定で使わない (今までのスタックは、更新しても信頼が変わらない)。移行の期間の許可も既定で無し
+	if got := dig(t, tpl, "Parameters", "GitHubEnvironment", "Default"); got != "" {
+		t.Errorf("GitHubEnvironment の既定は空: %v", got)
+	}
+	keep := dig(t, tpl, "Parameters", "KeepBranchSubject").(map[string]any)
+	if keep["Default"] != "false" {
+		t.Errorf("KeepBranchSubject の既定は false: %v", keep["Default"])
+	}
+	if av, ok := keep["AllowedValues"].([]any); !ok || len(av) != 2 || av[0] != "false" || av[1] != "true" {
+		t.Errorf("KeepBranchSubject は false / true だけ: %v", keep["AllowedValues"])
 	}
 }
 

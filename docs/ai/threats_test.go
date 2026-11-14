@@ -15,7 +15,7 @@ var (
 	threatRefRe  = regexp.MustCompile("`arata help ai threats ([a-z0-9-]+)`")
 )
 
-// TestThreats は事例 (docs/ai/threats/<id>.md) の書式と保守の決まりを固定する (ADR 0057)。
+// TestThreats は事例 (docs/ai/threats/<id>.md) の書式と保守の決まりを固定する (ADR 0058)。
 //   - 見出しは固定。各事例に公開日と、日付の付いた出典の URL が必ずある
 //   - 段階の表に出てくるチェックは実在する (playbook がある = 登録済み。internal/checks のテストが登録と playbook の一致を固定している)
 //   - 出典の書き方 (観測 / 機能 / 推定 / 記述 / 想定) を必ず分ける

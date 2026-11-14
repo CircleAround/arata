@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// 実際に起きた攻撃と、arata のどのチェックで何が見えるかの対応表 (docs/ai/threats/<id>.md。ADR 0057)。
+// 実際に起きた攻撃と、arata のどのチェックで何が見えるかの対応表 (docs/ai/threats/<id>.md。ADR 0058)。
 //
 // 決定:
 //   - 事例 1 つが 1 ファイル。見出しは固定 (ThreatSections)。一覧とチェックごとの表は、事例の本文から作る (二重に持つとずれる)。

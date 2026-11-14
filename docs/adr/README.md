@@ -63,7 +63,7 @@
 | [0037](0037-sast-and-untrusted-log-values.md) | 静的解析を CI で常に回し、ログ由来の値と LLM の出力を信用しない前提で通知を組み立てる | 採用 |
 | [0038](0038-source-catchup-and-reported-after-staging.md) | 失敗したソースはソースごとの位置から追いつき、報告済みの印は出力の準備の後に付ける | 採用 |
 | [0039](0039-actions-lock-with-sha-pins.md) | Actions のロックファイルを、uses の SHA 固定と併用して `--no-narrow` で作る | 採用 |
-| [0040](0040-github-actions-runner-template.md) | GitHub Actions の実行の仕組みは素の CloudFormation で配り、信頼は `sub` の完全一致に絞る | 採用 |
+| [0040](0040-github-actions-runner-template.md) | GitHub Actions の実行の仕組みは素の CloudFormation で配り、信頼は `sub` の完全一致に絞る | 採用 (environment の扱いは 0057 で置き換え) |
 | [0041](0041-fuzz-untrusted-input.md) | 信用できない入力を解釈する箇所を、Go 標準のファズテストで確かめる | 採用 |
 | [0042](0042-offline-config-check-and-triage-workflow.md) | 設定と allowlist の形はオフラインの `config check` で PR の時点に確かめ、finding の片付けは Actions の手動実行で行う | 採用 |
 | [0043](0043-vulnerability-fix-exempt-from-cooldown.md) | 脆弱性の修正版は、条件を満たせば 7 日の待機の対象外にする | 採用 |
@@ -80,4 +80,5 @@
 | [0054](0054-machine-readable-output-schemas.md) | 機械が読む出力は `--format json` で出し、Go の型から作った JSON Schema とテストで固定する (人向けの出力を機械で読ませない) | 採用 |
 | [0055](0055-oidc-assume-role.md) | OIDC でのロールの引き受けを、(プロバイダ, sub, ロール) の組で既知リストと比べる (`oidc_assume_role`) | 採用 |
 | [0056](0056-deploy-principal-not-lowered.md) | 既知デプロイ主体でも、アクセスキーの作成と、信頼ポリシーを外へ広げる変更は下げない。ロールの作成も信頼ポリシーを読んで報告する (`iam_changes`) | 採用 |
-| [0057](0057-threat-coverage-table.md) | 公開された攻撃の事例ごとに、arata で見える段階と見えない段階を、出典の URL 付きの対応表として持つ | 採用 |
+| [0057](0057-runner-github-environment.md) | 実行の仕組みを GitHub の environment に対応させ、見本は秘密を environment に置く (`sub` は environment、ブランチは `ref` で絞る) | 採用 |
+| [0058](0058-threat-coverage-table.md) | 公開された攻撃の事例ごとに、arata で見える段階と見えない段階を、出典の URL 付きの対応表として持つ | 採用 |

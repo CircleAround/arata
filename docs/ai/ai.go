@@ -40,7 +40,7 @@ const playbookDir = "playbooks"
 
 // PlaybookSections は playbook の見出し (## ) で、この順に必ず持つ。
 // aratam などが LLM の system に埋め込むときの約束でもあるので、変えるときは読む側も見直す。
-// 決定 (ADR 0057): 最後の「関連する事例」には、公開の事例 (`arata help ai threats <id>`) か「対応する公開の事例はまだ無い」を書く。
+// 決定 (ADR 0058): 最後の「関連する事例」には、公開の事例 (`arata help ai threats <id>`) か「対応する公開の事例はまだ無い」を書く。
 var PlaybookSections = []string{"この指摘の意味", "まず確かめること", "判断の分かれ目", "対処の選択肢", "やってはいけないこと", "関連する事例"}
 
 // PlaybookNames は playbook のあるチェック名 (名前順)。
@@ -74,7 +74,7 @@ func Playbook(check string) (string, bool) {
 }
 
 // PlaybookProcedure は、playbook から最後の節「関連する事例」を除いた本文 (対処手順だけ) を返す。無ければ false。
-// 決定 (ADR 0057): aratam が LLM の system に入れるのはこちら。事例への案内は、手を動かせない LLM には使えず (help を引けない)、
+// 決定 (ADR 0058): aratam が LLM の system に入れるのはこちら。事例への案内は、手を動かせない LLM には使えず (help を引けない)、
 // 入れると上限 (notify.MaxPlaybookBytes) の中に入る playbook の数が減る。指摘を特定の攻撃と結び付けて書かせないためでもある。
 func PlaybookProcedure(check string) (string, bool) {
 	body, ok := Playbook(check)

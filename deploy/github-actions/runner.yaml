@@ -4,6 +4,7 @@
 #   - GitHub の OIDC プロバイダ (token.actions.githubusercontent.com)。アカウントに 1 つだけなので、既にあれば OIDCProviderArn に渡す (作らない)
 #   - ストアのバケット (バージョニング・既定の暗号化・パブリックアクセスブロック・TLS 必須)。スタックを消しても残す
 #   - 実行用ロール。信頼は 1 つのリポジトリの 1 つのブランチだけ (sub の完全一致)。
+#     GitHubEnvironment を指定すると、1 つのリポジトリの 1 つの environment の、1 つのブランチだけ (sub と ref の完全一致。ADR 0057)。
 #     権限はストアの読み書き (s3:GetObject / s3:PutObject / s3:ListBucket) と、監査対象の読み取り専用ロールの引き受けだけ
 #   - (任意) aratam の provider: bedrock 用に、指定した推論プロファイルを通した bedrock:InvokeModel
 #
@@ -22,6 +23,10 @@
 #     --capabilities CAPABILITY_NAMED_IAM \
 #     --parameter-overrides GitHubRepository=example-org/security-audit \
 #       AuditRoleArns=arn:aws:iam::123456789012:role/arata-readonly
+#
+# 勧める形 (GitHub の environment を使う。秘密を environment に置き、デプロイできるブランチを main だけにする) は、上に次を足す:
+#       GitHubEnvironment=audit
+# 既に動いているスタックを environment に移すときは、KeepBranchSubject=true を足して両方を許す期間を作る (手順は README の「environment に移す」)
 AWSTemplateFormatVersion: '2010-09-09'
 Description: arata runner for GitHub Actions (OIDC provider, store bucket, runner role)
 
@@ -40,7 +45,28 @@ Parameters:
     Default: main
     AllowedPattern: '^[A-Za-z0-9._/-]+$'
     ConstraintDescription: must be a single branch name (no wildcards)
-    Description: 実行を許すブランチ。定時実行は既定のブランチで動く
+    Description: >-
+      実行を許すブランチ。定時実行は既定のブランチで動く。
+      GitHubEnvironment が空なら sub (repo:…:ref:refs/heads/<ブランチ>) に使う。
+      GitHubEnvironment を指定したときは sub に入らない (environment の sub にはブランチが無い) ので、ref の条件 (refs/heads/<ブランチ>) に使う
+  GitHubEnvironment:
+    Type: String
+    Default: ''
+    # ワイルドカード・コロン・% を受け付けない (sub を広げさせない。GitHub は名前の中の : を %3A に変えて sub に入れる)
+    AllowedPattern: '^$|^[A-Za-z0-9._-]+$'
+    ConstraintDescription: must be a single GitHub environment name of letters, digits, dot, underscore and hyphen (no wildcards)
+    Description: >-
+      (勧める) 実行を許す GitHub の environment の名前 (例 audit)。GitHub の設定の名前と、大文字・小文字まで同じに書く。
+      指定すると sub の条件が repo:<GitHubRepository>:environment:<名前> になり、ジョブに environment: を付けたワークフローだけが引き受けられる。
+      ブランチは ref の条件 (GitHubBranch) で絞る。空なら environment を使わない (sub はブランチの形)
+  KeepBranchSubject:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['false', 'true']
+    Description: >-
+      (移行のときだけ) true にすると、GitHubEnvironment を指定していても、これまでのブランチの sub
+      (repo:…:ref:refs/heads/<GitHubBranch>) も受ける。ワークフローに environment: を足し終えたら false に戻す。
+      GitHubEnvironment が空なら意味を持たない
   GitHubWorkflowRef:
     Type: String
     Default: ''
@@ -48,7 +74,8 @@ Parameters:
     ConstraintDescription: must be owner/repo/.github/workflows/FILE.yml@refs/heads/BRANCH (no wildcards)
     Description: >-
       (任意) 実行を許すワークフローのファイル。OIDC トークンの job_workflow_ref と完全に一致させる
-      (例 example-org/security-audit/.github/workflows/arata-audit.yml@refs/heads/main)。空なら条件を足さない
+      (例 example-org/security-audit/.github/workflows/arata-audit.yml@refs/heads/main)。空なら条件を足さない。
+      GitHubEnvironment を指定したときにも効く。実行用ロールを使うワークフローが 1 つだけなら、指定を勧める
   OIDCProviderArn:
     Type: String
     Default: ''
@@ -94,6 +121,8 @@ Parameters:
 
 Conditions:
   CreateOIDCProvider: !Equals [!Ref OIDCProviderArn, '']
+  UseEnvironment: !Not [!Equals [!Ref GitHubEnvironment, '']]
+  AlsoAllowBranchSubject: !Equals [!Ref KeepBranchSubject, 'true']
   HasWorkflowRef: !Not [!Equals [!Ref GitHubWorkflowRef, '']]
   HasStoreBucketName: !Not [!Equals [!Ref StoreBucketName, '']]
   HasStorePrefix: !Not [!Equals [!Ref StorePrefix, '']]
@@ -176,10 +205,22 @@ Resources:
               Federated: !If [CreateOIDCProvider, !Ref GitHubOIDCProvider, !Ref OIDCProviderArn]
             Action: sts:AssumeRoleWithWebIdentity
             Condition:
-              # すべて完全一致 (StringLike を使わない)
+              # すべて完全一致 (StringLike を使わない)。キーどうしは AND、1 つのキーに並べた値は OR
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
-                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubRepository}:ref:refs/heads/${GitHubBranch}
+                # environment を使わない (既定): ブランチの sub の 1 つだけ
+                # environment を使う: environment の sub の 1 つだけ。移行の期間 (KeepBranchSubject=true) だけ、ブランチの sub も受ける
+                token.actions.githubusercontent.com:sub: !If
+                  - UseEnvironment
+                  - !If
+                    - AlsoAllowBranchSubject
+                    - - !Sub repo:${GitHubRepository}:environment:${GitHubEnvironment}
+                      - !Sub repo:${GitHubRepository}:ref:refs/heads/${GitHubBranch}
+                    - !Sub repo:${GitHubRepository}:environment:${GitHubEnvironment}
+                  - !Sub repo:${GitHubRepository}:ref:refs/heads/${GitHubBranch}
+                # environment の sub にはブランチが入らない。GitHub の側の「デプロイできるブランチ」の設定だけに頼らず、
+                # AWS の側でも ref でブランチに絞る (設定を外されても・付け忘れても、ほかのブランチからは引き受けられない)
+                token.actions.githubusercontent.com:ref: !If [UseEnvironment, !Sub 'refs/heads/${GitHubBranch}', !Ref AWS::NoValue]
                 token.actions.githubusercontent.com:job_workflow_ref: !If [HasWorkflowRef, !Ref GitHubWorkflowRef, !Ref AWS::NoValue]
       Policies:
         - PolicyName: arata-runner

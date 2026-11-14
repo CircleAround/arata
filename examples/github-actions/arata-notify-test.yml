@@ -1,5 +1,5 @@
 # Slack への送信だけを確かめる見本 (workflow_dispatch)。監査 (arata run) は回さず、aratam test-notify で試験メッセージを 1 通送る。
-# 新しい通知先 (チャンネル) を足したとき、Webhook や bot トークンを入れ替えたときに、Actions の secrets と
+# 新しい通知先 (チャンネル) を足したとき、Webhook や bot トークンを入れ替えたときに、environment の secrets と
 # リポジトリの aratam.yaml の組み合わせで届くかを確かめる。複数のアカウントの形 (arata-audit-multi.yml と組) で書いてある。
 # 利用者のリポジトリの .github/workflows/ に写して使う (arata のリポジトリの CI では動かさない)。
 # 使い方・注意は同じディレクトリの README.md「Slack への送信だけを確かめる」。例の値はすべて架空。
@@ -40,6 +40,9 @@ jobs:
   notify-test:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    # 秘密は environment の secrets に置き、environment のデプロイできるブランチを main だけにする (README「実行するリポジトリと環境を堅くする」の 5)。
+    # ほかのブランチのジョブには秘密が渡らない。OIDC は使わない (実行用ロールは引き受けない)。
+    environment: audit
     permissions:
       contents: read    # 設定ファイルの checkout
     env:

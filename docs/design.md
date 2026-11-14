@@ -1274,7 +1274,7 @@ arata は LLM を使わず候補だけを作り、aratam の LLM は候補を文
 決定 (対処手順。ADR 0025): チェックごとに `docs/ai/playbooks/<check>.md` (見出しは固定: この指摘の意味 / まず確かめること / 判断の分かれ目 / 対処の選択肢 / やってはいけないこと / 関連する事例) を書き、
 `arata help ai playbook <check>` で出す。登録済みのチェックすべてに playbook が要る (テストで固定)。新しいチェックを足すときは playbook も書く。封じ込めは人が判断して実行し、LLM は提案まで。
 
-決定 (攻撃の事例との対応表。ADR 0057): 公開された攻撃の事例ごとに `docs/ai/threats/<id>.md` (見出しは固定: 概要 / 出典 / 攻撃の段階と arata で見えるもの / arata では見えないもの / 予定している改善) を書き、
+決定 (攻撃の事例との対応表。ADR 0058): 公開された攻撃の事例ごとに `docs/ai/threats/<id>.md` (見出しは固定: 概要 / 出典 / 攻撃の段階と arata で見えるもの / arata では見えないもの / 予定している改善) を書き、
 `arata help ai threats [<id>]` で出す。人向けの入口は `docs/threats.md`。段階ごとに、出典が「観測した」と書くのか「スクリプトにその機能がある」とだけ書くのかを分け (観測 / 機能 / 推定 / 記述 / 想定)、
 見えない段階とその理由を必ず書く。一覧とチェックごとの表は事例の本文から作る。playbook の最後の節「関連する事例」は、事例への案内か「対応する公開の事例はまだ無い」。
 テストで固定: 各事例に公開日と日付付きの出典の URL がある / 表のチェックが実在する / playbook の案内と事例の表が食い違わない / `docs/threats.md` の表が生成したものと一字一句同じ。
@@ -1431,6 +1431,9 @@ Actions のログには arata / aratam の `level`・`code`・`source` と終了
 監査対象には `deploy/iam/readonly-role.yaml` を置き、`TrustedPrincipalArn` に実行用ロールを渡す (2 つの `aws cloudformation deploy`。同じアカウントでも別のアカウントでも同じ手順)。
 - 決定: 信頼は `StringEquals` だけで、`aud` = `sts.amazonaws.com` と `sub` = `repo:<リポジトリ>:ref:refs/heads/<ブランチ>` の完全一致。パラメータの `AllowedPattern` がワイルドカードとコロンを拒む。
   リポジトリは `sub` の `repo:` の部分をそのまま受ける (2026-07-15 より後に作ったリポジトリは `owner@ID/repo@ID` の形になるため、両方の形を受け付ける)
+- 決定 (environment。ADR 0057): 任意のパラメータ `GitHubEnvironment` を指定すると、`sub` = `repo:<リポジトリ>:environment:<名前>` と `ref` = `refs/heads/<ブランチ>` の完全一致に変わる
+  (environment の `sub` にはブランチが入らないので、AWS の側でも `ref` でブランチに絞る)。既定は空で、これまでと同じ。見本は environment (`audit`) を前提にする。
+  既に動いているスタックを止めずに移すために、`KeepBranchSubject=true` の間だけ、ブランチの `sub` も並べて受ける
 - 決定: `job_workflow_ref` の条件は任意のパラメータ (`GitHubWorkflowRef`) にし、既定では足さない。AWS は GitHub 固有の条件キーとしてこれを受け付けるが、
   GitHub の文書は値を「再利用ワークフローへの参照」としか定めておらず、ふつうのワークフローでの値が保証されていない。既定で足すと、文書に無い挙動に定時の監査が依存する。
   実際のトークンで値を確かめてから、既定にするかを決め直す
@@ -1451,11 +1454,12 @@ Actions のログには arata / aratam の `level`・`code`・`source` と終了
   書き込み権限の最小化、Actions の許可リストと SHA 固定) を、見本の README「実行するリポジトリと環境を堅くする」と `arata help ai runtime` (LLM が点検するときのチェックリスト) に書く。
   `sub` を 1 つのブランチに絞っているので「main に入れられる人 = 実行用ロールを使える人」になり、main の保護が権限の境界になる。
   確かめる `gh api` は読み取りだけを載せ、設定を変えるのは人とする (テストが書き込みの例を拒む)。
-  見本が前提を満たすこと (secrets か OIDC を使う見本は定時と手動だけ、action は 2 つだけ、environment を使わない) はテストで固定する
-- 決定 (secrets と environment): リポジトリの secrets は書き込み権限のある人なら別のブランチのワークフローで読み出せる。読み出されて困るのは Webhook (bot トークンの方式ならトークン。`docs/aratam.md` 4-1 章) で、
-  ロールの ARN は `sub` が合わないので引き受けられない。GitHub の environment に置いてデプロイできるブランチを main に限る案は、ジョブの `sub` が
-  `repo:...:environment:<名前>` に変わり (ブランチが `sub` から消える)、今の `runner.yaml` では引き受けられないので、いまは採らない (ADR 0040 のまま)。
-  テンプレートの対応はロードマップに残し、それまでは書き込み権限を持つ人を最小にすることで守る
+  見本が前提を満たすこと (secrets か OIDC を使う見本は定時と手動だけ、action は 2 つだけ、secrets か OIDC を使うジョブは `environment: audit` で動き、PR の検査には付けない) はテストで固定する
+- 決定 (secrets と environment。ADR 0057): リポジトリの secrets は書き込み権限のある人 (と、そのアカウントを乗っ取った人) なら別のブランチのワークフローで読み出せる。
+  読み出されて困るのは Webhook (bot トークンの方式ならトークン。`docs/aratam.md` 4-1 章)。見本は、秘密を GitHub の environment (`audit`) の secrets に置き、
+  デプロイできるブランチを main だけにする。秘密か OIDC を使うジョブに `environment: audit` を付け、実行用ロールも同じ environment に絞る (`GitHubEnvironment`)。
+  秘密の守りは GitHub の側の設定 (デプロイできるブランチ) だけなので、確かめ方を README と `arata help ai runtime` に書く。
+  非公開のリポジトリで environment を使えないプランのときは、environment を使わない形 (これまでの形。書き込み権限を持つ人を最小にすることで守る) を残す
 - 決定 (最初の run と Slack の疎通): 最初の run は手元で実行して `aratam notify --dry-run` で中身を見てから、定時の実行に任せる (見本の README の手順 6)。
   run は finding を報告済みとしてストアに確定するので (ADR 0038)、以後の定時の実行は新しく起きたことだけを報せる。
   見本のワークフローに「通知しない」入力や test-notify の入力は足さない: 初回の収集で手元にストアを書ける認証が既にあり、Actions では中身を見る場所が無い

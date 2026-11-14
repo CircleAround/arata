@@ -40,7 +40,7 @@ func TestSummarySystemHasPlaybooksOfRunChecks(t *testing.T) {
 			t.Fatalf("%s must be embedded whole", c)
 		}
 	}
-	// 「関連する事例」(公開の攻撃の事例への案内。ADR 0057) は入れない: 上限に入る playbook を減らさず、指摘を特定の攻撃と結び付けさせない
+	// 「関連する事例」(公開の攻撃の事例への案内。ADR 0058) は入れない: 上限に入る playbook を減らさず、指摘を特定の攻撃と結び付けさせない
 	if strings.Contains(l.system, "関連する事例") || strings.Contains(l.system, "help ai threats") {
 		t.Fatal("the threats section of a playbook must not be embedded")
 	}

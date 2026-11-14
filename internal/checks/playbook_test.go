@@ -22,7 +22,7 @@ func TestEveryCheckHasPlaybook(t *testing.T) {
 	}
 }
 
-// TestThreatTablesNameRegisteredChecks は、攻撃の事例の対応表 (docs/ai/threats/<id>.md。ADR 0057) に出てくるチェックが、
+// TestThreatTablesNameRegisteredChecks は、攻撃の事例の対応表 (docs/ai/threats/<id>.md。ADR 0058) に出てくるチェックが、
 // 登録済みのチェックであることを固定する。チェックを消す・名前を変えると落ちる。
 func TestThreatTablesNameRegisteredChecks(t *testing.T) {
 	reg := NewRegistry()

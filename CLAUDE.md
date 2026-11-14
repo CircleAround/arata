@@ -97,7 +97,7 @@ go run ./cmd/arata help ai                               # LLM 向けの使い�
   `internal/checks` チェック / `internal/engine` run の流れ / `internal/report` レポート (`schema` は標準ライブラリだけ) /
   `internal/allowlist` 既知リスト / `internal/scaffold` 雛形 / `internal/notify`・`internal/llm`・`internal/slack` aratam
 - `docs/ai/*.md` はバイナリに埋め込まれる。変えたらテストのゴールデンも変わる。新しいチェックを足したら `docs/ai/playbooks/<check>.md` (対処手順。ADR 0025) も書く (無ければテストが落ちる)
-- 新しいチェックを足す・重大度や条件を変えるときは、攻撃の事例の対応表 (`docs/threats.md`、本文は `docs/ai/threats/<id>.md`。ADR 0057) も直す。そのチェックで見える公開の事例 (出典の URL と日付を自分で読んで確かめたもの) を足すか、playbook の「関連する事例」に「対応する公開の事例はまだ無い」と書く (無ければテストが落ちる)
+- 新しいチェックを足す・重大度や条件を変えるときは、攻撃の事例の対応表 (`docs/threats.md`、本文は `docs/ai/threats/<id>.md`。ADR 0058) も直す。そのチェックで見える公開の事例 (出典の URL と日付を自分で読んで確かめたもの) を足すか、playbook の「関連する事例」に「対応する公開の事例はまだ無い」と書く (無ければテストが落ちる)
 - ログの `code` は `internal/codes` に足す (各パッケージに文字列で書かない)。足したら文書の表 (`docs/ai/index.md`・`docs/design.md`・`docs/aratam.md`) にも足す。
   ERROR のログには必ず code を付ける。消す・名前を変えるのは互換を壊す変更 (どれもテストが確かめる。ADR 0054)
 - `schemas/*.schema.json` は機械が読む出力の JSON Schema。バイナリに埋め込まれる。型 (`internal/jsonschema` が読む) から作るので手で編集せず、
