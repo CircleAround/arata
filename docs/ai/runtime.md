@@ -43,11 +43,9 @@ grep -rnE 'pull_request_target|workflow_run' .github/workflows/
 
 ## OIDC の信頼
 
-実行用ロール (`deploy/github-actions/runner.yaml`) は、OIDC トークンの `sub` が次の 1 つの文字列に完全に一致するときだけ引き受けられる。
-
-```
-repo:OWNER@OWNER_ID/REPO@REPO_ID:ref:refs/heads/main
-```
+実行用ロール (`deploy/github-actions/runner.yaml`) は、OIDC トークンが次に完全に一致するときだけ引き受けられる (勧める形。`GitHubEnvironment=audit`):
+`sub` = `repo:OWNER@OWNER_ID/REPO@REPO_ID:environment:audit` と `ref` = `refs/heads/main`。
+environment を使わない構成 (`GitHubEnvironment` が空。非公開のリポジトリで GitHub Free のとき) では、`sub` = `repo:OWNER@OWNER_ID/REPO@REPO_ID:ref:refs/heads/main` の 1 つ。
 
 ```sh
 gh api repos/OWNER/REPO/actions/oidc/customization/sub
@@ -57,17 +55,19 @@ aws iam get-role --role-name arata-runner --query 'Role.AssumeRolePolicyDocument
 - 1 つ目の応答が `use_default: true`・`use_immutable_subject: true` で、`sub_claim_prefix` が `repo:OWNER@OWNER_ID/REPO@REPO_ID` の形 (ID 入り)。
   `use_immutable_subject` が `false` なら従来の形 (`repo:OWNER/REPO:...`) で、名前だけで決まる。リポジトリや組織を消した後に同じ名前で作り直されると、同じ `sub` になる。
   ID 入りに切り替えるのは人が行い (リポジトリか組織の Actions の OIDC の設定)、切り替えたら `runner.yaml` の `GitHubRepository` も `OWNER@OWNER_ID/REPO@REPO_ID` に変える (揃えないと引き受けに失敗する)
-- 信頼ポリシーは `StringEquals` だけで、`aud` = `sts.amazonaws.com`、`sub` = 上の文字列 (`sub_claim_prefix` + `:ref:refs/heads/main`)。
-  `StringLike`、`*` を含む `sub`、複数のブランチ、`:pull_request`、`:environment:` の `sub` があれば人に知らせる
+- 信頼ポリシーは `StringEquals` だけで、`aud` = `sts.amazonaws.com`、`sub` = 上の文字列 (`sub_claim_prefix` + `:environment:audit`。environment を使わない構成では `:ref:refs/heads/main`)。`sub` が `:environment:` の形なら、`token.actions.githubusercontent.com:ref` = `refs/heads/main` の条件もあること (environment の `sub` にはブランチが入らない)。
+  `StringLike`、`*` を含む `sub`、複数のブランチ、`:pull_request`、`ref` の条件の無い `:environment:` の `sub` があれば人に知らせる
+- `sub` に `:environment:audit` と `:ref:refs/heads/main` の 2 つが並んでいたら、移行の期間の許可 (`runner.yaml` の `KeepBranchSubject=true`) が残っている。移行が済んでいるか (ワークフローに `environment: audit` があるか) を確かめ、済んでいれば外すよう人に知らせる
 - 引き受けられない理由 (確かめるときの見方):
   - fork は別のリポジトリなので、fork で動くワークフローの `sub` は fork 自身の名前と ID になる
   - 同じ名前で作り直したリポジトリは ID が違う (ID 入りの形のとき)
   - 同じリポジトリでも、ほかのブランチは `ref` が違い、PR のワークフローは `sub` が `...:pull_request` になる
-- ジョブに `environment:` を書くと `sub` が `...:environment:<名前>` に変わり、`runner.yaml` のロールは引き受けられなくなる。監査のワークフローに書かれていないこと
+  - environment を参照しないジョブ、別の名前の environment を参照するジョブは `sub` が違う
+- ジョブに `environment:` を書くと `sub` が `...:environment:<名前>` に変わる。ワークフローの `environment:` の有無と名前が、信頼ポリシーの `sub` の形と揃っていること (秘密か OIDC を使うジョブは `environment: audit`、PR の検査には無い。名前は式ではなく、そのままの文字列)
 
 ## main の保護と書き込み権限
 
-`sub` が main に絞られているので、main にコミットを入れられる人が、実行用ロールで動かす内容を決められる。
+信頼が main に絞られているので (`ref`。environment を使わない構成では `sub`)、main にコミットを入れられる人が、実行用ロールと秘密で動かす内容を決められる。
 
 ```sh
 gh api repos/OWNER/REPO/rules/branches/main --jq '[.[].type]'
@@ -85,19 +85,23 @@ gh api repos/OWNER/REPO/keys --jq '.[] | {title, read_only}'
 
 ## secrets
 
-リポジトリの secrets は、どのブランチのワークフローからも読める。書き込み権限のある人は、ブランチにワークフローを足して push すれば、main の保護を通らずに読み出せる。
+リポジトリの secrets は、どのブランチのワークフローからも読める。書き込み権限のある人 (と、その人のアカウントを乗っ取った人) は、ブランチにワークフローを足して push すれば、main の保護を通らずに読み出せる。勧める形は、秘密を GitHub の environment (`audit`) の secrets に置き、デプロイできるブランチを main だけにすること。
 
 ```sh
 gh api repos/OWNER/REPO/actions/secrets --jq '[.secrets[].name]'
 gh api repos/OWNER/REPO/environments --jq '[.environments[] | {name, deployment_branch_policy}]'
+gh api repos/OWNER/REPO/environments/audit/deployment-branch-policies --jq '[.branch_policies[] | {name, type}]'
+gh api repos/OWNER/REPO/environments/audit/secrets --jq '[.secrets[].name]'
 ```
 
+- `audit` の `deployment_branch_policy` が `custom_branch_policies: true` で、ブランチの一覧が `main` だけ。`null` (どのブランチからも使える) や、main のほかのブランチがあれば人に知らせる。environment の secrets は、その environment を参照するジョブにしか渡らず、ほかのブランチのジョブは始まる前に止まる
+- 秘密が environment にあり、リポジトリの secrets (1 つ目) が空。同じ名前がリポジトリにも残っていれば、移行の途中か消し忘れ (どのブランチからも読める)
+- 覚えのない environment が無い (書き込み権限のある人は、ワークフローで別の名前の environment を作れる。秘密が無く `sub` も違うので使えないが、作った跡)
+- environment の設定を変えられるのは admin を持つ人。admin の人数が最小か (`collaborators` の `permissions.admin`) を人に確かめてもらう
 - 置いてあるのが、見本の 4 つ (実行用ロールと監査ロールの ARN、Slack の Webhook 2 つ。複数のアカウントなら ARN は JSON の 1 つ。bot トークンの方式なら Webhook 2 つの代わりに `ARATAM_SLACK_BOT_TOKEN` 1 つ) だけ。長期の AWS のアクセスキーが無い
 - 読み出されて困るのは Webhook と bot トークン (偽の通知を送れる。bot トークンは bot を招待したすべてのチャンネルに送れるので、招待が通知用のチャンネルだけか、Slack アプリの scope が `chat:write` だけかを人に確かめてもらう)。ロールの ARN は読めても、`sub` が合わないので引き受けられない (分かるのはアカウント ID)
-- 守りは「書き込み権限を持つ人を最小に」。漏れた疑いがあれば、人が Webhook を作り直す (bot トークンなら取り消して入れ直す)
-- GitHub の environment に Webhook を置き、`deployment_branch_policy` で main だけに限れば、ほかのブランチのジョブからは読めなくなる。
-  ただし今の `runner.yaml` は environment の `sub` を受け付けないので、OIDC を使うジョブには `environment:` を付けられない (テンプレートの対応は予定。arata の `docs/roadmap.md`)。
-  environment を勧めるときは、この制約と、非公開のリポジトリでは GitHub の有料プランが要ることを添える
+- 漏れた疑いがあれば、人が Webhook を作り直す (bot トークンなら取り消して入れ直す)
+- environment を使っていない構成 (秘密がリポジトリの secrets、`sub` が `:ref:` の形) なら、守りは「書き込み権限を持つ人を最小に」だけ。environment への移行を勧める (順番は見本の README「既に動いている監査を environment に移す」: environment を作る → スタックを `GitHubEnvironment` と `KeepBranchSubject=true` で更新 → ワークフローに `environment:` を足す → 秘密を移してリポジトリから消す → `KeepBranchSubject=false`)。勧めるときは、非公開のリポジトリでは GitHub の有料プラン (Team など) が要ることを添える。設定を変えるのは人
 
 ## Actions の設定
 

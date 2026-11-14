@@ -73,6 +73,7 @@ type workflow struct {
 	} `yaml:"defaults"`
 	Jobs map[string]struct {
 		RunsOn      string      `yaml:"runs-on"`
+		Environment any         `yaml:"environment"`
 		Concurrency concurrency `yaml:"concurrency"`
 		Strategy    struct {
 			FailFast *bool `yaml:"fail-fast"`

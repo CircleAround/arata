@@ -39,6 +39,7 @@ aws cloudformation deploy --stack-name arata-runner \
   --capabilities CAPABILITY_NAMED_IAM \
   --parameter-overrides \
     GitHubRepository=example-org/security-audit \
+    GitHubEnvironment=audit \
     AuditRoleArns=arn:aws:iam::123456789012:role/arata-readonly
 
 aws cloudformation describe-stacks --stack-name arata-runner --query 'Stacks[0].Outputs' --output table
@@ -51,16 +52,19 @@ aws cloudformation describe-stacks --stack-name arata-runner --query 'Stacks[0].
 | `GitHubRepository` (必須) | 設定ファイルを置くリポジトリ。OIDC トークンの `sub` の `repo:` の部分と同じ形で書く (下の注意) |
 | `AuditRoleArns` (必須) | 手順 2 で作る読み取り専用ロールの ARN。まだ無くてよい (名前は既定で `arata-readonly`)。複数ならカンマ区切り |
 | `OIDCProviderArn` | アカウントに GitHub の OIDC プロバイダが既にあれば、その ARN。空なら作る |
-| `GitHubBranch` | 既定は `main`。定時実行は既定のブランチでだけ動く |
+| `GitHubEnvironment` | (勧める) GitHub の environment の名前。見本は `audit`。指定すると、ジョブに `environment: audit` を付けたワークフローだけが引き受けられる。空なら environment を使わない (下の注意) |
+| `GitHubBranch` | 既定は `main`。定時実行は既定のブランチでだけ動く。`GitHubEnvironment` が空なら `sub` に、指定したときは `ref` の条件に使う |
 | `GitHubWorkflowRef` | (任意) ワークフローのファイルまで絞る。下の注意 |
+| `KeepBranchSubject` | (移行のときだけ) `true` の間は、environment の `sub` とこれまでのブランチの `sub` の両方を受ける。既定は `false` (下の「既に動いている監査を environment に移す」) |
 | `StoreBucketName` / `StorePrefix` | バケットの名前 (空なら自動) と、実行用ロールが読み書きできる prefix (空ならバケット全体) |
 | `NoncurrentVersionDays` | 古い版のオブジェクトを消すまでの日数 (既定 90)。SQLite は run のたびに置き換わる |
 | `BedrockInferenceProfileArn` | (任意) aratam の `llm.provider: bedrock` で使う推論プロファイルの ARN。空なら Bedrock の権限を足さない (手順 3) |
 | `RoleName` | 既定は `arata-runner` |
 
 - **OIDC プロバイダはアカウントに 1 つ**しか作れません。先に確かめます: `aws iam list-open-id-connect-providers`。`token.actions.githubusercontent.com` があれば `OIDCProviderArn=<その ARN>` を足します
-- **`GitHubRepository` の形**: 信頼は `sub` の完全一致 (`repo:<GitHubRepository>:ref:refs/heads/<GitHubBranch>`) で、ワイルドカードは受け付けません。
-  2026-07-15 より後に作った (または名前を変えた・移した) リポジトリは、`sub` に ID が入ります (`repo:example-org@1234567/security-audit@7654321:ref:refs/heads/main`)。
+- **`GitHubRepository` の形**: 信頼は `sub` の完全一致 (environment を使うなら `repo:<GitHubRepository>:environment:<GitHubEnvironment>`、
+  使わないなら `repo:<GitHubRepository>:ref:refs/heads/<GitHubBranch>`) で、ワイルドカードは受け付けません。
+  2026-07-15 より後に作った (または名前を変えた・移した) リポジトリは、`sub` に ID が入ります (`repo:example-org@1234567/security-audit@7654321:environment:audit`)。
   その場合は `GitHubRepository=example-org@1234567/security-audit@7654321` と書きます。値は次で作れます
 
   ```sh
@@ -76,8 +80,18 @@ aws cloudformation describe-stacks --stack-name arata-runner --query 'Stacks[0].
 - **`GitHubWorkflowRef`**: 指定すると、トークンの `job_workflow_ref` が完全に一致するワークフローだけが引き受けられます
   (例 `example-org/security-audit/.github/workflows/arata-audit.yml@refs/heads/main`)。同じリポジトリの `main` にある別のワークフローからは使えなくなります。
   既定は空です (GitHub の文書は、再利用しないワークフローでのこの値を定めていないため。設計書 9 章)
-- **GitHub の environment は使いません**。ジョブに `environment:` を付けると `sub` の形が変わり (`repo:...:environment:<名前>`)、このロールを引き受けられなくなります
-  (secrets を environment に置く案との関係は、下の「実行するリポジトリと環境を堅くする」の 5)
+- **`GitHubEnvironment`**: 見本のワークフローは、秘密か OIDC を使うジョブに `environment: audit` を付けています (秘密を environment に置き、main のジョブにだけ渡すため。
+  下の「実行するリポジトリと環境を堅くする」の 5)。ジョブに `environment:` を付けると、`sub` は `repo:...:environment:<名前>` に変わり、ブランチは `sub` に入らなくなります。
+  `GitHubEnvironment=audit` を指定すると、信頼の条件は次の 3 つの完全一致になります (ADR 0057)
+  - `sub` = `repo:<GitHubRepository>:environment:audit` (その environment を参照するジョブだけ)
+  - `ref` = `refs/heads/<GitHubBranch>` (そのブランチで起動した実行だけ。environment の「デプロイできるブランチ」を付け忘れても・外されても、AWS の側で止まります)
+  - `aud` = `sts.amazonaws.com`
+
+  名前は GitHub の設定と、大文字・小文字まで同じに書きます (小文字の英数字とハイフンにしておくと取り違えません)。
+  **environment を使えない・使わないとき** (非公開のリポジトリで GitHub Free のとき。environment の secrets と保護は効きません) は、`GitHubEnvironment` を書かず、
+  写したワークフローから `environment: audit` の行を消します。信頼はブランチの `sub` の形になり、秘密はリポジトリの secrets に置きます (5 の「environment を使えないとき」)
+- **environment と `GitHubWorkflowRef`**: `GitHubWorkflowRef` は environment のときにも効きます。実行用ロールを使うワークフローが監査の 1 つだけなら、指定を勧めます
+  (environment を参照する、main の別のワークフローからも引き受けられなくなります)
 - **スタックを消しても、バケットと OIDC プロバイダは残ります** (監査の状態を失わないため・プロバイダはアカウントで共有されるため)。作り直すときは `OIDCProviderArn` に残ったプロバイダを渡します
 
 実行用ロールの権限は、ストアの `s3:GetObject`・`s3:PutObject`・`s3:ListBucket` と、`AuditRoleArns` への `sts:AssumeRole` だけです (削除の権限はありません)。
@@ -138,7 +152,8 @@ aws cloudformation deploy --stack-name arata-readonly \
 - バケット: バージョニング・既定の暗号化・パブリックアクセスブロック (4 項目)・TLS 必須のバケットポリシー
 - 実行用ロール: 信頼ポリシーは `sts:AssumeRoleWithWebIdentity` で、`StringEquals` の `token.actions.githubusercontent.com:aud` (`sts.amazonaws.com`) と `:sub` (上の形)。
   `StringLike` と `repo:example-org/*` のようなワイルドカードは使いません。権限は `runner.yaml` の `Policies` の 3 つの文、最大セッションは 1 時間
-- GitHub の environment で承認や secrets を分けたいときは、`sub` を `repo:example-org/security-audit:environment:audit` にしたロールを自分で作ります (ブランチの条件は効かなくなります)
+- GitHub の environment を使うときは、`:sub` を `repo:example-org/security-audit:environment:audit` にし、`token.actions.githubusercontent.com:ref` (`refs/heads/main`) の条件を足します
+  (environment の `sub` にはブランチが入らないため)
 
 </details>
 
@@ -211,7 +226,22 @@ llm:
 - 許すのは、指定した 1 つのプロファイルを通した呼び出しだけです。プロファイルが振り分ける先のリージョンの基盤モデルは、`bedrock:InferenceProfileArn` の条件でそのプロファイル経由に限って許します (基盤モデルを直接は呼べません)
 - `model` を別のプロファイルに変えたら、`BedrockInferenceProfileArn` も変えます。食い違うと aratam は LLM の失敗として report.md の原文を送ります (通知は止まりません)
 
-### 4. Secrets
+### 4. environment と Secrets
+
+秘密は、リポジトリの secrets ではなく **environment の secrets** に置きます。先に environment を作ります (設定できるのは、リポジトリの admin を持つ人です)。
+
+1. リポジトリの Settings → Environments → 「New environment」で `audit` を作ります (手順 1 の `GitHubEnvironment` と同じ名前)
+2. 「Deployment branches and tags」を「Selected branches and tags」にし、`main` だけを足します。**これを忘れると、どのブランチのジョブにも秘密が渡ります**
+3. 「Environment secrets」に下の表の秘密を入れます。リポジトリの secrets (Settings → Secrets and variables → Actions) には置きません
+4. 「Required reviewers」と「Wait timer」は付けません (定時の実行が、承認を待って止まります)
+
+**environment は必ずワークフローより先に作ります**。無い environment を参照するワークフローが動くと、GitHub は同じ名前の environment を、制限なしで自動で作ります。
+設定は次で確かめます (下の「実行するリポジトリと環境を堅くする」の 5)。非公開のリポジトリで environment を使うには、GitHub の有料プラン (Team など) が要ります。
+
+```sh
+gh api repos/example-org/security-audit/environments/audit --jq '{name, deployment_branch_policy}'
+gh api repos/example-org/security-audit/environments/audit/deployment-branch-policies --jq '[.branch_policies[] | {name, type}]'
+```
 
 | 名前 | 中身 |
 |---|---|
@@ -221,7 +251,7 @@ llm:
 | `ARATAM_SLACK_URGENT_WEBHOOK` | 緊急用の Webhook |
 | `ARATA_ALERT_WEBHOOK` | 定時の通知が送れなかったことを知らせる、別の Webhook (下の「定時の通知が送れなかったとき」) |
 
-**Slack の疎通を確かめる**: Webhook を secrets に入れたら、同じ URL で手元から試験メッセージを 1 通送ります。チャンネルと Webhook の対応 (通常用と緊急用の取り違え) は、送ってみないと分かりません。
+**Slack の疎通を確かめる**: Webhook を environment の secrets に入れたら、同じ URL で手元から試験メッセージを 1 通送ります。チャンネルと Webhook の対応 (通常用と緊急用の取り違え) は、送ってみないと分かりません。
 
 ```sh
 read -rs ARATAM_SLACK_WEBHOOK && export ARATAM_SLACK_WEBHOOK                  # 貼り付けて Enter (シェルの履歴に残さない)
@@ -360,11 +390,11 @@ llm:
 監査のリポジトリを使える人は、実行用ロール (ストアの読み書き・監査対象の読み取り) と Slack の Webhook (bot トークンの方式ならトークン) を使えます。目指す状態は次の 2 つです。
 
 - **main にコミットを入れられる人だけが、実行用ロールを使える** (fork、ほかのブランチ、PR からは使えない)
-- **secrets を読める人が最小**
+- **main にコミットを入れられる人だけが、secrets を使える** (environment に置き、デプロイできるブランチを main だけにする)
 
 下の `gh api` はすべて読み取りです (`example-org/security-audit` は自分のリポジトリに読み替えます)。組織の設定は、組織の所有者でないと読めないものがあります。
 AI (LLM) に点検させるときは `arata help ai runtime` (同じ項目のチェックリスト) を読ませます。設定を変えるのは人です。
-main の保護 (4) と environment (5) は、非公開のリポジトリでは GitHub の有料プラン (Team など) が要ります。
+main の保護 (4) と environment (5) は、非公開のリポジトリでは GitHub の有料プラン (Team など) が要ります (使えないときの形は 5 の「environment を使えないとき」)。
 
 ### 1. リポジトリは非公開にし、fork を禁止する
 
@@ -391,18 +421,23 @@ gh api repos/example-org/security-audit/actions/permissions/fork-pr-workflows-pr
 - `pull_request` で動かすのは [arata-check.yml](arata-check.yml) の形に留めます。権限は `contents: read` だけで、secrets も OIDC も使いません。
   secrets か OIDC を使うワークフロー (監査、finding の片付け) は、定時と手動でだけ動かします
 
-### 3. OIDC の信頼は、ID 入りの `sub` で 1 つのブランチに絞る
+### 3. OIDC の信頼は、ID 入りの `sub` で 1 つの environment と 1 つのブランチに絞る
 
-実行用ロールは、OIDC トークンの `sub` が次の 1 つの文字列に完全に一致するときだけ引き受けられます (手順 1 の `runner.yaml`。ワイルドカードは受け付けません)。
+実行用ロールは、OIDC トークンが次に完全に一致するときだけ引き受けられます (手順 1 の `runner.yaml`。ワイルドカードは受け付けません)。
 
 ```
-repo:OWNER@OWNER_ID/REPO@REPO_ID:ref:refs/heads/main
+sub = repo:OWNER@OWNER_ID/REPO@REPO_ID:environment:audit
+ref = refs/heads/main
 ```
+
+environment を使わない構成 (`GitHubEnvironment` が空) では、`sub` = `repo:OWNER@OWNER_ID/REPO@REPO_ID:ref:refs/heads/main` の 1 つです。
 
 - **fork は引き受けられません**。fork は別のリポジトリなので、fork で動くワークフローの `sub` は fork 自身の名前と ID になります
 - **同じ名前で作り直したリポジトリも引き受けられません** (ID 入りの形のとき)。従来の形 (`repo:example-org/security-audit:...`) は名前だけで決まるので、
   リポジトリや組織を消した後に同じ名前が別の人に取られると、同じ `sub` を作られます。ID は使い回されません
-- **ほかのブランチと PR からも引き受けられません**。ほかのブランチは `ref` が違い、PR のワークフローは `sub` が `...:pull_request` になります
+- **ほかのブランチと PR からも引き受けられません**。ほかのブランチで起動した実行は `ref` が違います (environment の「デプロイできるブランチ」の制限より手前の、AWS の側の守りです)。
+  PR のワークフローは `ref` が `refs/pull/...` で、environment を参照しなければ `sub` も `...:pull_request` になります
+- **environment を参照しないジョブからも引き受けられません** (`sub` がブランチの形になります)。別の名前の environment を参照しても、`sub` が違います
 
 ```sh
 gh api repos/example-org/security-audit/actions/oidc/customization/sub
@@ -412,11 +447,12 @@ aws iam get-role --role-name arata-runner --query 'Role.AssumeRolePolicyDocument
 - 1 つ目が `use_default: true`・`use_immutable_subject: true` なら ID 入りです (2026-07-15 より後に作った・名前を変えた・移したリポジトリは、最初からこの形です)
 - `use_immutable_subject: false` (従来の形) なら、リポジトリか組織の Actions の OIDC の設定で ID 入りに切り替えます。
   切り替えたら、`GitHubRepository` を `sub_claim_prefix` の `repo:` より後ろの値にしてスタックを更新します (揃うまでは引き受けに失敗します。定時の実行の合間に行います)
-- 2 つ目の信頼ポリシーが `StringEquals` だけで、`sub` が上の 1 つだけであること。手で直して `StringLike` や `*` を足さないでください
+- 2 つ目の信頼ポリシーが `StringEquals` だけで、`sub` が上の 1 つだけ、`ref` が `refs/heads/main` であること。手で直して `StringLike` や `*` を足さないでください。
+  `sub` に `...:environment:audit` と `...:ref:refs/heads/main` の 2 つが並んでいたら、移行の期間の許可 (`KeepBranchSubject=true`) が残っています。移行が済んでいれば外します
 
 ### 4. main を保護し、書き込み権限を持つ人を最小にする
 
-`sub` を main に絞っているので、**main に入れられる人 = 実行用ロールを使える人**です。main の保護が、実行用ロールの権限の境界になります。
+信頼を main に絞っているので (`ref`。environment を使わない構成では `sub`)、**main に入れられる人 = 実行用ロールと秘密を使える人**です。main の保護が、権限の境界になります。
 
 ```sh
 gh api repos/example-org/security-audit/rules/branches/main --jq '[.[].type]'
@@ -429,27 +465,97 @@ gh api repos/example-org/security-audit/keys --jq '.[] | {title, read_only}'
   迂回できる主体 (`gh api repos/example-org/security-audit/rulesets/<id>` の `bypass_actors`) は置かないか、理由を説明できるものだけにします
 - 書き込み権限 (`push`) を持つ人を、監査の運用に要る人だけにします。組織の既定の権限 (base permissions) が write だと、組織の全員が持ちます
 - 書き込みのできるデプロイキーや、書き込み権限を持つ外部のアプリを置きません
+- admin を持つ人は、さらに少なくします。admin は main の保護も environment の設定 (デプロイできるブランチ、secrets) も変えられます
 - `arata-check` を必須のチェックにすると、形の誤った設定は main に入りません (「PR で設定を検査する」)
 - PR のレビューを必須にすれば、1 人では main を変えられなくなります。人数が足りずに必須にできないときは、PR の差分を誰が見るかを決めておきます
 
-### 5. secrets は、書き込み権限のある人なら読み出せる
+### 5. secrets は environment に置き、デプロイできるブランチを main だけにする
 
-リポジトリの secrets は、**どのブランチのワークフローからも読めます**。書き込み権限のある人は、ブランチにワークフローを足して push すれば、main の保護を通らずに読み出せます。
+リポジトリの secrets は、**どのブランチのワークフローからも読めます**。書き込み権限のある人 (と、その人のアカウントを乗っ取った人) は、ブランチにワークフローを足して push すれば、
+main の保護を通らずに読み出せます。乗っ取ったアカウントでワークフローを書き換え、CI の秘密を持ち出す攻撃は、実際に広く起きています。
 
-- 読み出されて困るのは Slack の Webhook か bot トークンです (偽の通知を送れます。bot トークンは、bot を招待したすべてのチャンネルに送れます)。ロールの ARN は読めても、3 の `sub` が合わないので引き受けられません (分かるのはアカウント ID です)
-- 今の守りは 4 の「書き込み権限を持つ人を最小に」です。漏れた疑いがあれば Webhook を作り直します (bot トークンなら取り消して入れ直します)。長期の AWS のアクセスキーは secrets に置きません
-- **案: GitHub の environment に置き、デプロイできるブランチを main に限る**。environment の secrets は、その environment を参照するジョブにしか渡らず、
-  デプロイできるブランチを限れば、ほかのブランチのジョブは environment を使えません
-- **ただし、今の `runner.yaml` とは組み合わせられません**。ジョブに `environment:` を付けると、`sub` が `repo:...:environment:<名前>` に変わり (ブランチは `sub` に入らなくなります)、
-  実行用ロールを引き受けられなくなります。見本のジョブは OIDC と Webhook を同じジョブで使うので、Webhook だけを environment に移すこともできません。
-  テンプレートを environment の `sub` に対応させるのは今後の課題です (arata の `docs/roadmap.md`)
-- それまでに environment を使うなら、手順 1 の「テンプレートを使わない場合」のとおり、`sub` を `repo:OWNER@OWNER_ID/REPO@REPO_ID:environment:<名前>` にしたロールを自分で作ります。
-  この形ではブランチの条件が `sub` から消えるので、**environment のデプロイできるブランチの制限が、実行用ロールの境界になります**。次で確かめます
+見本は、秘密を **GitHub の environment (`audit`) の secrets** に置きます (手順 4)。
 
-  ```sh
-  gh api repos/example-org/security-audit/environments --jq '[.environments[] | {name, deployment_branch_policy}]'
-  gh api repos/example-org/security-audit/environments/audit/deployment-branch-policies --jq '[.branch_policies[] | {name, type}]'
-  ```
+- environment の secrets は、その environment を参照するジョブにしか渡りません。デプロイできるブランチを main だけにすると、ほかのブランチのジョブは environment を使えず、
+  始まる前に止まります (秘密も OIDC のトークンも渡りません)
+- 見本のうち、秘密か OIDC を使うジョブ (監査、finding の片付け、Slack への送信のテスト) は `environment: audit` を付けています。
+  PR の検査 ([arata-check.yml](arata-check.yml)) は秘密も OIDC も使わないので、付けていません (付けると PR のブランチで動けません)
+- 実行用ロールも、同じ environment に絞ります (手順 1 の `GitHubEnvironment=audit`)。environment の `sub` にはブランチが入らないので、`runner.yaml` は `ref` の条件でもブランチに絞ります。
+  デプロイできるブランチの設定が外れても、ほかのブランチからは実行用ロールを引き受けられません (**秘密のほうは、この設定だけが守りです**)
+- 読み出されて困るのは Slack の Webhook か bot トークンです (偽の通知を送れます。bot トークンは、bot を招待したすべてのチャンネルに送れます)。漏れた疑いがあれば Webhook を作り直します
+  (bot トークンなら取り消して入れ直します)。長期の AWS のアクセスキーは secrets に置きません
+- environment の設定を変えられるのは、リポジトリの admin を持つ人です (4)。書き込み権限だけの人は、ワークフローで別の名前の environment を作れますが、
+  そこには秘密が無く、`sub` も違うので実行用ロールを引き受けられません
+
+次で確かめます。
+
+```sh
+gh api repos/example-org/security-audit/environments --jq '[.environments[] | {name, deployment_branch_policy}]'
+gh api repos/example-org/security-audit/environments/audit/deployment-branch-policies --jq '[.branch_policies[] | {name, type}]'
+gh api repos/example-org/security-audit/environments/audit/secrets --jq '[.secrets[].name]'
+gh api repos/example-org/security-audit/actions/secrets --jq '[.secrets[].name]'
+```
+
+- `audit` の `deployment_branch_policy` が `{"protected_branches": false, "custom_branch_policies": true}` で、2 つ目の一覧が `main` (`type: branch`) だけであること。
+  `deployment_branch_policy` が `null` なら、どのブランチからも使えます
+- 秘密の名前が 3 つ目 (environment) にあり、4 つ目 (リポジトリ) が空であること。同じ名前が両方にあると、environment を参照しないジョブはリポジトリの値を読めます
+- 覚えのない environment が無いこと (秘密を置いていなければ害はありませんが、誰かがワークフローで作った跡です)
+
+知っておくこと:
+
+- environment を参照するジョブは、実行のたびに GitHub の「Deployments」に記録が 1 件増えます (matrix ならアカウントの数だけ)。動作には影響しません
+- 手動実行 (`workflow_dispatch`) で main 以外のブランチを選ぶと、ジョブは environment の制限で始まる前に失敗します。
+  設定を直すブランチで試したいときは、手元で `arata config check` / `aratam config check` を流すか、PR の検査を使います
+
+#### environment を使えないとき
+
+非公開のリポジトリで GitHub Free のときは、environment の secrets と保護が効きません。このときは次の形にします (これまでの見本と同じ守りです)。
+
+- `runner.yaml` に `GitHubEnvironment` を書かない (信頼は `sub` = `repo:...:ref:refs/heads/main` の 1 つ)
+- 写したワークフローから `environment: audit` の行を消す (残すと、実行用ロールを引き受けられません)
+- 秘密はリポジトリの secrets に置く。守りは 4 の「書き込み権限を持つ人を最小に」だけになり、書き込み権限のある人は別のブランチから秘密を読み出せます。
+  ロールの ARN は読めても、`sub` が合わないので引き受けられません (分かるのはアカウント ID です)
+
+#### 既に動いている監査を environment に移す
+
+これまでの見本 (environment なし、リポジトリの secrets) で動いている監査を、定時の実行を止めずに移す順番です。
+`KeepBranchSubject=true` の間は、実行用ロールが environment の `sub` とブランチの `sub` の両方を受けるので、ワークフローを変える前後のどちらでも引き受けられます。
+
+1. **environment を作り、スタックを更新する**。手順 4 の 1・2 のとおり `audit` を作り、デプロイできるブランチを `main` だけにします (秘密はまだ入れなくてかまいません)。
+   次に、スタックを更新します (書かなかったパラメータは前の値のままです)
+
+   ```sh
+   aws cloudformation deploy --stack-name arata-runner \
+     --template-file deploy/github-actions/runner.yaml \
+     --capabilities CAPABILITY_NAMED_IAM \
+     --parameter-overrides GitHubEnvironment=audit KeepBranchSubject=true
+   ```
+
+   この時点では、まだ environment を参照しない今のワークフローが、これまでどおり動きます
+2. **ワークフローに `environment: audit` を足す**。秘密か OIDC を使うジョブ (監査、finding の片付け、送信のテスト) に足す PR を作り、マージします (PR の検査には足しません)。
+   マージしたら、監査のワークフローを手動で実行して (`dry_run` でかまいません) 実行用ロールを引き受けられることを確かめます。
+   秘密は、まだリポジトリの secrets から読まれます (environment を参照するジョブにも、リポジトリの secrets は渡ります)
+3. **秘密を environment に移す**。同じ名前で environment の secrets に入れます (GitHub から値は読み出せないので、ARN はスタックの出力から、Webhook や bot トークンは Slack の設定から用意します。
+   この機会に Webhook を作り直す・トークンを入れ直すと、これまでに読み出されていた場合にも備えられます)。
+   同じ名前が両方にあるときは environment の値が使われます。[arata-notify-test.yml](arata-notify-test.yml) で届くことを確かめてから、**リポジトリの secrets を消します**
+4. **移行の期間の許可を外す**。スタックを `KeepBranchSubject=false` で更新し、もう一度、手動の実行で確かめます
+
+   ```sh
+   aws cloudformation deploy --stack-name arata-runner \
+     --template-file deploy/github-actions/runner.yaml \
+     --capabilities CAPABILITY_NAMED_IAM \
+     --parameter-overrides KeepBranchSubject=false
+   aws iam get-role --role-name arata-runner --query 'Role.AssumeRolePolicyDocument'
+   ```
+
+   `sub` が `...:environment:audit` の 1 つだけになっていれば終わりです。4 を済ませるまでは、environment を参照しない main のワークフローからも実行用ロールを引き受けられます
+
+- 順番を変えないでください。スタックより先にワークフローを変えると、`sub` が合わず、定時の監査が OIDC の引き受けで失敗します (「arata の出力が無いか古い」が緊急用に届きます)
+- 実行の仕組みを置いたアカウントを `oidc_assume_role` で監査していて、既知リストの `oidc_subjects` に実行用ロールを書いているなら、2 の PR より前に
+  その項目へ `environments: ["audit"]` を足します (足さないと、`sub` が変わった最初の引き受けを high で報告します)。4 が済んだら、その項目の `refs` を消します
+- 新しい版の `runner.yaml` に更新しただけ (`GitHubEnvironment` を書かない) なら、信頼は変わりません
+- 戻すとき: ワークフローから `environment: audit` を消してマージし、秘密をリポジトリの secrets に戻してから、スタックを `GitHubEnvironment=` (空) で更新します
+  (`KeepBranchSubject=true` にしてあれば、どちらの順でも止まりません)
 
 ### 6. Actions の設定
 
@@ -474,7 +580,8 @@ Settings → Actions → General で設定します。
 見本をそのまま写せば、上の前提に合います (arata のリポジトリのテストが固定しています)。書き換えるときは崩さないでください。
 
 - ワークフローの先頭は `permissions: {}`。権限はジョブごとで、監査と片付けは `id-token: write` と `contents: read`、PR の検査と送信のテストは `contents: read` だけ
-- secrets か OIDC を使う見本は `schedule` と `workflow_dispatch` でだけ動き、`pull_request_target`・`workflow_run`・`environment:` を使わない
+- secrets か OIDC を使う見本は `schedule` と `workflow_dispatch` でだけ動き、`pull_request_target`・`workflow_run` を使わない
+- secrets か OIDC を使うジョブは `environment: audit` で動く (名前は式にせず、そのまま書く)。PR の検査には付けない
 - action は 2 つだけで、どちらも commit SHA で固定。checkout は `persist-credentials: false`
 - `run:` に式を埋め込まず、secrets は使う step にだけ渡す
 - 手動実行の `dry_run` では、通知せず、ストアのバケットに何も置かず、結果は件数と重大度だけをログに出す
@@ -512,12 +619,13 @@ name: prod                                # 通知に出す名前。アカウン
     --capabilities CAPABILITY_NAMED_IAM \
     --parameter-overrides \
       GitHubRepository=example-org/security-audit \
+      GitHubEnvironment=audit \
       AuditRoleArns=arn:aws:iam::123456789012:role/arata-readonly,arn:aws:iam::444455556666:role/arata-readonly
   ```
 
 - **手順 2**: 監査対象のアカウントごとに、同じ `TrustedPrincipalArn` で 1 回ずつ実行します
 - **ワークフロー**: `matrix.account` にディレクトリの名前を並べます (小文字の英数字とハイフン)。アカウントを足すときは、ディレクトリ・matrix・`AuditRoleArns`・下の secret の 4 か所です
-- **Secrets**: `ARATA_AUDIT_ROLE_ARN` の代わりに `ARATA_AUDIT_ROLE_ARNS` を 1 つ置きます。名前からロールを引く JSON です
+- **Secrets**: environment は全アカウントで 1 つ (`audit`) です。`ARATA_AUDIT_ROLE_ARN` の代わりに `ARATA_AUDIT_ROLE_ARNS` を 1 つ置きます。名前からロールを引く JSON です
 
   ```json
   {"prod": "arn:aws:iam::123456789012:role/arata-readonly", "staging": "arn:aws:iam::444455556666:role/arata-readonly"}
@@ -565,7 +673,7 @@ name: prod                                # 通知に出す名前。アカウン
 
 - **理由と操作した人はストアに残りません**。arata の `ack` / `snooze` / `resolve` には理由や操作した人を記録する欄が無いので、記録は Actions の実行履歴 (Summary) が持ちます。
   Actions の実行の記録には保持期間があります (リポジトリの設定。ログの既定は 90 日)。長く残したい判断は、Issue などにも書いてください
-- **main で動かします**。実行用ロールの信頼は 1 つのブランチだけ (既定は `main`) なので、ほかのブランチを選ぶと OIDC の引き受けで失敗します。
+- **main で動かします**。environment のデプロイできるブランチも、実行用ロールの信頼も main だけなので、ほかのブランチを選ぶと、ジョブが始まる前に失敗します。
   `runner.yaml` の `GitHubWorkflowRef` で監査のワークフローのファイルに絞っている場合は、このワークフローからは引き受けられません (`GitHubWorkflowRef` を空にするか、手元で実行します)
 - **監査が走っていれば待ちます**。定時の監査と同じ `concurrency` の group (アカウントごと) なので、同じストアへは順番に書きます。
   同じ group で待てるのは 1 つだけです。待っている間にもう 1 つ実行すると、先に待っていたほうが取り消されます。続けて行うときは、前の実行が終わってからにします
@@ -662,7 +770,7 @@ esac
 ## Slack への送信だけを確かめる
 
 [arata-notify-test.yml](arata-notify-test.yml) を `.github/workflows/` に置くと、Actions の画面から `aratam test-notify` を実行できます。
-監査 (`arata run`) は回さず、試験メッセージを 1 通送るだけです。Actions の secrets と、リポジトリの `aratam.yaml` の組み合わせで届くかが分かります。
+監査 (`arata run`) は回さず、試験メッセージを 1 通送るだけです。environment の secrets と、リポジトリの `aratam.yaml` の組み合わせで届くかが分かります。
 
 使いどころ:
 
@@ -686,8 +794,8 @@ esac
   `ARATA_VERSION` も監査と同じ版にします (PR の検査が、揃っていることを確かめます)
 - `account` の選択肢は、監査の `matrix.account` と同じ並びにします。アカウントを足したら、ここにも足します。
   1 つのアカウントの形 ([arata-audit.yml](arata-audit.yml)) で使うときの変え方は、見本の先頭のコメントにあります
-- 選んだブランチの `aratam.yaml` を読みます。チャンネル ID を足す PR をマージする前に、そのブランチで確かめられます
-  (secrets は書き込み権限のある人ならどのブランチからも使えます。「実行するリポジトリと環境を堅くする」の 5)
+- **main で動かします**。秘密は environment にあり、main のジョブにしか渡りません (「実行するリポジトリと環境を堅くする」の 5)。
+  チャンネル ID を足す PR は、マージしてから確かめます (マージの前に確かめたいときは、手元で `aratam test-notify` を実行します。手順 4)
 
 失敗したときは、ジョブが失敗 (赤) になり、ログに `code` と終了コードが出ます。
 

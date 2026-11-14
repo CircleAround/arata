@@ -62,9 +62,12 @@ func TestEveryWorkflowFollowsTheCommonRules(t *testing.T) {
 }
 
 // 利用者のリポジトリの前提 (README「実行するリポジトリと環境を堅くする」) を見本が満たすこと。
-// - secrets か OIDC を使う見本は、定時と手動でだけ動く (PR や push では動かさない)
-// - 使う action は、許可リストに書く 2 つ (GitHub 製の checkout と aws-actions/configure-aws-credentials) だけ
-// - GitHub の environment を使わない (sub の形が変わり、runner.yaml のロールを引き受けられなくなる)
+//   - secrets か OIDC を使う見本は、定時と手動でだけ動く (PR や push では動かさない)
+//   - 使う action は、許可リストに書く 2 つ (GitHub 製の checkout と aws-actions/configure-aws-credentials) だけ
+//   - secrets か OIDC を使う見本のジョブは、GitHub の environment (audit) で動く。秘密は environment に置き、デプロイできるブランチを
+//     main だけにするので、ほかのブランチのジョブには秘密が渡らない。OIDC の sub は repo:…:environment:audit になり、
+//     runner.yaml の GitHubEnvironment=audit と組になる (ADR 0057)
+//   - secrets も OIDC も使わない見本 (PR の検査) には environment を付けない (PR のブランチでは動けなくなる。守る秘密も無い)
 func TestEveryWorkflowFitsTheHardenedRepository(t *testing.T) {
 	for _, f := range allFiles {
 		t.Run(f, func(t *testing.T) {
@@ -84,8 +87,18 @@ func TestEveryWorkflowFitsTheHardenedRepository(t *testing.T) {
 					t.Errorf("action outside the documented allowlist: %s", s.Uses)
 				}
 			}
-			if regexp.MustCompile(`(?m)^\s+environment:`).MatchString(text) {
-				t.Errorf("must not use a GitHub environment (the sub claim changes)")
+			sensitive := strings.Contains(text, "secrets.") || strings.Contains(text, "id-token")
+			for name, j := range w.Jobs {
+				switch {
+				case sensitive && j.Environment != "audit":
+					// 名前は文字列でそのまま書く (式にしない。入力から environment を選べると、守りの弱い environment に逃がせる)
+					t.Errorf("job %s uses secrets or OIDC and must run in the environment audit: %v", name, j.Environment)
+				case !sensitive && j.Environment != nil:
+					t.Errorf("job %s uses neither secrets nor OIDC and must not reference an environment: %v", name, j.Environment)
+				}
+			}
+			if n := len(regexp.MustCompile(`(?m)^\s+environment:`).FindAllString(text, -1)); sensitive && n != 1 || !sensitive && n != 0 {
+				t.Errorf("environment: must appear once, on the job (secrets or OIDC: %v): %d", sensitive, n)
 			}
 		})
 	}
