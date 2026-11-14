@@ -116,6 +116,10 @@ func (c *Collector) Yields() []record.Kind {
 	var out []record.Kind
 	if c.formatSelected() {
 		out = append(out, c.prof.Yields)
+		// ユーザー ID を取り出す設定のあるソースは http_user も出す (ADR 0051 の 2 節。0 件の run は Unavailable で外す)
+		if c.userConfigured() {
+			out = append(out, record.KindHTTPUser)
+		}
 	}
 	if c.hygieneSelected() {
 		out = append(out, record.KindLogHygiene)
@@ -136,7 +140,7 @@ func (c *Collector) Select(needs map[record.Kind]bool) {
 }
 
 func (c *Collector) formatSelected() bool {
-	return c.prof.Yields != "" && (c.selected == nil || c.selected[c.prof.Yields])
+	return c.prof.Yields != "" && (c.selected == nil || c.selected[c.prof.Yields] || (c.userConfigured() && c.selected[record.KindHTTPUser]))
 }
 
 func (c *Collector) hygieneSelected() bool {
@@ -302,7 +306,7 @@ func (c *Collector) collectFormat(ctx context.Context, w collect.Window, sink co
 		return err
 	}
 	if c.prof.req != nil {
-		rs := requestStats(linesRows, c.src.ExpectedCompleteRate)
+		rs := requestStats(linesRows, c.src.ExpectedCompleteRate, c.prof.req)
 		c.stats.Requests = &rs
 	}
 	lines := dayCounts{}
@@ -328,6 +332,7 @@ func (c *Collector) collectFormat(ctx context.Context, w collect.Window, sink co
 		if n := c.stats.Requests.StartsUntagged; n > 0 {
 			c.Logger.Warn("first lines without a request id are not counted as requests", "source", c.src.ID, "log_group", c.src.LogGroup, "lines", n)
 		}
+		c.warnUsers()
 	}
 	if c.stats.Total == 0 {
 		c.Logger.Warn("no log lines in window; check log_group / stream_prefix", "source", c.src.ID, "log_group", c.src.LogGroup,
@@ -513,7 +518,8 @@ func (c *Collector) emitRequests(ctx context.Context, rows []map[string]string, 
 			continue
 		}
 		if days[day] == nil {
-			days[day] = &collect.RequestStats{}
+			st := c.prof.req.newStats(0)
+			days[day] = &st
 		}
 		addRequestRow(days[day], readRequestRow(r))
 	}
@@ -526,6 +532,9 @@ func (c *Collector) emitRequests(ctx context.Context, rows []map[string]string, 
 			if err := sink.Emit(ctx, c.metric(day, m.name, "", float64(m.v))); err != nil {
 				return err
 			}
+		}
+		if err := c.emitUsers(ctx, day, st, sink); err != nil {
+			return err
 		}
 	}
 	return nil

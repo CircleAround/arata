@@ -74,7 +74,7 @@ func FuzzRequestRows(f *testing.F) {
 				t.Fatalf("数えるリクエストの数が、最初の行のあるリクエストの数より減った: %+v", rr)
 			}
 		}
-		st := requestStats(rows, 0.8)
+		st := requestStats(rows, 0.8, nil)
 		if _, err := json.Marshal(st); err != nil {
 			t.Fatalf("JSON にできない: %v", err)
 		}

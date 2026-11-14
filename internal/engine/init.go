@@ -131,10 +131,7 @@ func (e *Engine) Init(ctx context.Context, o InitOptions) (*InitResult, error) {
 			if t, ok := totals[f.Source]; ok {
 				t.Total, t.Matched, t.BytesScanned = t.Total+f.Total, t.Matched+f.Matched, t.BytesScanned+f.BytesScanned
 				if q := f.Requests; q != nil && t.Requests != nil {
-					r := *t.Requests
-					r.Total, r.Complete, r.WithStatus = r.Total+q.Total, r.Complete+q.Complete, r.WithStatus+q.WithStatus
-					r.Starts, r.Reused, r.StartsUntagged = r.Starts+q.Starts, r.Reused+q.Reused, r.StartsUntagged+q.StartsUntagged
-					t.Requests = &r
+					t.Requests = addRequestCoverage(t.Requests, q)
 				} else if q != nil {
 					r := *q
 					t.Requests = &r
@@ -235,6 +232,10 @@ func formatTotals(m map[string]*report.FormatCoverage) []report.FormatCoverage {
 		}
 		if c.Requests != nil {
 			r := *c.Requests
+			if r.Users != nil {
+				u := *r.Users
+				r.Users = &u
+			}
 			setCompleteRate(&r)
 			c.Requests = &r
 		}

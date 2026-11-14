@@ -74,6 +74,12 @@ sources:
   #       - { name: started, regex: 'Started (?P<method>[A-Z]+) "(?P<path>[^"?]*)[^"]*" for (?P<ip>\S+) at ' }
   #       - { name: completed, regex: 'Completed (?P<status>\d{3}) ' }
   #       - { name: no_route, regex: 'ActionController::RoutingError', set: { status: 404 } }
+  #     # ユーザー ID の要るチェック用。アプリに足す行 (actor / auth) の形と出し方は arata help ai user_id。書かなければ読まない
+  #     # user_id:                               # ユーザー ID の取り方 (書いたソースは http_user も出す。ID が 0 件の run では、ユーザー ID の要るチェックは skip)
+  #     #   from: app_line                       # none | app_line (アプリが出す行) | debug_sql (消えうる取り方。doctor が warn を出し続ける)
+  #     #   regex: ' -- : \[[A-Za-z0-9_@-]{1,255}\] actor kind=(?P<user_kind>[a-z_]{1,32}) id=(?P<user_id>[A-Za-z0-9_-]{1,64})(?: by=(?P<by_kind>[a-z_]{1,32}):(?P<by_id>[A-Za-z0-9_-]{1,64}))?$'
+  #     # auth:                                  # ログインの結果の行。正規表現はどちらも $ で終える (行の途中の同じ並びを読まない)
+  #     #   regex: ' -- : \[[A-Za-z0-9_@-]{1,255}\] auth result=(?P<auth_result>success|failure|impersonate) kind=(?P<auth_kind>[a-z_]{1,32}) id=(?P<auth_id>[A-Za-z0-9_-]{1,64})(?: via=(?P<auth_via>password|remember))?(?: by=(?P<auth_by_kind>[a-z_]{1,32}):(?P<auth_by_id>[A-Za-z0-9_-]{1,64}))?(?: reason=(?P<auth_reason>[a-z_]{1,64}))?$'
   #   # expected_complete_rate: 0.8              # まとめられた割合 (最初の行のあるリクエスト / request_id の数) の閾値
   # アプリのログの中身 → log_hygiene (下の checks.log_hygiene に sources・kinds を書くまで読まれない)
   # - id: app_prod

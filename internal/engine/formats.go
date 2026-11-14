@@ -8,6 +8,7 @@ import (
 
 	"github.com/CircleAround/arata/internal/collect"
 	"github.com/CircleAround/arata/internal/report"
+	"github.com/CircleAround/arata/internal/report/schema"
 )
 
 // FORMAT_DRIFT の判定 (設計書 2-2): 直近 driftRuns 回の解釈率の平均から driftDrop 以上落ちたら警告する。
@@ -66,16 +67,64 @@ func requestCoverage(rs *collect.RequestStats) *report.RequestCoverage {
 	}
 	rc := &report.RequestCoverage{Total: rs.Total, Complete: rs.Complete, Expected: rs.Expected, WithStatus: rs.WithStatus,
 		Starts: rs.Starts, Reused: rs.Reused, StartsUntagged: rs.StartsUntagged}
+	if u := rs.Users; u != nil {
+		rc.Users = &schema.UserCoverage{From: u.From, WithUser: u.Requests, Kinds: copyCounts(u.Kinds), WithBy: u.By, Invalid: u.Invalid}
+	}
+	if a := rs.Auth; a != nil {
+		rc.Auth = &schema.AuthCoverage{Success: a.Success, Via: copyCounts(a.Via), Failure: a.Failure, Reasons: copyCounts(a.Reasons), Impersonate: a.Impersonate, Invalid: a.Invalid}
+	}
 	setCompleteRate(rc)
 	return rc
 }
 
+func copyCounts(m map[string]int64) map[string]int64 {
+	out := make(map[string]int64, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
+// setCompleteRate は数から割合 (まとめられた割合と、ID の付いたリクエストの割合) を作り直す。
 func setCompleteRate(rc *report.RequestCoverage) {
 	rc.CompleteRate = nil
 	if rc.Total > 0 {
 		r := round3(float64(rc.Complete) / float64(rc.Total))
 		rc.CompleteRate = &r
 	}
+	if rc.Users != nil {
+		rc.Users.UserRate = nil
+		if rc.Starts > 0 {
+			r := round3(float64(rc.Users.WithUser) / float64(rc.Starts))
+			rc.Users.UserRate = &r
+		}
+	}
+}
+
+// addRequestCoverage は q の数を t に足した複製を返す (init が日ごとの結果を合わせる)。割合は setCompleteRate で作り直す。
+func addRequestCoverage(t, q *report.RequestCoverage) *report.RequestCoverage {
+	r := *t
+	r.Total, r.Complete, r.WithStatus = r.Total+q.Total, r.Complete+q.Complete, r.WithStatus+q.WithStatus
+	r.Starts, r.Reused, r.StartsUntagged = r.Starts+q.Starts, r.Reused+q.Reused, r.StartsUntagged+q.StartsUntagged
+	addCounts := func(dst, src map[string]int64) map[string]int64 {
+		out := copyCounts(dst)
+		for k, v := range src {
+			out[k] += v
+		}
+		return out
+	}
+	if t.Users != nil && q.Users != nil {
+		u := *t.Users
+		u.WithUser, u.WithBy, u.Invalid, u.Kinds = u.WithUser+q.Users.WithUser, u.WithBy+q.Users.WithBy, u.Invalid+q.Users.Invalid, addCounts(u.Kinds, q.Users.Kinds)
+		r.Users = &u
+	}
+	if t.Auth != nil && q.Auth != nil {
+		a := *t.Auth
+		a.Success, a.Failure, a.Impersonate, a.Invalid = a.Success+q.Auth.Success, a.Failure+q.Auth.Failure, a.Impersonate+q.Auth.Impersonate, a.Invalid+q.Auth.Invalid
+		a.Via, a.Reasons = addCounts(a.Via, q.Auth.Via), addCounts(a.Reasons, q.Auth.Reasons)
+		r.Auth = &a
+	}
+	return &r
 }
 
 // recentMatchRate は直近 driftRuns 回 (このソースの解釈率を記録した run) の平均。
@@ -115,6 +164,16 @@ func addFormatStats(stats map[string]any, formats []report.FormatCoverage) {
 				"request_id_reused": q.Reused, "starts_untagged": q.StartsUntagged}
 			if q.CompleteRate != nil {
 				m["complete_rate"] = *q.CompleteRate
+			}
+			// ID の付いたリクエストの割合 (ADR 0052。後から「直近の平均から落ちた」を判定する元)
+			if u := q.Users; u != nil {
+				m["user_id_from"], m["with_user"], m["with_by"], m["user_id_invalid"] = u.From, u.WithUser, u.WithBy, u.Invalid
+				if u.UserRate != nil {
+					m["user_rate"] = *u.UserRate
+				}
+			}
+			if a := q.Auth; a != nil {
+				m["auth_success"], m["auth_failure"], m["auth_impersonate"], m["auth_invalid"] = a.Success, a.Failure, a.Impersonate, a.Invalid
 			}
 			requests[f.Source] = m
 		}

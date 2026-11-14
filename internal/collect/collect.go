@@ -150,6 +150,45 @@ type RequestStats struct {
 	StartsUntagged int64
 	// Expected は expected_complete_rate。
 	Expected float64
+	// Users はユーザー ID の付いたリクエストの集計 (request.user_id を書いたソースだけ。ADR 0052)。
+	Users *UserStats
+	// Auth はログインの結果の行 (auth) の集計 (request.auth を書いたソースだけ)。
+	Auth *AuthStats
+}
+
+// UserStats はユーザー ID (アプリの足した actor の行など) の付いたリクエストの集計。数はどれも「数えたリクエスト」(最初の行の数) の単位。
+type UserStats struct {
+	// From は request.user_id.from (app_line / debug_sql)。
+	From string
+	// Requests は形に合った種類と ID の付いたリクエストの数。Kinds はその種類ごとの数。
+	Requests int64
+	Kinds    map[string]int64
+	// By はそのうち by (代わりにログインした操作) の付いた数。
+	By int64
+	// Invalid は行はあるが、値が形に合わず捨てたリクエストの数。
+	Invalid int64
+}
+
+// AuthStats はログインの結果の行の集計。
+type AuthStats struct {
+	// Success は成功の数。Via は手段ごと (無ければ空の key)。
+	Success int64
+	Via     map[string]int64
+	// Failure は失敗の数。Reasons は理由ごと (無ければ空の key)。
+	Failure int64
+	Reasons map[string]int64
+	// Impersonate は代わりのログインを始めた数。
+	Impersonate int64
+	// Invalid は行はあるが、結果の値が形に合わず捨てたリクエストの数。
+	Invalid int64
+}
+
+// UserRate は Users.Requests / Starts (ID の付いたリクエストの割合)。ユーザー ID を取らないソース・数えたリクエストが 0 なら ok=false。
+func (s RequestStats) UserRate() (rate float64, ok bool) {
+	if s.Users == nil || s.Starts <= 0 {
+		return 0, false
+	}
+	return float64(s.Users.Requests) / float64(s.Starts), true
 }
 
 // CompleteRate は Complete / Total。Total が 0 なら ok=false。

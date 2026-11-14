@@ -204,7 +204,7 @@ func EndpointsQuery(p Profile, srcID string, ea config.EndpointAbuse) (MergedQue
 	if p.req != nil {
 		seen = rlFirst
 	}
-	q := p.head(bin, "t", cond, marks, false, true) +
+	q := p.head(bin, "t", cond, marks, false, true, false) +
 		"\n| stats " + p.count() + " as " + endpointHits + ", min(" + seen + ") as first_seen, max(" + seen + ") as last_seen by " + p.binBy(bin, "t") + ", " +
 		strings.Join(group, ", ") +
 		"\n| sort " + endpointHits + " desc\n| limit " + strconv.Itoa(MaxRows)
