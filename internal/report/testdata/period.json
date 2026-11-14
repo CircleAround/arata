@@ -1,4 +1,6 @@
 {
+  "schema": "report-period",
+  "schema_version": 1,
   "kind": "period",
   "name": "acme",
   "period": {

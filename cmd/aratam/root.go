@@ -20,6 +20,7 @@ import (
 	"github.com/CircleAround/arata/internal/notify"
 	"github.com/CircleAround/arata/internal/slack"
 	"github.com/CircleAround/arata/internal/subcmd"
+	"github.com/CircleAround/arata/schemas"
 )
 
 // Deps は CLI の差し替え可能な依存。テストは固定時計、出力バッファ、環境変数の表、httptest に向けた http.Client を渡す。
@@ -119,7 +120,7 @@ func NewRootCmd(d *Deps) *subcmd.Command {
 		Stdout:  d.Stdout,
 	}
 	root.PersistentStringVarP(&g.config, "config", "c", "", "設定ファイル (YAML)。省略時は環境変数 "+envConfig+"、無ければ ./"+defaultConfigFile)
-	root.AddCommand(newConfigCmd(d, g), newNotifyCmd(d, g), newDoctorCmd(d, g), newTestNotifyCmd(d, g))
+	root.AddCommand(newConfigCmd(d, g), newNotifyCmd(d, g), newDoctorCmd(d, g), newTestNotifyCmd(d, g), newSchemaCmd(d))
 	return root
 }
 
@@ -210,8 +211,50 @@ func newConfigCmd(d *Deps, g *globalFlags) *subcmd.Command {
 	return cmd
 }
 
+// config check --format json のスキーマの名前と版 (ADR 0054)。名前は `aratam schema <名前>` の名前。
+// 版は、項目を消す・名前や型や意味を変える・閉じた語彙 (slack.method・rows[].status) に値を足すときだけ上げる。
+const (
+	configCheckSchema        = "aratam-config-check"
+	configCheckSchemaVersion = 1
+)
+
+// configCheckOutput は config check --format json の出力。機械が読む (GitHub Actions が Slack への送り方を判別する、など)。
+//
+// 決定 (ADR 0054): 人向けの出力 (text) を機械で読ませない。text の行の文言・並びは版をまたいで変わる。
+// 設定を読めなかったときは、設定から決まる値 (name・llm・slack・timezone) を出さない。`jq -r .slack.method` は null になり、
+// 「bot / webhook 以外なら止める」と書いた側は止まる。
+// 秘密と、秘密ではないが判別に要らない値 (チャンネル ID・環境変数の名前) は出さない。
+type configCheckOutput struct {
+	Schema        string            `json:"schema" jsonschema:"const=aratam-config-check"`
+	SchemaVersion int               `json:"schema_version" jsonschema:"const=1"`
+	OK            bool              `json:"ok" desc:"ng の行が無い (終了コード 0)。warn だけなら true"`
+	Config        string            `json:"config" desc:"検査した設定ファイル (カレントディレクトリの下なら相対パス)"`
+	Name          string            `json:"name,omitempty" desc:"設定の name (監査対象の名前)。設定を読めなければ出さない"`
+	LLM           *configCheckLLM   `json:"llm,omitempty" desc:"設定を読めなければ出さない"`
+	Slack         *configCheckSlack `json:"slack,omitempty" desc:"設定を読めなければ出さない"`
+	Timezone      string            `json:"timezone,omitempty" desc:"通知に出す時刻のタイムゾーン (設定に無ければ UTC)。設定を読めなければ出さない"`
+	Rows          []configCheckRow  `json:"rows" desc:"検査の結果の行 (text の出力の行と同じ内容)"`
+}
+
+type configCheckLLM struct {
+	Provider string `json:"provider" desc:"llm.provider (bedrock / claude-cli / openai-api / none)。開いた語彙 (版を上げずに値が足される)"`
+}
+
+type configCheckSlack struct {
+	Method string `json:"method" jsonschema:"enum=bot|webhook" desc:"Slack への送り方。webhook = Incoming Webhook (slack.webhook_env)、bot = bot トークン (slack.bot_token_env と slack.channel)。閉じた語彙 (知らない値を見たら止める)"`
+	Format string `json:"format" desc:"slack.format (blocks / text)。開いた語彙"`
+}
+
+type configCheckRow struct {
+	Status  string `json:"status" jsonschema:"enum=ok|warn|ng|skip" desc:"ng が 1 つでもあれば終了コード 2"`
+	Item    string `json:"item" desc:"検査した項目 (config = 設定ファイルの形、context = llm.context_file)。開いた語彙"`
+	Code    string `json:"code,omitempty" desc:"ログと同じ固定語彙の code (あるときだけ)"`
+	Message string `json:"message" desc:"人向けの文。文言は固定しない (機械で読まない)"`
+}
+
 func newConfigCheckCmd(d *Deps, g *globalFlags) *subcmd.Command {
-	return &subcmd.Command{
+	var format string
+	cmd := &subcmd.Command{
 		Use:   "check",
 		Short: "設定の形をオフラインで検査する (Slack にも LLM にも繋がない。問題があれば終了コード 2)",
 		Long: `設定 (-c、省略時は ARATAM_CONFIG か ./aratam.yaml) の形を検査する: 未知のキー、型、必須項目、値の選択肢
@@ -222,9 +265,15 @@ func newConfigCheckCmd(d *Deps, g *globalFlags) *subcmd.Command {
   - Slack への送り方 (webhook か bot) は 1 つだけ。bot なら slack.channel / urgent_channel がチャンネル ID の形かを見る
   - llm.context_file は、書いてあれば読めるかを見る (読めない・16 KiB を超えるなら warn。notify は前提なしで続ける)
 
-行ごとに ok / warn / ng / skip を出す。ng が 1 つでもあれば終了コード 2 (warn だけなら 0)。`,
+行ごとに ok / warn / ng / skip を出す。ng が 1 つでもあれば終了コード 2 (warn だけなら 0)。
+
+機械で読むときは --format json (スキーマは aratam schema aratam-config-check)。Slack への送り方は .slack.method (bot / webhook)。
+設定を読めなければ .slack は無い。text の出力は人向けで、文言と並びは版をまたいで変わるので、機械で読まない。`,
 		Args: subcmd.NoArgs,
 		Run: func(context.Context, []string) error {
+			if format != "text" && format != "json" {
+				return configErr(d, fmt.Errorf("unknown format %q (text|json)", format))
+			}
 			path, err := configPath(d, g)
 			if err != nil {
 				return err
@@ -239,19 +288,65 @@ func newConfigCheckCmd(d *Deps, g *globalFlags) *subcmd.Command {
 					abs = rel
 				}
 			}
-			row := func(status, where, msg string) {
-				fmt.Fprintf(d.Stdout, "%-4s  %s: %s\n", status, where, strings.ReplaceAll(msg, "\n", "\n      "))
+			out := configCheckOutput{Schema: configCheckSchema, SchemaVersion: configCheckSchemaVersion, Config: abs, Rows: []configCheckRow{}}
+			cfg, loadErr := notify.LoadConfig(path)
+			if loadErr != nil {
+				out.Rows = append(out.Rows, configCheckRow{Status: "ng", Item: "config", Message: loadErr.Error()})
+			} else {
+				out.OK = true
+				out.Name = cfg.Name
+				out.LLM = &configCheckLLM{Provider: cfg.LLM.Provider}
+				out.Slack = &configCheckSlack{Method: cfg.Slack.Method(), Format: cfg.Slack.Format}
+				out.Timezone = cfg.Rules(false).Zone.Name()
+				out.Rows = append(out.Rows, configCheckRow{Status: "ok", Item: "config",
+					Message: fmt.Sprintf("name %s, provider %s, format %s, slack %s, timezone %s", out.Name, out.LLM.Provider, out.Slack.Format, out.Slack.Method, out.Timezone)})
+				if r, ok := contextRow(cfg); ok {
+					out.Rows = append(out.Rows, configCheckRow{Status: r.status, Item: r.item, Code: r.code, Message: r.detail})
+				}
 			}
-			cfg, err := notify.LoadConfig(path)
-			if err != nil {
-				row("ng", abs, err.Error())
-				return configErr(d, err)
+			if format == "json" {
+				enc := json.NewEncoder(d.Stdout)
+				enc.SetEscapeHTML(false)
+				enc.SetIndent("", "  ")
+				if err := enc.Encode(out); err != nil {
+					return err
+				}
+			} else {
+				for _, r := range out.Rows {
+					// 人向けの行の頭は、設定の行ならファイル、context の行なら設定の項目名
+					where := abs
+					if r.Item == "context" {
+						where = "llm.context_file"
+					}
+					fmt.Fprintf(d.Stdout, "%-4s  %s: %s\n", r.Status, where, strings.ReplaceAll(r.Message, "\n", "\n      "))
+				}
 			}
-			row("ok", abs, fmt.Sprintf("name %s, provider %s, format %s, slack %s, timezone %s", cfg.Name, cfg.LLM.Provider, cfg.Slack.Format, cfg.Slack.Method(), cfg.Rules(false).Zone.Name()))
-			if r, ok := contextRow(cfg); ok {
-				row(r.status, "llm.context_file", r.detail)
+			if loadErr != nil {
+				return configErr(d, loadErr)
 			}
 			return nil
+		},
+	}
+	cmd.StringVar(&format, "format", "text", "出力形式 (text|json)。json は機械が読む形 (aratam schema aratam-config-check)")
+	return cmd
+}
+
+// newSchemaCmd は `aratam schema [名前]`。機械が読む出力の JSON Schema を出す (ADR 0054)。arata schema と同じものを出す。
+func newSchemaCmd(d *Deps) *subcmd.Command {
+	return &subcmd.Command{
+		Use:   "schema [名前]",
+		Short: "機械が読む出力 (--format json、report.json) の JSON Schema を出す (引数なしで名前の一覧)",
+		Long:  schemas.Long,
+		Args:  subcmd.MaximumNArgs(1),
+		Run: func(_ context.Context, args []string) error {
+			name := ""
+			if len(args) == 1 {
+				name = args[0]
+			}
+			if _, ok := schemas.Lookup(name); name != "" && !ok {
+				return configErr(d, fmt.Errorf("no schema named %q (%s)", name, strings.Join(schemas.Names(), ", ")))
+			}
+			return schemas.Write(d.Stdout, name)
 		},
 	}
 }

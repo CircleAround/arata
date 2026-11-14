@@ -277,6 +277,39 @@ func TestRunInputProblems(t *testing.T) {
 	}
 }
 
+// report.json の schema_version が、この aratam の知る版より大きければ、中身を読まずに「読めない入力」として緊急用に送る (ADR 0054)。
+// 版を上げるのは項目を消す・意味を変えるときなので、古い aratam が新しい形を読み違えて通知するのを防ぐ。
+// 項目が無い (この項目を足す前の arata の出力)・今の版は読む。
+func TestRunRejectsNewerSchemaVersion(t *testing.T) {
+	at := `"generated_at":"2026-10-21T09:00:00Z"`
+	newer := map[string]string{
+		"run":    `{"schema":"report","schema_version":2,` + at + `}`,
+		"period": `{"schema":"report-period","schema_version":2,"kind":"period",` + at + `}`,
+	}
+	for name, body := range newer {
+		t.Run(name, func(t *testing.T) {
+			s := &fakeSender{}
+			res, logs := run(t, inputDir(t, []byte(body), ""), s)
+			if res != (Result{Exit: ExitInput, Route: RouteUrgent, Sent: true}) || len(s.got) != 1 {
+				t.Fatalf("%+v %+v", res, s.got)
+			}
+			if text := s.got[0].text; !strings.Contains(text, "`"+CodeInputInvalid+"`") || !strings.Contains(text, "schema_version 2") ||
+				!strings.Contains(text, "aratam を arata と同じ版に上げ") || !strings.Contains(logs.String(), CodeInputInvalid) {
+				t.Fatalf("text:\n%s\nlogs: %s", text, logs)
+			}
+		})
+	}
+	for name, version := range map[string]string{"今の版": `"schema_version": 1`, "項目が無い": `"x_unused": 1`, "版が 0": `"schema_version": 0`} {
+		t.Run(name, func(t *testing.T) {
+			body := strings.Replace(string(golden(t, "report.json")), `"schema_version": 1`, version, 1)
+			in, err := ReadInput(inputDir(t, []byte(body), ""), now, 26*time.Hour)
+			if err != nil || in.Run == nil {
+				t.Fatalf("%v", err)
+			}
+		})
+	}
+}
+
 func TestRunSendFailure(t *testing.T) {
 	s := &fakeSender{err: errors.New("slack: webhook returned 500: oops")}
 	dir := inputDir(t, golden(t, "report.json"), "")

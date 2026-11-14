@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:arata:schema:aratam-config-check:1",
+  "title": "aratam-config-check",
+  "description": "aratam config check --format json の出力。設定の形の検査の結果と、設定から決まる値 (Slack への送り方など)。Slack にも LLM にも繋がずに出す",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "aratam-config-check"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "ok": {
+      "description": "ng の行が無い (終了コード 0)。warn だけなら true",
+      "type": "boolean"
+    },
+    "config": {
+      "description": "検査した設定ファイル (カレントディレクトリの下なら相対パス)",
+      "type": "string"
+    },
+    "name": {
+      "description": "設定の name (監査対象の名前)。設定を読めなければ出さない",
+      "type": "string"
+    },
+    "llm": {
+      "description": "設定を読めなければ出さない",
+      "$ref": "#/$defs/configCheckLLM"
+    },
+    "slack": {
+      "description": "設定を読めなければ出さない",
+      "$ref": "#/$defs/configCheckSlack"
+    },
+    "timezone": {
+      "description": "通知に出す時刻のタイムゾーン (設定に無ければ UTC)。設定を読めなければ出さない",
+      "type": "string"
+    },
+    "rows": {
+      "description": "検査の結果の行 (text の出力の行と同じ内容)",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/configCheckRow"
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "schema_version",
+    "ok",
+    "config",
+    "rows"
+  ],
+  "$defs": {
+    "configCheckLLM": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "description": "llm.provider (bedrock / claude-cli / openai-api / none)。開いた語彙 (版を上げずに値が足される)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider"
+      ]
+    },
+    "configCheckRow": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "description": "ng が 1 つでもあれば終了コード 2",
+          "type": "string",
+          "enum": [
+            "ok",
+            "warn",
+            "ng",
+            "skip"
+          ]
+        },
+        "item": {
+          "description": "検査した項目 (config = 設定ファイルの形、context = llm.context_file)。開いた語彙",
+          "type": "string"
+        },
+        "code": {
+          "description": "ログと同じ固定語彙の code (あるときだけ)",
+          "type": "string"
+        },
+        "message": {
+          "description": "人向けの文。文言は固定しない (機械で読まない)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "item",
+        "message"
+      ]
+    },
+    "configCheckSlack": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "description": "Slack への送り方。webhook = Incoming Webhook (slack.webhook_env)、bot = bot トークン (slack.bot_token_env と slack.channel)。閉じた語彙 (知らない値を見たら止める)",
+          "type": "string",
+          "enum": [
+            "bot",
+            "webhook"
+          ]
+        },
+        "format": {
+          "description": "slack.format (blocks / text)。開いた語彙",
+          "type": "string"
+        }
+      },
+      "required": [
+        "method",
+        "format"
+      ]
+    }
+  }
+}

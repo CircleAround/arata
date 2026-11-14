@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/CircleAround/arata/internal/collect/cloudtrail/cloudtrailtest"
+	"github.com/CircleAround/arata/internal/jsonschema/schematest"
+	"github.com/CircleAround/arata/internal/report/schema"
 )
 
 // TestPeriodReport は run を重ねたストアから、収集せずに月次レポートを作る。
@@ -61,6 +63,7 @@ func TestPeriodReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	schematest.Conforms(t, schema.PeriodReportSchema, b, &schema.PeriodReport{})
 	var period struct {
 		Kind    string
 		Summary struct{ New, Resolved int }

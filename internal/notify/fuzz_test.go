@@ -489,6 +489,10 @@ func FuzzRunWithReport(f *testing.F) {
 	f.Add([]byte(`{"generated_at":"2026-10-21T09:00:00Z","name":"` + long + `","profile":"` + long + `","summary":{"new":1,"max_severity":"` + long + `"},"proposals":[{"kind":"unused_rule"}],"coverage":{"sources_failed":[{"source":"` + long + `"}]}}`))
 	f.Add([]byte(`{"kind":"period","generated_at":"2026-10-21T09:00:00Z","name":"` + long + `","period":{"from":"` + long + `"}}`))
 	f.Add([]byte(`null`))
+	// 知らない版 (ADR 0054)。中身がどうであっても、読まずに「読めない入力」として扱う
+	f.Add([]byte(`{"schema":"report","schema_version":2,"generated_at":"2026-10-21T09:00:00Z","summary":{"new":1,"max_severity":"critical"}}`))
+	f.Add([]byte(`{"schema":"report-period","schema_version":99,"kind":"period","generated_at":"2026-10-21T09:00:00Z"}`))
+	f.Add([]byte(`{"schema_version":1e3,"generated_at":"2026-10-21T09:00:00Z"}`))
 
 	dir, err := os.MkdirTemp("", "aratam-fuzz-*")
 	if err != nil {
@@ -500,6 +504,11 @@ func FuzzRunWithReport(f *testing.F) {
 			t.Fatal(err)
 		}
 		os.Remove(filepath.Join(dir, ReportMD))
+		// schema_version が知る版 (1) より大きい報告は、中身を通知に使わない (入力の問題として終了コード 4)
+		var head struct {
+			SchemaVersion int `json:"schema_version"`
+		}
+		newer := json.Unmarshal(reportJSON, &head) == nil && head.SchemaVersion > 1
 		// timezone を設定した経路 (時刻を直す) でも同じ性質を守る。夏時間があり略称が変わるゾーンで確かめる
 		zoned := fuzzRules
 		zoned.Zone = mustZone(t, "America/New_York")
@@ -512,6 +521,9 @@ func FuzzRunWithReport(f *testing.F) {
 			res := Run(context.Background(), Options{Dir: dir, Now: now, Rules: c.rules, Sender: s, Format: format, Force: true, DryRun: true})
 			if res.Sent != (len(s.got) > 0) {
 				t.Errorf("%s: Sent=%v なのに %d 通", format, res.Sent, len(s.got))
+			}
+			if newer && res.Exit != ExitInput {
+				t.Errorf("%s: schema_version %d の報告を読んだ (終了コード %d)", format, head.SchemaVersion, res.Exit)
 			}
 			for i, m := range s.got {
 				name := fmt.Sprintf("%s %s[%d]", c.rules.Zone.Name(), format, i)

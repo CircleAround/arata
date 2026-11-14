@@ -10,6 +10,7 @@ import (
 
 	"github.com/CircleAround/arata/docs/ai"
 	"github.com/CircleAround/arata/internal/subcmd"
+	"github.com/CircleAround/arata/schemas"
 )
 
 // rootLong はルートのヘルプ。「とりあえず叩けば何をすればよいか分かる」ように、人向けの手順と AI 向けの入口を最初に出す。
@@ -26,6 +27,9 @@ const rootLong = `arata は AWS のログと設定を定期的に改め、前回
 設定ファイルは -c で指定する。省略時は環境変数 ARATA_CONFIG、無ければカレントディレクトリの ./arata.yaml を読む。
 実行されるのは設定の profiles に書いたチェックだけ (暗黙の既定は無い)。効いている中身は arata profiles、
 新しい版との差分は arata config init --diff で確かめる。設定と allowlist.yaml の形だけなら arata config check (AWS に繋がない)。
+
+出力を機械 (スクリプト・CI) で読むときは --format json と report.json を読む。読んでよい項目は arata schema (JSON Schema) にある。
+表や文 (table / text / md、ログの msg) は人向けで、版をまたいで変わるので機械で読まない。
 
 AI (LLM) から使う場合は ` + "`arata help ai`" + ` を最初に読んでください (report の読み方は ` + "`arata help ai report`" + `、承認判断は ` + "`arata help ai approve`" + `、
 チェックごとの対処手順は ` + "`arata help ai playbook <check>`" + `、GitHub Actions で動かす環境を作る・見直すときは ` + "`arata help ai runtime`" + `、導入の流れは ` + "`arata help ai onboarding`" + `、
@@ -66,18 +70,50 @@ func writeAIDoc(w io.Writer, sub, format string) error {
 	return fmt.Errorf("unknown format %q (md|json)", format)
 }
 
+// newSchemaCmd は `arata schema [名前]`。機械が読む出力の JSON Schema を出す (ADR 0054)。`arata help schema [名前]` も同じものを出す。
+// aratam schema と同じファイルを出す (どちらのコマンドも全部のスキーマを持つ)。
+func newSchemaCmd(d *Deps) *subcmd.Command {
+	return &subcmd.Command{
+		Use:   "schema [名前]",
+		Short: "機械が読む出力 (--format json、report.json) の JSON Schema を出す (引数なしで名前の一覧)",
+		Long:  schemas.Long,
+		Args:  subcmd.MaximumNArgs(1),
+		Run: func(_ context.Context, args []string) error {
+			return writeSchema(d, args)
+		},
+	}
+}
+
+func writeSchema(d *Deps, args []string) error {
+	name := ""
+	switch len(args) {
+	case 0:
+	case 1:
+		name = args[0]
+	default:
+		return configErr(d, errors.New("usage: arata schema [名前]"))
+	}
+	if _, ok := schemas.Lookup(name); name != "" && !ok {
+		return configErr(d, fmt.Errorf("no schema named %q (%s)", name, strings.Join(schemas.Names(), ", ")))
+	}
+	return schemas.Write(d.Stdout, name)
+}
+
 // newHelpCmd は `arata help [command]`。`arata help ai [topic]` は ai コマンドと同じものを出す。それ以外はそのコマンドのヘルプ (見つからなければルート)。
 func newHelpCmd(d *Deps, root *subcmd.Command) *subcmd.Command {
 	var format string
 	cmd := &subcmd.Command{
 		Use:   "help [command]",
-		Short: "コマンドのヘルプ (arata help ai で AI 向けの使い方)",
+		Short: "コマンドのヘルプ (arata help ai で AI 向けの使い方、arata help schema で出力の JSON Schema)",
 		Run: func(ctx context.Context, args []string) error {
 			if len(args) > 0 && args[0] == "ai" {
 				if len(args) > 3 {
 					return errors.New("usage: arata help ai [report|approve|runtime|onboarding|logs|request_lines|playbook [check]]")
 				}
 				return writeAIDoc(d.Stdout, strings.Join(args[1:], " "), format)
+			}
+			if len(args) > 0 && args[0] == "schema" {
+				return writeSchema(d, args[1:])
 			}
 			target := root.FindPath(args)
 			if target == nil {

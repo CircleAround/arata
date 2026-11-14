@@ -106,6 +106,7 @@ func NewRootCmd(d *Deps) *subcmd.Command {
 	root.AddCommand(newConfigCmd(d, g), newProfilesCmd(d, g), newInitCmd(d, g), newDoctorCmd(d, g), newRunCmd(d, g), newCollectCmd(d, g), newEvaluateCmd(d, g), newReportCmd(d, g), newRebuildCmd(d, g))
 	root.AddCommand(reviewCommands(d, g)...)
 	root.AddCommand(newAICmd(d))
+	root.AddCommand(newSchemaCmd(d))
 	root.AddCommand(newHelpCmd(d, root))
 	return root
 }

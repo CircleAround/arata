@@ -70,6 +70,8 @@ const (
 // 決定:
 //   - report.json が JSON として読めない・generated_at が無いか RFC 3339 でない場合も「失敗した」とみなす (INPUT_INVALID)。
 //   - 未知のフィールドは無視する (arata が足したフィールドで aratam が止まらないように)。
+//   - schema_version がこの aratam の知る版より大きければ、中身を読まずに INPUT_INVALID (ADR 0054)。版が上がるのは項目を消す・
+//     意味を変えるときなので、古い aratam が新しい形を読み違えたまま通知しない。項目が無い報告 (足す前の arata の出力) は版 1 として読む。
 //   - report.md が無ければ report.json から arata と同じ関数で作る (同じリポジトリの schema パッケージ)。
 func ReadInput(dir string, now time.Time, maxAge time.Duration) (*Input, error) {
 	path := filepath.Join(dir, ReportJSON)
@@ -85,11 +87,20 @@ func ReadInput(dir string, now time.Time, maxAge time.Duration) (*Input, error) 
 	}
 	in := &Input{Dir: dir, JSON: b}
 	var head struct {
-		Kind        string `json:"kind"`
-		GeneratedAt string `json:"generated_at"`
+		Kind          string `json:"kind"`
+		GeneratedAt   string `json:"generated_at"`
+		SchemaVersion int    `json:"schema_version"`
 	}
 	if err := json.Unmarshal(b, &head); err != nil {
 		return nil, &InputError{Code: CodeInputInvalid, Reason: fmt.Sprintf("%s を解釈できません (%v)", path, err)}
+	}
+	known := schema.ReportSchemaVersion
+	if head.Kind == "period" {
+		known = schema.PeriodReportSchemaVersion
+	}
+	if head.SchemaVersion > known {
+		return nil, &InputError{Code: CodeInputInvalid, Reason: fmt.Sprintf("%s の schema_version %d は、この aratam が読める版 (%d) より新しい。aratam を arata と同じ版に上げてください",
+			path, head.SchemaVersion, known)}
 	}
 	switch head.Kind {
 	case "period":

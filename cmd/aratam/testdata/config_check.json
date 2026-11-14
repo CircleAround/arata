@@ -1,0 +1,27 @@
+{
+  "schema": "aratam-config-check",
+  "schema_version": 1,
+  "ok": true,
+  "config": "<dir>/aratam.yaml",
+  "name": "acme",
+  "llm": {
+    "provider": "claude-cli"
+  },
+  "slack": {
+    "method": "webhook",
+    "format": "text"
+  },
+  "timezone": "Asia/Tokyo",
+  "rows": [
+    {
+      "status": "ok",
+      "item": "config",
+      "message": "name acme, provider claude-cli, format text, slack webhook, timezone Asia/Tokyo"
+    },
+    {
+      "status": "ok",
+      "item": "context",
+      "message": "<dir>/context.md (43 バイト)"
+    }
+  ]
+}

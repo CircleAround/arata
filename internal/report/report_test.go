@@ -10,6 +10,7 @@ import (
 
 	"github.com/CircleAround/arata/internal/checks"
 	"github.com/CircleAround/arata/internal/collect"
+	"github.com/CircleAround/arata/internal/jsonschema/schematest"
 	"github.com/CircleAround/arata/internal/record"
 	"github.com/CircleAround/arata/internal/report/schema"
 	"github.com/CircleAround/arata/internal/store"
@@ -80,6 +81,8 @@ func TestBuild(t *testing.T) {
 	}
 	empty := Build(Input{Profile: "daily", Now: time.Now()})
 	b, _ := empty.JSON()
+	// 空の報告も、配列を null にせず、スキーマに合う (ADR 0054)
+	schematest.Conforms(t, schema.ReportSchema, b, &schema.Report{})
 	for _, want := range []string{`"collect_errors": []`, `"sources_ok": []`, `"checks_skipped": []`, `"formats": []`, `"new": []`, `"recurred": []`, `"max_severity": ""`} {
 		if !strings.Contains(string(b), want) {
 			t.Fatalf("empty report must still have %s:\n%s", want, b)
@@ -94,6 +97,7 @@ func TestGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	compareGolden(t, "report.json", j)
+	schematest.Conforms(t, schema.ReportSchema, j, &schema.Report{})
 	compareGolden(t, "report.md", []byte(r.Markdown()))
 }
 
