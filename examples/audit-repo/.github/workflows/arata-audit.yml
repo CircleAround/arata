@@ -103,8 +103,9 @@ jobs:
 
       # 秘密が「仮の値」のままなら、ここで秘密の名前を出して止める (ADR 0059)。仮の値は、github/secrets の Terraform が
       # 秘密の箱を作るときに入れる決まった文字列。形が合わずに偶然止まることに頼らない。
-      # ARATA_ALERT_WEBHOOK は、定時の通知が送れなかったときにしか使わないので、ここで確かめないと仮の値のまま気づけない。
-      # Slack の秘密は、送り方を判別した後の notify で、使うものだけを確かめる。渡すのは比べるためだけで、値は出さない。
+      # 止めるのは、必ず使う 2 つ (実行用ロールと監査ロール) だけ。ARATA_ALERT_WEBHOOK (定時の通知が送れなかったときの別の経路) は、
+      # 使うかどうかを利用者が選ぶので、仮の値のままなら警告だけを出す (ふだん使われないので、ここで出さないと気づけない)。
+      # Slack の秘密は notify で確かめる (aratam.yaml が使うものだけが渡る)。渡すのは比べるためだけで、値は出さない。
       - id: secrets
         name: 秘密に仮の値が残っていないことを確かめる
         timeout-minutes: 2
@@ -112,7 +113,9 @@ jobs:
           ARATA_RUNNER_ROLE_ARN: ${{ secrets.ARATA_RUNNER_ROLE_ARN }}
           ARATA_AUDIT_ROLE_ARNS: ${{ secrets.ARATA_AUDIT_ROLE_ARNS }}
           ARATA_ALERT_WEBHOOK: ${{ secrets.ARATA_ALERT_WEBHOOK }}
-        run: .github/scripts/arata-secret-check.sh ARATA_RUNNER_ROLE_ARN ARATA_AUDIT_ROLE_ARNS ARATA_ALERT_WEBHOOK
+        run: |
+          .github/scripts/arata-secret-check.sh ARATA_RUNNER_ROLE_ARN ARATA_AUDIT_ROLE_ARNS
+          .github/scripts/arata-secret-check.sh --warn ARATA_ALERT_WEBHOOK
 
       # 実行用ロール。権限は監査ロールの引き受けとストアのバケットの読み書きだけにする。
       # ロールの ARN はアカウント ID を含むので secrets に置く (secrets はログで自動的に隠される)。
@@ -230,8 +233,10 @@ jobs:
         timeout-minutes: 2
         run: |
           method="$(.github/scripts/arata-slack-method.sh "$ARATA_CONFIG_DIR/aratam.yaml")"
-          echo "slack method=$method"
+          urgent="$(.github/scripts/arata-slack-method.sh --urgent-webhook "$ARATA_CONFIG_DIR/aratam.yaml")"
+          echo "slack method=$method urgent_webhook=$urgent"
           echo "method=$method" >>"$GITHUB_OUTPUT"
+          echo "urgent_webhook=$urgent" >>"$GITHUB_OUTPUT"
 
       - id: notify
         name: aratam notify
@@ -239,14 +244,16 @@ jobs:
         if: always() && steps.install.outcome == 'success' && !inputs.dry_run
         timeout-minutes: 5
         env:
-          # 判別した送り方の secret だけを渡す (使わないほうは空)。Webhook の方式なら上の 2 つ、bot トークンの方式なら下の 1 つ
+          # aratam.yaml が使う secret だけを渡す (使わないものは空)。Webhook の方式なら上の 2 つ、bot トークンの方式なら下の 1 つ
           # (説明書の「bot トークンで送る」。チャンネル ID は aratam.yaml に書く。秘密ではない)。
+          # 緊急用の Webhook は、aratam.yaml が別に持つとき (slack.urgent_webhook_env が空でない) だけ渡す。
+          # 使わない秘密の箱は、仮の値のままでも、消してあってもよい (渡らないので、下の検査にも掛からない)。
           # 判別に失敗していれば 3 つとも空で、aratam は CONFIG_INVALID (終了コード 2) で止まる。そのことは最後の alert が知らせる。
           ARATAM_SLACK_WEBHOOK: ${{ steps.slack-method.outputs.method == 'webhook' && secrets.ARATAM_SLACK_WEBHOOK || '' }}
-          ARATAM_SLACK_URGENT_WEBHOOK: ${{ steps.slack-method.outputs.method == 'webhook' && secrets.ARATAM_SLACK_URGENT_WEBHOOK || '' }}
+          ARATAM_SLACK_URGENT_WEBHOOK: ${{ steps.slack-method.outputs.method == 'webhook' && steps.slack-method.outputs.urgent_webhook == 'true' && secrets.ARATAM_SLACK_URGENT_WEBHOOK || '' }}
           ARATAM_SLACK_BOT_TOKEN: ${{ steps.slack-method.outputs.method == 'bot' && secrets.ARATAM_SLACK_BOT_TOKEN || '' }}
         run: |
-          # 使う送り方の秘密が仮の値のままなら、名前を出して止める (終了コード 1。Slack には何も届かないので、最後の alert が知らせる)
+          # 渡された秘密 (= aratam.yaml が使うもの) が仮の値のままなら、名前を出して止める (終了コード 1。Slack には何も届かないので、最後の alert が知らせる)
           .github/scripts/arata-secret-check.sh ARATAM_SLACK_WEBHOOK ARATAM_SLACK_URGENT_WEBHOOK ARATAM_SLACK_BOT_TOKEN
           log="$RUNNER_TEMP/aratam.log"
           status=0
@@ -292,8 +299,9 @@ jobs:
           # id は英小文字・数字・ハイフンのものだけを拾う (このファイルの id の形)。outcome のほかの値・outputs は読まない
           failed="$(jq -r '[to_entries[] | select(.value.outcome == "failure") | .key | select(test("^[a-z0-9-]{1,40}$"))] | join(", ")' <<<"$STEPS" 2>/dev/null)" || failed=""
           echo "failed steps: ${failed:-unknown}"
-          if [ -z "${ALERT_WEBHOOK:-}" ]; then
-            echo "::error::ARATA_ALERT_WEBHOOK が無いので、通知が送れなかったことを知らせられない"
+          # 無い・仮の値のまま (使わない利用者の箱) なら、送らずに終わる。ジョブは、元の失敗で赤のまま
+          if [ -z "${ALERT_WEBHOOK:-}" ] || ! .github/scripts/arata-secret-check.sh ALERT_WEBHOOK 2>/dev/null; then
+            echo "::error::ARATA_ALERT_WEBHOOK が無い (か、仮の値のまま) ので、通知が送れなかったことを知らせられない"
             exit 1
           fi
           text="arata の定時の通知を送れていません。対象: $ARATA_TARGET / プロファイル: $PROFILE / 失敗した段階: ${failed:-不明} / $RUN_URL"

@@ -24,7 +24,7 @@ const (
 	StatusSame    = "same"    // 生成物が、この版の一式と同じ
 	StatusDiffers = "differs" // 生成物が、この版の一式と違う
 	StatusMissing = "missing" // 一式にあるファイルが無い
-	StatusExtra   = "extra"   // この版の一式に無い、arata- で始まるファイルがある (.github/workflows と .github/scripts の中)
+	StatusExtra   = "extra"   // この版の一式に無いファイルがある (.github/workflows・.github/scripts の arata- で始まるファイル、github・github/secrets の .tf)
 	StatusPresent = "present" // 利用者が育てるファイルがある (中身は比べない。arata config init --diff の役目)
 )
 
@@ -33,14 +33,14 @@ type DiffOutput struct {
 	Schema        string     `json:"schema" jsonschema:"const=repo-diff"`
 	SchemaVersion int        `json:"schema_version" jsonschema:"const=1"`
 	OK            bool       `json:"ok" desc:"differs・missing・extra が 1 つも無い (終了コード 0)。1 つでもあれば false (終了コード 1)"`
-	Files         []DiffFile `json:"files" desc:"一式のファイルと、この版の一式に無い arata- のファイル。path の順"`
+	Files         []DiffFile `json:"files" desc:"一式のファイルと、この版の一式に無いファイル (status が extra)。path の順"`
 }
 
 // DiffFile は 1 つのファイルの比べた結果。
 type DiffFile struct {
 	Path   string `json:"path" desc:"リポジトリの根からの相対パス (区切りは /)"`
 	Kind   string `json:"kind" jsonschema:"enum=generated|seed" desc:"generated = 生成物 (手で直さない。--force で書き直す)、seed = 利用者が育てるファイル (aws/ の下。書き直さない)"`
-	Status string `json:"status" jsonschema:"enum=same|differs|missing|extra|present" desc:"same = この版の一式と同じ、differs = 違う、missing = 無い、extra = この版の一式に無い arata- のファイル、present = 利用者が育てるファイルがある (中身は比べない)"`
+	Status string `json:"status" jsonschema:"enum=same|differs|missing|extra|present" desc:"same = この版の一式と同じ、differs = 違う、missing = 無い、extra = この版の一式に無いファイル (ワークフローとスクリプトの置き場所の arata- で始まるもの、Terraform の宣言の置き場所の .tf)、present = 利用者が育てるファイルがある (中身は比べない)"`
 
 	lines []string // text の出力に添える行の差分 (differs のときだけ。機械向けには出さない)
 }
@@ -74,7 +74,7 @@ func Diff(dir string, files []File) (DiffOutput, error) {
 		out.Files = append(out.Files, d)
 	}
 	for _, md := range managedDirs {
-		ents, err := os.ReadDir(filepath.Join(dir, filepath.FromSlash(md)))
+		ents, err := os.ReadDir(filepath.Join(dir, filepath.FromSlash(md.dir)))
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
@@ -82,8 +82,8 @@ func Diff(dir string, files []File) (DiffOutput, error) {
 			return DiffOutput{}, err
 		}
 		for _, e := range ents {
-			p := md + "/" + e.Name()
-			if strings.HasPrefix(e.Name(), managedPrefix) && !known[p] {
+			p := md.dir + "/" + e.Name()
+			if !e.IsDir() && md.match(e.Name()) && !known[p] {
 				out.Files = append(out.Files, DiffFile{Path: p, Kind: string(Generated), Status: StatusExtra})
 			}
 		}
@@ -103,7 +103,7 @@ func WriteDiff(w io.Writer, out DiffOutput) error {
 	label := map[string]string{
 		StatusDiffers: "違う (この版の一式と中身が違う。--force で書き直す)",
 		StatusMissing: "無い (arata repo init で作る)",
-		StatusExtra:   "この版の一式に無い (要らなければ消す)",
+		StatusExtra:   "この版の一式に無い (古い版の残りや、手で作った Terraform の宣言。要らなければ消す。github/ の .tf は、残すと一緒に当たる)",
 	}
 	same, present := 0, 0
 	for _, f := range out.Files {

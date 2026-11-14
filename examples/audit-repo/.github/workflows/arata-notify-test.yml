@@ -94,8 +94,10 @@ jobs:
         timeout-minutes: 2
         run: |
           method="$(.github/scripts/arata-slack-method.sh "$ARATA_CONFIG_DIR/aratam.yaml")"
-          echo "slack method=$method"
+          urgent="$(.github/scripts/arata-slack-method.sh --urgent-webhook "$ARATA_CONFIG_DIR/aratam.yaml")"
+          echo "slack method=$method urgent_webhook=$urgent"
           echo "method=$method" >>"$GITHUB_OUTPUT"
+          echo "urgent_webhook=$urgent" >>"$GITHUB_OUTPUT"
 
       # secrets の渡し方は監査の notify と同じにする (同じ secrets と同じ aratam.yaml で送って、初めて定時の通知の確認になる)。
       # ログの方針も監査と同じ: 出力は実行環境の一時ファイルに書き、Actions には INFO 以外の level / code / source だけを出す。
@@ -108,12 +110,13 @@ jobs:
         name: aratam test-notify
         timeout-minutes: 3
         env:
-          # 判別した送り方の secret だけを渡す (使わないほうは空)。Webhook の方式なら上の 2 つ、bot トークンの方式なら下の 1 つ
+          # aratam.yaml が使う secret だけを渡す (使わないものは空)。Webhook の方式なら上の 2 つ (緊急用は、aratam.yaml が別に持つときだけ)、
+          # bot トークンの方式なら下の 1 つ。使わない秘密の箱は、仮の値のままでも、消してあってもよい
           ARATAM_SLACK_WEBHOOK: ${{ steps.slack-method.outputs.method == 'webhook' && secrets.ARATAM_SLACK_WEBHOOK || '' }}
-          ARATAM_SLACK_URGENT_WEBHOOK: ${{ steps.slack-method.outputs.method == 'webhook' && secrets.ARATAM_SLACK_URGENT_WEBHOOK || '' }}
+          ARATAM_SLACK_URGENT_WEBHOOK: ${{ steps.slack-method.outputs.method == 'webhook' && steps.slack-method.outputs.urgent_webhook == 'true' && secrets.ARATAM_SLACK_URGENT_WEBHOOK || '' }}
           ARATAM_SLACK_BOT_TOKEN: ${{ steps.slack-method.outputs.method == 'bot' && secrets.ARATAM_SLACK_BOT_TOKEN || '' }}
         run: |
-          # 使う送り方の秘密が仮の値のままなら、名前を出して止める (監査の notify と同じ)
+          # 渡された秘密 (= aratam.yaml が使うもの) が仮の値のままなら、名前を出して止める (監査の notify と同じ)
           .github/scripts/arata-secret-check.sh ARATAM_SLACK_WEBHOOK ARATAM_SLACK_URGENT_WEBHOOK ARATAM_SLACK_BOT_TOKEN
           log="$RUNNER_TEMP/aratam.log"
           args=(test-notify -c "$ARATA_CONFIG_DIR/aratam.yaml")

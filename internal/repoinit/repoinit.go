@@ -156,10 +156,19 @@ var generated = []struct {
 	{"gitignore", ".gitignore", 0o644},
 }
 
-// managedDirs は、名前が arata- で始まるファイルをこのコマンドのものとみなすディレクトリ (--diff が「この版の一式に無い」を出す)。
-var managedDirs = []string{".github/workflows", ".github/scripts"}
-
-const managedPrefix = "arata-"
+// managedDirs は、一式に無いファイルを --diff が「この版の一式に無い」(extra) として出すディレクトリと、その対象の名前。
+//   - .github/workflows と .github/scripts: 名前が arata- で始まるファイル (古い版の一式の残り)
+//   - github と github/secrets: .tf のファイル (Terraform は同じ root の .tf を全部当てるので、手で作った宣言が残っていると、
+//     書き出した宣言と二重になる・緩い設定が当たる)
+var managedDirs = []struct {
+	dir   string
+	match func(name string) bool
+}{
+	{".github/workflows", func(n string) bool { return strings.HasPrefix(n, "arata-") }},
+	{".github/scripts", func(n string) bool { return strings.HasPrefix(n, "arata-") }},
+	{"github", func(n string) bool { return strings.HasSuffix(n, ".tf") }},
+	{"github/secrets", func(n string) bool { return strings.HasSuffix(n, ".tf") }},
+}
 
 // Command は、この一式を書き出すコマンド (README に載せる。--out は . にする)。
 func (p Params) Command() string {

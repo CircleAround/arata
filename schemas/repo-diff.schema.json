@@ -18,7 +18,7 @@
       "type": "boolean"
     },
     "files": {
-      "description": "一式のファイルと、この版の一式に無い arata- のファイル。path の順",
+      "description": "一式のファイルと、この版の一式に無いファイル (status が extra)。path の順",
       "type": "array",
       "items": {
         "$ref": "#/$defs/DiffFile"
@@ -48,7 +48,7 @@
           ]
         },
         "status": {
-          "description": "same = この版の一式と同じ、differs = 違う、missing = 無い、extra = この版の一式に無い arata- のファイル、present = 利用者が育てるファイルがある (中身は比べない)",
+          "description": "same = この版の一式と同じ、differs = 違う、missing = 無い、extra = この版の一式に無いファイル (ワークフローとスクリプトの置き場所の arata- で始まるもの、Terraform の宣言の置き場所の .tf)、present = 利用者が育てるファイルがある (中身は比べない)",
           "type": "string",
           "enum": [
             "same",

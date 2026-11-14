@@ -9,7 +9,8 @@
   },
   "slack": {
     "method": "webhook",
-    "format": "text"
+    "format": "text",
+    "urgent_webhook": true
   },
   "timezone": "Asia/Tokyo",
   "rows": [

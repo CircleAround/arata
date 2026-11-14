@@ -61,6 +61,7 @@ func TestSecretCheckScript(t *testing.T) {
 		// 仮の値を含むだけの値は、仮の値ではない
 		{"contains the placeholder", []string{"A_ONE=x" + ph}, []string{"A_ONE"}, 0, nil},
 		{"no arguments", nil, nil, 2, nil},
+		{"only --warn", nil, []string{"--warn"}, 2, nil},
 		{"odd name", []string{"A_ONE=" + real}, []string{"A_ONE;id"}, 2, nil},
 		{"lowercase name", nil, []string{"path"}, 2, nil},
 	}
@@ -92,7 +93,7 @@ func TestSecretCheckScript(t *testing.T) {
 // ARATA_ALERT_WEBHOOK は、定時の通知が送れなかったときにしか使わないので、ここで見ないと仮の値のまま気づけない。
 func TestWorkflowsStopOnPlaceholderSecretsBeforeAWS(t *testing.T) {
 	for file, names := range map[string][]string{
-		multiFile:  {"ARATA_RUNNER_ROLE_ARN", "ARATA_AUDIT_ROLE_ARNS", "ARATA_ALERT_WEBHOOK"},
+		multiFile:  {"ARATA_RUNNER_ROLE_ARN", "ARATA_AUDIT_ROLE_ARNS"},
 		triageFile: {"ARATA_RUNNER_ROLE_ARN"},
 	} {
 		t.Run(file, func(t *testing.T) {
@@ -101,7 +102,9 @@ func TestWorkflowsStopOnPlaceholderSecretsBeforeAWS(t *testing.T) {
 			if s.If != "" {
 				t.Errorf("the check must not be conditional: %q", s.If)
 			}
-			if len(s.Env) != len(names) {
+			// 監査は、使うかどうかを利用者が選ぶ ARATA_ALERT_WEBHOOK も受け取り、警告だけを出す (下の TestUnusedBoxesDoNotStopTheRun)
+			optional := map[string][]string{multiFile: {"ARATA_ALERT_WEBHOOK"}}[file]
+			if len(s.Env) != len(names)+len(optional) {
 				t.Errorf("env: %v", s.Env)
 			}
 			for _, n := range names {
@@ -109,7 +112,14 @@ func TestWorkflowsStopOnPlaceholderSecretsBeforeAWS(t *testing.T) {
 					t.Errorf("%s: %q", n, s.Env[n])
 				}
 			}
-			if strings.TrimSpace(s.Run) != secretScriptPath+" "+strings.Join(names, " ") {
+			wantRun := secretScriptPath + " " + strings.Join(names, " ")
+			for _, n := range optional {
+				if s.Env[n] != "${{ secrets."+n+" }}" {
+					t.Errorf("%s: %q", n, s.Env[n])
+				}
+				wantRun += "\n" + secretScriptPath + " --warn " + n
+			}
+			if strings.TrimSpace(s.Run) != wantRun {
 				t.Errorf("run: %q", s.Run)
 			}
 			// checkout (スクリプトがある) より後、実行用ロールの引き受けより前
@@ -133,6 +143,62 @@ func TestWorkflowsStopOnPlaceholderSecretsBeforeAWS(t *testing.T) {
 				t.Errorf("placeholder: exit %d\n%s", code, out)
 			}
 		})
+	}
+}
+
+// --warn は、仮の値が残っていても止めずに、警告だけを出す (使うかどうかを利用者が選ぶ秘密に使う)。
+func TestSecretCheckScriptWarns(t *testing.T) {
+	out, code := runSecretCheck(t, []string{"A_ONE=" + repoinit.Placeholder, "B_TWO=real"}, "--warn", "A_ONE", "B_TWO")
+	if code != 0 || !strings.Contains(out, "::warning::秘密 A_ONE が仮の値のまま") || strings.Contains(out, "::error::") || strings.Contains(out, "B_TWO") || strings.Contains(out, repoinit.Placeholder) {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if out, code := runSecretCheck(t, []string{"A_ONE=real"}, "--warn", "A_ONE"); code != 0 || out != "" {
+		t.Fatalf("exit %d %q", code, out)
+	}
+}
+
+// 使わない秘密の箱が仮の値のままでも、実行は止まらない (箱は 6 つ全部作られるが、使うのは構成で違う)。
+// 組: Webhook だけ・緊急用の Webhook なし・ARATA_ALERT_WEBHOOK なし。使わない 3 つの箱 (bot トークン・緊急用・alert) は仮の値のまま。
+func TestUnusedBoxesDoNotStopTheRun(t *testing.T) {
+	ph := repoinit.Placeholder
+	w, _ := load(t, multiFile)
+
+	// 1. 最初の検査: alert が仮の値のままでも止まらず、警告だけを出す
+	out, code, _ := runStep(t, stepByID(t, w, "secrets").Run, t.TempDir(),
+		"ARATA_RUNNER_ROLE_ARN=arn:aws:iam::123456789012:role/arata-runner", `ARATA_AUDIT_ROLE_ARNS={"prod":"arn:aws:iam::123456789012:role/arata-readonly"}`, "ARATA_ALERT_WEBHOOK="+ph)
+	if code != 0 || !strings.Contains(out, "::warning::秘密 ARATA_ALERT_WEBHOOK が仮の値のまま") || strings.Contains(out, "::error::") {
+		t.Errorf("an unused alert box must only warn: exit %d\n%s", code, out)
+	}
+	// 箱を消してあっても (空でも) 止まらず、何も出さない
+	if out, code, _ := runStep(t, stepByID(t, w, "secrets").Run, t.TempDir(), "ARATA_RUNNER_ROLE_ARN=real", "ARATA_AUDIT_ROLE_ARNS=real", "ARATA_ALERT_WEBHOOK="); code != 0 || out != "" {
+		t.Errorf("a deleted alert box: exit %d\n%s", code, out)
+	}
+
+	// 2. 送り方の判別: 緊急用の Webhook を持たない Webhook の方式
+	for file, id := range map[string]string{multiFile: "notify", notifyTestFile: "test-notify"} {
+		t.Run(file, func(t *testing.T) {
+			w, _ := load(t, file)
+			bin := fakeBin(t, "aratam", `if [ "$1" = config ]; then echo '{"ok":true,"slack":{"method":"webhook","urgent_webhook":false},"rows":[]}'; else touch "$RUNNER_TEMP/called"; fi`+"\n")
+			_, code, tmp := runStep(t, stepByID(t, w, "slack-method").Run, bin)
+			if got := output(t, tmp); code != 0 || got != "method=webhook\nurgent_webhook=false\n" {
+				t.Fatalf("slack-method: exit %d output %q", code, got)
+			}
+			// 3. この出力なら、式は緊急用と bot トークンを空にする (TestNotifyGetsOnlyTheSecretsOfTheMethod が式を固定)。
+			//    箱が仮の値のままでも、step には空で届くので、止まらずに aratam まで進む
+			out, code, tmp := runStep(t, stepByID(t, w, id).Run, bin, "ROUTE=normal",
+				"ARATAM_SLACK_WEBHOOK=https://hooks.slack.example/a", "ARATAM_SLACK_URGENT_WEBHOOK=", "ARATAM_SLACK_BOT_TOKEN=")
+			if _, err := os.Stat(filepath.Join(tmp, "called")); code != 0 || err != nil {
+				t.Errorf("the step must reach aratam: exit %d\n%s", code, out)
+			}
+		})
+	}
+
+	// 4. 定時の通知が送れなかったとき: alert の箱が仮の値のままなら、送らずに「知らせられない」と出す (curl を呼ばない)
+	a := stepByID(t, w, "alert")
+	curl := fakeBin(t, "curl", `touch "$RUNNER_TEMP/curl-called"`+"\n")
+	out, code, tmp := runStep(t, a.Run, curl, "ALERT_WEBHOOK="+ph, "STEPS={}", "RUN_URL=https://github.example/run", "ARATA_TARGET=prod")
+	if _, err := os.Stat(filepath.Join(tmp, "curl-called")); code != 1 || err == nil || !strings.Contains(out, "ARATA_ALERT_WEBHOOK が無い (か、仮の値のまま)") || strings.Contains(out, ph) {
+		t.Errorf("a placeholder alert webhook must not be called: exit %d\n%s", code, out)
 	}
 }
 

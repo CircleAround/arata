@@ -515,6 +515,12 @@ func TestDiffReportsEachGeneratedFile(t *testing.T) {
 	must(os.Remove(filepath.Join(dir, "aws/staging/aratam.yaml")))
 	must(os.WriteFile(filepath.Join(dir, ".github/workflows/arata-old.yml"), []byte("name: old\n"), 0o644))
 	must(os.WriteFile(filepath.Join(dir, ".github/workflows/ci.yml"), []byte("name: ci\n"), 0o644))
+	// github/ と github/secrets/ に残った、ほかの .tf (手で作った宣言など) も差にする: 同じ root の .tf は全部当たるので、
+	// 残っていると、書き出した宣言と二重になる・緩い設定が当たる
+	must(os.WriteFile(filepath.Join(dir, "github/repository.tf"), []byte("# old\n"), 0o644))
+	must(os.WriteFile(filepath.Join(dir, "github/secrets/old.tf"), []byte("# old\n"), 0o644))
+	must(os.WriteFile(filepath.Join(dir, "github/NOTES.md"), []byte("notes\n"), 0o644))
+	must(os.WriteFile(filepath.Join(dir, "github/terraform.tfstate"), []byte("{}\n"), 0o644))
 	out, err = Diff(dir, files)
 	must(err)
 	got := map[string]string{}
@@ -525,7 +531,7 @@ func TestDiffReportsEachGeneratedFile(t *testing.T) {
 	}
 	want := map[string]string{
 		workflowPaths[0]: StatusDiffers, ".gitignore": StatusMissing, "aws/staging/aratam.yaml": StatusMissing,
-		".github/workflows/arata-old.yml": StatusExtra,
+		".github/workflows/arata-old.yml": StatusExtra, "github/repository.tf": StatusExtra, "github/secrets/old.tf": StatusExtra,
 	}
 	if len(got) != len(want) || out.OK {
 		t.Fatalf("got %v", got)

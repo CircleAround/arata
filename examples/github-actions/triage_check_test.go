@@ -379,7 +379,7 @@ echo '{"level":"ERROR","msg":"stderr log"}' >&2
 cat >/dev/null # 標準入力 (ループのファイルの一覧) を読んでも、次のファイルが消えない
 if grep -q bad "$4"; then exit 2; fi
 if [ "${5:-}" = --format ]; then
-  echo "{\"ok\":true,\"slack\":{\"method\":\"$(grep -o 'method-[a-z]*' "$4" | cut -d- -f2)\"},\"rows\":[]}"
+  echo "{\"ok\":true,\"slack\":{\"method\":\"$(grep -o 'method-[a-z]*' "$4" | cut -d- -f2)\",\"urgent_webhook\":false},\"rows\":[]}"
 else
   echo "ok    $4: checked, slack webhook, slack bot"
 fi
@@ -423,9 +423,13 @@ fi
 		"aws/staging/arata.yaml": "ok", "aws/staging/aratam.yaml": "method-webhook",
 		".git/arata.yaml": "bad", "README.md": "ok",
 	}
-	// aratam.yaml は、形の検査のあとに、送り方の判別 (--format json) をもう 1 回
-	wantMulti := "arata config check -c ./aws/prod/arata.yaml\naratam config check -c ./aws/prod/aratam.yaml\naratam config check -c ./aws/prod/aratam.yaml --format json\n" +
-		"arata config check -c ./aws/staging/arata.yaml\naratam config check -c ./aws/staging/aratam.yaml\naratam config check -c ./aws/staging/aratam.yaml --format json\n"
+	// aratam.yaml は、形の検査のあとに、送り方の判別と、緊急用の Webhook を持つかの判別 (どちらも --format json) を 1 回ずつ
+	// (定時の監査の slack-method と同じ 2 つ。古い aratam で urgent_webhook が読めないことも、マージの前に止める)
+	jsonCalls := func(file string) string {
+		return strings.Repeat("aratam config check -c "+file+" --format json\n", 2)
+	}
+	wantMulti := "arata config check -c ./aws/prod/arata.yaml\naratam config check -c ./aws/prod/aratam.yaml\n" + jsonCalls("./aws/prod/aratam.yaml") +
+		"arata config check -c ./aws/staging/arata.yaml\naratam config check -c ./aws/staging/aratam.yaml\n" + jsonCalls("./aws/staging/aratam.yaml")
 
 	t.Run("multi", func(t *testing.T) {
 		out, code, tmp := runStepIn(t, tree(multi), script, bin)
@@ -436,7 +440,7 @@ fi
 			t.Errorf("the result lines must be shown, without the duplicate JSON log:\n%s", out)
 		}
 		// 送り方は設定ごとに判別する (アカウントごとに違ってよい)
-		if strings.Count(out, "slack method: bot\n") != 1 || strings.Count(out, "slack method: webhook\n") != 1 {
+		if strings.Count(out, "slack method: bot (urgent_webhook: false)\n") != 1 || strings.Count(out, "slack method: webhook (urgent_webhook: false)\n") != 1 {
 			t.Errorf("each aratam.yaml must show its method:\n%s", out)
 		}
 	})
@@ -448,8 +452,10 @@ fi
 		}
 		files["aws/prod/aratam.yaml"] = "method-email"
 		out, code, tmp := runStepIn(t, tree(files), script, bin)
-		if code != 1 || calls(tmp) != wantMulti || !strings.Contains(out, "::error::") || strings.Contains(out, "slack method: email") ||
-			!strings.Contains(out, "slack method: webhook\n") {
+		// 送り方が判別できなければ、その設定の 2 つ目の判別はしない
+		want := strings.Replace(wantMulti, jsonCalls("./aws/prod/aratam.yaml"), "aratam config check -c ./aws/prod/aratam.yaml --format json\n", 1)
+		if code != 1 || calls(tmp) != want || !strings.Contains(out, "::error::") || strings.Contains(out, "slack method: email") ||
+			!strings.Contains(out, "slack method: webhook (urgent_webhook: false)\n") {
 			t.Errorf("exit %d, calls:\n%s\n%s", code, calls(tmp), out)
 		}
 	})
@@ -465,7 +471,7 @@ fi
 	})
 	t.Run("single", func(t *testing.T) {
 		_, code, tmp := runStepIn(t, tree(map[string]string{"arata/arata.yaml": "ok", "arata/aratam.yaml": "method-webhook"}), script, bin)
-		if code != 0 || calls(tmp) != "arata config check -c ./arata/arata.yaml\naratam config check -c ./arata/aratam.yaml\naratam config check -c ./arata/aratam.yaml --format json\n" {
+		if code != 0 || calls(tmp) != "arata config check -c ./arata/arata.yaml\naratam config check -c ./arata/aratam.yaml\n"+jsonCalls("./arata/aratam.yaml") {
 			t.Errorf("exit %d, calls:\n%s", code, calls(tmp))
 		}
 	})

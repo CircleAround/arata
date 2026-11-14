@@ -196,3 +196,74 @@ func TestSlackMethodScriptWithTheRealAratam(t *testing.T) {
 		t.Fatalf("missing file: %q exit %d", out, code)
 	}
 }
+
+// --urgent-webhook は、緊急用の Webhook を別に持つか (.slack.urgent_webhook) を true / false で出す。
+// ワークフローは、true のときだけ緊急用の Webhook の秘密を notify に渡す (使わない秘密の箱が、仮の値のままでも止まらないように。ADR 0059)。
+// 真偽値でなければ止める (項目を知らない古い aratam・読めない設定・JSON でない出力)。決めつけて先へ進まない。
+func TestSlackMethodScriptUrgentWebhook(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, want string
+		exit             int
+	}{
+		{"true", `echo '{"ok":true,"slack":{"method":"webhook","format":"text","urgent_webhook":true},"rows":[]}'`, "true\n", 0},
+		{"false", `echo '{"ok":true,"slack":{"method":"webhook","urgent_webhook":false},"rows":[]}'`, "false\n", 0},
+		{"bot", `echo '{"ok":true,"slack":{"method":"bot","urgent_webhook":false},"rows":[]}'`, "false\n", 0},
+		{"old aratam without the field", `echo '{"ok":true,"slack":{"method":"webhook","format":"text"},"rows":[]}'`, "", 1},
+		{"string instead of a boolean", `echo '{"ok":true,"slack":{"method":"webhook","urgent_webhook":"true"},"rows":[]}'`, "", 1},
+		{"null", `echo '{"ok":true,"slack":{"urgent_webhook":null}}'`, "", 1},
+		{"no slack", `echo '{"ok":false,"rows":[]}'; exit 2`, "", 1},
+		{"failed but printed a value", `echo '{"slack":{"urgent_webhook":true}}'; exit 2`, "", 1},
+		{"not json", `echo 'ok    aratam.yaml: urgent_webhook true'`, "", 1},
+		{"two documents", `echo '{"slack":{"urgent_webhook":true}}'; echo '{"slack":{"urgent_webhook":false}}'`, "", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errOut, code := runMethodScript(t, fakeBin(t, "aratam", tc.body+"\n"), "--urgent-webhook", "aws/prod/aratam.yaml")
+			if out != tc.want || code != tc.exit {
+				t.Fatalf("stdout %q exit %d, want %q exit %d\n%s", out, code, tc.want, tc.exit, errOut)
+			}
+			if tc.exit != 0 && !strings.Contains(errOut, "::error::") {
+				t.Errorf("a failure must say why:\n%s", errOut)
+			}
+		})
+	}
+	// 引数の数が違えば止まる
+	if _, _, code := runMethodScript(t, fakeBin(t, "aratam", "exit 0\n"), "--urgent-webhook"); code != 1 {
+		t.Errorf("missing file argument: exit %d", code)
+	}
+}
+
+// 本物の aratam (この版) の出力と噛み合うこと: 雛形 (緊急用の Webhook あり) は true、urgent_webhook_env を空にすると false、bot は false。
+func TestSlackMethodScriptUrgentWebhookWithTheRealAratam(t *testing.T) {
+	bin := realAratam(t)
+	scaffold, err := exec.Command(filepath.Join(bin, "aratam"), "config", "init", "--out", "-").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	replace := func(s string, pairs ...string) string {
+		for i := 0; i < len(pairs); i += 2 {
+			if !strings.Contains(s, pairs[i]) {
+				t.Fatalf("the scaffold lacks %q", pairs[i])
+			}
+			s = strings.Replace(s, pairs[i], pairs[i+1], 1)
+		}
+		return s
+	}
+	webhook := string(scaffold)
+	noUrgent := replace(webhook, "urgent_webhook_env: ARATAM_SLACK_URGENT_WEBHOOK ", `urgent_webhook_env: "" `)
+	bot := replace(noUrgent, "webhook_env: ARATAM_SLACK_WEBHOOK ", `webhook_env: "" `, `bot_token_env: ""`, "bot_token_env: ARATAM_SLACK_BOT_TOKEN", `  channel: ""`, "  channel: C0123456789")
+	for _, tc := range []struct{ name, body, want string }{
+		{"scaffold", webhook, "true\n"},
+		{"webhook without the urgent webhook", noUrgent, "false\n"},
+		{"bot", bot, "false\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := filepath.Join(t.TempDir(), "aratam.yaml")
+			if err := os.WriteFile(p, []byte(tc.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if out, errOut, code := runMethodScript(t, bin, "--urgent-webhook", p); out != tc.want || code != 0 {
+				t.Fatalf("stdout %q exit %d, want %q\n%s", out, code, tc.want, errOut)
+			}
+		})
+	}
+}

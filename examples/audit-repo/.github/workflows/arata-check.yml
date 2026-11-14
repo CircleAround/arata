@@ -123,8 +123,9 @@ jobs:
               continue
             fi
             if [ "$tool" = aratam ]; then
-              if method="$(.github/scripts/arata-slack-method.sh "$file" </dev/null)"; then
-                echo "slack method: $method"
+              if method="$(.github/scripts/arata-slack-method.sh "$file" </dev/null)" &&
+                urgent="$(.github/scripts/arata-slack-method.sh --urgent-webhook "$file" </dev/null)"; then
+                echo "slack method: $method (urgent_webhook: $urgent)"
               else
                 status=1
               fi

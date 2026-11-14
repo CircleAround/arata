@@ -274,7 +274,7 @@ gh api repos/example-org/security-audit/environments/audit/deployment-branch-pol
 | `ARATA_ALERT_WEBHOOK` | 定時の通知が送れなかったことを知らせる、別の Webhook (下の「定時の通知が送れなかったとき」) |
 
 書き出される `github/secrets/` の Terraform は、これらの名前を **仮の値** で先に作ります (秘密の箱)。値を入れる人は、画面で名前を迷いません。
-既にある秘密には書きません (下の「GitHub の設定を Terraform で当てる」)。仮の値が残っている秘密を使おうとしたワークフローは、秘密の名前を出して止まります。
+既にある秘密には書きません (下の「GitHub の設定を Terraform で当てる」)。使う秘密に仮の値が残っていると、ワークフローは秘密の名前を出して止まります。使わない箱は、仮の値のままでも、消してもかまいません (同じ節)。
 
 **Slack の疎通を確かめる**: Webhook を environment の secrets に入れたら、同じ URL で手元から試験メッセージを 1 通送ります。チャンネルと Webhook の対応 (通常用と緊急用の取り違え) は、送ってみないと分かりません。
 
@@ -436,7 +436,10 @@ terraform -chdir=github/secrets apply
 | `GITHUB_TOKEN` | 既定は read。Actions に PR を承認させない | 6 |
 | environment `audit` | デプロイできるブランチは `main` だけ。レビュー担当と待ち時間は付けない | 5 |
 
-- リポジトリが既にあるときは、先に `terraform -chdir=github import github_repository.audit <リポジトリの名前>` で取り込みます (取り込まずに当てると、「同じ名前がある」というエラーで止まります)
+- **リポジトリや設定が既にあるとき** (GitHub の設定の Terraform を手で作っていた場合を含む) は、先に、今あるものを state に取り込みます。
+  手順は、書き出される README.md の「[既にあるリポジトリを取り込む](../audit-repo/README.md#既にあるリポジトリを取り込む)」にあります
+  (古い `.tf` と state をどける → リポジトリ・ルールセット・environment などを `terraform import` で取り込む (ID の調べ方つき) → plan の「destroy」が 0 であることを確かめる)。
+  `arata repo init --diff` は、`github/` に残っている古い `.tf` も「この版の一式に無い」と出します
 - リポジトリには `prevent_destroy` を付けています。`terraform destroy` でリポジトリを消しません
 - PR の承認の数は変数です (既定は 0。`-var required_approving_review_count=1`)。2 人以上で運用するなら 1 以上を勧めます
 - **宣言に無いもの**は、下の節の `gh api` で点検します: fork の PR へのワークフローの権限 (2)、OIDC の `sub` の ID 入りの形 (3)、組織の fork の設定 (1)、書き込み権限を持つ人 (4)
@@ -450,9 +453,15 @@ terraform -chdir=github/secrets apply
 - 値の変更は見ません (`ignore_changes`)。人が本物の値を入れた後に当て直しても、何も変わりません。`prevent_destroy` で、`terraform destroy` でも消しません
 - state を失っても、もう一度当てれば、全部の名前が「既にある」になり、取り込むだけで終わります
 - **計画を見てから承認するまでの間に、同じ名前の秘密を入れないでください**。一覧を読むのは計画のときなので、その後に入った秘密は、仮の値で置き換わります。値を入れるのは、箱を作った後です
-- 仮の値は決まった 1 つの文字列で、秘密ではありません。ワークフローは、秘密を使う前にこの文字列と比べ、一致したら秘密の名前を出して止まります
-  (`.github/scripts/arata-secret-check.sh`)。定時の通知が送れなかったことを知らせる `ARATA_ALERT_WEBHOOK` は、ふだん使われないので、監査のジョブの最初に確かめます。
-  Slack の秘密は、使う送り方のものだけを確かめます (Webhook の方式なら、bot トークンの箱は仮の値のままでかまいません)
+- 仮の値は決まった 1 つの文字列で、秘密ではありません。ワークフローは、**使う秘密**をこの文字列と比べ、一致したら秘密の名前を出して止まります
+  (`.github/scripts/arata-secret-check.sh`)。形が合わずに偶然止まることに頼りません
+- **使わない箱は、仮の値のままでも、消してもかまいません**。箱は 6 つ全部作られますが、使う秘密は構成で違います
+  - 必ず使う: `ARATA_RUNNER_ROLE_ARN`・`ARATA_AUDIT_ROLE_ARNS`。仮の値のままなら、実行用ロールを引き受ける前に止まります
+  - Slack: ワークフローは、アカウントの `aratam.yaml` が使う秘密だけを通知の段階に渡し、渡した秘密だけを確かめます。Webhook の方式なら `ARATAM_SLACK_WEBHOOK`、
+    bot トークンの方式なら `ARATAM_SLACK_BOT_TOKEN`。`ARATAM_SLACK_URGENT_WEBHOOK` は、`slack.urgent_webhook_env` が空でないときだけ
+    (`aratam config check --format json` の `.slack.urgent_webhook`)。アカウントごとに違っていてもかまいません
+  - `ARATA_ALERT_WEBHOOK` (定時の通知が送れなかったことの連絡): 使うかどうかは選べます。仮の値のままなら、監査は止まらず、毎回の実行に警告 (`::warning::`) が 1 行出ます
+    (ふだん使われない秘密なので、黙っていると、仮の値のままであることに気づけません)。連絡が要る場面では、「知らせられない」と出して終わります
 - 箱を使わないなら、`github/secrets/` を当てずに、画面か `gh secret set --env audit <名前>` で値を入れます
 
 arata のテストは、この Terraform を偽の GitHub API に当てて、「既にある秘密に 1 度も書き込まない」ことを確かめています (実際の GitHub では確かめていません。ADR 0059)。
@@ -720,7 +729,21 @@ name: prod                                # 通知に出す名前。アカウン
     urgent_channel: C0123456780                    #   urgent_channel: C0123456780
   ```
 
-実行用ロールは全アカウントの prefix を読み書きできます (分けるのは置き場所で、権限ではありません)。権限まで分けたいときは、アカウントごとにリポジトリと実行の仕組みを分けます。
+実行用ロールは全アカウントの prefix を読み書きできます (分けるのは置き場所で、権限ではありません)。権限まで分けたいときは、リポジトリと実行の仕組みを分けます (次の節)。
+
+## 会社ごとに、リポジトリと実行用ロールを分ける
+
+決定: 監査のリポジトリは、**会社 (監査を任される組織) ごとに 1 つ**にすることを勧めます。1 つのリポジトリで複数のアカウントを回す形 (上の「アカウントを足す」) は、
+同じ会社のアカウント (prod と staging など) に使います。
+
+- 理由: 実行用ロール・リポジトリ・秘密の 1 組が複数の会社に届いていると、乗っ取り (リポジトリの書き込み権限、Slack の秘密) や取り違え (ある会社の指摘が、別の会社の Slack に届く。
+  matrix の名前と `ARATA_AUDIT_ROLE_ARNS` の対応の誤りなど) の被害が、全部の会社に及びます。分けておけば、1 つのリポジトリで起きたことは、その会社の中で止まります
+- 会社ごとに `arata repo init` を別のリポジトリに向けて流し、実行用ロールも会社ごとに作ります。同じ AWS アカウントに 2 つ目以降の実行の仕組みを置くときのパラメータ
+  (スタックの名前と `RoleName` を変える、`OIDCProviderArn` で OIDC プロバイダを共有する、`AuditRoleArns` はその会社のロールだけ、ストアのバケットはスタックごとに別にできる) は、
+  書き出される README.md の「[会社ごとに、リポジトリと実行用ロールを分ける](../audit-repo/README.md#会社ごとにリポジトリと実行用ロールを分ける)」にあります
+- Slack の秘密は、リポジトリごとの environment に置きます。bot トークンをアカウントごとに分けて 1 つの JSON にまとめる形は採りません (リポジトリを会社ごとに分ければ、
+  1 つのリポジトリの中で宛先ごとにトークンを分ける必要が無くなります)。同じ bot トークンを複数の会社のリポジトリに置くと、1 つから読み出されたときに、ほかの会社のチャンネルにも投稿できます。
+  分けるなら、Slack アプリを会社ごとに作るか、Webhook を使います
 
 ## finding を片付ける (ack / snooze / resolve)
 
@@ -787,6 +810,8 @@ case "$method" in
 esac
 ```
 
+- 同じスクリプトに `--urgent-webhook` を付けると、緊急用の Webhook を別に持つか (`.slack.urgent_webhook`。`true` / `false`) を出します。
+  ワークフローは、`true` のときだけ `ARATAM_SLACK_URGENT_WEBHOOK` を notify に渡します。真偽値でなければ止まります (この項目を知らない古い aratam も、ここで止まります)
 - **読むのは `--format json` の `.slack.method`** です (機械が読む出力。項目は `aratam schema aratam-config-check` の JSON Schema にあります)。
   **人向けの出力 (`aratam config check` の行) を grep で読みません**。人向けの行は版をまたいで文言と並びが変わります。
   行末の語で送り方を判別していた仕組みが、行末に項目が足された版で判別を外し、定時の通知を送れなかったことがあります (arata の ADR 0054)
