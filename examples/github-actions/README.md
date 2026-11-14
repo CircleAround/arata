@@ -93,6 +93,10 @@ aws cloudformation deploy --stack-name arata-readonly \
   --parameter-overrides TrustedPrincipalArn=arn:aws:iam::123456789012:role/arata-runner
 ```
 
+監査のロールにも読ませたくないロググループ (個人情報だけを書くメールの送信ログなど) があれば、`DeniedLogGroupNames=prod-mail-delivery,prod-mail-bounce` のように名前を足します。
+そのロググループの中身を読む操作を明示の Deny で止めます (ADR 0053)。読ませないロググループは arata の設定の `sources` に書きません。
+既にあるロールに足すときも同じコマンドです (`--parameter-overrides DeniedLogGroupNames=…` だけを書けば、ほかのパラメータは前の値のままです)。
+
 順序は 1 → 2 です。信頼ポリシーに書く主体 (実行用ロール) は、先に存在している必要があります。
 出力の `RoleArn` が手順 1 の `AuditRoleArns` と違う (ロールの名前を変えた) ときは、手順 1 を正しい ARN でもう一度実行します。
 

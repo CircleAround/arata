@@ -368,6 +368,13 @@ daily のソースのうち、追加の権限が要るもの:
 - 既に配ったロールには上の 3 つの action を足す必要がある (無ければそのソースだけが ACCESS_DENIED になり、そのチェックが skip される)。
   `cost_anomaly` は Cost Anomaly Detection のモニター (無料) が無ければ skip される (doctor は warn)
 - `iam:GenerateCredentialReport` だけは書き込み系。読み取り専用ロールで拒否されても、4 時間以内に生成済みのレポートがあればそれを使う (生成時刻は finding の Data に残る)
+- 監査のロールにも読ませたくないロググループ (個人情報だけを書くメールの送信ログなど) は、`deploy/iam/readonly-role.yaml` の `DeniedLogGroupNames` に
+  名前をカンマ区切りで書く (既定は空 = 何も止めない。ADR 0053)。そのロググループの中身を読む操作 (`logs:StartQuery`・`GetQueryResults`・`GetLogEvents`・
+  `FilterLogEvents`・`StartLiveTail` など) を明示の Deny で止めるので、後からほかのポリシーが付いても読めない。名前は完全一致で、どのリージョンの同じ名前にも効く。
+  **読ませないロググループは `sources` に書かない** (書くと、そのソースだけが ACCESS_DENIED になり、doctor が `permission` の行に `logs:StartQuery が拒否された (<ロググループ>)` と出す)。
+  既に配ったロールは、同じスタックを更新する:
+  `aws cloudformation deploy --stack-name arata-readonly --template-file deploy/iam/readonly-role.yaml --capabilities CAPABILITY_NAMED_IAM --parameter-overrides DeniedLogGroupNames=prod-mail-delivery,prod-mail-bounce`
+  (書かなかったパラメータは前の値のまま)
 - 権限が足りないソースのチェックだけが skip され、他は続行する (coverage と doctor に不足 action が出る)。前回の指摘は「解消」にならない。
   posture は一部の項目だけ取れなければ取れた項目で評価する (終了コード 3)
 - GuardDuty が無効なら guardduty_findings は skip され、posture が「GuardDuty が有効でない」と報告する。アナライザーが無ければ access_analyzer は skip

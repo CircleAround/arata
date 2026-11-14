@@ -6,6 +6,8 @@
 #   どちらか、または両方を指定する。どちらも空ならスタックを作らせない (Rules)
 # - TrustedPrincipalArn が別のアカウントの主体なら、その引き受けはこのアカウントの CloudTrail に「外部アカウントの AssumeRole」として残る。
 #   既知リストに無いと unknown_assume_role が監査そのものを high で報告するので、設定を arata config init --audit-account <そのアカウントの ID> で作る (ADR 0045)
+# - 監査のロールにも読ませたくないロググループ (個人情報だけを書くログなど) は DeniedLogGroupNames に名前を書く。中身を読む操作を明示の Deny で止める
+#   (ADR 0053)。そのロググループは arata の設定の sources に書かない (書くと、そのソースだけが ACCESS_DENIED になる)
 # - CDK を使わずに配れるよう素の CloudFormation にしている。開発用の sandbox (deploy/sandbox) はこのファイルを CfnInclude で取り込む
 #   (定義は 1 か所。ADR 0020)。action の過不足は internal/engine/readonly_role_test.go が Go の collector と突き合わせて確かめる
 #
@@ -13,6 +15,11 @@
 #   aws cloudformation deploy --stack-name arata-readonly --template-file readonly-role.yaml \
 #     --capabilities CAPABILITY_NAMED_IAM \
 #     --parameter-overrides TrustedPrincipalArn=arn:aws:iam::123456789012:role/arata-runner
+#
+# 読ませないロググループを足す (既にあるスタックの更新も同じコマンド。書かなかったパラメータは前の値のまま):
+#   aws cloudformation deploy --stack-name arata-readonly --template-file readonly-role.yaml \
+#     --capabilities CAPABILITY_NAMED_IAM \
+#     --parameter-overrides DeniedLogGroupNames=prod-mail-delivery,prod-mail-bounce
 AWSTemplateFormatVersion: '2010-09-09'
 Description: arata read-only audit role
 
@@ -36,11 +43,20 @@ Parameters:
     Default: ''
     AllowedPattern: '^$|^arn:aws[a-z-]*:rolesanywhere:[a-z0-9-]+:\d{12}:trust-anchor/.+$'
     Description: IAM Roles Anywhere のトラストアンカーの ARN。空なら Roles Anywhere からは引き受けさせない
+  DeniedLogGroupNames:
+    Type: String
+    Default: ''
+    # 名前に使える文字 (英数字と _ - / . #) だけ。ワイルドカード (* ?)・空白・コロン・空の要素は通さない
+    # (`*` 1 つで全部のロググループを止める、前後の空白で 1 つも当たらない、を黙って通さないため)
+    AllowedPattern: '^$|^[A-Za-z0-9_./#-]+(,[A-Za-z0-9_./#-]+)*$'
+    ConstraintDescription: ロググループの名前 (英数字と _ - / . #) をカンマで区切って書いてください。空白・ワイルドカード (* ?)・ARN は書けません
+    Description: このロールに中身を読ませないロググループの名前 (完全一致。カンマ区切り。例 prod-mail-delivery,prod-mail-bounce)。空なら何も止めない
 
 Conditions:
   HasTrustedPrincipal: !Not [!Equals [!Ref TrustedPrincipalArn, '']]
   HasExternalId: !Not [!Equals [!Ref ExternalId, '']]
   HasRolesAnywhere: !Not [!Equals [!Ref RolesAnywhereTrustAnchorArn, '']]
+  HasDeniedLogGroups: !Not [!Equals [!Ref DeniedLogGroupNames, '']]
 
 Rules:
   RequireTrust:
@@ -163,6 +179,40 @@ Resources:
                   - ce:GetAnomalyMonitors
                   - ce:GetAnomalies
                 Resource: '*'
+              # DeniedLogGroupNames のロググループの中身を読ませない (ADR 0053)。空ならこの文は出ない。
+              # - 明示の Deny。上の Allow から外すだけにしないのは、後からほかのポリシー (管理ポリシーなど) が付いても効くようにするため
+              # - action は、ログの行・項目の値を返す操作 (ロググループ / ログストリームを対象に取る Read)。arata が呼ぶのは StartQuery と GetQueryResults だけ。
+              #   一覧 (DescribeLogGroups) と StopQuery は中身を返さないので止めない (doctor の log_group は名前の一致を見られる)
+              # - 決定: リージョン・アカウント・パーティションは `*`。IAM のロールはリージョンを持たず、arata のソースはリージョンごとに書けるので、
+              #   どのリージョンの同じ名前のロググループも読ませない (止めすぎる側に倒す。スタックを置いたリージョンに依らない)。
+              #   アカウントとパーティションが `*` なのは、名前の並びに接頭辞を付ける !Join の区切りに関数 (AWS::AccountId など) を書けないため
+              # - 名前ごとに 2 つの ARN。`…:log-group:<名前>` はロググループそのもの (StartQuery・FilterLogEvents など)、
+              #   `…:log-group:<名前>:*` はその下のログストリーム (GetLogEvents)。名前は完全一致で、`prod-mail` は `prod-mail-2` に当たらない
+              # - 複数のロググループを 1 回で問い合わせる StartQuery は、その中に 1 つでもここに当たるものがあれば、問い合わせ全体が拒否される見込み
+              #   (IAM は明示の Deny を優先する)。arata は 1 回に 1 つのロググループしか問い合わせないので、ほかのソースには影響しない
+              - !If
+                - HasDeniedLogGroups
+                - Sid: DenyLogGroupRead
+                  Effect: Deny
+                  Action:
+                    - logs:StartQuery
+                    - logs:GetQueryResults
+                    - logs:GetLogRecord
+                    - logs:GetLogEvents
+                    - logs:FilterLogEvents
+                    - logs:StartLiveTail
+                    - logs:GetLogGroupFields
+                    - logs:Unmask
+                  Resource: !Split
+                    - ','
+                    - !Join
+                      - ''
+                      - - 'arn:*:logs:*:*:log-group:'
+                        - !Join [',arn:*:logs:*:*:log-group:', !Split [',', !Ref DeniedLogGroupNames]]
+                        - ',arn:*:logs:*:*:log-group:'
+                        - !Join [':*,arn:*:logs:*:*:log-group:', !Split [',', !Ref DeniedLogGroupNames]]
+                        - ':*'
+                - !Ref AWS::NoValue
 
 Outputs:
   RoleArn:

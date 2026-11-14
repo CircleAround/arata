@@ -53,7 +53,10 @@ function roleOf(t: Record<string, any>): Record<string, any> {
 test('読み取りロールの権限は決めた action だけ (ワイルドカード無し)', () => {
   const t = rawTemplate();
   const role = roleOf(t);
-  const statements = role.Properties.Policies.flatMap((p: any) => p.PolicyDocument.Statement);
+  const all = role.Properties.Policies.flatMap((p: any) => p.PolicyDocument.Statement);
+  // 条件付きの文 (Fn::If) は DeniedLogGroupNames の Deny だけ。下のテストで見る
+  const statements = all.filter((s: any) => !s['Fn::If']);
+  assert.equal(all.length - statements.length, 1, '条件付きの文は 1 つ (Deny) だけ');
   const actions = statements.flatMap((s: any) => [s.Action].flat()).sort();
   assert.deepEqual(actions, EXPECTED_ACTIONS);
   for (const s of statements) {
@@ -79,6 +82,47 @@ test('信頼する主体・Roles Anywhere のトラストアンカー・External
   assert.ok(trust.includes('rolesanywhere.amazonaws.com'));
   assert.ok(trust.includes('"Ref":"RolesAnywhereTrustAnchorArn"'), 'Roles Anywhere はトラストアンカーで絞る');
   assert.ok(trust.includes('sts:ExternalId'));
+});
+
+test('DeniedLogGroupNames のロググループは明示の Deny で読ませない (既定は空で、文を出さない)', () => {
+  const t = rawTemplate();
+  const p = t.Parameters.DeniedLogGroupNames;
+  assert.equal(p.Type, 'String');
+  assert.equal(p.Default, '');
+  const pattern = new RegExp(p.AllowedPattern);
+  for (const ok of ['', 'prod-mail-delivery', 'prod-mail-delivery,/app/prod/mail-bounce']) {
+    assert.ok(pattern.test(ok), `通るはず: ${ok}`);
+  }
+  for (const ng of ['*', 'prod-*', 'a, b', 'a,', 'a:*', 'arn:aws:logs:ap-northeast-1:123456789012:log-group:a']) {
+    assert.ok(!pattern.test(ng), `弾くはず: ${ng}`);
+  }
+  assert.deepEqual(t.Conditions.HasDeniedLogGroups, { 'Fn::Not': [{ 'Fn::Equals': [{ Ref: 'DeniedLogGroupNames' }, ''] }] });
+
+  const statements = roleOf(t).Properties.Policies.flatMap((p: any) => p.PolicyDocument.Statement);
+  const conditional = statements.filter((s: any) => s['Fn::If']);
+  assert.equal(conditional.length, 1);
+  const [cond, deny, otherwise] = conditional[0]['Fn::If'];
+  assert.equal(cond, 'HasDeniedLogGroups');
+  assert.deepEqual(otherwise, { Ref: 'AWS::NoValue' }, '空なら文を出さない');
+  assert.equal(deny.Effect, 'Deny');
+  assert.equal(deny.NotAction, undefined);
+  assert.equal(deny.NotResource, undefined);
+  assert.equal(deny.Condition, undefined);
+  assert.deepEqual([...deny.Action].sort(), [
+    'logs:FilterLogEvents',
+    'logs:GetLogEvents',
+    'logs:GetLogGroupFields',
+    'logs:GetLogRecord',
+    'logs:GetQueryResults',
+    'logs:StartLiveTail',
+    'logs:StartQuery',
+    'logs:Unmask',
+  ]);
+  // Resource は名前の並びから組み立てる (解いた結果は internal/engine/readonly_role_test.go が確かめる)
+  const resource = JSON.stringify(deny.Resource);
+  assert.ok(resource.includes('"Ref":"DeniedLogGroupNames"'), resource);
+  assert.ok(resource.includes('arn:*:logs:*:*:log-group:'), resource);
+  assert.notEqual(deny.Resource, '*');
 });
 
 test('信頼先が 1 つも無いスタックは作らせない (Rules)', () => {

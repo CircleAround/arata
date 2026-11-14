@@ -65,7 +65,7 @@ LLM の役割は「危険の判定を代行する」ことではなく「人が�
 
 | code | 意味 | 対処 |
 |---|---|---|
-| `ACCESS_DENIED` | IAM 権限不足 (`action` に不足した action) | 読み取りロールに action を足す。`arata doctor` の表の最後に必要な action が出る |
+| `ACCESS_DENIED` | IAM 権限不足 (`action` に不足した action) | 読み取りロールに action を足す。`arata doctor` の表の最後に必要な action が出る。1 つのロググループの `logs:StartQuery` だけなら、ロールが読ませない設定 (`DeniedLogGroupNames`) なので、そのソースを設定から外す |
 | `LOG_GROUP_MISSING` | ロググループが無い / 名前変更 | config.yaml の `log_group` を直す |
 | `FORMAT_MISMATCH` | 解釈率が閾値未満 (そのソースは失敗扱い) | `samples` を見て `format` / `fields` / `regex` / `stream_prefix` を直す。混在ストリームなら `expected_match_rate` を下げる。`request_lines` で `reason` が `request_id` / `complete_rate` なら `request.id` と最初の行の正規表現を直す (`arata help ai request_lines`) |
 | `FORMAT_DRIFT` | 解釈率が直近平均から急落 (警告) | アプリのデプロイでログ形式が変わっていないか確認する |
@@ -124,6 +124,7 @@ assume_destinations:              # 外向きの引き受けで、行き先と�
 - 権限は読み取りのみ。追加の裏取りをするときも読み取り API だけを使う
 - 例外は `iam:GenerateCredentialReport` (書き込み系: 認証情報レポートの生成のみ)。拒否されても 4 時間以内に生成済みのレポートがあれば使う。
   必要な action の一覧は `arata doctor` の表の最後に出る
+- 利用者が読み取り専用ロールの `DeniedLogGroupNames` に書いたロググループ (個人情報だけを書くログなど) は、明示の Deny で読めない。`sources` に書かない
 
 ## 次に読むもの
 
