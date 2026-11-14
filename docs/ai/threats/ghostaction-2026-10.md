@@ -9,19 +9,28 @@
 - 規模 (GitGuardian): 2026-08-31 から 09-30 に公開リポジトリ 772、2026-10-08 から 09 に 3 万以上。GitHub は 10-09 から実行を止めた
 - StepSecurity は 10-08 の 345 リポジトリの波を追い、実行のログに攻撃者のサーバーの応答が残っていたと書く
 - **盗んだ AWS のキーが AWS で使われたとは、どちらの出典も書いていない**
-- 2026-11 の wfx-loot (`arata help ai threats wfx-loot-2026-11`) と被害のアカウントが重なる
+- 2026-11 の wfx-loot (`arata help ai threats wfx-loot-2026-11`) と被害のアカウントが重なる。wfx-loot を報じた Aikido の記事は、別の攻撃者の別の作戦と見ている (この事例の出典ではない)
+- GitHub に残る形 (出典の記述。送り先の IP・ドメインは出典を読む):
+  - ワークフローのファイル: `.github/workflows/github_actions_security.yml` (name `Github Actions Security`。2025 年から)、`security-check.yml` (name `Security Check`)、`.github/workflows/security-audit.yml` (name `Security Audit`、job `audit`)。wfx-loot の記事 (Aikido、2026-11-12) は `audit.yml`・`ci-check.yml` なども GhostAction の形に挙げる
+  - コミットメッセージ: `Add Github Actions Security workflow`、`Update Github Actions Security workflow`、`Add security check workflow`、`Add security audit workflow`、`Update security audit workflow`、`Trigger security scan`
+  - 既定のブランチへ PR を通さずに直接 push する。コミットは乗っ取ったアカウントのもの。StepSecurity は、署名の無いコミットが数分で多数のリポジトリに入ることを見る点に挙げる。
+    中身の無いコミットや README の変更で、ワークフローを再び動かす (StepSecurity)
+  - 起動は `workflow_dispatch` と、枝を絞らない `push`。`fetch-depth: 0` で全履歴を取る
+  - 消さずに残ることが多い (GitGuardian は 2026-10-05 時点で掃除されたのは 16% と書く)。force push の報告は無い。PR や Issue の番号の欠けの報告も無い
+  - **名前は監査を装うので、正規の監査のワークフローと同じ名前になり得る。** 名前だけでは正規のものと区別できない
 
 ## 出典
 
 - GitGuardian "The campaign that never stopped: tracking GhostAction from 2025 to 2026" (2026-10-07。10-09 と 10-13 に追記): https://blog.gitguardian.com/ghostaction-github-actions-supply-chain-attack-returns/
 - StepSecurity "GhostAction Returns: Malicious "Security Audit" Workflows Now Mine Credentials from Entire Git Histories" (2026-10-09): https://www.stepsecurity.io/blog/ghostaction-returns
+- 2025 年の波 (同じファイル名とコミットメッセージ): GitGuardian "The GhostAction Campaign: 3,325 Secrets Stolen Through Compromised GitHub Workflows" (2025-09-05): https://blog.gitguardian.com/ghostaction-campaign-3-325-secrets-stolen/
 
 ## 攻撃の段階と arata で見えるもの
 
 | 攻撃の段階 | 出典の書き方 | arata のチェック | 記録 | 出るもの |
 |---|---|---|---|---|
 | 初期の侵入: メンテナーの GitHub の認証情報を手に入れる (漏れたトークンなどと出典は見ている) | 推定 | — | 無し | 見えない (GitHub の中) |
-| GitHub での準備: 監査を装ったワークフローを足し、push で実行させる | 観測 | — | 無し | 見えない (GitHub の中) |
+| GitHub での準備: 監査を装ったワークフローを足し、既定のブランチへ PR を通さずに push して実行させる | 観測 | — | 無し | 見えない (GitHub の中) |
 | 認証情報の収集: 決め打ちの secrets、作業ツリーと全履歴の認証情報 (AWS のアクセスキー ID と前後の行を含む) | 機能 | — | 無し | 見えない (ランナーの中)。履歴に残った古いキーも対象になる |
 | 外への送信: 攻撃者のサーバーへの HTTP POST | 観測 | — | 無し | 見えない (ランナーの通信) |
 | 事前の備え: 履歴に残りがちな、使っていない長期のアクセスキーが有効なまま | 想定 | `credential_hygiene` | IAM の認証情報レポート | 有効で長く使われていないキーが medium、ルートのアクセスキーは high (weekly)。盗まれる前に消す材料 |
@@ -30,7 +39,7 @@
 
 ## arata では見えないもの
 
-- **GitHub の中の動き** (ワークフローの追加・実行): arata は GitHub の監査ログを読まない
+- **GitHub の中の動き** (ワークフローの追加・実行): arata は GitHub を読まない (監査ログも、ワークフローの一覧や実行の履歴も)。概要の「GitHub に残る形」はどれも GitHub の中にある
 - **外への送信**: GitHub が用意する実行環境の通信は、利用者の AWS の記録に残らない
 - **リポジトリの履歴に認証情報が残っていること**: arata はリポジトリを読まない (`log_hygiene` が数えるのは CloudWatch Logs の行だけ)
 - **盗まれたこと自体**: キーが AWS で使われるまで、AWS の記録には何も現れない。使われ方が正規の利用と同じ送信元・同じ操作なら、使われても出ない
@@ -39,4 +48,4 @@
 
 ## 予定している改善
 
-無し。同じ系統の攻撃で、OIDC のトークンでロールを引き受ける段階の見え方は `arata help ai threats wfx-loot-2026-11` に書いた。
+無し。GitHub のワークフローの一覧と実行の履歴を読む案は検討中で、まだ予定にしていない (リポジトリの `docs/github-source.md`)。同じ系統の攻撃で、OIDC のトークンでロールを引き受ける段階の見え方は `arata help ai threats wfx-loot-2026-11` に書いた。

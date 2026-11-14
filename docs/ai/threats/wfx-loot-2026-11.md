@@ -10,6 +10,13 @@
   (公開のログ 19 リポジトリで実行、うち 18 でスクリプトが送信の成功を報告)
 - **AWS に関する記述は、どちらの出典も「スクリプトにその機能がある」という説明**。被害者の AWS アカウントで起きたと観測した、とは書いていない
 - 2026-10 の GhostAction (`arata help ai threats ghostaction-2026-10`) と被害のアカウントが重なるが、出典は別の攻撃者の別の攻撃と見ている
+  (Aikido は、100 を超えるリポジトリで GhostAction のワークフローのファイルに wfx-loot が入れられたと書く)
+- GitHub に残る形 (Aikido の「影響を受けたか」の記述。送り先は出典を読む):
+  - 下調べの PR: タイトル `docs: dependency audit notes`、枝 `wfx-docs`
+  - コミットのタイトル: `ci: refresh build cache`、`chore: add ci helper`、`chore: add dependency audit workflow`
+  - 使い捨ての枝: `chore/` と 8 文字のランダムな文字。そこに `.github/workflows/build-audit-<ランダム>.yml` を足す
+  - 後始末: 1 分以内に戻し、ワークフローの実行とそのログを消す。**ワークフローの実行の番号の欠けが、唯一の痕跡になることが多い**
+  - PR や Issue の番号の欠けの報告は無い (下調べの PR は多くが開いたまま)
 
 ## 出典
 
@@ -32,7 +39,8 @@
 
 ## arata では見えないもの
 
-- **GitHub の中の動き** (PR、ワークフローとフックの書き換え、実行、実行の記録の削除): arata が読むのは AWS の記録だけで、GitHub の監査ログは読まない
+- **GitHub の中の動き** (PR、ワークフローとフックの書き換え、実行、実行の記録の削除): arata が読むのは AWS の記録だけで、GitHub は読まない (監査ログも、実行の履歴も)。
+  概要の「GitHub に残る形」と実行の番号の欠けは、どれも GitHub の中にある
 - **外への送信**: GitHub が用意する実行環境の通信は、利用者の AWS のどの記録にも残らない。self-hosted のランナーでも、arata は VPC フローログを読まない
 - **OIDC の引き受けが、どのワークフローからか**: CloudTrail の `AssumeRoleWithWebIdentity` の記録に、トークンの `job_workflow_ref` は残らない。正規のワークフローと、書き換えられたワークフローを区別できない。
   `oidc_assume_role` が比べるのは sub にある単位 (リポジトリと、ブランチ・タグ / environment / pull_request) まで
@@ -43,3 +51,4 @@
 ## 予定している改善
 
 - 承認済みのロールからの乗り移り (CI のロールから、初めてのロールへの `AssumeRole`) を見ること (予定。まだ決めていない。ADR 0055 に次の候補として書いてある)
+- GitHub のワークフローの実行の履歴を読み、AWS に OIDC で入った実行 (CloudTrail の userAgent の `run_id`) が GitHub から消えていないかを突き合わせること (案。検討中で、まだ予定にしていない。リポジトリの `docs/github-source.md`)
