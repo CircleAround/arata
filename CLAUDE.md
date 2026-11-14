@@ -24,6 +24,9 @@ LLM 向けの使い方は `go run ./cmd/arata help ai` (バイナリに埋め込
 - TDD。テストを先に書いて失敗を確かめてから実装する。ゴールデン (testdata) を変えるときは PR に理由を書く
 - テストは **実 AWS・実 LLM・実 Slack・実 `claude` に接続しない**。`httptest`、偽の実行ファイル、固定値で差し替える。
   テストが PATH の本物の `claude` を起動しないことを必ず確かめる (過去に 1 度起きた)
+- **人向けの出力 (table / text / md、ログの `msg` の文言) を機械で読ませない。** 機械が読む値は `--format json` で出し、スキーマ (`schemas/`) とテストで固定する。
+  見本のワークフローや文書に、人向けの出力を grep / sed で読む例を書かない。項目を足すのは互換、消す・意味を変える・型を変えるのは
+  `schema_version` を上げて Release の本文に書く (ADR 0054)
 - Go は `$HOME/.local/go/bin` の公式 tarball (README「開発」)。cgo は使わない (単一静的バイナリ。ADR 0002)
 - `go test ./...` / `go vet ./...` / `gofmt -l $(git ls-files '*.go')` を通してから push する。CI は `go mod verify`・age-gate・govulncheck・ビルドも回す
   (`gofmt -l .` は `deploy/sandbox/node_modules` の中の Go の雛形まで読んで失敗するので、git 管理のファイルだけを見る)
