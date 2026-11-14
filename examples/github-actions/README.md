@@ -551,6 +551,8 @@ gh api repos/example-org/security-audit/actions/secrets --jq '[.secrets[].name]'
    `sub` が `...:environment:audit` の 1 つだけになっていれば終わりです。4 を済ませるまでは、environment を参照しない main のワークフローからも実行用ロールを引き受けられます
 
 - 順番を変えないでください。スタックより先にワークフローを変えると、`sub` が合わず、定時の監査が OIDC の引き受けで失敗します (「arata の出力が無いか古い」が緊急用に届きます)
+- 実行の仕組みを置いたアカウントを `oidc_assume_role` で監査していて、既知リストの `oidc_subjects` に実行用ロールを書いているなら、2 の PR より前に
+  その項目へ `environments: ["audit"]` を足します (足さないと、`sub` が変わった最初の引き受けを high で報告します)。4 が済んだら、その項目の `refs` を消します
 - 新しい版の `runner.yaml` に更新しただけ (`GitHubEnvironment` を書かない) なら、信頼は変わりません
 - 戻すとき: ワークフローから `environment: audit` を消してマージし、秘密をリポジトリの secrets に戻してから、スタックを `GitHubEnvironment=` (空) で更新します
   (`KeepBranchSubject=true` にしてあれば、どちらの順でも止まりません)
