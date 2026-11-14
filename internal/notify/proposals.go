@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/CircleAround/arata/docs/ai"
+	"github.com/CircleAround/arata/internal/codes"
 	"github.com/CircleAround/arata/internal/report/schema"
 )
 
@@ -26,8 +27,8 @@ import (
 
 // ログの code (提案の書き起こし)。
 const (
-	CodeLLMProposalsFailed  = "LLM_PROPOSALS_FAILED"
-	CodeLLMProposalRejected = "LLM_PROPOSAL_REJECTED"
+	CodeLLMProposalsFailed  = codes.LLMProposalsFailed
+	CodeLLMProposalRejected = codes.LLMProposalRejected
 )
 
 // ProposalsFallbackNotice は提案の書き起こしに失敗し、候補を規則の書式で載せるときの注記。

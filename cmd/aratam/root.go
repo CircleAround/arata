@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/CircleAround/arata/internal/codes"
 	"github.com/CircleAround/arata/internal/llm"
 	"github.com/CircleAround/arata/internal/notify"
 	"github.com/CircleAround/arata/internal/slack"
@@ -379,7 +380,7 @@ func readTargets(d *Deps, cfg *notify.Config, require bool) (targets, error) {
 	}
 	if env := cfg.Slack.UrgentWebhookEnv; env != "" {
 		if w.urgent = d.Getenv(env); w.urgent == "" {
-			d.Logger.Warn(fmt.Sprintf("environment variable %s (slack.urgent_webhook_env) is not set; urgent notifications go to the normal webhook with urgent_mention", env), "code", "URGENT_WEBHOOK_UNSET")
+			d.Logger.Warn(fmt.Sprintf("environment variable %s (slack.urgent_webhook_env) is not set; urgent notifications go to the normal webhook with urgent_mention", env), "code", codes.UrgentWebhookUnset)
 		}
 	}
 	return w, nil

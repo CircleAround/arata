@@ -219,18 +219,20 @@ func TestAlertTellsWhichTargetWasNotNotified(t *testing.T) {
 	}
 }
 
-// fakeYQ は `yq -r '.env.ARATA_VERSION // ""' <file>` だけを受け付け、ファイルの「ARATA_VERSION: 値」の行の値を返す。
-// broken と書いたファイルは、YAML として読めないことにする。
-const fakeYQ = `if [ "$#" -ne 3 ] || [ "$1" != -r ] || [ "$2" != '.env.ARATA_VERSION // ""' ]; then echo "unexpected yq $*" >&2; exit 64; fi
+// fakeYQ は `yq -r '.env.ARATA_VERSION' <file>` だけを受け付け、ファイルの「ARATA_VERSION: 値」の行の値を返す。
+// 行が無ければ、本物の yq (mikefarah/yq v4) と同じく null と出す。broken と書いたファイルは、YAML として読めないことにする。
+// 式は、利用者の側で GitHub の実行環境の yq で動かして確かめた形 (.env.ARATA_VERSION) にそろえてある。
+const fakeYQ = `if [ "$#" -ne 3 ] || [ "$1" != -r ] || [ "$2" != '.env.ARATA_VERSION' ]; then echo "unexpected yq $*" >&2; exit 64; fi
 if grep -q broken "$3"; then echo "yaml: line 1: did not find expected key" >&2; exit 1; fi
-sed -n 's/^  ARATA_VERSION: *\([^ ]*\).*/\1/p' "$3"
+v="$(sed -n 's/^  ARATA_VERSION: *\([^ ]*\).*/\1/p' "$3")"
+echo "${v:-null}"
 `
 
 // PR の検査は、arata を使うワークフローの版が揃っていることを確かめる (片方だけ上げて、検査と定時の実行の版がずれるのを防ぐ)。
 func TestCheckRequiresTheSameVersionEverywhere(t *testing.T) {
 	w, _ := load(t, checkFile)
 	script := stepByID(t, w, "versions").Run
-	if !strings.Contains(script, `yq -r '.env.ARATA_VERSION // ""'`) || strings.Contains(script, "grep") {
+	if !strings.Contains(script, `yq -r '.env.ARATA_VERSION' "$file"`) || strings.Contains(script, "grep") {
 		t.Errorf("versions must read the workflows as YAML:\n%s", script)
 	}
 	order := map[string]int{}

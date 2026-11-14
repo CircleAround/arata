@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/CircleAround/arata/internal/codes"
 	"github.com/CircleAround/arata/internal/config"
 )
 
@@ -19,8 +20,8 @@ const (
 
 // ログの code。
 const (
-	CodeSourceCatchup          = "SOURCE_CATCHUP"
-	CodeSourceCatchupTruncated = "SOURCE_CATCHUP_TRUNCATED"
+	CodeSourceCatchup          = codes.SourceCatchup
+	CodeSourceCatchupTruncated = codes.SourceCatchupTruncated
 )
 
 type catchup struct {

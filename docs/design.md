@@ -237,7 +237,7 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
 - **集計値の読み取り**: 決定 (ADR 0041): Insights の結果の数値 (件数・パーセンタイル) は、読めない値に加えて `NaN`・無限大・負の値も 0 として扱う。そのまま metric の値にすると JSON に書けず、その run の保存が失敗する。
 
 ```json
-{"level":"error","code":"FORMAT_MISMATCH","source":"rails_app","log_group":"prod-app.log","format":"json","match_rate":0.12,"expected":0.6,"samples":["..."],"run_id":"..."}
+{"time":"2026-10-21T00:40:12.345Z","level":"ERROR","msg":"collect failed","code":"FORMAT_MISMATCH","source":"rails_app","log_group":"prod-app.log","format":"json","match_rate":0.12,"expected":0.6,"samples":["..."],"run_id":"..."}
 ```
 
 | code | 意味 |
@@ -254,7 +254,19 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
 | `RUN_MISSED` | 前回実行から profile の周期の 2 倍以上空いた (起動側の障害) |
 | `COLLECT_FAILED` | 決定: 上記に分類できない収集エラー (ネットワーク断など) |
 | `CONFIG_INVALID` | 決定: 設定ファイルの読み込み・検証エラー (終了コード 2) |
+| `REPORT_NOT_FOUND` | 決定: `arata report` で出す報告が無い (そのプロファイルの run がまだ無い。終了コード 2) |
+| `SOURCE_CATCHUP` / `SOURCE_CATCHUP_TRUNCATED` | 決定 (ADR 0038): 前に失敗したソースを取れていた位置から引き直している (警告) / 遅れが `max_catchup` を超え、古い分を取りこぼした (警告) |
 | `CHECK_UNUSED` | 決定: どのプロファイルにも入っていないチェックがある (警告。run / evaluate / doctor が出す。3 章、ADR 0014) |
+
+決定 (ADR 0054): ログの行で機械が読んでよい (安定な) 項目は、`time`・`level` (`DEBUG` / `INFO` / `WARN` / `ERROR`。大文字)・`code`・`source`・`run_id` と、
+aratam の `slack_error`。スキーマは `arata schema log` (`schemas/log.schema.json`)。`msg` は人向けの文で、文言は固定しない。`error` などほかの属性は
+人が原因を調べるための値で、名前も中身も固定しない (ログ由来の値を含み得るので、公開されるログには出さない)。行ごとに `schema` の項目は出さない。
+- **code の一覧は `internal/codes` の 1 か所に持つ** (arata と aratam で共通のパッケージ。各パッケージの `Code*` の定数はそこを指す)。テストで固定する:
+  code として渡す値に文字列の直書きが無い / ERROR のログには必ず code がある (ソースを `go/ast` で走査) / この表・`arata help ai` の表・aratam 設計書の表が一覧と一致する /
+  log スキーマの code の既知の値が一覧と一致する / コマンドのテストが出したログの行がすべて log スキーマに合い、code がそのコマンドの一覧にある
+- code は開いた語彙。足すのは互換で、読む側は知らない code を「その他の警告・エラー」として扱う。消す・名前を変える・意味を変えるのは互換を壊す変更で、Release の本文に書く。
+  スキーマには `anyOf` で「既知の値」か「大文字・数字・`_` の語」と書く (既知の値を機械で引けて、足しても古いスキーマで落ちない)
+- WARN には code の無い行がある (再試行、行が無い、など)。運用で気づくべきものには code を付ける
 
 `doctor` は同じ検査を実行前に行い、全ソースの解釈率を表で出す。
 

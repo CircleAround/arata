@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/CircleAround/arata/docs/ai"
+	"github.com/CircleAround/arata/internal/codes"
 )
 
 // チェックごとの対処手順 (playbook。docs/ai/playbooks/<check>.md。ADR 0025) を LLM の system に入れる。
@@ -23,7 +24,7 @@ import (
 //   - 提案の書き起こし (2 回目の呼び出し) には waf_review の playbook を同じ形で入れる。provider: none は LLM を呼ばないので使わない。
 
 // CodePlaybooksOmitted は上限に入らず system に入れなかった playbook があるときのログの code。
-const CodePlaybooksOmitted = "PLAYBOOKS_OMITTED"
+const CodePlaybooksOmitted = codes.PlaybooksOmitted
 
 // MaxPlaybookBytes は system に入れる playbook の本文の合計の上限 (24 KiB)。
 var MaxPlaybookBytes = 24 * 1024

@@ -9,6 +9,7 @@ import (
 
 	"github.com/aws/smithy-go"
 
+	"github.com/CircleAround/arata/internal/codes"
 	"github.com/CircleAround/arata/internal/record"
 )
 
@@ -54,15 +55,15 @@ type Collector interface {
 
 // 収集エラーの code (設計書 2-2 の固定語彙)。
 const (
-	CodeFormatMismatch  = "FORMAT_MISMATCH"
-	CodeFormatDrift     = "FORMAT_DRIFT"
-	CodeAccessDenied    = "ACCESS_DENIED"
-	CodeLogGroupMissing = "LOG_GROUP_MISSING"
-	CodeQueryLimit      = "QUERY_LIMIT"
+	CodeFormatMismatch  = codes.FormatMismatch
+	CodeFormatDrift     = codes.FormatDrift
+	CodeAccessDenied    = codes.AccessDenied
+	CodeLogGroupMissing = codes.LogGroupMissing
+	CodeQueryLimit      = codes.QueryLimit
 	// 決定: クエリ / 設定の不備 (Insights の構文エラーなど) は上限とは別に QUERY_INVALID とする。
-	CodeQueryInvalid = "QUERY_INVALID"
+	CodeQueryInvalid = codes.QueryInvalid
 	// 決定: 上記に分類できない収集エラーの code。
-	CodeCollectFailed = "COLLECT_FAILED"
+	CodeCollectFailed = codes.CollectFailed
 )
 
 // Error は分類済みの収集エラー。

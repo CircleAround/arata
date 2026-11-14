@@ -126,6 +126,9 @@ var hints = map[string]string{ // #nosec G101 -- Slack の error コード (toke
 	"invalid_blocks_format":  "blocks の形を Slack が受け付けませんでした (aratam notify --dry-run --format json で送る内容を確かめてください)",
 }
 
+// SlackErrorCode は Slack が返した error コード (無ければ空)。ログの slack_error になる (notify.SendErrorAttrs)。
+func (e *APIError) SlackErrorCode() string { return e.Code }
+
 func (e *APIError) Error() string {
 	var b strings.Builder
 	b.WriteString("slack: " + e.Method)

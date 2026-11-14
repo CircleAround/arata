@@ -37,12 +37,24 @@ func path(t testing.TB, name string) string {
 	}
 }
 
-// Golden は v の型から作ったスキーマを、置いてあるファイルと比べる。update なら先に書き直す。
-// 最上位がオブジェクトの出力は、schema (名前) と schema_version (版) の項目を const で持つことも確かめる。
-// 最上位が配列の出力 (版 1 の review・config-diff) は項目を持てないので、versioned を false にする。
-func Golden(t *testing.T, name string, version int, description string, v any, versioned, update bool) {
+// Spec は固定するスキーマ 1 つ。
+type Spec struct {
+	Name        string // schemas/<Name>.schema.json、`schema <Name>`
+	Version     int
+	Description string
+	Type        any // 出力の型の値 (ゼロ値でよい)
+	// Versioned は、出力の最上位が schema (名前) と schema_version (版) の項目を const で持つこと。
+	// 持てない出力 (最上位が配列のもの、1 行ごとに出すログ) は false。
+	Versioned bool
+	// Open は開いた語彙 (`jsonschema:"open=名前"`)。
+	Open map[string]jsonschema.Vocabulary
+}
+
+// Golden は Spec の型から作ったスキーマを、置いてあるファイルと比べる。update なら先に書き直す。
+func Golden(t *testing.T, spec Spec, update bool) {
 	t.Helper()
-	got, err := jsonschema.Generate(v, jsonschema.Options{ID: schemas.ID(name, version), Title: name, Description: description})
+	name, version, v, versioned := spec.Name, spec.Version, spec.Type, spec.Versioned
+	got, err := jsonschema.Generate(v, jsonschema.Options{ID: schemas.ID(name, version), Title: name, Description: spec.Description, Open: spec.Open})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,13 +109,7 @@ func Golden(t *testing.T, name string, version int, description string, v any, v
 //   - 型に無い項目を出していない: DisallowUnknownFields で into (出力の型へのポインタ) に読める
 func Conforms(t *testing.T, name string, out []byte, into any) {
 	t.Helper()
-	schema, ok := schemas.Lookup(name)
-	if !ok {
-		t.Fatalf("no embedded schema %q", name)
-	}
-	if err := jsonschema.Verify(schema, out); err != nil {
-		t.Fatalf("the output does not match schemas/%s.schema.json: %v\n%s", name, err, out)
-	}
+	Matches(t, name, out)
 	dec := json.NewDecoder(bytes.NewReader(out))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(into); err != nil {
@@ -111,5 +117,18 @@ func Conforms(t *testing.T, name string, out []byte, into any) {
 	}
 	if _, err := dec.Token(); err != io.EOF {
 		t.Fatalf("the output must be one JSON value:\n%s", out)
+	}
+}
+
+// Matches は、out がスキーマに合うことだけを確かめる (必須の項目・null・enum・const・pattern)。
+// スキーマに無い項目があってよい出力 (ログの行。安定な項目のほかに人向けの属性が付く) に使う。
+func Matches(t testing.TB, name string, out []byte) {
+	t.Helper()
+	schema, ok := schemas.Lookup(name)
+	if !ok {
+		t.Fatalf("no embedded schema %q", name)
+	}
+	if err := jsonschema.Verify(schema, out); err != nil {
+		t.Fatalf("the output does not match schemas/%s.schema.json: %v\n%s", name, err, out)
 	}
 }

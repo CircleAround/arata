@@ -700,7 +700,8 @@ esac
 | `SEND_FAILED` だけ (終了コード 5) | Webhook が受け取らなかった、Slack に繋がらなかった | Webhook を作り直して secret に入れ直す。詳しい原因は手元で同じコマンドを実行する |
 | `URGENT_WEBHOOK_UNSET` (warn) | 緊急用の Webhook の secret が空 | 緊急用が通常用にメンション付きで届く。分けるなら secret を入れる |
 
-ログに足して出すのは、bot トークンの方式の Slack の error コードだけです (aratam が形を確かめた値です)。エラーの文・チャンネル ID・Webhook の応答の本文は、監査と同じく出しません。
+ログに足して出すのは、bot トークンの方式の Slack の error コードだけです。ログの行の `slack_error` (機械が読む項目。`aratam schema log`) から読みます。
+aratam が形を確かめた値で、人向けの `error` の文からは切り出しません。エラーの文・チャンネル ID・Webhook の応答の本文は、監査と同じく出しません。
 
 ## 失敗したとき
 
@@ -715,7 +716,8 @@ esac
 
 `STORE_CONFLICT` は再実行で解消します (手元の `arata ack` と重なったときなど)。走らなかった窓は次の run が引き直します。
 
-**ログには原因の詳細を出しません**。Actions に出るのは `level`・`code`・`source` と終了コードだけです。`msg` と `error` には ARN やアカウント ID が入り得るためです。詳細は手元で同じコマンドを実行して確かめます。
+**ログには原因の詳細を出しません**。Actions に出るのは `level`・`code`・`source` と終了コードだけです (この 3 つは、版をまたいで変わらない項目です。`arata schema log`。
+code は増えることがあるので、知らない code は「その他の警告・エラー」として扱います)。`msg` と `error` には ARN やアカウント ID が入り得るためです。詳細は手元で同じコマンドを実行して確かめます。
 `::add-mask::` で値を列挙して隠す方式は採りません。監査の結果に何が出るかは列挙できないからです。アカウント ID はロールの ARN を secrets に置くことと `mask-aws-account-id: true` で隠します。
 
 ## 定時の通知が送れなかったとき

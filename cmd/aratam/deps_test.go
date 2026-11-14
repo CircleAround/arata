@@ -16,8 +16,9 @@ var allowedDeps = []string{
 	"github.com/CircleAround/arata/internal/subcmd",
 	"github.com/CircleAround/arata/internal/report/schema",
 	"github.com/CircleAround/arata/internal/llm",
-	"github.com/CircleAround/arata/docs/ai", // LLM の system に埋め込む文書 (標準ライブラリだけに依存)
-	"github.com/CircleAround/arata/schemas", // 機械が読む出力の JSON Schema のファイル (標準ライブラリだけに依存。ADR 0054)
+	"github.com/CircleAround/arata/docs/ai",        // LLM の system に埋め込む文書 (標準ライブラリだけに依存)
+	"github.com/CircleAround/arata/internal/codes", // ログの code の一覧 (標準ライブラリだけに依存。ADR 0054)
+	"github.com/CircleAround/arata/schemas",        // 機械が読む出力の JSON Schema のファイル (標準ライブラリだけに依存。ADR 0054)
 	"gopkg.in/yaml.v3",
 	// bedrock プロバイダ (aratam 設計書 1 章で AWS SDK を使ってよいとしたもの)。Converse と、標準の認証チェーンが使う STS / SSO だけ
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime",

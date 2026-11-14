@@ -2,6 +2,7 @@ package githubactions_test
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/CircleAround/arata/internal/notify"
 	"github.com/CircleAround/arata/internal/slack"
 )
 
@@ -232,12 +234,21 @@ func TestNotifyTestLogsOnlyCodesAndKeepsExitCode(t *testing.T) {
 	}
 }
 
-// sendFailedLog は aratam test-notify が送信に失敗したときの標準エラーの 1 行 (cmd/aratam の newTestNotifyCmd と同じ項目)。
-func sendFailedLog(t *testing.T, errText string) string {
+// sendFailedLine は aratam test-notify が送信に失敗したときの標準エラーの 1 行を書いたファイル。
+// 項目は cmd/aratam の newTestNotifyCmd と同じ作り方 (notify.SendErrorAttrs) で作る。extra は、その後に足す・上書きする項目。
+func sendFailedLine(t *testing.T, err error, extra map[string]any) string {
 	t.Helper()
-	b, err := json.Marshal(map[string]string{"level": "ERROR", "msg": "試験通知の送信に失敗しました", "code": "SEND_FAILED", "route": "normal", "error": errText})
-	if err != nil {
-		t.Fatal(err)
+	line := map[string]any{"time": "2026-10-21T10:00:00Z", "level": "ERROR", "msg": "試験通知の送信に失敗しました", "code": "SEND_FAILED", "route": "normal"}
+	attrs := notify.SendErrorAttrs(err)
+	for i := 0; i+1 < len(attrs); i += 2 {
+		line[attrs[i].(string)] = attrs[i+1]
+	}
+	for k, v := range extra {
+		line[k] = v
+	}
+	b, merr := json.Marshal(line)
+	if merr != nil {
+		t.Fatal(merr)
 	}
 	path := filepath.Join(t.TempDir(), "line")
 	if err := os.WriteFile(path, append(b, '\n'), 0o600); err != nil {
@@ -247,11 +258,14 @@ func sendFailedLog(t *testing.T, errText string) string {
 }
 
 // bot トークンの方式の失敗は、Slack の error コード (not_in_channel など) だけを足して出す。
-// コードは aratam が形を確かめた値 ([a-z0-9_] で 64 字まで。internal/slack の ParseResponse) で、何をすればよいかがこれで決まる。
-// エラーの文は internal/slack の APIError から作る (文の形が変わったら、ここで気づく)。
+// 読むのはログの slack_error (機械が読む項目。log スキーマ)。人向けの error の文からは切り出さない (ADR 0054)。
+// 行は internal/slack の APIError と notify.SendErrorAttrs から作る (aratam が出す形が変わったら、ここで気づく)。
 func TestNotifyTestShowsTheSlackErrorCode(t *testing.T) {
 	w, _ := load(t, notifyTestFile)
 	script := stepByID(t, w, "test-notify").Run
+	if strings.Contains(script, "capture(") || strings.Contains(script, ".error") {
+		t.Errorf("the step must read slack_error, not the human text in error:\n%s", script)
+	}
 	const channel = "C0123456789"
 	for name, tc := range map[string]struct {
 		err  error
@@ -264,9 +278,10 @@ func TestNotifyTestShowsTheSlackErrorCode(t *testing.T) {
 		"no channel":        {&slack.APIError{Method: "chat.postMessage", Code: "invalid_auth", Status: 200}, "invalid_auth"},
 		"http status":       {&slack.APIError{Method: "chat.postMessage", Code: "internal_error", Status: 500, Channel: channel}, "internal_error"},
 		"ratelimited":       {&slack.APIError{Method: "chat.postMessage", Code: "ratelimited", Status: 429, Channel: channel, RetryAfter: 60 * time.Second}, "ratelimited"},
+		"wrapped":           {fmt.Errorf("urgent: %w", &slack.APIError{Method: "chat.postMessage", Code: "is_archived", Status: 200, Channel: channel}), "is_archived"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			bin := fakeBin(t, "aratam", fmt.Sprintf("cat %q >&2\nexit 5\n", sendFailedLog(t, tc.err.Error())))
+			bin := fakeBin(t, "aratam", fmt.Sprintf("cat %q >&2\nexit 5\n", sendFailedLine(t, tc.err, nil)))
 			out, code, _ := runStep(t, script, bin, notifyTestEnv()...)
 			if code != 5 {
 				t.Errorf("exit %d\n%s", code, out)
@@ -282,26 +297,41 @@ func TestNotifyTestShowsTheSlackErrorCode(t *testing.T) {
 			}
 		})
 	}
-	// それ以外のエラーの文は出さない (Webhook の応答の本文は形を確かめていない。接続の失敗の文も同じ)
-	for name, errText := range map[string]string{
-		"webhook body":   "slack: webhook returned 404: no_service 123456789012",
-		"webhook dial":   "slack: post webhook: dial tcp: lookup hooks.example.com: no such host",
-		"bot dial":       "slack: chat.postMessage: dial tcp: lookup example.com: no such host",
-		"bot not json":   "slack: chat.postMessage: response is not a JSON object",
-		"other method":   "slack: auth.test failed: invalid_auth",
-		"not at start":   "x slack: chat.postMessage failed: not_in_channel",
-		"upper code":     "slack: chat.postMessage failed: Not_In_Channel 123456789012",
-		"code with tail": "slack: chat.postMessage failed: abc123456789012/secret",
-		"long code":      "slack: chat.postMessage failed: " + strings.Repeat("a", 65),
+	// コードの無い失敗 (Webhook、接続の失敗、HTTP の状態だけ) は、何も足さない。error の文にコードらしい語があっても読まない
+	for name, err := range map[string]error{
+		"webhook body":  errors.New("slack: webhook returned 404: no_service 123456789012"),
+		"webhook dial":  errors.New("slack: post webhook: dial tcp: lookup hooks.example.com: no such host"),
+		"text only":     errors.New("slack: chat.postMessage failed: not_in_channel"),
+		"status only":   &slack.APIError{Method: "chat.postMessage", Status: 502, Channel: channel},
+		"odd code":      &slack.APIError{Method: "chat.postMessage", Code: "Not_In_Channel 123456789012", Status: 200},
+		"long code":     &slack.APIError{Method: "chat.postMessage", Code: strings.Repeat("a", 65), Status: 200},
+		"code and tail": &slack.APIError{Method: "chat.postMessage", Code: "abc/secret", Status: 200},
 	} {
 		t.Run("hidden/"+name, func(t *testing.T) {
-			bin := fakeBin(t, "aratam", fmt.Sprintf("cat %q >&2\nexit 5\n", sendFailedLog(t, errText)))
+			bin := fakeBin(t, "aratam", fmt.Sprintf("cat %q >&2\nexit 5\n", sendFailedLine(t, err, nil)))
 			out, code, _ := runStep(t, script, bin, notifyTestEnv()...)
 			if code != 5 || !strings.Contains(out, "SEND_FAILED") {
 				t.Errorf("exit %d\n%s", code, out)
 			}
 			if strings.Contains(out, "slack error=") {
 				t.Errorf("must not print an unverified error:\n%s", out)
+			}
+		})
+	}
+	// ワークフローの側でも形を確かめる: 形に合わない slack_error、文字列でない slack_error、別の code の行の slack_error は出さない
+	for name, extra := range map[string]map[string]any{
+		"upper":        {"slack_error": "Not_In_Channel"},
+		"with newline": {"slack_error": "a\n::add-mask::x"},
+		"with space":   {"slack_error": "not in channel 123456789012"},
+		"too long":     {"slack_error": strings.Repeat("a", 65)},
+		"not a string": {"slack_error": []string{"not_in_channel"}},
+		"other code":   {"slack_error": "not_in_channel", "code": "CONFIG_INVALID"},
+	} {
+		t.Run("rejected/"+name, func(t *testing.T) {
+			bin := fakeBin(t, "aratam", fmt.Sprintf("cat %q >&2\nexit 5\n", sendFailedLine(t, errors.New("x"), extra)))
+			out, _, _ := runStep(t, script, bin, notifyTestEnv()...)
+			if strings.Contains(out, "slack error=") || strings.Contains(out, "add-mask") || strings.Contains(out, "123456789012") {
+				t.Errorf("must not print it:\n%s", out)
 			}
 		})
 	}
