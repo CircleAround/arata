@@ -304,7 +304,7 @@ func (c SecretAccess) Evaluate(ctx context.Context, q store.Query, w collect.Win
 
 // lateInWindow は e が再走査で遅れて届いたイベント (windowEvents が窓に含めるもの) か。履歴から除く (窓と二重に数えて初出を隠さない)。
 func lateInWindow(e record.TrailEvent, w collect.Window) bool {
-	return !w.ScanFrom.IsZero() && !w.CollectedAt.IsZero() && !e.Time.Before(w.ScanFrom) && e.Time.Before(w.From) && !e.CollectedAt.Before(w.CollectedAt)
+	return !w.ScanFrom.IsZero() && !w.LateSince().IsZero() && !e.Time.Before(w.ScanFrom) && e.Time.Before(w.From) && !e.CollectedAt.Before(w.LateSince())
 }
 
 // TrailCollectedStat は run の stats のキー。その run (init はその時点の done_until まで) で、主体の活動の日次集計を出す cloudtrail-lookup の

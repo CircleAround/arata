@@ -747,8 +747,9 @@ func TestRunRescansIngestDelay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := h.fake.Calls[calls].StartTime; !got.Equal(prevTo.Add(-15 * time.Minute)) {
-		t.Fatalf("lookup must start ingest_delay before the window: %v", got)
+	// CloudTrail は ingest_delay 前の時の頭から引き直す (主体の活動の時ごとの集計を全件にする。ADR 0064)
+	if got := h.fake.Calls[calls].StartTime; !got.Equal(prevTo.Add(-15 * time.Minute).Truncate(time.Hour)) {
+		t.Fatalf("lookup must start at the hour of ingest_delay before the window: %v", got)
 	}
 	if r2.Report.Window.From != prevTo.UTC().Format(time.RFC3339) {
 		t.Fatalf("the window itself is unchanged: %+v", r2.Report.Window)

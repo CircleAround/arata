@@ -418,10 +418,7 @@ func (r *replayer) line(src, where string, lineNo int, line []byte) error {
 	case record.PrincipalSeen:
 		r.principal(v)
 	case record.Metric:
-		_, err := r.tx.ExecContext(r.ctx, `INSERT INTO metrics(date, source, "from", metric, key, value) VALUES (?,?,?,?,?,?)
-			ON CONFLICT(date, source, metric, key) DO UPDATE SET value=excluded.value, "from"=excluded."from"`,
-			v.Date, v.Source, string(v.From), v.Metric, v.Key, v.Value)
-		return wrap(err)
+		return upsertMetric(r.ctx, r.tx, v)
 	case record.SnapshotItem:
 		g := r.snap(v.Kind, src)
 		t := fmtTime(v.Time)

@@ -131,8 +131,9 @@ func TestDryRunWindow(t *testing.T) {
 		t.Fatal("dry run must collect")
 	}
 	for _, c := range h.fake.Calls {
-		if got, want := aws.ToTime(c.StartTime), h.now.Add(-2*time.Hour-15*time.Minute); !got.Equal(want) {
-			t.Fatalf("LookupEvents must start at now - window - ingest_delay (%s), got %s", want, got)
+		// CloudTrail は再走査の始まりの時の頭から引き直す (ADR 0064)
+		if got, want := aws.ToTime(c.StartTime), h.now.Add(-2*time.Hour-15*time.Minute).Truncate(time.Hour); !got.Equal(want) {
+			t.Fatalf("LookupEvents must start at the hour of now - window - ingest_delay (%s), got %s", want, got)
 		}
 	}
 	for _, code := range h.logCodes(t) {

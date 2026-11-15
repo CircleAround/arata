@@ -25,6 +25,18 @@ type Window struct {
 	ScanFrom time.Time
 	// CollectedAt は今回の収集の時刻 (events.collected_at)。遅れて届いたイベントの判定に使う。ゼロなら判定しない。
 	CollectedAt time.Time
+	// EvaluatedSince は、このプロファイルの前回の評価の後の最初の時刻 (前回の run の開始時刻 + 1ns)。ゼロなら CollectedAt を使う。
+	// 決定 (ADR 0064): 遅れて届いたイベントは「前回の評価の後に保存したもの」。別のプロファイルの run や収集だけの run が先に拾ったものも、
+	// このプロファイルが 1 回だけ評価する (CollectedAt だけでは、この run が拾ったものしか見ない)。
+	EvaluatedSince time.Time
+}
+
+// LateSince は、遅れて届いたイベントとして評価する collected_at の下限。
+func (w Window) LateSince() time.Time {
+	if !w.EvaluatedSince.IsZero() {
+		return w.EvaluatedSince
+	}
+	return w.CollectedAt
 }
 
 // Start は実際に引き始める時刻 (ScanFrom があればそれ、無ければ From)。

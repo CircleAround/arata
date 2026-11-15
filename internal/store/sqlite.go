@@ -21,7 +21,7 @@ import (
 //go:embed schema.sql
 var schemaSQL string
 
-const schemaVersion = 5
+const schemaVersion = 6
 
 // Dir は dir:// バックエンド。<dir>/audit.sqlite と <dir>/raw/ を持つ。
 type Dir struct {
@@ -509,34 +509,61 @@ func (s *Dir) Events(ctx context.Context, from, to time.Time, f EventFilter) ([]
 // --- metrics ---
 
 func (s *Dir) UpsertMetric(ctx context.Context, m record.Metric) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO metrics(date, source, "from", metric, key, value) VALUES (?,?,?,?,?,?)
+	return upsertMetric(ctx, s.db, m)
+}
+
+// upsertMetric は日の行 (metrics) か、Hour があれば時ごとの行 (metrics_hourly) を置き換える。
+func upsertMetric(ctx context.Context, db execer, m record.Metric) error {
+	if m.Hour != "" {
+		date := m.Hour
+		if len(date) >= len(record.DateLayout) {
+			date = date[:len(record.DateLayout)]
+		}
+		_, err := db.ExecContext(ctx, `INSERT INTO metrics_hourly(hour, date, source, "from", metric, key, value) VALUES (?,?,?,?,?,?,?)
+		ON CONFLICT(hour, source, metric, key) DO UPDATE SET value=excluded.value, "from"=excluded."from"`,
+			m.Hour, date, m.Source, string(m.From), m.Metric, m.Key, m.Value)
+		return wrap(err)
+	}
+	_, err := db.ExecContext(ctx, `INSERT INTO metrics(date, source, "from", metric, key, value) VALUES (?,?,?,?,?,?)
 		ON CONFLICT(date, source, metric, key) DO UPDATE SET value=excluded.value, "from"=excluded."from"`,
 		m.Date, m.Source, string(m.From), m.Metric, m.Key, m.Value)
 	return wrap(err)
 }
 
+// Metrics は日の行を返す。時ごとの集計 (metrics_hourly) は日ごとに足して日の行にし、時ごとの行がある (日, source, metric) では
+// metrics の日の行 (前の版が書いたもの) を使わない (ADR 0064)。
 func (s *Dir) Metrics(ctx context.Context, f MetricFilter) ([]record.Metric, error) {
-	q := `SELECT date, source, "from", metric, key, value FROM metrics WHERE 1=1`
-	var args []any
-	if f.Metric != "" {
-		q += ` AND metric = ?`
-		args = append(args, f.Metric)
-	}
-	if f.From != "" {
-		q += ` AND date >= ?`
-		args = append(args, f.From)
-	}
-	if f.To != "" {
-		q += ` AND date <= ?`
-		args = append(args, f.To)
-	}
-	if len(f.Sources) > 0 {
-		q += ` AND source IN (` + placeholders(len(f.Sources)) + `)` // #nosec G202 -- 結合するのは定数と placeholders() の ? だけ。値はすべて束縛する
-		for _, src := range f.Sources {
-			args = append(args, src)
+	where := func() (string, []any) {
+		w := ` WHERE 1=1`
+		var args []any
+		if f.Metric != "" {
+			w += ` AND metric = ?`
+			args = append(args, f.Metric)
 		}
+		if f.From != "" {
+			w += ` AND date >= ?`
+			args = append(args, f.From)
+		}
+		if f.To != "" {
+			w += ` AND date <= ?`
+			args = append(args, f.To)
+		}
+		if len(f.Sources) > 0 {
+			w += ` AND source IN (` + placeholders(len(f.Sources)) + `)` // #nosec G202 -- 結合するのは定数と placeholders() の ? だけ。値はすべて束縛する
+			for _, src := range f.Sources {
+				args = append(args, src)
+			}
+		}
+		return w, args
 	}
-	q += ` ORDER BY date, source, key`
+	wd, args := where()
+	wh, argsH := where()
+	// #nosec G202 -- 結合するのは定数と where() が作る条件 (? の束縛) だけ
+	q := `SELECT date, source, "from", metric, key, value FROM metrics AS m` + wd +
+		` AND NOT EXISTS (SELECT 1 FROM metrics_hourly AS h WHERE h.metric = m.metric AND h.date = m.date AND h.source = m.source)` +
+		` UNION ALL SELECT date, source, MAX("from"), metric, key, SUM(value) FROM metrics_hourly` + wh + ` GROUP BY date, source, metric, key` +
+		` ORDER BY date, source, key`
+	args = append(args, argsH...)
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, wrap(err)

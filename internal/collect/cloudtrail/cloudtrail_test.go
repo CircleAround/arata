@@ -445,8 +445,9 @@ func activityBody(id, identity, name, region, ip, code string, readOnly bool) st
 	  "awsRegion":%q,"sourceIPAddress":%q,"errorCode":%q,"readOnly":%v,"eventID":%q}`, identity, name, region, ip, code, readOnly, id)
 }
 
-// 主体の活動の日次集計 (principal_new_source。ADR 0027): 主体 × 送信元 (/24・/48)、その書き込み、主体 × 書き込みのリージョン。
-// サービス主体・root・IP でない送信元は出さない。再走査の区間も数える (値は下限として使うだけ)。
+// 主体の活動の集計 (principal_new_source。ADR 0027): 主体 × 送信元 (/24・/48)、その書き込み、主体 × 書き込みのリージョン。
+// サービス主体・root・IP でない送信元は出さない。決定 (ADR 0064): 時ごと (UTC) に出し、再走査の区間も数える (時の頭から引き直して置き換えるので、その時の全件)。
+// 始まりが時の途中の時は出さない (一部だけの値で、前の収集の全件を置き換えない)。
 func TestCollectActivityMetrics(t *testing.T) {
 	const (
 		alice   = `{"type":"IAMUser","arn":"arn:aws:iam::123456789012:user/alice","accountId":"123456789012"}`
@@ -464,10 +465,12 @@ func TestCollectActivityMetrics(t *testing.T) {
 		ev("a6", day.Add(5*time.Hour), activityBody("a6", root, "CreateTags", "us-east-1", "198.51.100.8", "", false)),
 		ev("a7", day.Add(6*time.Hour), activityBody("a7", service, "CreateTags", "us-east-1", "ec2.amazonaws.com", "", false)),
 		ev("a8", day.Add(7*time.Hour), activityBody("a8", alice, "CreateTags", "ap-northeast-1", "AWS Internal", "", false)),
+		ev("a9", day.Add(time.Hour+30*time.Minute), activityBody("a9", alice, "DescribeInstances", "ap-northeast-1", "203.0.113.2", "", true)),
+		ev("a0", day.Add(-150*time.Minute), activityBody("a0", alice, "DescribeInstances", "ap-northeast-1", "203.0.113.2", "", true)), // 始まり (21:30) の時は途中なので出さない
 	}}}
 	c, _, _ := testCollector("trail", RegionClient{Region: "ap-northeast-1", API: fake})
 	sink := &captured{}
-	w := collect.Window{From: day, To: day.Add(24 * time.Hour), ScanFrom: day.Add(-2 * time.Hour)}
+	w := collect.Window{From: day, To: day.Add(24 * time.Hour), ScanFrom: day.Add(-150 * time.Minute)}
 	if err := c.Collect(context.Background(), w, sink); err != nil {
 		t.Fatal(err)
 	}
@@ -476,18 +479,23 @@ func TestCollectActivityMetrics(t *testing.T) {
 		if m.Source != "trail" || m.From != record.KindTrailEvent {
 			t.Fatalf("metric source: %+v", m)
 		}
-		got[m.Date+" "+m.Metric+" "+m.Key] = m.Value
+		if m.Date != m.Hour[:10] {
+			t.Fatalf("date and hour disagree: %+v", m)
+		}
+		got[m.Hour+" "+m.Metric+" "+m.Key] = m.Value
 	}
 	const a, r = "arn:aws:iam::123456789012:user/alice", "arn:aws:iam::123456789012:role/Admin"
 	want := map[string]float64{
-		"2026-10-20 principal_source " + a + "|203.0.113.0/24":         1,
-		"2026-10-21 principal_source " + a + "|203.0.113.0/24":         2,
-		"2026-10-21 principal_source_writes " + a + "|203.0.113.0/24":  1,
-		"2026-10-21 principal_write_region " + a + "|ap-northeast-1":   2, // 送信元が IP でない書き込みもリージョンには数える
-		"2026-10-21 principal_source " + a + "|2001:db8:1::/48":        1,
-		"2026-10-21 principal_source " + r + "|198.51.100.0/24":        1,
-		"2026-10-21 principal_source_writes " + r + "|198.51.100.0/24": 1,
-		"2026-10-21 principal_write_region " + r + "|us-east-1":        1,
+		"2026-10-20T23 principal_source " + a + "|203.0.113.0/24":         1,
+		"2026-10-21T01 principal_source " + a + "|203.0.113.0/24":         2,
+		"2026-10-21T01 principal_source_writes " + a + "|203.0.113.0/24":  1,
+		"2026-10-21T01 principal_write_region " + a + "|ap-northeast-1":   1,
+		"2026-10-21T07 principal_write_region " + a + "|ap-northeast-1":   1, // 送信元が IP でない書き込みもリージョンには数える
+		"2026-10-21T02 principal_source " + a + "|203.0.113.0/24":         1,
+		"2026-10-21T03 principal_source " + a + "|2001:db8:1::/48":        1,
+		"2026-10-21T04 principal_source " + r + "|198.51.100.0/24":        1,
+		"2026-10-21T04 principal_source_writes " + r + "|198.51.100.0/24": 1,
+		"2026-10-21T04 principal_write_region " + r + "|us-east-1":        1,
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("metrics:\n got  %v\n want %v", got, want)
