@@ -32,6 +32,7 @@ const (
 const (
 	CodeSourceCatchup          = codes.SourceCatchup
 	CodeSourceCatchupTruncated = codes.SourceCatchupTruncated
+	CodeSourceCollectLimited   = codes.SourceCollectLimited
 )
 
 type catchup struct {
@@ -170,6 +171,9 @@ func (c *catchup) advance(cr CollectResult, base, to time.Time) (covered, from m
 			outFrom[id] = start
 		}
 		out[id] = to
+		if t, ok := cr.scanTo[id]; ok {
+			out[id] = t
+		}
 	}
 	for _, id := range cr.SourcesFailed {
 		if _, ok := out[id]; !ok {

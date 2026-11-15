@@ -272,6 +272,17 @@ func TestEndToEnd(t *testing.T) {
 	if code := c.run("collect", "--config", c.cfg, "--window", "2h", "--source", "trail"); code != 0 || !strings.Contains(c.stdout.String(), "sources ok: trail") {
 		t.Fatalf("collect exit %d\n%s%s", code, c.stdout, c.stderr)
 	}
+	// collect --incremental は位置から続きだけを集める (ADR 0064)。--window・--source とは一緒に使えない
+	c.stdout.Reset()
+	if code := c.run("collect", "--config", c.cfg, "--incremental"); code != 0 || !strings.Contains(c.stdout.String(), "sources ok: trail") {
+		t.Fatalf("collect --incremental exit %d\n%s%s", code, c.stdout, c.stderr)
+	}
+	for _, args := range [][]string{{"--window", "2h"}, {"--source", "trail"}} {
+		c.stderr.Reset()
+		if code := c.run(append([]string{"collect", "--config", c.cfg, "--incremental"}, args...)...); code != 2 || strings.Join(c.codes(), ",") != "CONFIG_INVALID" {
+			t.Fatalf("collect --incremental %v: exit %d %v", args, code, c.codes())
+		}
+	}
 	c.assertCodesInVocabulary()
 }
 

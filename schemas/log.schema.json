@@ -46,6 +46,7 @@
             "REPORT_NOT_FOUND",
             "SOURCE_CATCHUP",
             "SOURCE_CATCHUP_TRUNCATED",
+            "SOURCE_COLLECT_LIMITED",
             "NO_LOG_LINES",
             "LOG_GROUP_UNVERIFIED",
             "TRAIL_FILE_INVALID",

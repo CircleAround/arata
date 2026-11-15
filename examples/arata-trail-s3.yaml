@@ -27,6 +27,7 @@ sources:
     regions: [ap-northeast-1, us-east-1]   # 必須。IAM・ConsoleLogin・STS の一部は us-east-1 にしか記録されない
     # bucket_region: ap-northeast-1   # バケットのリージョン。省略時は aws.region
     # ingest_delay: 15m               # 記録の遅れの見込み。窓の前をこの分だけ引き直し、窓の後にこの分だけ遅れて配信されたファイルも読む
+    # max_collect: 12h                # 1 回の収集の上限 (止まった後の追いつきを、資格情報の 1 時間に収める。書かなければ上限なし)
   - id: trail_unused_regions
     kind: cloudtrail-unused-regions   # 対象 = 有効なリージョン − 上の cloudtrail-s3 の regions (LookupEvents で書き込みだけを引く)
 

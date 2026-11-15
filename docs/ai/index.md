@@ -79,7 +79,7 @@ LLM の役割は「危険の判定を代行する」ことではなく「人が�
 | `CONFIG_INVALID` / `ROLE_POLICY_LARGE` | 設定ファイルの読み込み・検証エラー / `arata config role-params` の一覧で、読み取り専用ロールのインラインポリシーが IAM の上限 (10,240 文字) に近い見込み (警告。値は出す) | エラーメッセージに従い設定を直す / スタックの更新が失敗するおそれがある。ソースのロググループを減らせないか人に確かめる |
 | `CHECK_UNUSED` | どのプロファイルにも入っていないチェックがある (警告。`checks` に名前) | 入れ忘れなら profiles に足す。`arata config init --diff` で雛形と比べる。意図して外したなら人に確認するだけでよい |
 | `REPORT_NOT_FOUND` | `arata report --profile X` で、そのプロファイルの run がまだ無い (終了コード 2) | 先に `arata run --profile X` を実行する。プロファイル名の打ち間違いも疑う |
-| `SOURCE_CATCHUP` / `SOURCE_CATCHUP_TRUNCATED` | 前に失敗したソースを取れていた位置から引き直している (警告) / 遅れが `max_catchup` を超え、古い分を取りこぼした (警告) | 前者は何もしなくてよい (続くなら前の run の code を見る)。後者は取りこぼした期間を人に知らせる |
+| `SOURCE_CATCHUP` / `SOURCE_CATCHUP_TRUNCATED` / `SOURCE_COLLECT_LIMITED` | 前に失敗したソースを取れていた位置から引き直している (警告) / 遅れが `max_catchup` を超え、古い分を取りこぼした (警告) / 1 回の収集が `max_collect` に当たり、そこまで集めて止めた (警告。続きは次の回が集める) | 前者は何もしなくてよい (続くなら前の run の code を見る)。後者は取りこぼした期間を人に知らせる |
 | `NO_LOG_LINES` / `LOG_GROUP_UNVERIFIED` / `TRAIL_FILE_INVALID` | 窓の中にログの行が無い (警告) / ロググループの保存期間などを確かめられないまま問い合わせた (警告) | `log_group`・`stream_prefix` と、`logs:DescribeLogGroups` の権限を確かめる (`arata doctor`、`arata help ai logs`) / `cloudtrail-s3` で trail の S3 のファイルを読めず飛ばした (警告。`key` にキー。続くなら配信先と改ざんを疑う) |
 | `AGGREGATE_TRUNCATED` / `REQUESTS_UNTAGGED` | 集計が行の上限で切れた / request id の無い最初の行を数えていない (どちらも件数が少なめに出る。警告) | 件数を下限として読む。後者は `arata help ai request_lines` |
 | `USER_ID_MISSING` / `USER_ID_INVALID` | ユーザー ID の付いたリクエストが無く、要るチェックを skip した / 形に合わないユーザー ID・ログインの結果を捨てた (警告) | アプリの行と `request.user_id` / `request.auth` を確かめる (`arata help ai user_id`) |

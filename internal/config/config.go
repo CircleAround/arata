@@ -108,6 +108,11 @@ type Source struct {
 	AccountID string `yaml:"account_id"`
 	// BucketRegion はバケットのリージョン (既定は aws.region)。
 	BucketRegion string `yaml:"bucket_region"`
+	// MaxCollect は 1 回の収集でこのソースが集める範囲の上限 (0 なら上限なし)。超えたら上限まで集めて位置を進め、run は partial。
+	// 決定 (ADR 0064): 資格情報が 1 時間で切れる環境 (GitHub Actions の役割の連鎖) で、止まった後の追いつきが毎回途中で失敗し続けないため。
+	// CloudTrail の種類 (cloudtrail-lookup・cloudtrail-s3・cloudtrail-unused-regions) だけ。1h 以上
+	MaxCollect    time.Duration `yaml:"-"`
+	MaxCollectRaw string        `yaml:"max_collect"`
 	// IngestDelay はイベントが起きてから取得できるようになるまでの遅延の見込み。収集は [From - IngestDelay, To) を引き、
 	// 前回の窓の末尾に起きて遅れて記録されたイベントを拾う (設計書 3 章、ADR 0013)。既定は kind ごと (DefaultIngestDelay)。0 で再走査しない。
 	IngestDelay    time.Duration `yaml:"-"`
@@ -264,6 +269,22 @@ func (c *Config) applyDefaults() error {
 			if err := s.applyRequestDefaults(); err != nil {
 				return fmt.Errorf("config: source %s: %w", s.ID, err)
 			}
+		}
+		if s.MaxCollectRaw != "" {
+			switch s.Kind {
+			case KindCloudTrailLookup, KindCloudTrailS3, KindCloudTrailUnusedRegions:
+			default:
+				return fmt.Errorf("config: source %s: max_collect is only for %s, %s and %s (Logs Insights reads from the start of the day; see ADR 0065)",
+					s.ID, KindCloudTrailLookup, KindCloudTrailS3, KindCloudTrailUnusedRegions)
+			}
+			d, err := ParseDuration(s.MaxCollectRaw)
+			if err != nil {
+				return fmt.Errorf("config: source %s: max_collect %q: %w", s.ID, s.MaxCollectRaw, err)
+			}
+			if d < time.Hour {
+				return fmt.Errorf("config: source %s: max_collect %q must be at least 1h", s.ID, s.MaxCollectRaw)
+			}
+			s.MaxCollect = d
 		}
 		s.IngestDelay = DefaultIngestDelay[s.Kind]
 		if s.IngestDelayRaw != "" {

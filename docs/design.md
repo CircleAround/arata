@@ -278,7 +278,7 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
 | `CONFIG_INVALID` | 決定: 設定ファイルの読み込み・検証エラー (終了コード 2) |
 | `ROLE_POLICY_LARGE` | 決定 (ADR 0062): `arata config role-params` の一覧で、読み取り専用ロールのインラインポリシーが IAM の上限 (10,240 文字。空白は数えない) の 9 割を超える見込み。値は出す (警告。Deny の分は設定から分からないので見積もりに入れない) |
 | `REPORT_NOT_FOUND` | 決定: `arata report` で出す報告が無い (そのプロファイルの run がまだ無い。終了コード 2) |
-| `SOURCE_CATCHUP` / `SOURCE_CATCHUP_TRUNCATED` | 決定 (ADR 0038): 前に失敗したソースを取れていた位置から引き直している (警告) / 遅れが `max_catchup` を超え、古い分を取りこぼした (警告) |
+| `SOURCE_CATCHUP` / `SOURCE_CATCHUP_TRUNCATED` / `SOURCE_COLLECT_LIMITED` | 決定 (ADR 0038): 前に失敗したソースを取れていた位置から引き直している (警告) / 遅れが `max_catchup` を超え、古い分を取りこぼした (警告) / 決定 (ADR 0064): 1 回の収集が `max_collect` に当たり、そこまで集めて止めた (警告。run は partial。続きは次の回) |
 | `NO_LOG_LINES` / `LOG_GROUP_UNVERIFIED` | 決定 (ADR 0054): 窓の中にログの行が無い (警告) / ロググループの保存期間などを確かめられないまま問い合わせた (範囲の確認をしていない。警告) |
 | `TRAIL_FILE_INVALID` | 決定 (ADR 0063): `cloudtrail-s3` で trail の S3 のファイルを読めず (gzip・JSON の誤り、大きさの上限)、飛ばした (警告。`key` にオブジェクトのキー)。他のファイルは読み続ける |
 | `AGGREGATE_TRUNCATED` / `REQUESTS_UNTAGGED` | 決定 (ADR 0054): 集計が行の上限で切れ、件数が下限になった (警告) / request id の無い最初の行を数えていない (警告) |
@@ -572,6 +572,19 @@ sources:
   (今までは、この run が保存したものだけ)。別のプロファイルの run が先に拾った遅れて届いたイベントも、このプロファイルが 1 回だけ評価する。遡る範囲は窓の始まり − 最大の ingest_delay の時の頭まで。
   初めての run と試しの実行は、今までどおりこの run が保存したもの
 - 位置の記録の書式は RFC 3339 (ナノ秒まで)。前の版の秒までの値もそのまま読める
+
+決定 (ADR 0064。続きだけの収集の 2 段目): `arata collect --incremental` と `max_collect`。
+
+- `collect --incremental` は評価も報告もしない (aratam は送らない)。全プロファイルが要る CloudTrail のソース (`cloudtrail-lookup`・`cloudtrail-s3`・
+  `cloudtrail-unused-regions`) の続きだけを、共有の位置から集めて位置を進める (runs の profile は `collect-incremental`)。位置が無いソースは、そのソースを要る
+  プロファイルの最も長い窓の分。遅れがそのプロファイルの最も長い `max_catchup` を超えたら、超えた分は諦めて `SOURCE_CATCHUP_TRUNCATED`。`--window`・`--source` とは一緒に使えない
+- cloudwatch-logs は今は集めない。Logs Insights は日の頭から読み直すので、短い間隔で回すと読み取り (費用) が増える。ADR 0065 で時ごとに続きだけを読むようになったら入れる。
+  行き着く先は、ソースの種類を問わず 1 つの収集の間隔で全部を集め、利用者が決めるのはその間隔だけ (オーナーの意向。2026-11-15)。そのときに CloudTrail だけという区別も無くす
+- `sources[].max_collect` (CloudTrail の種類だけ。1h 以上。書かなければ上限なし): 1 回の収集でそのソースが集める範囲 (読み始めから) の上限。超えたら上限まで集めて位置を
+  そこまで進め、`SOURCE_COLLECT_LIMITED` の WARN、run は partial (終了コード 3)。プロファイルの run でも同じ上限が効き、止めた時刻より後の記録が報告に入っていないことを
+  `coverage.notes` に書く。資格情報が 1 時間で切れる環境 (GitHub Actions の役割の連鎖) で、止まった後の追いつきが毎回途中で失敗し続けないため
+- ADR 0064 の「途中で失敗したソースも、古い側から取れた所まで位置を進める (LookupEvents を古い順に区切って引く)」は、まだ入れていない。
+  区切って引くと空の区切りの呼び出しが増え (2 TPS)、追いつきが資格情報の期限で失敗し続ける問題は `max_collect` で先に防げるため。実データで要ると分かってから入れる
 
 決定 (実行が遅れた時の窓): `run` の窓は通常 `[now - window, now)` だが、同じ profile の直近の ok / partial な run があれば
 From = min(now - window, 前回の window_to) として、cron の遅延・欠落で空いた期間を取りこぼさない。追いつきは `profiles.<name>.max_catchup` (既定 7d) まで。
@@ -1391,6 +1404,7 @@ arata doctor                   # 権限・ロググループ・形式プロフ�
 arata run       --profile daily [--out dir]   # collect → evaluate → report → prune
 arata run       --profile daily --dry-run [--window 1h] [--out dir]   # 試しの実行。ストアに何も書かない (3 章、ADR 0049)
 arata collect   --window 24h [--source id]
+arata collect   --incremental                 # 全プロファイルが要る CloudTrail のソースの続きだけを、共有の位置から集める (ADR 0064)
 arata evaluate  --profile daily
 arata report    --from 2026-10-01 --to 2026-10-31 --format md|json [--template monthly]
                 # 決定: --month 2026-10 を糖衣にし、--template は作らない。収集せずストアだけから作る (ADR 0016)

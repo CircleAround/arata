@@ -286,6 +286,7 @@ cat /tmp/arata-out/report.md                  # 人向け。report.json は機�
 arata report   --profile daily --format md    # 最後の run のレポートを再表示
 arata run      --profile daily --dry-run --window 1h --out /tmp/arata-try   # 試しの実行 (ストアに何も書かない)
 arata collect  --window 2h                    # 収集だけ
+arata collect  --incremental                  # CloudTrail の続きだけを位置から集める (6 時間ごとなど。daily は読み直さずに評価する。ADR 0064)
 arata evaluate --profile daily                # 収集せずに評価だけ
 arata rebuild                                 # raw JSONL から audit.sqlite を作り直す (findings・runs・主体の状態は引き継ぐ)
 ```
