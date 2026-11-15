@@ -475,9 +475,9 @@ func newCollectCmd(d *Deps, g *globalFlags) *subcmd.Command {
 		Long: `収集だけを行い、ストアへ反映する。評価も報告もしない (aratam は送らない)。
 
   --window <期間>   今から遡ってその期間を集める (既定 24h)。位置は進めない (手で過去を足すとき)
-  --incremental     全プロファイルが要る CloudTrail のソースの続きだけを、共有の位置から集めて位置を進める (ADR 0064)。
+  --incremental     全プロファイルが要る CloudTrail と collect: hourly の cloudwatch-logs のソースの続きだけを、共有の位置から集めて位置を進める (ADR 0064)。
                     短い間隔 (6 時間ごとなど) で回すと、プロファイルの run (daily など) は読み直さずに評価だけをする。
-                    cloudwatch-logs は今は集めない (Logs Insights は日の頭から読み直すので、短い間隔だと費用が増える。ADR 0065 で入れる)。
+                    cloudwatch-logs は collect: hourly のソースだけを集める (日の頭から読み直すソースは、短い間隔だと費用が増える。ADR 0065)。
                     1 回に集める範囲の上限はソースの max_collect。--window・--source とは一緒に使えない`,
 		Run: func(ctx context.Context, _ []string) error {
 			if incremental && (window != "" || len(sources) > 0) {
@@ -518,7 +518,7 @@ func newCollectCmd(d *Deps, g *globalFlags) *subcmd.Command {
 		},
 	}
 	cmd.StringVar(&window, "window", "", "収集する期間 (例: 24h, 7d。既定 24h)。--incremental とは一緒に使えない")
-	cmd.BoolVar(&incremental, "incremental", false, "全プロファイルが要る CloudTrail のソースの続きだけを、共有の位置から集める (ADR 0064)")
+	cmd.BoolVar(&incremental, "incremental", false, "全プロファイルが要る CloudTrail と collect: hourly の cloudwatch-logs のソースの続きだけを、共有の位置から集める (ADR 0064・0065)")
 	cmd.StringArrayVar(&sources, "source", "対象ソース ID (複数可。省略時は全部)")
 	return cmd
 }

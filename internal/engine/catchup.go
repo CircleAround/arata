@@ -45,6 +45,8 @@ type catchup struct {
 	// coveredFrom は位置まで途切れずに読めている始まり。ahead は位置から続きだけを読むソース (位置が窓の始まりより先)。
 	coveredFrom map[string]time.Time
 	ahead       map[string]time.Time
+	// start は時の単位で読む cloudwatch-logs のソースの読み始め (位置。ADR 0065)。
+	start map[string]time.Time
 }
 
 // latestPositions は、位置を持つ最も新しい ok / partial の run の位置と始まり。
@@ -94,7 +96,7 @@ func incrementalKind(kind string) bool {
 
 // planCatchup は前回の run の位置から、遅れているソースを決める。追いつきは max_catchup までで、超えた分は諦めて警告する。
 func (e *Engine) planCatchup(ctx context.Context, profile string, prof config.Profile, base, now time.Time) (*catchup, error) {
-	cu := &catchup{covered: map[string]time.Time{}, from: map[string]time.Time{}, coveredFrom: map[string]time.Time{}, ahead: map[string]time.Time{}}
+	cu := &catchup{covered: map[string]time.Time{}, from: map[string]time.Time{}, coveredFrom: map[string]time.Time{}, ahead: map[string]time.Time{}, start: map[string]time.Time{}}
 	var err error
 	if cu.covered, cu.coveredFrom, err = e.latestPositions(ctx); err != nil {
 		return cu, err
@@ -106,6 +108,14 @@ func (e *Engine) planCatchup(ctx context.Context, profile string, prof config.Pr
 		// 決定 (ADR 0064): このプロファイルが読まないソースは見ない (位置は共有なので、hourly から見た daily だけのソースは常に古い)
 		if !ok || !anyNeeded(kindsOf(e.cfg, src), needs) {
 			continue
+		}
+		// 決定 (ADR 0065): 時の単位で読むソースは、いつも位置 (読み終えた時) から読む。位置は「今 − ingest_delay」を切り捨てた時なので、
+		// 窓の始まりより 1 時間 + ingest_delay までの遅れは遅れにしない (警告も窓の広げもしない)
+		if src.CollectHourly() && anyNeeded(formatKinds(src), needs) {
+			cu.start[src.ID] = t
+			if !t.Before(base.Add(-src.IngestDelay - time.Hour)) {
+				continue
+			}
 		}
 		if !t.Before(base) {
 			if f, ok := cu.coveredFrom[src.ID]; ok && incrementalKind(src.Kind) && !f.After(base.Add(-src.IngestDelay)) && t.After(base) {
@@ -159,6 +169,27 @@ func (c *catchup) advance(cr CollectResult, base, to time.Time) (covered, from m
 		outFrom[id] = t
 	}
 	for _, id := range cr.SourcesOK {
+		if t, ok := cr.coveredTo[id]; ok {
+			// 時の単位で読むソース (ADR 0065): 読み終えた時まで進める。読む時が無かったら前の位置のまま
+			if t.IsZero() {
+				continue
+			}
+			if prev, hasPrev := c.covered[id]; hasPrev && !t.After(prev) {
+				continue
+			}
+			start := cr.scanFrom[id]
+			if prev, hasPrev := c.covered[id]; hasPrev && !start.After(prev) {
+				if f, ok := c.coveredFrom[id]; ok {
+					outFrom[id] = earlier(f, start)
+				} else {
+					outFrom[id] = start
+				}
+			} else {
+				outFrom[id] = start
+			}
+			out[id] = t
+			continue
+		}
 		start, ok := cr.scanFrom[id]
 		if !ok {
 			start = base

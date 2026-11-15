@@ -357,7 +357,7 @@ func (c *Collector) collectWAF(ctx context.Context, qs []MergedQuery, lines []ma
 		return err
 	}
 	limits := dayCounts{} // 位置の上限を超えたリクエストの数 (waf_position_limit)
-	rows, err := c.splitQuery(ctx, qs[1], from, to, time.Hour, false)
+	rows, err := c.fetch(ctx, qs[1], from, to, time.Hour, false)
 	if err != nil {
 		return err
 	}
@@ -365,7 +365,7 @@ func (c *Collector) collectWAF(ctx context.Context, qs []MergedQuery, lines []ma
 	if err != nil {
 		return err
 	}
-	rows, err = c.splitQuery(ctx, qs[2], from, to, time.Hour, false)
+	rows, err = c.fetch(ctx, qs[2], from, to, time.Hour, false)
 	if err != nil {
 		return err
 	}
@@ -373,6 +373,12 @@ func (c *Collector) collectWAF(ctx context.Context, qs []MergedQuery, lines []ma
 		return err
 	}
 	rate := WAFRateQuery(c.prof, c.checks)
+	if c.hourly() {
+		if err := c.collectRateHourly(ctx, rate, from, to, sink); err != nil {
+			return err
+		}
+		return limits.emit(ctx, c, sink)
+	}
 	for d := from; d.Before(to); d = d.Add(24 * time.Hour) {
 		end := d.Add(24 * time.Hour)
 		if end.After(to) {

@@ -258,7 +258,7 @@ type endpointHit struct {
 func (c *Collector) collectEndpoints(ctx context.Context, q MergedQuery, from, to time.Time, sink collect.RecordSink) error {
 	ea := c.checks.EndpointAbuse
 	specs := endpointSpecs(c.prof, c.src.ID, ea)
-	rows, err := c.splitQuery(ctx, q, from, to, ea.WindowDuration(), true)
+	rows, err := c.fetch(ctx, q, from, to, ea.WindowDuration(), true)
 	if err != nil {
 		return err
 	}

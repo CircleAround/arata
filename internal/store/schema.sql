@@ -98,6 +98,19 @@ CREATE TABLE IF NOT EXISTS metrics_hourly (
 );
 CREATE INDEX IF NOT EXISTS metrics_hourly_day ON metrics_hourly(metric, date, source);
 
+-- 部分の行 (schema 7。ADR 0065)。Logs Insights のクエリが時の単位で返した行を、(source, query, hour) ごとに丸ごと置き換えて残す。
+-- 日の値 (metrics) はその日の全部の時の行から Go で作る。raw には書かない (作業用。rebuild は既存の SQLite から引き継ぐ)。
+-- rows は行の JSON の配列。date は hour の日 (古い日を消すため)。
+CREATE TABLE IF NOT EXISTS metric_parts (
+  source TEXT NOT NULL,
+  query  TEXT NOT NULL,
+  hour   TEXT NOT NULL,
+  date   TEXT NOT NULL,
+  rows   TEXT NOT NULL DEFAULT '[]',
+  PRIMARY KEY (source, query, hour)
+);
+CREATE INDEX IF NOT EXISTS metric_parts_date ON metric_parts(source, date);
+
 -- スナップショット (認証情報レポート・GuardDuty・Access Analyzer・姿勢)。収集が成功したときだけ (kind, source) 単位で丸ごと置き換える (ADR 0015)。
 CREATE TABLE IF NOT EXISTS snapshot_items (
   kind         TEXT NOT NULL,

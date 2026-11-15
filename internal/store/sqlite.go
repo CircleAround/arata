@@ -21,7 +21,7 @@ import (
 //go:embed schema.sql
 var schemaSQL string
 
-const schemaVersion = 6
+const schemaVersion = 7
 
 // Dir は dir:// バックエンド。<dir>/audit.sqlite と <dir>/raw/ を持つ。
 type Dir struct {
@@ -528,6 +528,50 @@ func upsertMetric(ctx context.Context, db execer, m record.Metric) error {
 		ON CONFLICT(date, source, metric, key) DO UPDATE SET value=excluded.value, "from"=excluded."from"`,
 		m.Date, m.Source, string(m.From), m.Metric, m.Key, m.Value)
 	return wrap(err)
+}
+
+// PutParts は (source, query, hour) の部分の行を丸ごと置き換える (ADR 0065)。rows が空でも書く (その時に行が無かったことを残す)。
+// 書いた時の日から retentionDays 日より前の、そのソースの部分の行は消す (0 なら消さない)。
+func (s *Dir) PutParts(ctx context.Context, source, query string, hour time.Time, rows []map[string]string, retentionDays int) error {
+	if rows == nil {
+		rows = []map[string]string{}
+	}
+	b, err := json.Marshal(rows)
+	if err != nil {
+		return err
+	}
+	h := hour.UTC().Truncate(time.Hour)
+	_, err = s.db.ExecContext(ctx, `INSERT INTO metric_parts(source, query, hour, date, rows) VALUES (?,?,?,?,?)
+		ON CONFLICT(source, query, hour) DO UPDATE SET rows=excluded.rows`,
+		source, query, h.Format(record.HourLayout), h.Format(record.DateLayout), string(b))
+	if err != nil || retentionDays <= 0 {
+		return wrap(err)
+	}
+	_, err = s.db.ExecContext(ctx, `DELETE FROM metric_parts WHERE source = ? AND date < ?`, source, h.AddDate(0, 0, -retentionDays).Format(record.DateLayout))
+	return wrap(err)
+}
+
+// Parts は (source, query) の、時が [from, to) の部分の行を時の順につないで返す。hours は書いてあった時の数 (行の無い時も数える)。
+func (s *Dir) Parts(ctx context.Context, source, query string, from, to time.Time) (rows []map[string]string, hours int, err error) {
+	res, err := s.db.QueryContext(ctx, `SELECT rows FROM metric_parts WHERE source = ? AND query = ? AND hour >= ? AND hour < ? ORDER BY hour`,
+		source, query, from.UTC().Format(record.HourLayout), to.UTC().Format(record.HourLayout))
+	if err != nil {
+		return nil, 0, wrap(err)
+	}
+	defer res.Close()
+	for res.Next() {
+		var b string
+		if err := res.Scan(&b); err != nil {
+			return nil, 0, wrap(err)
+		}
+		var part []map[string]string
+		if err := json.Unmarshal([]byte(b), &part); err != nil {
+			return nil, 0, fmt.Errorf("store: metric_parts: %w", err)
+		}
+		rows = append(rows, part...)
+		hours++
+	}
+	return rows, hours, wrap(res.Err())
 }
 
 // Metrics は日の行を返す。時ごとの集計 (metrics_hourly) は日ごとに足して日の行にし、時ごとの行がある (日, source, metric) では

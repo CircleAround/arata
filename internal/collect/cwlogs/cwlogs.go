@@ -72,6 +72,13 @@ type Collector struct {
 	HygieneFrom time.Time
 	// selected は Select で絞った、この収集で出す種類 (nil なら形式の集計だけ)。
 	selected map[record.Kind]bool
+	// Parts は時の単位で読むソース (collect: hourly) の部分の行の置き場所 (engine がストアを渡す。ADR 0065)。nil なら日の頭から読み直す。
+	Parts PartStore
+	// PartRetentionDays は部分の行を残す日数 (0 なら DefaultPartRetentionDays)。
+	PartRetentionDays int
+	// coveredTo は時の単位で読んだ終わり (CoveredTo)。limited は max_collect で止めたか (Limited)。
+	coveredTo time.Time
+	limited   bool
 }
 
 // 問い合わせ範囲が Insights に拒否される理由 (FormatStats.OutOfRange)。
@@ -164,12 +171,26 @@ func (c *Collector) Queries() map[string]string {
 	}
 	if c.prof.Yields == record.KindWAFAction {
 		out["waf_ip_rate"] = WAFRateQuery(c.prof, c.checks)
+		if c.src.CollectHourly() {
+			out["waf_ip_rate"] = WAFRateHistQuery(out["waf_ip_rate"])
+		}
 	}
 	return out
 }
 
 // queries は Collect が範囲全体に流すクエリ (解釈率を含む。順番どおり。レートは含まない)。
+// 時の単位で読むソースは、日の軸を時の軸にする (ADR 0065)。
 func (c *Collector) queries() []MergedQuery {
+	qs := c.dayQueries()
+	if c.src.CollectHourly() {
+		for i := range qs {
+			qs[i].Query = hourlyQuery(qs[i].Query)
+		}
+	}
+	return qs
+}
+
+func (c *Collector) dayQueries() []MergedQuery {
 	switch c.prof.Yields {
 	case record.KindWAFAction:
 		return WAFQueries(c.prof, c.checks)
@@ -292,17 +313,29 @@ func (c *Collector) Collect(ctx context.Context, w collect.Window, sink collect.
 // collectFormat は形式プロファイルの集計 (解釈率と日次の metric)。
 func (c *Collector) collectFormat(ctx context.Context, w collect.Window, sink collect.RecordSink) error {
 	from, to := DayStart(w.Start()), w.To
+	c.coveredTo, c.limited = time.Time{}, false
+	qs := c.queries()
+	if c.hourly() {
+		var ok bool
+		var err error
+		if from, to, ok, err = c.hourlyRange(ctx, w, qs[0].Name); err != nil {
+			return err
+		} else if !ok {
+			// 終わった時がまだ無い (前の収集から 1 時間たっていない)。位置は変えない
+			return nil
+		}
+	}
 	c.stats = &collect.FormatStats{Source: c.src.ID, Format: c.src.Format, LogGroup: c.src.LogGroup, Expected: c.src.ExpectedMatchRate}
 	from, reason := c.queryRange(ctx, from, to)
 	if reason != "" {
 		c.stats.OutOfRange = reason
 		c.Logger.Info("query range is outside the log group's lifetime; treating as no data", "source", c.src.ID, "log_group", c.src.LogGroup,
 			"reason", reason, "from", from.Format(time.RFC3339), "to", to.Format(time.RFC3339))
+		c.coveredTo = to
 		return nil
 	}
-	qs := c.queries()
 	// request_lines の解釈率のクエリは 1 日ずつ流す (request_id の無い行の組が範囲の最初の日に寄らないように。request.go)
-	linesRows, err := c.splitQuery(ctx, qs[0], from, to, c.dayAlign(), c.prof.req != nil)
+	linesRows, err := c.fetch(ctx, qs[0], from, to, c.dayAlign(), c.prof.req != nil)
 	if err != nil {
 		return err
 	}
@@ -347,6 +380,9 @@ func (c *Collector) collectFormat(ctx context.Context, w collect.Window, sink co
 		}
 	}
 	if c.stats.Total == 0 {
+		if c.hourly() {
+			c.coveredTo = to // 行が無い時も読み終えた
+		}
 		return nil
 	}
 	if err := c.emitRequests(ctx, linesRows, sink); err != nil {
@@ -354,11 +390,14 @@ func (c *Collector) collectFormat(ctx context.Context, w collect.Window, sink co
 	}
 	switch c.prof.Yields {
 	case record.KindWAFAction:
-		return c.collectWAF(ctx, qs, linesRows, from, to, sink)
+		err = c.collectWAF(ctx, qs, linesRows, from, to, sink)
 	case record.KindHTTPAccess:
-		return c.collectHTTP(ctx, qs, linesRows, from, to, sink)
+		err = c.collectHTTP(ctx, qs, linesRows, from, to, sink)
 	}
-	return nil
+	if err == nil && c.hourly() {
+		c.coveredTo = to
+	}
+	return err
 }
 
 // collectHTTP は http_access のまとめた集計から sign_in_failures / probe_hits / probe_paths と endpoint_abuse の metric を出す。
@@ -374,10 +413,11 @@ func (c *Collector) collectHTTP(ctx context.Context, qs []MergedQuery, linesRows
 			out[MetricProbePaths].add(day, Mask(r["probe_path"]), c.rowCount(r))
 		}
 	}
-	rows, err := c.splitQuery(ctx, qs[1], from, to, c.dayAlign(), false)
+	rows, err := c.fetch(ctx, qs[1], from, to, c.dayAlign(), false)
 	if err != nil {
 		return err
 	}
+	signInHours := map[string]float64{}
 	for _, r := range rows {
 		day, ok := parseDay(r["day"])
 		if !ok {
@@ -386,6 +426,7 @@ func (c *Collector) collectHTTP(ctx context.Context, qs []MergedQuery, linesRows
 		n, ip := num(r[httpHits]), Mask(r["ip"])
 		if (len(lb.Methods) == 0 || containsStr(lb.Methods, r["method"])) && (len(lb.Paths) == 0 || r["sign_in"] != "") && statusIn(r["status"], lb.FailureStatuses) {
 			out[MetricSignInFailures].add(day, ip, n)
+			signInHours[r["day"]] += n
 		}
 		if statusIn(r["status"], pp.Statuses) && (len(pp.Paths) == 0 || r["probe"] != "") && r["probe_ex"] == "" {
 			out[MetricProbeHits].add(day, ip, n)
@@ -398,6 +439,11 @@ func (c *Collector) collectHTTP(ctx context.Context, qs []MergedQuery, linesRows
 					return err
 				}
 			}
+		}
+	}
+	if c.hourly() {
+		if err := c.emitSignInHourly(ctx, signInHours, sink); err != nil {
+			return err
 		}
 	}
 	if len(qs) > 2 {

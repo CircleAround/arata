@@ -573,12 +573,40 @@ sources:
   初めての run と試しの実行は、今までどおりこの run が保存したもの
 - 位置の記録の書式は RFC 3339 (ナノ秒まで)。前の版の秒までの値もそのまま読める
 
+決定 (ADR 0065): cloudwatch-logs の `collect: hourly` (時の単位で続きだけを読む)。
+
+- 集計のクエリの軸を `bin(1d)` から `bin(1h)` にし、[位置の時, (今 − ingest_delay) を切り捨てた時) だけを読む。終わっていない時は読まない。
+  同じ時を 2 度読まないので、1 日に読む量は「本数 × 1 日分」で実行の時刻にも間隔にも依らない (今の読み方は、6 時間ごとに回すと同じ日を 4 回読む)
+- クエリが返した行を時ごとに `metric_parts` に残し、日の値はその日の全部の時の行を今までの振り分けに通して作る。振り分けは同じ組の行の件数を足し、
+  IP は集合で取るので、1 日分を 1 本で引いたときと同じ値になる (同値のゴールデン `equiv_waf.golden`・`equiv_http.golden` を、時の単位で 3 回に分けて読んだ結果と突き合わせて固定)
+- 時の単位で読み始める日に 0 時からの部分の行が無ければ、その日の頭から読む (移った日の値を一部だけの値で置き換えない)
+- 位置は読み終えた時 (「今 − ingest_delay」を切り捨てた時)。プロファイルの run はいつも位置から読み、窓の始まりより 1 時間 + ingest_delay までの遅れは遅れにしない。
+  読む時が無ければ (前の収集から 1 時間たっていない) 何も読まず、位置も変えない。log_hygiene だけを読む run (weekly) も位置を変えない
+- レート (`waf_ip_rate_p50`・`p99`・`max`) は 2 段目を「5 分あたりの件数 n の度数」(`stats count(*) as k by acl, grp, n`) にして時ごとに引き、日の度数を足して
+  Go で分位数 (最も近い順位) を取る。Insights の `pct` は近似なので、値が少し変わる (Release の本文に書く。report.json の型と schema_version は変わらない)
+- 時ごとの sign-in の失敗の和を `sign_in_failures_hourly` (`metrics_hourly`、key なし) に書く (速報 `sign_in_failure_spike` の材料。ADR 0066)
+- 決定 (実データで直した。2026-11-15): 時の単位で読むソースは、**初めから 1 時間ずつクエリを流し、各時を 1 回だけ読む**。行数の上限 (10,000) に当たっても範囲を割らない。
+  上限に当たった時は、クエリの sort desc + limit で件数の多い組が残るので、その metric を truncated (下限。`AGGREGATE_TRUNCATED`) にする。
+  大きなアカウントの WAF (1 日約 4.5 GB) で、位置の無い 1 回目に 36 時間を 1 本で流してから 18・9・4・2 時間と割り、2 時間でも上限に当たって、読み取りが押し上げられたため
+- `max_collect` (ADR 0064) は `collect: hourly` の cloudwatch-logs にも効く。collector が、日の頭からの読み直しを含めて、古い側から決めた時間の分だけ読み、
+  位置をそこまで進める (`SOURCE_COLLECT_LIMITED`、partial)。位置の無い 1 回目が大きいとき (WAF で 30 GB を超えるなど) に使う
+- 読み終わりは、窓の終わりと「今 − ingest_delay」の早い方を時に切り捨てたもの (`max_collect` で止めた古い時は、取り込みの遅れを待たない)
+- 記録 (ADR 0031 の分割と読み取り量。今の利用者への影響): 日の頭から読む読み方 (`collect: hourly` を書かないソース) は、行数の上限に当たると範囲を時に揃えて半分に割って
+  **引き直す**。割る前の 1 本も範囲の全部を読んでいるので、割るたびに読み取りが増える (1 段割るごとに、その範囲をもう一度読む)。ADR 0031 の
+  「分けて流してもスキャン量は増えない」は、分けたクエリどうしの和の話で、上限に当たった最初の 1 本の分は増える。大きなアカウントの WAF の daily は、
+  この引き直しで 1 回に約 31.8 GB を読んだ (v0.16.0、max_scan_gb 30 で QUERY_LIMIT)。`collect: hourly` にすると、この引き直しは無くなる
+- 対象外: `request_lines` (request_id で行をまとめるので、時の境目をまたぐリクエストが割れる)、`text` (日次の集計が無い)。endpoint_abuse の時間幅は 1 時間を割り切る値に限る
+- `arata collect --incremental` は `collect: hourly` のソースも集める (日の頭から読み直すソースは集めない)
+- 既定にする道筋: 最初の版はソースごとの opt-in。実データで日の値が同じこと (レート以外) と読み取り量を確かめた後の版で既定にし、`collect` の項目を要らなくする。
+  そのとき `collect --incremental` の「CloudTrail と collect: hourly の cloudwatch-logs だけ」という区別も無くし、利用者が決めるのは収集の間隔だけにする (オーナーの意向)。
+  request_lines は時の単位にできないので、その形式だけは日の頭から読む読み方が残る (種類で違いが残る唯一の理由)
+
 決定 (ADR 0064。続きだけの収集の 2 段目): `arata collect --incremental` と `max_collect`。
 
 - `collect --incremental` は評価も報告もしない (aratam は送らない)。全プロファイルが要る CloudTrail のソース (`cloudtrail-lookup`・`cloudtrail-s3`・
   `cloudtrail-unused-regions`) の続きだけを、共有の位置から集めて位置を進める (runs の profile は `collect-incremental`)。位置が無いソースは、そのソースを要る
   プロファイルの最も長い窓の分。遅れがそのプロファイルの最も長い `max_catchup` を超えたら、超えた分は諦めて `SOURCE_CATCHUP_TRUNCATED`。`--window`・`--source` とは一緒に使えない
-- cloudwatch-logs は今は集めない。Logs Insights は日の頭から読み直すので、短い間隔で回すと読み取り (費用) が増える。ADR 0065 で時ごとに続きだけを読むようになったら入れる。
+- cloudwatch-logs は `collect: hourly` のソースだけを集める (ADR 0065)。日の頭から読み直すソースを短い間隔で回すと、読み取り (費用) が増えるため。
   行き着く先は、ソースの種類を問わず 1 つの収集の間隔で全部を集め、利用者が決めるのはその間隔だけ (オーナーの意向。2026-11-15)。そのときに CloudTrail だけという区別も無くす
 - `sources[].max_collect` (CloudTrail の種類だけ。1h 以上。書かなければ上限なし): 1 回の収集でそのソースが集める範囲 (読み始めから) の上限。超えたら上限まで集めて位置を
   そこまで進め、`SOURCE_COLLECT_LIMITED` の WARN、run は partial (終了コード 3)。プロファイルの run でも同じ上限が効き、止めた時刻より後の記録が報告に入っていないことを
@@ -784,6 +812,7 @@ SQLite ファイルは数十 MB 程度に収まる想定 (集計のみ保存す�
 | `events` | time, source, name, principal_arn, ip, region, resource, data | 「注目イベント」のみ (ルート利用、IAM 変更など)。全 CloudTrail は保存しない。決定: 注目の判定は collector 側 (`cloudtrail.DefaultNotable`) で行い、ルート利用・AssumeRole*・IAM / CloudTrail / GuardDuty / Access Analyzer / Organizations の書き込み・秘匿値取得・SSM セッション・公開設定変更を残す。決定: defense_evasion / public_exposure が見る操作 (ログの削除・保持期間、フローログの削除、Config・Security Hub の停止、WAF のログ設定、S3 のバケットポリシーの削除・ライフサイクル、スナップショットの共有、Lambda の AddPermission など) だけを足し、全書き込みは足さない。一覧はチェック側 (`checks.DefenseEvasionAPIs` / `PublicExposureAPIs`) にあり、collector のテストで突き合わせる。該当する操作だけ requestParameters から判定に要る値を `data` に取り出す (ポリシー全文は残さない。ADR 0026)。決定: 拒否された呼び出し (errorCode が `checks.access_denied.error_codes` に入るもの) も読み取りを含めて残す (access_denied の元。コードは設定から `cloudtrail.NotableWith` に渡す。ADR 0021)。決定 (ADR 0027): 秘匿値の読み取り (GetSecretValue・BatchGetSecretValue・GetParameter(s)・GetParametersByPath) は名前 / ARN・パス・`recursive`・`with_decryption` (常に残す。無いのは以前の版で集めたもの) だけを `data` に取り出す (値は CloudTrail に入らない)。BatchGetSecretValue も注目イベントに足した (一覧は `checks.SecretReadAPIs`)。`event_id` で重複を排除する (複数リージョンを引いた場合の二重も同じ仕組みで防ぐ。collector 側でも同一 Collect 内の event_id は 1 回だけ数える)。決定: `collected_at` (最初に収集した run の時刻) を持ち、再走査で遅れて届いたイベントを見分ける (3 章、ADR 0013)。決定 (ADR 0032): `cloudtrail-unused-regions` のソースは、ふだん使わないリージョンの AWS のサービス以外の主体の書き込みを (失敗を含めて) すべて残す (使っていないリージョンでは 0〜数件)。source 列がそのソースの ID で、unused_region_activity だけが見る (他のチェックの Query は除く) |
 | `metrics` | date, source, metric, key, value | 日次集計 (`sign_in_failures` by ip、`admin_404` by ip、`waf_block` by rule)。平常帯の計算元。決定: 集計元のレコード種類 `from` 列を追加。主キーは (date, source, metric, key) で、後から来た値で**置き換える** (3 章の決定により後の値ほど完全)。raw JSONL には追記されるので rebuild は行順に適用すれば同じ結果になる (ソースが主キーに入るので、ソースの中の日付順・行順で足りる。5-4)。日は UTC。決定 (ADR 0027): cloudtrail collector も主体の活動の日次集計を出す: `principal_source` (key `<主体 ARN>\|<送信元の /24・/48>`)、`principal_source_writes` (同じ key の成功した書き込み)、`principal_write_region` (key `<主体 ARN>\|<リージョン>` の成功した書き込み)。対象は IAM ユーザーとロール (のセッション)、送信元は IP のときだけ。cloudtrail は日の頭から引き直さないので、置き換えの規則のため値は「その日を最後に引いた run が見た件数」(下限) になる。判定は「その日に有ったか」と下限値にだけ使う。期間レポートの推移表には出さない。Yields に metric は足さない (http_access / waf_action のチェックの skip 判定を変えないため)。行数の見積もり: 1 日あたり (主体数 × その日の送信元の数) × 2 + (主体数 × 書き込みのリージョン数)。主体 50・送信元 2 なら 1 日 250 行、400 日で 10 万行 (数十 MB 未満)。Lambda などサービスが引き受けるロールは送信元が多く、数十のロールが 1 日数十の /24 を使う環境では年 100 万行に近づく。多ければ prune を入れるときに `principal_*` の保持を baseline_days の数倍 (例 90 日) に短くする (判定は 30 日しか見ない)。決定 (ADR 0030): cloudwatch-logs の http_access のソースは endpoint_abuse の画面ごとに `endpoint_abuse_count` / `endpoint_abuse_ips` (key `<画面>\|<HH:MM>`。時間幅の始まり、UTC)、`endpoint_abuse_ua_ips` (key `<画面>\|<HH:MM>\|<UA のハッシュ>`。その幅で最も多くの IP にまたがった UA 1 つ、2 IP 以上のときだけ)、`endpoint_abuse_follow` (key `<from>><to>\|<HH:MM>`。1 以上のときだけ) を出す。IP と UA の原文は保存しない。行数の見積もり: 1 日あたり最大で画面数 × 144 (10 分幅) × 3 + 連鎖数 × 144。画面 3・連鎖 1 で 1 日最大 1,440 行、400 日で 58 万行 (実際は来訪のある幅だけなのでずっと少ない) |
 | `metrics_hourly` | hour, date, source, metric, key, value | 決定 (ADR 0064。schema 6): 時ごとの集計 (今は主体の活動の `principal_source`・`principal_source_writes`・`principal_write_region`)。同じ (hour, source, metric, key) は置き換える。`Metrics` は日の値を時の和として返し、時ごとの行がある (日, source, metric) では `metrics` の日の行 (前の版が書いた下限の値) を使わない。raw には `hour` の付いた metric の行として残り、rebuild は同じ規則で入れ直す |
+| `metric_parts` | source, query, hour, date, rows | 決定 (ADR 0065。schema 7): 時の単位で読む cloudwatch-logs のソース (`collect: hourly`) の、Logs Insights のクエリが返した行 (部分の行) を (source, query, hour) ごとに丸ごと置き換えて残す。日の値 (`metrics`) はその日の全部の時の行から作る。raw には書かない作業用の行で、rebuild は既存の SQLite から引き継ぐ。確定した日から 3 日より古いものは書くときに消す |
 | `findings` | id, check, key, severity, first_seen, last_seen, last_changed, status (open/resolved/acked/snoozed), reported_at, fingerprint, data, suppressed_severity | 差分判定の中核。決定: `fingerprint` 列を追加 (4-2)。決定: `suppressed_severity` (ack / snooze したときの重大度。open / resolved では空) を追加 (schema 5、ADR 0022)。移行では既存の acked / snoozed の行に今の severity を入れる |
 | `posture` | check, resource, value, first_seen, last_changed | 姿勢チェックの現在値。決定: 作らず `snapshot_items` にまとめた (ADR 0015) |
 | `snapshot_items` | kind, source, key, data, collected_at | 決定: アカウント単位の状態 (認証情報レポート・GuardDuty・Access Analyzer・姿勢・WAF の WebACL の設定) の最新のスナップショット。収集が成功したときだけ (kind, source) 単位で丸ごと置き換える (ADR 0015)。決定 (ADR 0033): 置き換えたら raw に `snapshot_replaced` の行 (置き換えた収集の時刻と件数) を書く (0 件の置き換えと失敗した収集を rebuild が見分ける) |

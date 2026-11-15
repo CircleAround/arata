@@ -17,8 +17,8 @@ import (
 // 決定:
 //   - 収集だけの run は評価も報告もしない。全プロファイルが要る CloudTrail のソース (cloudtrail-lookup・cloudtrail-s3・cloudtrail-unused-regions) の
 //     続きだけを、共有の位置から集めて位置を進める (run の stats に位置を書くので、プロファイルの run が読み直さない)。
-//     cloudwatch-logs は今は対象にしない: Logs Insights は日の頭から読み直すので、短い間隔で回すと読み取り (費用) が増える。ADR 0065 で時ごとに続きだけを
-//     読むようになったら対象に入れる (行き着く先は、種類を問わず 1 つの間隔で全部を集め、利用者が決めるのは間隔だけ)
+//     cloudwatch-logs は時の単位で読むソース (collect: hourly。ADR 0065) だけを対象にする: 日の頭から読み直すソースを短い間隔で回すと、
+//     読み取り (費用) が増える。collect: hourly を既定にしたら、この区別も無くす (行き着く先は、種類を問わず 1 つの間隔で全部を集め、利用者が決めるのは間隔だけ)
 //   - 位置が無いソースは、そのソースを要るプロファイルの最も長い窓の分を集める (次のプロファイルの run が、その窓を覆う位置として使える)。
 //     遅れが max_catchup (そのプロファイルの最も長いもの) を超えたら、超えた分は諦めて SOURCE_CATCHUP_TRUNCATED
 //   - max_collect: ソースの 1 回の収集を読み始め + max_collect で止め、位置をそこまで進める。run は partial (終了コード 3) で SOURCE_COLLECT_LIMITED。
@@ -27,11 +27,13 @@ import (
 // collectIncrementalProfile は収集だけの run の profile (runs の行。プロファイルの窓や RUN_MISSED には使わない)。
 const collectIncrementalProfile = "collect-incremental"
 
-// incrementalCollectKind は、収集だけの run が集めるソースの種類 (CloudTrail だけ。上の決定)。
-func incrementalCollectKind(kind string) bool {
-	switch kind {
+// incrementalCollectSource は、収集だけの run が集めるソース (CloudTrail と、時の単位で読む cloudwatch-logs。上の決定)。
+func incrementalCollectSource(src config.Source) bool {
+	switch src.Kind {
 	case config.KindCloudTrailLookup, config.KindCloudTrailS3, config.KindCloudTrailUnusedRegions:
 		return true
+	case config.KindCloudWatchLogs:
+		return src.CollectHourly() && len(formatKinds(src)) > 0
 	}
 	return false
 }
@@ -61,7 +63,8 @@ func (e *Engine) limitCollect(starts map[string]time.Time, to time.Time, runID s
 	out := map[string]time.Time{}
 	for _, src := range e.cfg.Sources {
 		start, ok := starts[src.ID]
-		if !ok || src.MaxCollect <= 0 || to.Sub(start) <= src.MaxCollect {
+		// 時の単位で読む cloudwatch-logs は collector が上限を効かせる (日の頭からの読み直しを含めて数えるため。ADR 0065)
+		if !ok || src.MaxCollect <= 0 || to.Sub(start) <= src.MaxCollect || src.CollectHourly() {
 			continue
 		}
 		out[src.ID] = start.Add(src.MaxCollect)
@@ -102,7 +105,7 @@ func (e *Engine) CollectIncremental(ctx context.Context) (*CollectResult, error)
 	var ids []string
 	from := now
 	for _, src := range e.cfg.Sources {
-		if !incrementalCollectKind(src.Kind) {
+		if !incrementalCollectSource(src) {
 			continue
 		}
 		var window, maxCatchup time.Duration
