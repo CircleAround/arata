@@ -12,7 +12,7 @@ AWS のログと設定を定期的に改め、**前回から新しく発生し�
 
 ## 現在の実装範囲 (設計書 10 章の Step 1〜3)
 
-- ソース: `cloudtrail-lookup` (CloudTrail LookupEvents)、`cloudwatch-logs` (Logs Insights の集計クエリ。形式プロファイル `nginx_access` / `alb_access` / `wafv2` / `json` / `regex` / `request_lines`、行を解釈しない `text`)、
+- ソース: `cloudtrail-lookup` (CloudTrail LookupEvents)、`cloudtrail-s3` (trail の S3 への配信。記録の多いアカウント向け。ADR 0063)、`cloudwatch-logs` (Logs Insights の集計クエリ。形式プロファイル `nginx_access` / `alb_access` / `wafv2` / `json` / `regex` / `request_lines`、行を解釈しない `text`)、
   アカウント単位の状態 `iam-credential-report` / `guardduty` / `access-analyzer` / `posture` / `waf-config` (WAFv2 の WebACL の設定)、
   `cloudtrail-unused-regions` (ふだん使わないリージョンの書き込み)、`cost-anomaly` (AWS Cost Anomaly Detection の異常)
 - チェック: `root_usage`, `unknown_assume_role`, `oidc_assume_role`, `new_principal`, `iam_changes`, `access_denied`, `defense_evasion`, `public_exposure`, `principal_new_source`, `secret_access`, `unused_region_activity`, `cost_anomaly`, `login_bruteforce`, `probe_paths`, `endpoint_abuse`, `waf_block_trend`, `ai_path_usage` (daily)、
@@ -369,7 +369,8 @@ daily のソースのうち、追加の権限が要るもの:
 
 | source.kind | action | 費用 |
 |---|---|---|
-| `cloudtrail-unused-regions` | `account:ListRegions`、`cloudtrail:LookupEvents` (有効なリージョン − `cloudtrail-lookup` の `regions` の各リージョン) | 無料 |
+| `cloudtrail-unused-regions` | `account:ListRegions`、`cloudtrail:LookupEvents` (有効なリージョン − `cloudtrail-lookup` (か `cloudtrail-s3`) の `regions` の各リージョン) | 無料 |
+| `cloudtrail-s3` | `s3:ListBucket`・`s3:GetObject` (trail の配信先の `<接頭辞>/AWSLogs/` の下だけ)、SSE-KMS なら `kms:Decrypt`、doctor が `cloudtrail:DescribeTrails`・`cloudtrail:GetEventSelectors` | S3 の GET・LIST の料金 (1 アカウント・1 リージョンで 1 日約 288 ファイル) |
 | `cost-anomaly` | `ce:GetAnomalyMonitors`, `ce:GetAnomalies` (us-east-1) | Cost Explorer の API は 1 リクエスト 0.01 USD。1 回の run で約 2 回 (daily で月 0.6 USD ほど。`arata doctor` の cost に出る) |
 
 - 既に配ったロールには上の 3 つの action を足す必要がある (無ければそのソースだけが ACCESS_DENIED になり、そのチェックが skip される)。
@@ -385,6 +386,10 @@ daily のソースのうち、追加の権限が要るもの:
   - **AllowedLogGroupNames より前の版のロールから上げるとき (必須の手順)**: 1. 設定の `sources` を見直し、読ませてよいロググループだけにする (中身の種類を確かめる)。
     2. `arata config role-params` の値で、ロールのスタックを更新する (値を渡さない更新は CloudFormation が止める)。今と同じに全部を読ませるなら `AllowedLogGroupNames='*'`。
     3. `arata doctor` で、各ソースの `permission` の行が出ないことを確かめる
+- **`cloudtrail-s3` を使うなら、ロールに `CloudTrailBucketName` を渡す** (と、接頭辞があれば `CloudTrailBucketPrefix`、SSE-KMS なら `CloudTrailKmsKeyArn`。既定は空で、空なら S3・KMS を読ませない。ADR 0063)。
+  バケットと接頭辞は `arata config role-params` が設定から出す (鍵の ARN は設定から分からないので足す)。組織の trail でバケットや鍵がログ用の別のアカウントにあるときは、
+  そのバケットのバケットポリシーと鍵のキーポリシーでも、読み取り専用ロールに `s3:GetObject`・`s3:ListBucket`・`kms:Decrypt` を許す (ロールのポリシーだけでは読めない)。
+  `arata doctor` が読めるか・trail が管理イベントの読み取りと書き込みを全部記録しているかを確かめる
 - 監査のロールにも読ませたくないロググループ (個人情報だけを書くメールの送信ログなど) は、`deploy/iam/readonly-role.yaml` の `DeniedLogGroupNames` に
   名前をカンマ区切りで書く (既定は空 = 何も止めない。ADR 0053)。そのロググループの中身を読む操作 (`logs:StartQuery`・`GetQueryResults`・`GetLogEvents`・
   `FilterLogEvents`・`StartLiveTail` など) を明示の Deny で止めるので、後からほかのポリシーが付いても読めない。名前は完全一致で、どのリージョンの同じ名前にも効く。

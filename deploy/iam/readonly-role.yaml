@@ -13,6 +13,10 @@
 #   (利用者の操作のログ・個人情報が混ざっていないか。arata には判断できない)。一覧に無いソースは、run で ACCESS_DENIED になる
 # - 監査のロールにも読ませたくないロググループ (個人情報だけを書くログなど) は DeniedLogGroupNames に名前を書く。中身を読む操作を明示の Deny で止める
 #   (ADR 0053)。そのロググループは arata の設定の sources に書かない (書くと、そのソースだけが ACCESS_DENIED になる)
+# - CloudTrail を trail の S3 への配信から読む (cloudtrail-s3。ADR 0063) なら、CloudTrailBucketName にバケットの名前を渡す
+#   (と、接頭辞があれば CloudTrailBucketPrefix、SSE-KMS なら CloudTrailKmsKeyArn)。読ませるのは <接頭辞>/AWSLogs/ の下の GetObject と、
+#   そのキーの一覧 (ListBucket) だけ。どれも既定は空で、空なら S3・KMS の文を出さない (今までのロールと同じ)。値は `arata config role-params` が設定から作る。
+#   バケットがログ用の別のアカウントにある (組織の trail) なら、そのバケットのバケットポリシーと KMS キーのキーポリシーでも、このロールを許す必要がある
 # - CDK を使わずに配れるよう素の CloudFormation にしている。開発用の sandbox (deploy/sandbox) はこのファイルを CfnInclude で取り込む
 #   (定義は 1 か所。ADR 0020)。action の過不足は internal/engine/readonly_role_test.go が Go の collector と突き合わせて確かめる
 #
@@ -66,6 +70,26 @@ Parameters:
     AllowedPattern: '^$|^[A-Za-z0-9_./#-]+(,[A-Za-z0-9_./#-]+)*$'
     ConstraintDescription: ロググループの名前 (英数字と _ - / . #) をカンマで区切って書いてください。空白・ワイルドカード (* ?)・ARN は書けません
     Description: このロールに中身を読ませないロググループの名前 (完全一致。カンマ区切り。例 prod-mail-delivery,prod-mail-bounce)。空なら何も止めない
+  CloudTrailBucketName:
+    Type: String
+    Default: ''
+    # S3 の汎用バケットの名前の規則 (ARN・s3://・ワイルドカードは通さない)
+    AllowedPattern: '^$|^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+    ConstraintDescription: バケットの名前だけ (小文字・数字・. ・-) を書いてください。ARN や s3:// は書けません
+    Description: cloudtrail-s3 で読む、trail の配信先のバケットの名前 (ADR 0063)。空なら S3 を読ませない。arata config role-params が設定から作る
+  CloudTrailBucketPrefix:
+    Type: String
+    Default: ''
+    # trail の S3KeyPrefix (AWSLogs/ の手前まで)。先頭と末尾の / は書かない。ワイルドカード (* ?) は通さない (読ませる範囲が広がるため)
+    AllowedPattern: "^$|^[A-Za-z0-9!_.'()-]+(/[A-Za-z0-9!_.'()-]+)*$"
+    ConstraintDescription: trail の S3 キーの接頭辞を、先頭と末尾の / を付けずに書いてください。ワイルドカード (* ?) は書けません
+    Description: trail の S3 キーの接頭辞 (AWSLogs/ の手前まで。例 logs)。無ければ空
+  CloudTrailKmsKeyArn:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^arn:aws[a-z-]*:kms:[a-z0-9-]+:\d{12}:key/[A-Za-z0-9-]+$'
+    ConstraintDescription: KMS キーの ARN (arn:aws:kms:<リージョン>:<アカウント>:key/<キー ID>) を書いてください。エイリアスは書けません
+    Description: trail のファイルを暗号化している KMS キーの ARN (SSE-KMS のとき)。空なら KMS の文を出さない (SSE-S3 なら空)
 
 Conditions:
   HasTrustedPrincipal: !Not [!Equals [!Ref TrustedPrincipalArn, '']]
@@ -74,6 +98,9 @@ Conditions:
   HasDeniedLogGroups: !Not [!Equals [!Ref DeniedLogGroupNames, '']]
   AllowAllLogGroups: !Equals [!Ref AllowedLogGroupNames, '*']
   AllowNoLogGroups: !Equals [!Ref AllowedLogGroupNames, 'none']
+  HasTrailBucket: !Not [!Equals [!Ref CloudTrailBucketName, '']]
+  HasTrailPrefix: !Not [!Equals [!Ref CloudTrailBucketPrefix, '']]
+  HasTrailKmsKey: !Not [!Equals [!Ref CloudTrailKmsKeyArn, '']]
 
 Rules:
   RequireTrust:
@@ -129,6 +156,51 @@ Resources:
                 Action:
                   - cloudtrail:LookupEvents
                 Resource: '*'
+              # doctor が cloudtrail-s3 の trail の記録の範囲 (管理イベントの読み取り・書き込み、除いた種類) を確かめる (ADR 0063)。設定を読むだけ
+              - Sid: CloudTrailSelectors
+                Effect: Allow
+                Action:
+                  - cloudtrail:GetEventSelectors
+                Resource: '*'
+              # cloudtrail-s3 (trail の S3 への配信。ADR 0063)。CloudTrailBucketName が空ならどちらの文も出さない
+              # - 読ませるのは <接頭辞>/AWSLogs/ の下だけ (一覧は s3:prefix の条件で、読み取りはキーの ARN で絞る)。バケットの設定・ACL は読ませない
+              # - 公式の共有の例は s3:Get* と s3:List* だが、読み取り専用を保つため GetObject と ListBucket だけにする
+              # - パーティションは `*` (上の Logs と同じ。!Sub を使わない)
+              - !If
+                - HasTrailBucket
+                - Sid: CloudTrailS3List
+                  Effect: Allow
+                  Action:
+                    - s3:ListBucket
+                  Resource: !Join ['', ['arn:*:s3:::', !Ref CloudTrailBucketName]]
+                  Condition:
+                    StringLike:
+                      s3:prefix: !If [HasTrailPrefix, !Join ['', [!Ref CloudTrailBucketPrefix, '/AWSLogs/*']], 'AWSLogs/*']
+                - !Ref AWS::NoValue
+              - !If
+                - HasTrailBucket
+                - Sid: CloudTrailS3Read
+                  Effect: Allow
+                  Action:
+                    - s3:GetObject
+                  Resource: !If
+                    - HasTrailPrefix
+                    - !Join ['', ['arn:*:s3:::', !Ref CloudTrailBucketName, '/', !Ref CloudTrailBucketPrefix, '/AWSLogs/*']]
+                    - !Join ['', ['arn:*:s3:::', !Ref CloudTrailBucketName, '/AWSLogs/*']]
+                - !Ref AWS::NoValue
+              # SSE-KMS の trail のファイルの復号。条件は公式のキーポリシーの例と同じ (CloudTrail が暗号化したものだけ)。
+              # キーが別のアカウントにあれば、そのキーポリシーでもこのロールを許す必要がある
+              - !If
+                - HasTrailKmsKey
+                - Sid: CloudTrailKmsDecrypt
+                  Effect: Allow
+                  Action:
+                    - kms:Decrypt
+                  Resource: !Ref CloudTrailKmsKeyArn
+                  Condition:
+                    'Null':
+                      kms:EncryptionContext:aws:cloudtrail:arn: 'false'
+                - !Ref AWS::NoValue
               # cloudwatch-logs (Logs Insights の集計クエリ。doctor の解釈率の確認も同じ action)
               # 一覧とクエリの停止。どちらもリソースの型を持たない (Service Authorization Reference) ので絞れない。ログの中身は返さない
               - Sid: CloudWatchLogsList

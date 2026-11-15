@@ -90,24 +90,84 @@ func (c *Collector) Yields() []record.Kind {
 // 決定 (ADR 0013): [w.ScanFrom, w.To) を引く。再走査の区間 [ScanFrom, From) のイベントは、注目イベントの出力と主体の初出・最終観測には使うが、
 // principal_seen の件数 (Count) には数えず RescanCount に分ける (前回の run で数え済みのものが二重に足されるため)。重なり区間でだけ見えた主体は Count 0 で出す。
 func (c *Collector) Collect(ctx context.Context, w collect.Window, sink collect.RecordSink) error {
-	seen := map[string]*record.PrincipalSeen{}
-	act := activity{}
-	doneIDs := map[string]bool{} // 同じイベントが複数リージョンに見えても 1 回だけ数える
+	agg := newTrailAgg(c.id, c.Notable)
 	var firstErr error
 	for _, rc := range c.clients {
-		if err := c.collectRegion(ctx, rc, w, sink, seen, act, doneIDs); err != nil {
+		if err := c.collectRegion(ctx, rc, w, sink, agg); err != nil {
 			firstErr = err
 			break
 		}
 	}
 	// 失敗しても取れた分の principal_seen と活動の集計は捨てない
-	if err := c.flush(ctx, sink, seen); err != nil {
-		return err
-	}
-	if err := act.flush(ctx, c.id, sink); err != nil {
+	if err := agg.flush(ctx, sink); err != nil {
 		return err
 	}
 	return firstErr
+}
+
+// trailAgg は 1 回の収集の、イベントごとの処理 (注目イベントの出力・主体 × IP の集計・主体の活動の日次集計) をまとめる。
+// LookupEvents (Collector) と trail の S3 (S3Collector。ADR 0063) が共有する。
+type trailAgg struct {
+	id      string
+	notable func(record.TrailEvent) bool
+	seen    map[string]*record.PrincipalSeen
+	act     activity
+	done    map[string]bool // 同じイベントが複数リージョン・重複配信で見えても 1 回だけ数える
+}
+
+func newTrailAgg(id string, notable func(record.TrailEvent) bool) *trailAgg {
+	return &trailAgg{id: id, notable: notable, seen: map[string]*record.PrincipalSeen{}, act: activity{}, done: map[string]bool{}}
+}
+
+// add は正規化したイベント 1 件を数える。同じ event_id は 2 度目から何もしない (false)。
+// 決定 (ADR 0013): 再走査の区間 [ScanFrom, From) のイベントは principal_seen の Count ではなく RescanCount に数える。
+func (a *trailAgg) add(ctx context.Context, e record.TrailEvent, w collect.Window, sink collect.RecordSink) (bool, error) {
+	if a.done[e.EventID] {
+		return false, nil
+	}
+	a.done[e.EventID] = true
+	a.act.add(e)
+	if e.PrincipalKind != record.PrincipalService && e.PrincipalARN != "" {
+		k := e.PrincipalARN + "|" + e.IP
+		p, ok := a.seen[k]
+		if !ok {
+			p = &record.PrincipalSeen{Source: a.id, ARN: e.PrincipalARN, Kind: e.PrincipalKind, IP: e.IP, Region: e.Region, FirstTime: e.Time, Time: e.Time}
+			a.seen[k] = p
+		}
+		if e.Time.Before(w.From) {
+			p.RescanCount++
+		} else {
+			p.Count++
+		}
+		if e.Time.Before(p.FirstTime) {
+			p.FirstTime = e.Time
+		}
+		if !e.Time.Before(p.Time) {
+			p.Time = e.Time
+			p.Region = e.Region
+		}
+	}
+	if a.notable(e) {
+		if err := sink.Emit(ctx, e); err != nil {
+			return true, err
+		}
+	}
+	return true, nil
+}
+
+// flush は主体 × IP の集計と、主体の活動の日次集計を出す。
+func (a *trailAgg) flush(ctx context.Context, sink collect.RecordSink) error {
+	keys := make([]string, 0, len(a.seen))
+	for k := range a.seen {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if err := sink.Emit(ctx, *a.seen[k]); err != nil {
+			return err
+		}
+	}
+	return a.act.flush(ctx, a.id, sink)
 }
 
 // activity は主体の活動の日次集計 (date → metric → key → 件数。ADR 0027)。
@@ -159,21 +219,7 @@ func (a activity) flush(ctx context.Context, source string, sink collect.RecordS
 	return nil
 }
 
-func (c *Collector) flush(ctx context.Context, sink collect.RecordSink, seen map[string]*record.PrincipalSeen) error {
-	keys := make([]string, 0, len(seen))
-	for k := range seen {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		if err := sink.Emit(ctx, *seen[k]); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (c *Collector) collectRegion(ctx context.Context, rc RegionClient, w collect.Window, sink collect.RecordSink, seen map[string]*record.PrincipalSeen, act activity, doneIDs map[string]bool) error {
+func (c *Collector) collectRegion(ctx context.Context, rc RegionClient, w collect.Window, sink collect.RecordSink, agg *trailAgg) error {
 	var next *string
 	pages, events := 0, 0
 	var oldest, lastEvent time.Time // LookupEvents は新しい順に返す
@@ -208,35 +254,11 @@ func (c *Collector) collectRegion(ctx context.Context, rc RegionClient, w collec
 		}
 		for _, raw := range out.Events {
 			e, ok := c.normalize(raw)
-			if !ok || doneIDs[e.EventID] {
+			if !ok {
 				continue
 			}
-			doneIDs[e.EventID] = true
-			act.add(e)
-			if e.PrincipalKind != record.PrincipalService && e.PrincipalARN != "" {
-				k := e.PrincipalARN + "|" + e.IP
-				p, ok := seen[k]
-				if !ok {
-					p = &record.PrincipalSeen{Source: c.id, ARN: e.PrincipalARN, Kind: e.PrincipalKind, IP: e.IP, Region: e.Region, FirstTime: e.Time, Time: e.Time}
-					seen[k] = p
-				}
-				if e.Time.Before(w.From) {
-					p.RescanCount++
-				} else {
-					p.Count++
-				}
-				if e.Time.Before(p.FirstTime) {
-					p.FirstTime = e.Time
-				}
-				if !e.Time.Before(p.Time) {
-					p.Time = e.Time
-					p.Region = e.Region
-				}
-			}
-			if c.Notable(e) {
-				if err := sink.Emit(ctx, e); err != nil {
-					return err
-				}
+			if _, err := agg.add(ctx, e, w, sink); err != nil {
+				return err
 			}
 		}
 		if out.NextToken == nil || *out.NextToken == "" {
@@ -292,15 +314,17 @@ type rawEvent struct {
 			} `json:"attributes"`
 		} `json:"sessionContext"`
 	} `json:"userIdentity"`
-	EventTime           string         `json:"eventTime"`
-	EventSource         string         `json:"eventSource"`
-	EventName           string         `json:"eventName"`
-	AWSRegion           string         `json:"awsRegion"`
-	SourceIPAddress     string         `json:"sourceIPAddress"`
-	UserAgent           string         `json:"userAgent"`
-	ErrorCode           string         `json:"errorCode"`
-	ReadOnly            bool           `json:"readOnly"`
-	EventID             string         `json:"eventID"`
+	EventTime       string `json:"eventTime"`
+	EventSource     string `json:"eventSource"`
+	EventName       string `json:"eventName"`
+	AWSRegion       string `json:"awsRegion"`
+	SourceIPAddress string `json:"sourceIPAddress"`
+	UserAgent       string `json:"userAgent"`
+	ErrorCode       string `json:"errorCode"`
+	ReadOnly        bool   `json:"readOnly"`
+	EventID         string `json:"eventID"`
+	// EventCategory は Management / Data / NetworkActivity など (record contents)。trail の S3 では管理イベントだけを使う (ADR 0063)。
+	EventCategory       string         `json:"eventCategory"`
 	RequestParameters   map[string]any `json:"requestParameters"`
 	ResponseElements    map[string]any `json:"responseElements"`
 	AdditionalEventData map[string]any `json:"additionalEventData"`
@@ -312,13 +336,22 @@ type rawEvent struct {
 }
 
 func (c *Collector) normalize(raw types.Event) (record.TrailEvent, bool) {
-	var r rawEvent
-	if raw.CloudTrailEvent == nil || json.Unmarshal([]byte(*raw.CloudTrailEvent), &r) != nil {
+	if raw.CloudTrailEvent == nil {
 		return record.TrailEvent{}, false
 	}
+	var r rawEvent
+	if json.Unmarshal([]byte(*raw.CloudTrailEvent), &r) != nil {
+		return record.TrailEvent{}, false
+	}
+	return normalizeRaw(c.id, r, aws.ToString(raw.EventId), raw.EventTime)
+}
+
+// normalizeRaw は CloudTrail の記録 1 件 (LookupEvents の CloudTrailEvent と trail の S3 の Records の要素は同じ record contents。ADR 0063) を正規化する。
+// id と t は LookupEvents の外側の EventId・EventTime (無ければ空・nil で、JSON の eventID・eventTime を使う)。
+func normalizeRaw(source string, r rawEvent, id string, t *time.Time) (record.TrailEvent, bool) {
 	e := record.TrailEvent{
-		EventID:     aws.ToString(raw.EventId),
-		Source:      c.id,
+		EventID:     id,
+		Source:      source,
 		Name:        r.EventName,
 		EventSource: r.EventSource,
 		Region:      r.AWSRegion,
@@ -329,8 +362,8 @@ func (c *Collector) normalize(raw types.Event) (record.TrailEvent, bool) {
 	if e.EventID == "" {
 		e.EventID = r.EventID
 	}
-	if raw.EventTime != nil {
-		e.Time = raw.EventTime.UTC()
+	if t != nil {
+		e.Time = t.UTC()
 	} else if t, err := time.Parse(time.RFC3339, r.EventTime); err == nil {
 		e.Time = t.UTC()
 	}

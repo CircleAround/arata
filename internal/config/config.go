@@ -100,6 +100,14 @@ type Source struct {
 	// ExpectedCompleteRate は request_lines の「まとめられた割合」(最初の行のあるリクエスト / request_id の数) の閾値 (既定 0.8)。下回ると FORMAT_MISMATCH。
 	ExpectedCompleteRate    float64  `yaml:"-"`
 	ExpectedCompleteRateRaw *float64 `yaml:"expected_complete_rate"`
+	// 以下は cloudtrail-s3 用 (trail の S3 への配信。ADR 0063、trail_s3.go)。
+	Bucket         string `yaml:"bucket"`
+	Prefix         string `yaml:"prefix"`
+	OrganizationID string `yaml:"organization_id"`
+	// AccountID は記録を読むアカウント (監査されるアカウント。キーに入る)。
+	AccountID string `yaml:"account_id"`
+	// BucketRegion はバケットのリージョン (既定は aws.region)。
+	BucketRegion string `yaml:"bucket_region"`
 	// IngestDelay はイベントが起きてから取得できるようになるまでの遅延の見込み。収集は [From - IngestDelay, To) を引き、
 	// 前回の窓の末尾に起きて遅れて記録されたイベントを拾う (設計書 3 章、ADR 0013)。既定は kind ごと (DefaultIngestDelay)。0 で再走査しない。
 	IngestDelay    time.Duration `yaml:"-"`
@@ -108,7 +116,7 @@ type Source struct {
 
 // DefaultIngestDelay は kind ごとの ingest_delay の既定。
 // 決定: CloudTrail は記録まで通常 5〜15 分かかるので上限の 15m、CloudWatch Logs は取り込みの数分の遅延を見て 5m。
-var DefaultIngestDelay = map[string]time.Duration{KindCloudTrailLookup: 15 * time.Minute, KindCloudTrailUnusedRegions: 15 * time.Minute, KindCloudWatchLogs: 5 * time.Minute}
+var DefaultIngestDelay = map[string]time.Duration{KindCloudTrailLookup: 15 * time.Minute, KindCloudTrailS3: 15 * time.Minute, KindCloudTrailUnusedRegions: 15 * time.Minute, KindCloudWatchLogs: 5 * time.Minute}
 
 // Profile は周期ごとの窓とチェック集合。
 type Profile struct {
@@ -153,7 +161,9 @@ const DefaultRegion = "ap-northeast-1"
 // source.kind。
 const (
 	KindCloudTrailLookup = "cloudtrail-lookup"
-	KindCloudWatchLogs   = "cloudwatch-logs"
+	// KindCloudTrailS3 は trail の S3 への配信 (gzip の JSON) を読む。cloudtrail-lookup と同じレコードを出す (ADR 0063)。
+	KindCloudTrailS3   = "cloudtrail-s3"
+	KindCloudWatchLogs = "cloudwatch-logs"
 	// 以下はアカウント単位の状態 (スナップショット) を取る。窓に依らず、取るたびに丸ごと置き換える (ADR 0015)。
 	KindCredentialReport = "iam-credential-report" // #nosec G101 -- 名前に credential を含むだけの種類の識別子で、秘密の値ではない
 	KindGuardDuty        = "guardduty"
@@ -169,7 +179,7 @@ const (
 )
 
 // SupportedKinds は受け付ける source.kind。
-var SupportedKinds = map[string]bool{KindCloudTrailLookup: true, KindCloudWatchLogs: true,
+var SupportedKinds = map[string]bool{KindCloudTrailLookup: true, KindCloudTrailS3: true, KindCloudWatchLogs: true,
 	KindCredentialReport: true, KindGuardDuty: true, KindAccessAnalyzer: true, KindPosture: true, KindWAFConfig: true,
 	KindCloudTrailUnusedRegions: true, KindCostAnomaly: true}
 
@@ -225,6 +235,14 @@ func (c *Config) applyDefaults() error {
 			// 決定 (ADR 0032): 対象のリージョンは実行時に「有効なリージョン − cloudtrail-lookup の regions」で決める。書かせない
 			if len(s.Regions) > 0 {
 				return fmt.Errorf("config: source %s: %s does not take regions (it scans the enabled regions that are not in the cloudtrail-lookup regions)", s.ID, s.Kind)
+			}
+		case KindCloudTrailS3:
+			// 決定 (ADR 0063): 読むリージョンは明示する (trail の記録の範囲は trail の設定に依るので、暗黙の既定を持たない。ADR 0014)
+			if len(s.Regions) == 0 {
+				return fmt.Errorf("config: source %s: regions is required for kind %s (e.g. [%s, %s])", s.ID, s.Kind, c.AWS.Region, GlobalRegion)
+			}
+			if s.BucketRegion == "" {
+				s.BucketRegion = c.AWS.Region
 			}
 		case KindCostAnomaly:
 			if len(s.Regions) > 0 && (len(s.Regions) != 1 || s.Regions[0] != GlobalRegion) {
@@ -370,6 +388,12 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("config: source %s: %w", s.ID, err)
 			}
 		}
+		if err := s.validateTrailS3(); err != nil {
+			return fmt.Errorf("config: source %s: %w", s.ID, err)
+		}
+	}
+	if err := c.validateTrailSources(); err != nil {
+		return err
 	}
 	if err := c.validateUnusedRegions(); err != nil {
 		return err
@@ -413,7 +437,7 @@ func safeName(s string) bool {
 func (c *Config) validateUnusedRegions() error {
 	for _, s := range c.Sources {
 		if s.Kind == KindCloudTrailUnusedRegions && len(c.ActiveRegions()) == 0 {
-			return fmt.Errorf("config: source %s: %s は cloudtrail-lookup の regions を「ふだん使うリージョン」として使う (それ以外の有効なリージョンを引く)。cloudtrail-lookup のソースを足す", s.ID, s.Kind)
+			return fmt.Errorf("config: source %s: %s は cloudtrail-lookup (か cloudtrail-s3) の regions を「ふだん使うリージョン」として使う (それ以外の有効なリージョンを引く)。cloudtrail-lookup か cloudtrail-s3 のソースを足す", s.ID, s.Kind)
 		}
 	}
 	return nil
@@ -440,12 +464,12 @@ func (c *Config) HasSourceKind(kind string) bool {
 	return false
 }
 
-// ActiveRegions はふだん使うリージョン (cloudtrail-lookup のソースの regions の和。重複除去、設定順)。
+// ActiveRegions はふだん使うリージョン (cloudtrail-lookup・cloudtrail-s3 のソースの regions の和。重複除去、設定順)。
 // cloudtrail-unused-regions はアカウントで有効なリージョンからこれを除いたリージョンを引く (ADR 0032)。
 func (c *Config) ActiveRegions() []string {
 	var out []string
 	for _, s := range c.Sources {
-		if s.Kind == KindCloudTrailLookup {
+		if s.Kind == KindCloudTrailLookup || s.Kind == KindCloudTrailS3 {
 			out = append(out, s.Regions...)
 		}
 	}

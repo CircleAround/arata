@@ -92,6 +92,10 @@ type Deps struct {
 	NewID func() string
 	// CloudTrail はソースとリージョンごとのクライアントを作る。
 	CloudTrail func(ctx context.Context, cfg *config.Config, src config.Source, region string) (cloudtrail.API, error)
+	// CloudTrailS3 は cloudtrail-s3 ソースの、trail の配信先のバケットのクライアントを作る (ADR 0063)。監査対象の認証 (aws:) で、バケットのリージョンに向ける。
+	CloudTrailS3 func(ctx context.Context, cfg *config.Config, src config.Source) (cloudtrail.S3API, error)
+	// TrailInfo は doctor が trail の設定 (DescribeTrails・GetEventSelectors) を読むクライアントを作る (ADR 0063)。
+	TrailInfo func(ctx context.Context, cfg *config.Config, region string) (cloudtrail.TrailInfoAPI, error)
 	// CloudWatchLogs は cloudwatch-logs ソースのクライアントを作る。
 	CloudWatchLogs func(ctx context.Context, cfg *config.Config, src config.Source, region string) (cwlogs.API, error)
 	// Account はアカウント単位のソース (iam-credential-report / guardduty / access-analyzer / posture) のクライアントの束を作る。
@@ -116,6 +120,8 @@ func DefaultDeps(logger *slog.Logger) Deps {
 		Now:            time.Now,
 		NewID:          RandomID,
 		CloudTrail:     NewCloudTrailClient,
+		CloudTrailS3:   NewCloudTrailS3Client,
+		TrailInfo:      NewTrailInfoClient,
 		CloudWatchLogs: NewCloudWatchLogsClient,
 		Account:        NewAccountClients,
 		S3Store:        NewS3StoreClient,
@@ -146,6 +152,24 @@ func NewCloudTrailRetryer() aws.Retryer {
 // NewCloudTrailClient は SDK の標準認証チェーンで CloudTrail クライアントを作る。
 func NewCloudTrailClient(ctx context.Context, cfg *config.Config, _ config.Source, region string) (cloudtrail.API, error) {
 	ac, err := loadAWSConfig(ctx, cfg, region, awsconfig.WithRetryer(NewCloudTrailRetryer))
+	if err != nil {
+		return nil, err
+	}
+	return ct.NewFromConfig(ac), nil
+}
+
+// NewCloudTrailS3Client は SDK の標準認証チェーン (aws:) で、trail の配信先のバケット (bucket_region) の S3 クライアントを作る。
+func NewCloudTrailS3Client(ctx context.Context, cfg *config.Config, src config.Source) (cloudtrail.S3API, error) {
+	ac, err := loadAWSConfig(ctx, cfg, src.BucketRegion)
+	if err != nil {
+		return nil, err
+	}
+	return s3.NewFromConfig(ac, func(o *s3.Options) { o.DisableLogOutputChecksumValidationSkipped = true }), nil
+}
+
+// NewTrailInfoClient は trail の設定を読む CloudTrail のクライアントを作る。
+func NewTrailInfoClient(ctx context.Context, cfg *config.Config, region string) (cloudtrail.TrailInfoAPI, error) {
+	ac, err := loadAWSConfig(ctx, cfg, region)
 	if err != nil {
 		return nil, err
 	}
@@ -217,6 +241,12 @@ func (d *Deps) fill(cfg *config.Config) {
 	}
 	if d.CloudTrail == nil {
 		d.CloudTrail = NewCloudTrailClient
+	}
+	if d.CloudTrailS3 == nil {
+		d.CloudTrailS3 = NewCloudTrailS3Client
+	}
+	if d.TrailInfo == nil {
+		d.TrailInfo = NewTrailInfoClient
 	}
 	if d.CloudWatchLogs == nil {
 		d.CloudWatchLogs = NewCloudWatchLogsClient
@@ -751,6 +781,17 @@ func (e *Engine) collector(ctx context.Context, src config.Source) (collect.Coll
 			c.Sleep = e.deps.Sleep
 		}
 		return c, nil
+	case config.KindCloudTrailS3:
+		api, err := e.deps.CloudTrailS3(ctx, e.cfg, src)
+		if err != nil {
+			return nil, err
+		}
+		c := cloudtrail.NewS3(src.ID, cloudtrail.TrailLocation{Bucket: src.Bucket, Prefix: src.Prefix, OrganizationID: src.OrganizationID,
+			AccountID: src.AccountID, Regions: src.Regions}, api)
+		c.Notable = cloudtrail.NotableWith(e.cfg.Checks.AccessDenied.ErrorCodes)
+		c.Delay = src.IngestDelay
+		c.Logger = e.log
+		return c, nil
 	}
 	return nil, fmt.Errorf("unsupported source kind %q", src.Kind)
 }
@@ -889,11 +930,11 @@ func (e *Engine) registry(profileName string) *checks.Registry {
 	return r
 }
 
-// trailCollected は ok のソースに cloudtrail-lookup があるか。run の stats に checks.TrailCollectedStat を付ける条件
+// trailCollected は ok のソースに cloudtrail-lookup か cloudtrail-s3 があるか。run の stats に checks.TrailCollectedStat を付ける条件
 // (principal_new_source / secret_access が「収集し終えた日」に数える。ADR 0027)。
 func (e *Engine) trailCollected(ok []string) bool {
 	for _, src := range e.cfg.Sources {
-		if src.Kind == config.KindCloudTrailLookup && contains(ok, src.ID) {
+		if (src.Kind == config.KindCloudTrailLookup || src.Kind == config.KindCloudTrailS3) && contains(ok, src.ID) {
 			return true
 		}
 	}
@@ -968,7 +1009,7 @@ func kindsOf(cfg *config.Config, src config.Source) []record.Kind {
 // formatKinds は log_hygiene を除いた、ソースの種類と形式で決まるレコード種類 (format: text の cloudwatch-logs は何も出さない)。
 func formatKinds(src config.Source) []record.Kind {
 	switch src.Kind {
-	case config.KindCloudTrailLookup:
+	case config.KindCloudTrailLookup, config.KindCloudTrailS3:
 		return []record.Kind{record.KindTrailEvent, record.KindPrincipalSeen}
 	case config.KindCloudWatchLogs:
 		if src.Yields == "" {

@@ -20,6 +20,9 @@ import (
 // collector に API を足したらロールにも足す (足し忘れると顧客の環境で ACCESS_DENIED になる)。書き込み系は iam:GenerateCredentialReport だけ。
 func TestReadonlyRoleActionsMatchRequiredActions(t *testing.T) {
 	want := map[string]bool{"cloudtrail:LookupEvents": true}
+	for _, a := range CloudTrailS3Actions {
+		want[a] = true
+	}
 	for _, a := range cwlogs.RequiredActions {
 		want[a] = true
 	}
@@ -32,7 +35,7 @@ func TestReadonlyRoleActionsMatchRequiredActions(t *testing.T) {
 	// 決定 (ADR 0062): ロググループを一覧に絞っても (1 つ・複数)、全部 (*) でも、collector に要る action は揃う
 	for _, allowed := range []string{"*", "prod-nginx-access", "prod-nginx-access,prod-api"} {
 		got := map[string]bool{}
-		for _, st := range roleStatements(t, map[string]string{"DeniedLogGroupNames": "prod-mail-delivery", "AllowedLogGroupNames": allowed}) {
+		for _, st := range roleStatements(t, map[string]string{"DeniedLogGroupNames": "prod-mail-delivery", "AllowedLogGroupNames": allowed, "CloudTrailBucketName": "example-trail-logs"}) {
 			// 許可を数える。Deny の文 (DeniedLogGroupNames) の action は、権限を足さないので doctor の一覧と突き合わせない
 			if st.effect != "Allow" {
 				continue
@@ -301,12 +304,24 @@ func TestRolePolicySizeEstimate(t *testing.T) {
 	}
 }
 
+// cloudtrail-s3 の文 (ADR 0063) の見積もりも、実際のテンプレートと離れすぎない。
+func TestRolePolicySizeEstimateTrail(t *testing.T) {
+	base := rolePolicySize(t, map[string]string{"AllowedLogGroupNames": "*"})
+	for _, tc := range [][2]string{{"example-trail-logs", ""}, {"example-trail-logs", "logs/org-1"}, {strings.Repeat("b", 63), strings.Repeat("p", 100)}} {
+		got := rolePolicySize(t, map[string]string{"AllowedLogGroupNames": "*", "CloudTrailBucketName": tc[0], "CloudTrailBucketPrefix": tc[1]}) - base
+		est := rolePolicyTrail + 2*len(tc[0]) + 2*len(tc[1])
+		if got > est || est-got > 100 {
+			t.Errorf("%v: 実際に増える %d 文字、見積もり %d 文字", tc, got, est)
+		}
+	}
+}
+
 // rolePolicySize は、パラメータを当てたポリシーの文書を JSON にした大きさ (IAM は空白を数えない)。
 func rolePolicySize(t *testing.T, params map[string]string) int {
 	t.Helper()
 	r := readRoleTemplate(t)
 	policies := mapGet(mapGet(mapGet(mapGet(r.root, "Resources"), "Role"), "Properties"), "Policies")
-	ev := cfnEval{t: t, params: params, conds: mapGet(r.root, "Conditions")}
+	ev := cfnEval{t: t, params: withDefaults(t, r, params), conds: mapGet(r.root, "Conditions")}
 	doc := ev.eval(mapGet(policies.Content[0], "PolicyDocument"))
 	b, err := json.Marshal(doc)
 	if err != nil {
@@ -405,7 +420,7 @@ func roleStatements(t *testing.T, params map[string]string) []roleStatement {
 	if policies == nil || len(policies.Content) != 1 {
 		t.Fatal("Policies が 1 個のはず")
 	}
-	ev := cfnEval{t: t, params: params, conds: mapGet(r.root, "Conditions")}
+	ev := cfnEval{t: t, params: withDefaults(t, r, params), conds: mapGet(r.root, "Conditions")}
 	raw, _ := ev.eval(mapGet(mapGet(policies.Content[0], "PolicyDocument"), "Statement")).([]any)
 	var out []roleStatement
 	for _, x := range raw {
@@ -429,6 +444,23 @@ func roleStatements(t *testing.T, params map[string]string) []roleStatement {
 			}
 		}
 		out = append(out, st)
+	}
+	return out
+}
+
+// withDefaults は、テストが値を渡さなかったパラメータにテンプレートの Default を当てる (Default の無いパラメータは渡さないとテストが落ちる)。
+func withDefaults(t *testing.T, r roleTemplate, params map[string]string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	ps := mapGet(r.root, "Parameters")
+	for i := 0; i+1 < len(ps.Content); i += 2 {
+		name := ps.Content[i].Value
+		if d, ok := r.param(t, name)["Default"]; ok {
+			out[name] = d
+		}
+	}
+	for k, v := range params {
+		out[k] = v
 	}
 	return out
 }
@@ -586,4 +618,90 @@ func setDiff(a, b map[string]bool) []string {
 	}
 	sort.Strings(d)
 	return d
+}
+
+// 決定 (ADR 0063): CloudTrailBucketName が空なら S3・KMS の文を出さない (今までのロールと同じ)。渡したら <接頭辞>/AWSLogs/ の下だけを読ませる。
+func TestReadonlyRoleCloudTrailS3(t *testing.T) {
+	base := map[string]string{"AllowedLogGroupNames": "*"}
+	for _, st := range roleStatements(t, base) {
+		for _, a := range st.actions {
+			if a == "s3:GetObject" || a == "s3:ListBucket" || a == "kms:Decrypt" {
+				t.Errorf("既定 (空) なのに %s の文がある: %+v", a, st)
+			}
+		}
+	}
+	tmpl := readRoleTemplate(t)
+	for _, p := range []string{"CloudTrailBucketName", "CloudTrailBucketPrefix", "CloudTrailKmsKeyArn"} {
+		if d, ok := tmpl.param(t, p)["Default"]; !ok || d != "" {
+			t.Errorf("%s の既定は空のはず: %q", p, d)
+		}
+	}
+	for _, tc := range []struct {
+		prefix, kms     string
+		object, listPfx string
+	}{
+		{"", "", "arn:*:s3:::example-trail-logs/AWSLogs/*", "AWSLogs/*"},
+		{"logs/org", "arn:aws:kms:ap-northeast-1:111122223333:key/0000aaaa-bb11-cc22-dd33-eeeeee444444",
+			"arn:*:s3:::example-trail-logs/logs/org/AWSLogs/*", "logs/org/AWSLogs/*"},
+	} {
+		params := map[string]string{"AllowedLogGroupNames": "*", "CloudTrailBucketName": "example-trail-logs", "CloudTrailBucketPrefix": tc.prefix, "CloudTrailKmsKeyArn": tc.kms}
+		got := map[string][]string{}
+		for _, st := range roleStatements(t, params) {
+			if strings.HasPrefix(st.sid, "CloudTrailS3") || st.sid == "CloudTrailKmsDecrypt" {
+				got[st.sid] = append(st.actions, st.resources...)
+			}
+		}
+		want := map[string][]string{
+			"CloudTrailS3List": {"s3:ListBucket", "arn:*:s3:::example-trail-logs"},
+			"CloudTrailS3Read": {"s3:GetObject", tc.object},
+		}
+		if tc.kms != "" {
+			want["CloudTrailKmsDecrypt"] = []string{"kms:Decrypt", tc.kms}
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("prefix=%q kms=%q: %v, want %v", tc.prefix, tc.kms, got, want)
+		}
+		// 一覧は s3:prefix の条件で AWSLogs/ の下に絞る
+		doc := rolePolicyJSON(t, params)
+		if !strings.Contains(doc, `"s3:prefix":"`+tc.listPfx+`"`) {
+			t.Errorf("ListBucket の条件が %s でない: %s", tc.listPfx, doc)
+		}
+		if tc.kms != "" && !strings.Contains(doc, `"kms:EncryptionContext:aws:cloudtrail:arn":"false"`) {
+			t.Errorf("kms:Decrypt は CloudTrail の暗号化文脈に絞る: %s", doc)
+		}
+	}
+}
+
+// 設定の prefix の規則 (trail_s3.go) と、ロールの CloudTrailBucketPrefix の AllowedPattern が同じ文字を受ける (role-params が外した / の前後を除く)。
+func TestRoleTrailPrefixPattern(t *testing.T) {
+	pat := regexp.MustCompile(readRoleTemplate(t).param(t, "CloudTrailBucketPrefix")["AllowedPattern"])
+	for _, ok := range []string{"", "logs", "logs/org-1", "a.b_c!(d)'e"} {
+		if !pat.MatchString(ok) {
+			t.Errorf("%q should be accepted", ok)
+		}
+	}
+	for _, bad := range []string{"/logs", "logs/", "logs//x", "logs/*", "lo?gs", "logs x"} {
+		if pat.MatchString(bad) {
+			t.Errorf("%q should be rejected", bad)
+		}
+	}
+	bucket := regexp.MustCompile(readRoleTemplate(t).param(t, "CloudTrailBucketName")["AllowedPattern"])
+	for _, bad := range []string{"arn:aws:s3:::x", "s3://x", "Example", "a", "x*"} {
+		if bucket.MatchString(bad) {
+			t.Errorf("bucket %q should be rejected", bad)
+		}
+	}
+}
+
+// rolePolicyJSON は、パラメータを当てたポリシーの文書を JSON にしたもの。
+func rolePolicyJSON(t *testing.T, params map[string]string) string {
+	t.Helper()
+	r := readRoleTemplate(t)
+	policies := mapGet(mapGet(mapGet(mapGet(r.root, "Resources"), "Role"), "Properties"), "Policies")
+	ev := cfnEval{t: t, params: withDefaults(t, r, params), conds: mapGet(r.root, "Conditions")}
+	b, err := json.Marshal(ev.eval(mapGet(policies.Content[0], "PolicyDocument")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }

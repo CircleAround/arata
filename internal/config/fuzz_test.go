@@ -75,12 +75,15 @@ func FuzzParseStore(f *testing.F) {
 
 // 設定ファイル全体。読めたら検証済みの値が入っている。読めなければエラー (パニックしない)。
 func FuzzLoad(f *testing.F) {
-	b, err := os.ReadFile("../../examples/arata.yaml")
-	if err != nil {
-		f.Fatal(err)
+	for _, p := range []string{"../../examples/arata.yaml", "../../examples/arata-trail-s3.yaml"} {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			f.Fatal(err)
+		}
+		f.Add(b)
 	}
-	f.Add(b)
 	for _, s := range []string{
+		"name: a\nstore: dir:///tmp/x\nsources: [{id: t, kind: cloudtrail-s3, bucket: b-1, prefix: x/../y, account_id: '123456789012', regions: [us-east-1]}]\nprofiles: {d: {window: 1h, checks: [root_usage]}}\n",
 		"name: acme\nstore: dir:///tmp/x\n", "name: acme\nstore: s3://example-bucket/p\nsources: [{id: a, kind: cloudtrail-lookup}]\nprofiles: {daily: {checks: [default-daily]}}\n",
 		"sources: [{id: web, kind: cloudwatch-logs, log_group: prod-nginx-access, format: nginx_access, yields: http_access, ingest_delay: 0d}]\n",
 		"sources: [null]\nprofiles: {x: null}\nchecks: null\n", "profiles: {a: {window: 9223372036854775807d}}\n", "name: [1]\n", "- x\n", "a: &a [*a]\n", "",
@@ -117,6 +120,19 @@ func FuzzLoad(f *testing.F) {
 				t.Fatalf("パスの区切りを含む source の id を受け入れた: %q", s.ID)
 			}
 			ids[s.ID] = true
+			// cloudtrail-s3 の値は S3 のキーと読み取り専用ロールのパラメータになる (ADR 0063): バケットは名前だけ、接頭辞に空・.・.. の区間やワイルドカードが無い、アカウントは 12 桁
+			if s.Kind == KindCloudTrailS3 {
+				if !bucketName.MatchString(s.Bucket) || !accountID.MatchString(s.AccountID) || len(s.Regions) == 0 {
+					t.Fatalf("cloudtrail-s3 を検証せずに受け入れた: %+v", s)
+				}
+				for _, seg := range strings.Split(strings.Trim(s.Prefix, "/"), "/") {
+					if s.Prefix != "" && (seg == "" || seg == "." || seg == ".." || seg == "AWSLogs") || strings.ContainsAny(s.Prefix, "*?") {
+						t.Fatalf("cloudtrail-s3 の prefix を検証せずに受け入れた: %q", s.Prefix)
+					}
+				}
+			} else if s.Bucket != "" || s.Prefix != "" || s.AccountID != "" || s.OrganizationID != "" {
+				t.Fatalf("cloudtrail-s3 でないソースに bucket などを受け入れた: %+v", s)
+			}
 		}
 		for name := range cfg.Profiles {
 			if strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") {

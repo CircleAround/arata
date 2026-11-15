@@ -73,6 +73,10 @@ func logsGuideTable(t *testing.T) string {
 			}
 		}
 	}
+	// cloudtrail-s3 は cloudtrail-lookup と同じ記録を出すが、同じ設定に並べられない (ADR 0063) ので、ここで並べる
+	for _, k := range kindsOf(h.cfg, config.Source{Kind: config.KindCloudTrailS3}) {
+		labels[k] = append(labels[k], config.KindCloudTrailS3)
+	}
 	for k, fs := range logFormats {
 		sort.Strings(fs)
 		labels[k] = append(labels[k], config.KindCloudWatchLogs+" ("+strings.Join(fs, " / ")+")")

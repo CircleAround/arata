@@ -93,6 +93,8 @@ sources:
     ingest_delay: 15m
 ```
 
+訂正 (2026-11-15): `account_id` は省略させない (監査されるアカウントで、`audit_account` = 監査する側のアカウントとは違う)。設計書 2 章の「決定 (ADR 0063)」を参照。
+
 - 決定: **同じ run が `cloudtrail-lookup` と `cloudtrail-s3` の両方を必要とする設定は `config check` で止める**。events は event_id で重複しないが、
   `principal_ips.count` と主体の活動の集計は二重に足される。移るときは `cloudtrail-lookup` をプロファイルから外す (下の「互換」)
 - 決定: `regions` は明示する (暗黙の既定を持たない。ADR 0014)。`config init` は `cloudtrail-lookup` の雛形と同じリージョンをコメントで示す

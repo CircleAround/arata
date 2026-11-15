@@ -662,7 +662,7 @@ func TestUnusedRegionAndCostAnomalySources(t *testing.T) {
 
 	// cloudtrail-lookup が無ければ「ふだん使うリージョン」が分からないので設定の誤り
 	noTrail := "name: acme\nstore: dir:///var/lib/arata/acme\nsources:\n  - id: unused\n    kind: cloudtrail-unused-regions\nprofiles:\n  daily:\n    window: 24h\n    checks: [unused_region_activity]\n"
-	if _, err := Load(write(t, noTrail)); err == nil || !strings.Contains(err.Error(), "cloudtrail-lookup の regions") {
+	if _, err := Load(write(t, noTrail)); err == nil || !strings.Contains(err.Error(), "cloudtrail-lookup (か cloudtrail-s3) の regions") {
 		t.Fatalf("unused-regions without cloudtrail-lookup: %v", err)
 	}
 	for _, b := range []string{

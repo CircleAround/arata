@@ -1,7 +1,10 @@
 package cloudtrail
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/netip"
 	"strings"
 	"testing"
@@ -9,6 +12,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/cloudtrail/types"
 
+	"github.com/CircleAround/arata/internal/collect/cloudtrail/cloudtrailtest"
 	"github.com/CircleAround/arata/internal/record"
 )
 
@@ -308,4 +312,49 @@ func r0(body string) rawEvent {
 	var r rawEvent
 	_ = json.Unmarshal([]byte(body), &r)
 	return r
+}
+
+// FuzzReadTrailFile は trail の S3 のファイル (ADR 0063) を読む。ファイルはバケットに書ける者が置ける値で、信用できない (ADR 0037)。
+// 規則: パニックしない。誤りは中身の誤り (ErrInvalidTrailFile) だけ (読み手は通信の失敗を起こさない)。解いた大きさの上限を超えて読まない。
+// 返した記録のうち管理イベントでないもの (data event など) は、collector が trail_event・principal_seen にしない。
+func FuzzReadTrailFile(f *testing.F) {
+	for _, s := range []string{
+		`{"Records":[]}`, `{"Records":null}`, `{"Records":[1,"x",null,{}]}`, `{}`, `[]`, `null`, ``,
+		`{"Records":[` + rootLogin + `,` + iamChange + `]}`,
+		`{"Records":[{"eventID":"d","eventTime":"2026-10-21T01:00:00Z","eventCategory":"Data","userIdentity":{"type":"IAMUser","arn":"arn:aws:iam::123456789012:user/alice"},"sourceIPAddress":"198.51.100.7"}]}`,
+		`{"Records":[{"eventID":"n","eventTime":"2026-10-21T01:00:00Z","eventCategory":"NetworkActivity"}]}`,
+		`{"Records":[{"eventID":"m","eventTime":"2026-10-21T01:00:00Z","eventCategory":"management"}]}`,
+		`{"Records":[{"eventCategory":["Management"]},{"eventID":"x","eventTime":"2026-10-21T01:00:00Z"}]}`,
+	} {
+		f.Add([]byte(s), true)
+	}
+	f.Add([]byte("this file is plain text, not gzip"), false)
+	const max = 1 << 16
+	f.Fuzz(func(t *testing.T, body []byte, compress bool) {
+		in := body
+		if compress {
+			in = cloudtrailtest.Gzip(body)
+		}
+		recs, n, err := ReadTrailFile(bytes.NewReader(in), max)
+		if n > max+1 {
+			t.Fatalf("read %d bytes, over the limit %d", n, max)
+		}
+		if err != nil {
+			if !errors.Is(err, ErrInvalidTrailFile) && !errors.Is(err, io.ErrUnexpectedEOF) {
+				t.Fatalf("an error from a byte slice should be a content error: %v", err)
+			}
+			if recs != nil {
+				t.Fatalf("records with an error: %+v", recs)
+			}
+			return
+		}
+		for _, r := range recs {
+			if !managementEvent(r) && (r.EventCategory == "" || r.EventCategory == "Management") {
+				t.Fatalf("managementEvent disagrees: %q", r.EventCategory)
+			}
+			if managementEvent(r) && r.EventCategory != "" && r.EventCategory != "Management" {
+				t.Fatalf("non-management event accepted: %q", r.EventCategory)
+			}
+		}
+	})
 }

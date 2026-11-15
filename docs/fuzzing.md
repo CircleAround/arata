@@ -52,7 +52,7 @@ CI は `.github/workflows/fuzz.yml` が週 1 回と手動 (`workflow_dispatch`�
 | | `FuzzUserCollect` | ログの行 (種類・ID・auth の結果が任意の文字列。設定の正規表現は緩い。偽の Insights) | 形に合った種類と ID のリクエストだけが ID つきに、合わないものは捨てた数に、ちょうど入る。合わない値は record に残らない。段 0 の数は変わらない。ID が 0 件なら `http_user` は「取れない」になる |
 | | `FuzzHygieneQuery` `FuzzNotPrecededBy` | 設定の項目名・`stream_prefix` (log_hygiene。ADR 0050) | どんな値でもクエリの段の数と並び (`fields` と `stats`) が変わらない。`/.../` を抜け出さない。一時フィールドの名前は全部異なり決まった字だけ。正規表現は Go の regexp でも読め、`=>` と `:`・空白の有無の 4 つの書き方に一致し、`[FILTERED]`・空の値・別の鍵に一致しない。検査を通らない項目名はクエリに入らない。「直前が〜でない」の表現が素直な判定と同じ意味 |
 | | `FuzzHygieneRows` | Insights の結果の行 (偽の API。log_hygiene) | 受け取るのは有限で負でない整数だけ (別の方法で読んだ値と一致)。それ以外は収集の失敗で、0 件にしない・何も出さない。record とエラーの文に結果の文字列が残らない |
-| `internal/collect/cloudtrail` | `FuzzNormalizeEvent` `FuzzRoleARNFromSession` | イベントの本文 (JSON)、ARN | 取り出す値の型と上限。セッション名を主体に残さない |
+| `internal/collect/cloudtrail` | `FuzzNormalizeEvent` `FuzzRoleARNFromSession` `FuzzReadTrailFile` | イベントの本文 (JSON)、ARN、trail の S3 のファイル (gzip の JSON) | 取り出す値の型と上限。セッション名を主体に残さない。ファイルの誤りは中身の誤りだけで、解いた大きさの上限を超えて読まず、管理イベント以外を管理イベントにしない |
 | | `FuzzPublicStatements` | バケットポリシー、CIDR | 公開の判定が見逃す側に倒れない (条件を外す・公開のステートメントを足す・広い CIDR・否定の演算子) |
 | `internal/record` `internal/report` | `FuzzMask` `FuzzFindingMasksIdentity` | 任意の文字列の間に置いたメールアドレス・セッション名 | レポートに元の形で残らない。冪等 |
 | `internal/report/schema` | `FuzzParse` `FuzzMarkdownLogValues` | report.json、ログ由来の値 | 読めたものは書き直しても同じ。report.md の行を増やせない (run と期間レポート) |

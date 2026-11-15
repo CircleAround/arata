@@ -40,6 +40,7 @@ const (
 	// 警告 (結果が欠ける・少なく出る・設定を直す必要がある)
 	NoLogLines                  = "NO_LOG_LINES"
 	LogGroupUnverified          = "LOG_GROUP_UNVERIFIED"
+	TrailFileInvalid            = "TRAIL_FILE_INVALID"
 	AggregateTruncated          = "AGGREGATE_TRUNCATED"
 	RequestsUntagged            = "REQUESTS_UNTAGGED"
 	UserIDMissing               = "USER_ID_MISSING"
@@ -141,6 +142,7 @@ var All = []Code{
 	{SourceCatchupTruncated, arataOnly, "ソースの遅れが max_catchup を超え、古い分を取りこぼした (警告)"},
 	{NoLogLines, arataOnly, "窓の中にログの行が無い (log_group / stream_prefix の誤りの疑い。警告)"},
 	{LogGroupUnverified, arataOnly, "ロググループの保存期間などを確かめられないまま問い合わせた (範囲の確認をしていない。警告)"},
+	{TrailFileInvalid, arataOnly, "trail の S3 のファイルを読めず (gzip・JSON の誤り、大きさの上限)、飛ばした (その中の記録は数えていない。警告)"},
 	{AggregateTruncated, arataOnly, "集計が行の上限で切れ、件数が下限になった (警告)"},
 	{RequestsUntagged, arataOnly, "request id の無い最初の行があり、リクエストに数えていない (警告)"},
 	{UserIDMissing, arataOnly, "ユーザー ID の付いたリクエストが無く、ユーザー ID の要るチェックを skip した (警告)"},
