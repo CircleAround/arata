@@ -273,11 +273,12 @@ func (c *Config) applyDefaults() error {
 			}
 		}
 		if s.MaxCollectRaw != "" {
-			switch s.Kind {
-			case KindCloudTrailLookup, KindCloudTrailS3, KindCloudTrailUnusedRegions:
+			switch {
+			case s.Kind == KindCloudTrailLookup, s.Kind == KindCloudTrailS3, s.Kind == KindCloudTrailUnusedRegions:
+			case s.Kind == KindCloudWatchLogs && s.Collect == CollectHourlyMode:
 			default:
-				return fmt.Errorf("config: source %s: max_collect is only for %s, %s and %s (Logs Insights reads from the start of the day; see ADR 0065)",
-					s.ID, KindCloudTrailLookup, KindCloudTrailS3, KindCloudTrailUnusedRegions)
+				return fmt.Errorf("config: source %s: max_collect is only for %s, %s, %s and %s with collect: %s (Logs Insights reads from the start of the day otherwise; see ADR 0065)",
+					s.ID, KindCloudTrailLookup, KindCloudTrailS3, KindCloudTrailUnusedRegions, KindCloudWatchLogs, CollectHourlyMode)
 			}
 			d, err := ParseDuration(s.MaxCollectRaw)
 			if err != nil {

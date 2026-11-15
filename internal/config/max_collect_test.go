@@ -24,8 +24,16 @@ func TestMaxCollect(t *testing.T) {
 		"invalid":   {strings.Replace(minimal, "    kind: cloudtrail-lookup\n", "    kind: cloudtrail-lookup\n    max_collect: soon\n", 1), "max_collect"},
 		"logs": {strings.Replace(minimal, "profiles:", "  - id: web\n    kind: cloudwatch-logs\n    log_group: prod-nginx-access\n    format: nginx_access\n    max_collect: 12h\nprofiles:", 1),
 			"max_collect is only for"},
+		"logs hourly is ok": {strings.Replace(minimal, "profiles:", "  - id: web\n    kind: cloudwatch-logs\n    log_group: prod-nginx-access\n    format: nginx_access\n    collect: hourly\n    max_collect: 12h\nprofiles:", 1), ""},
 	} {
-		if _, err := Load(write(t, tc.body)); err == nil || !strings.Contains(err.Error(), tc.want) {
+		_, err := Load(write(t, tc.body))
+		if tc.want == "" {
+			if err != nil {
+				t.Errorf("%s: %v", name, err)
+			}
+			continue
+		}
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: err = %v, want %q", name, err, tc.want)
 		}
 	}

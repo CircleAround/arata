@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/CircleAround/arata/internal/codes"
 	"github.com/CircleAround/arata/internal/collect"
 	"github.com/CircleAround/arata/internal/record"
 )
@@ -42,6 +43,9 @@ const wafRateHist = "waf_ip_rate_hist"
 
 func (c *Collector) hourly() bool { return c.src.CollectHourly() && c.Parts != nil }
 
+// Limited は、時の単位で読むソースが max_collect で止めたか (CoveredTo が今 − ingest_delay より前)。
+func (c *Collector) Limited() bool { return c.limited }
+
 // CoveredTo は時の単位で読むソースが、この収集で読み終えた時 (位置はここまで進める。ゼロなら位置を変えない)。engine が読む。
 func (c *Collector) CoveredTo() time.Time { return c.coveredTo }
 
@@ -51,13 +55,22 @@ func hourlyQuery(q string) string { return strings.ReplaceAll(q, "by bin(1d) as 
 // hourlyRange は時の単位で読む範囲。ok が false なら読む時が無い。
 func (c *Collector) hourlyRange(ctx context.Context, w collect.Window, first string) (from, to time.Time, ok bool, err error) {
 	from = w.From.UTC().Truncate(time.Hour)
-	to = w.To.UTC().Add(-c.src.IngestDelay).Truncate(time.Hour)
+	// 終わりは窓の終わりと「今 − ingest_delay」の早い方 (まだ取り込み中の時を読まない)
+	to = w.To.UTC()
+	if lim := c.Now().UTC().Add(-c.src.IngestDelay); to.After(lim) {
+		to = lim
+	}
+	to = to.Truncate(time.Hour)
 	if day := DayStart(from); from.After(day) {
 		if _, n, err := c.Parts.Parts(ctx, c.src.ID, first, day, from); err != nil {
 			return from, to, false, err
 		} else if n == 0 {
 			from = day
 		}
+	}
+	// max_collect (ADR 0064): 古い側から決めた時間の分だけ読む (日の頭からの読み直しを含む)
+	if m := c.src.MaxCollect; m > 0 && to.Sub(from) > m {
+		to, c.limited = from.Add(m).Truncate(time.Hour), true
 	}
 	return from, to, to.After(from), nil
 }
@@ -68,15 +81,41 @@ func (c *Collector) fetch(ctx context.Context, q MergedQuery, from, to time.Time
 	if !c.hourly() {
 		return c.splitQuery(ctx, q, from, to, align, perDay)
 	}
-	rows, err := c.splitQuery(ctx, q, from, to, align, false)
-	if err != nil {
-		return nil, err
-	}
-	if err := c.putHours(ctx, q.Name, rows, from, to); err != nil {
-		return nil, err
+	for h := from; h.Before(to); h = h.Add(time.Hour) {
+		r, err := c.queryHour(ctx, q, h)
+		if err != nil {
+			return nil, err
+		}
+		// 流した時の外の行 (時の軸が読めない・別の時) は捨てる (Insights の結果は信用できない入力。ADR 0037)
+		if err := c.putHours(ctx, q.Name, r, h, h.Add(time.Hour)); err != nil {
+			return nil, err
+		}
 	}
 	all, _, err := c.Parts.Parts(ctx, c.src.ID, q.Name, DayStart(from), to)
 	return all, err
+}
+
+// queryHour は q を 1 時間 [h, h+1h) に流す。
+//
+// 決定 (ADR 0065。実データで直した): 初めから 1 時間ずつ流し、各時を 1 回だけ読む。行数の上限に当たっても範囲を割らない。
+// 割ると、上限に当たるたびに同じ範囲を読み直し、読み取り量 (費用) が上がる (大きなアカウントの WAF で、36 時間を 1 本で流してから
+// 18・9・4・2 時間と割って、2 時間でも上限に当たった)。上限に当たった時は、クエリの sort desc + limit で件数の多い組が残るので、
+// その metric を truncated (下限) にする (日の頭から読むときに 1h まで割ってもなお当たったときと同じ扱い)
+func (c *Collector) queryHour(ctx context.Context, q MergedQuery, h time.Time) ([]map[string]string, error) {
+	end := h.Add(time.Hour)
+	rows, err := c.Query(ctx, q.Query, h, c.queryEnd(end))
+	c.stats.BytesScanned = c.scanned
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) >= MaxRows {
+		c.Logger.Warn("aggregate truncated at row limit; counts are lower bounds", "code", codes.AggregateTruncated, "source", c.src.ID, "query", q.Name,
+			"metrics", strings.Join(q.Metrics, ","), "limit", MaxRows, "hour", h.Format(time.RFC3339))
+		for _, m := range q.Metrics {
+			c.stats.AddTruncated(m)
+		}
+	}
+	return inRange(rows, q.Bin, end), nil
 }
 
 // putHours は行を時ごとに分けて部分の行として書く (行の無い時も空で書く)。

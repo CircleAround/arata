@@ -76,8 +76,9 @@ type Collector struct {
 	Parts PartStore
 	// PartRetentionDays は部分の行を残す日数 (0 なら DefaultPartRetentionDays)。
 	PartRetentionDays int
-	// coveredTo は時の単位で読んだ終わり (CoveredTo)。
+	// coveredTo は時の単位で読んだ終わり (CoveredTo)。limited は max_collect で止めたか (Limited)。
 	coveredTo time.Time
+	limited   bool
 }
 
 // 問い合わせ範囲が Insights に拒否される理由 (FormatStats.OutOfRange)。
@@ -312,7 +313,7 @@ func (c *Collector) Collect(ctx context.Context, w collect.Window, sink collect.
 // collectFormat は形式プロファイルの集計 (解釈率と日次の metric)。
 func (c *Collector) collectFormat(ctx context.Context, w collect.Window, sink collect.RecordSink) error {
 	from, to := DayStart(w.Start()), w.To
-	c.coveredTo = time.Time{}
+	c.coveredTo, c.limited = time.Time{}, false
 	qs := c.queries()
 	if c.hourly() {
 		var ok bool

@@ -31,8 +31,8 @@ func TestHourlyLogsSource(t *testing.T) {
 	if _, err := e.Run(ctx, "daily"); err != nil {
 		t.Fatal(err)
 	}
-	// 初回: 窓の始まり (前日 09:00) の日の頭から、09:00 − 5m を切り捨てた 08:00 まで
-	if s := linesStarts(h); len(s) != 1 || !s[0].Equal(day0.Add(-33*time.Hour)) {
+	// 初回: 窓の始まり (前日 09:00) の日の頭から、09:00 − 5m を切り捨てた 08:00 まで。1 時間ずつ流す (32 本)
+	if s := linesStarts(h); len(s) != 32 || !s[0].Equal(day0.Add(-33*time.Hour)) || !s[31].Equal(day0.Add(-2*time.Hour)) {
 		t.Fatalf("first starts %v", s)
 	}
 	rows, hours, err := e.Store().Parts(ctx, "web", "http_lines", day0.Add(-33*time.Hour), day0)
@@ -44,7 +44,7 @@ func TestHourlyLogsSource(t *testing.T) {
 	if _, err := e.CollectIncremental(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if s := linesStarts(h); len(s) != 2 || !s[1].Equal(day0.Add(-time.Hour)) {
+	if s := linesStarts(h)[32:]; len(s) != 6 || !s[0].Equal(day0.Add(-time.Hour)) {
 		t.Fatalf("incremental starts %v", s)
 	}
 	// 次の daily は 14:00 の続きから。遅れの警告は出ない
@@ -53,7 +53,7 @@ func TestHourlyLogsSource(t *testing.T) {
 	if _, err := e.Run(ctx, "daily"); err != nil {
 		t.Fatal(err)
 	}
-	if s := linesStarts(h); len(s) != 3 || !s[2].Equal(day0.Add(5*time.Hour)) {
+	if s := linesStarts(h)[38:]; len(s) != 18 || !s[0].Equal(day0.Add(5*time.Hour)) {
 		t.Fatalf("second daily starts %v", s)
 	}
 	if strings.Contains(h.stderr.String(), CodeSourceCatchup) {

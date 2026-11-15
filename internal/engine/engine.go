@@ -631,6 +631,11 @@ func (e *Engine) Collect(ctx context.Context, w collect.Window, o CollectOptions
 			err = c.Collect(ctx, sw, sink)
 			if lc, ok := c.(*cwlogs.Collector); ok && src.CollectHourly() {
 				res.coveredTo[src.ID] = lc.CoveredTo()
+				if err == nil && lc.Limited() {
+					res.scanTo[src.ID] = lc.CoveredTo()
+					e.log.Warn("source reached max_collect; collecting up to the limit and continuing next time", "code", CodeSourceCollectLimited, "source", src.ID,
+						"until", lc.CoveredTo().UTC().Format(time.RFC3339), "max_collect", src.MaxCollectRaw, "run_id", o.RunID)
+				}
 			}
 			res.Records += n
 			if ur, ok := c.(*cloudtrail.UnusedRegions); ok {

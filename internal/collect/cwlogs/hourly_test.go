@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+
 	"github.com/CircleAround/arata/internal/collect"
 	"github.com/CircleAround/arata/internal/collect/cwlogs/cwlogstest"
 	"github.com/CircleAround/arata/internal/config"
@@ -184,6 +186,7 @@ func TestHourlyRange(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.Parts = &memParts{}
+	c.Now = func() time.Time { return now.Add(3 * time.Minute) }
 	w := collect.Window{From: now.Add(-90 * time.Minute), To: now.Add(3 * time.Minute)} // 07:30 〜 09:03
 	if err := c.Collect(context.Background(), w, &sinkRecorder{}); err != nil {
 		t.Fatal(err)
@@ -258,4 +261,86 @@ func FuzzHistPercentiles(f *testing.F) {
 			t.Fatalf("h=%v → p50=%v p99=%v max=%v", h, p50, p99, mx)
 		}
 	})
+}
+
+// 決定 (ADR 0065。実データで直した): 時の単位で読むソースは、初めから 1 時間ずつ流す (各時を 1 回だけ読む)。
+// 1 時間でも行数の上限に当たったら割らず、上位の行だけを残して truncated (下限) にする。範囲を半分に割り直すと、同じ範囲を何度も読む。
+func TestHourlyQueriesEachHourOnce(t *testing.T) {
+	f := &cwlogstest.Fake{}
+	f.On("as lines_total", cwlogstest.Response{Rows: []map[string]string{row("day", "2026-10-21 05:00:00.000", "acl", "prod-waf", "rule", "Default_Action", "action", "ALLOW", "lines_total", "10", "lines_matched", "10")}})
+	full := make([]map[string]string, MaxRows)
+	for i := range full {
+		full[i] = row("day", "2026-10-21 05:00:00.000", "acl", "prod-waf", "rule", "block-all", "action", "BLOCK", "ip", "198.51.100."+strconv.Itoa(i%250), "waf_actions", "1")
+	}
+	f.On("as waf_actions", cwlogstest.Response{Rows: full}) // どの時も上限
+	f.On("as waf_rule_count_match", cwlogstest.Response{})
+	f.On("as k by acl, grp, n", cwlogstest.Response{})
+	src := wafSource()
+	src.Collect, src.IngestDelay = config.CollectHourlyMode, 5*time.Minute
+	c, err := New(src, wafEquivChecks(), f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Sleep = func(context.Context, time.Duration) error { return nil }
+	c.Parts = &memParts{}
+	// 00:00 〜 06:00 の 6 時間
+	if err := c.Collect(context.Background(), collect.Window{From: DayStart(now), To: DayStart(now).Add(6*time.Hour + 5*time.Minute)}, &sinkRecorder{}); err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]map[int64]int{}
+	for _, in := range f.Started {
+		q := aws.ToString(in.QueryString)
+		name := "other"
+		for _, n := range []string{"as lines_total", "as waf_actions", "as waf_rule_count_match", "as k by acl"} {
+			if strings.Contains(q, n) {
+				name = n
+			}
+		}
+		if got := aws.ToInt64(in.EndTime) + 1 - aws.ToInt64(in.StartTime); got != 3600 {
+			t.Fatalf("%s: a query must cover exactly one hour, got %ds", name, got)
+		}
+		if seen[name] == nil {
+			seen[name] = map[int64]int{}
+		}
+		seen[name][aws.ToInt64(in.StartTime)]++
+	}
+	for name, hours := range seen {
+		if len(hours) != 6 {
+			t.Fatalf("%s: %d hours, want 6", name, len(hours))
+		}
+		for h, n := range hours {
+			if n != 1 {
+				t.Fatalf("%s: hour %d read %d times", name, h, n)
+			}
+		}
+	}
+	if tr := c.FormatStats().Truncated; len(tr) == 0 {
+		t.Fatal("the hours at the row limit must be marked truncated")
+	}
+}
+
+// max_collect (ADR 0064) は collect: hourly の cloudwatch-logs にも効く。古い側から決めた時間の分だけ読み、位置をそこまで進める (初回の日の頭からの読み直しを含む)。
+func TestHourlyMaxCollect(t *testing.T) {
+	f := &cwlogstest.Fake{}
+	f.On("as lines_total", cwlogstest.Response{})
+	src := wafSource()
+	src.Collect, src.IngestDelay, src.MaxCollect = config.CollectHourlyMode, 5*time.Minute, 4*time.Hour
+	c, err := New(src, wafEquivChecks(), f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Parts = &memParts{}
+	c.Now = func() time.Time { return now }
+	if err := c.Collect(context.Background(), collect.Window{From: now.Add(-2 * time.Hour), To: now}, &sinkRecorder{}); err != nil { // 位置なし: 日の頭 (00:00) から
+		t.Fatal(err)
+	}
+	if !c.CoveredTo().Equal(DayStart(now).Add(4*time.Hour)) || !c.Limited() {
+		t.Fatalf("covered to %v (limited %v), want 04:00", c.CoveredTo(), c.Limited())
+	}
+	if err := c.Collect(context.Background(), collect.Window{From: c.CoveredTo(), To: now}, &sinkRecorder{}); err != nil {
+		t.Fatal(err)
+	}
+	if !c.CoveredTo().Equal(now.Add(-time.Hour)) || c.Limited() { // 04:00 〜 08:00 (09:00 − 5m を切り捨て)
+		t.Fatalf("covered to %v (limited %v), want 08:00", c.CoveredTo(), c.Limited())
+	}
 }

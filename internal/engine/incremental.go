@@ -63,7 +63,8 @@ func (e *Engine) limitCollect(starts map[string]time.Time, to time.Time, runID s
 	out := map[string]time.Time{}
 	for _, src := range e.cfg.Sources {
 		start, ok := starts[src.ID]
-		if !ok || src.MaxCollect <= 0 || to.Sub(start) <= src.MaxCollect {
+		// 時の単位で読む cloudwatch-logs は collector が上限を効かせる (日の頭からの読み直しを含めて数えるため。ADR 0065)
+		if !ok || src.MaxCollect <= 0 || to.Sub(start) <= src.MaxCollect || src.CollectHourly() {
 			continue
 		}
 		out[src.ID] = start.Add(src.MaxCollect)

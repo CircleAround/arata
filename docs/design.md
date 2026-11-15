@@ -585,6 +585,16 @@ sources:
 - レート (`waf_ip_rate_p50`・`p99`・`max`) は 2 段目を「5 分あたりの件数 n の度数」(`stats count(*) as k by acl, grp, n`) にして時ごとに引き、日の度数を足して
   Go で分位数 (最も近い順位) を取る。Insights の `pct` は近似なので、値が少し変わる (Release の本文に書く。report.json の型と schema_version は変わらない)
 - 時ごとの sign-in の失敗の和を `sign_in_failures_hourly` (`metrics_hourly`、key なし) に書く (速報 `sign_in_failure_spike` の材料。ADR 0066)
+- 決定 (実データで直した。2026-11-15): 時の単位で読むソースは、**初めから 1 時間ずつクエリを流し、各時を 1 回だけ読む**。行数の上限 (10,000) に当たっても範囲を割らない。
+  上限に当たった時は、クエリの sort desc + limit で件数の多い組が残るので、その metric を truncated (下限。`AGGREGATE_TRUNCATED`) にする。
+  大きなアカウントの WAF (1 日約 4.5 GB) で、位置の無い 1 回目に 36 時間を 1 本で流してから 18・9・4・2 時間と割り、2 時間でも上限に当たって、読み取りが押し上げられたため
+- `max_collect` (ADR 0064) は `collect: hourly` の cloudwatch-logs にも効く。collector が、日の頭からの読み直しを含めて、古い側から決めた時間の分だけ読み、
+  位置をそこまで進める (`SOURCE_COLLECT_LIMITED`、partial)。位置の無い 1 回目が大きいとき (WAF で 30 GB を超えるなど) に使う
+- 読み終わりは、窓の終わりと「今 − ingest_delay」の早い方を時に切り捨てたもの (`max_collect` で止めた古い時は、取り込みの遅れを待たない)
+- 記録 (ADR 0031 の分割と読み取り量。今の利用者への影響): 日の頭から読む読み方 (`collect: hourly` を書かないソース) は、行数の上限に当たると範囲を時に揃えて半分に割って
+  **引き直す**。割る前の 1 本も範囲の全部を読んでいるので、割るたびに読み取りが増える (1 段割るごとに、その範囲をもう一度読む)。ADR 0031 の
+  「分けて流してもスキャン量は増えない」は、分けたクエリどうしの和の話で、上限に当たった最初の 1 本の分は増える。大きなアカウントの WAF の daily は、
+  この引き直しで 1 回に約 31.8 GB を読んだ (v0.16.0、max_scan_gb 30 で QUERY_LIMIT)。`collect: hourly` にすると、この引き直しは無くなる
 - 対象外: `request_lines` (request_id で行をまとめるので、時の境目をまたぐリクエストが割れる)、`text` (日次の集計が無い)。endpoint_abuse の時間幅は 1 時間を割り切る値に限る
 - `arata collect --incremental` は `collect: hourly` のソースも集める (日の頭から読み直すソースは集めない)
 - 既定にする道筋: 最初の版はソースごとの opt-in。実データで日の値が同じこと (レート以外) と読み取り量を確かめた後の版で既定にし、`collect` の項目を要らなくする。
