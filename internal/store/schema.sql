@@ -84,6 +84,20 @@ CREATE TABLE IF NOT EXISTS metrics (
 );
 CREATE INDEX IF NOT EXISTS metrics_metric_date ON metrics(metric, date);
 
+-- 時ごとの集計 (schema 6。ADR 0064)。同じ (hour, source, metric, key) は置き換える。Metrics は日の値を時の和として返し、
+-- 時ごとの行がある (date, source, metric) では metrics の日の行を使わない。date は hour の日 (YYYY-MM-DD。索引のため持つ)。
+CREATE TABLE IF NOT EXISTS metrics_hourly (
+  hour   TEXT NOT NULL,
+  date   TEXT NOT NULL,
+  source TEXT NOT NULL,
+  "from" TEXT NOT NULL DEFAULT '',
+  metric TEXT NOT NULL,
+  key    TEXT NOT NULL DEFAULT '',
+  value  REAL NOT NULL DEFAULT 0,
+  PRIMARY KEY (hour, source, metric, key)
+);
+CREATE INDEX IF NOT EXISTS metrics_hourly_day ON metrics_hourly(metric, date, source);
+
 -- スナップショット (認証情報レポート・GuardDuty・Access Analyzer・姿勢)。収集が成功したときだけ (kind, source) 単位で丸ごと置き換える (ADR 0015)。
 CREATE TABLE IF NOT EXISTS snapshot_items (
   kind         TEXT NOT NULL,

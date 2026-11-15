@@ -90,7 +90,7 @@ func (c *Collector) Yields() []record.Kind {
 // 決定 (ADR 0013): [w.ScanFrom, w.To) を引く。再走査の区間 [ScanFrom, From) のイベントは、注目イベントの出力と主体の初出・最終観測には使うが、
 // principal_seen の件数 (Count) には数えず RescanCount に分ける (前回の run で数え済みのものが二重に足されるため)。重なり区間でだけ見えた主体は Count 0 で出す。
 func (c *Collector) Collect(ctx context.Context, w collect.Window, sink collect.RecordSink) error {
-	agg := newTrailAgg(c.id, c.Notable)
+	agg := newTrailAgg(c.id, c.Notable, w)
 	var firstErr error
 	for _, rc := range c.clients {
 		if err := c.collectRegion(ctx, rc, w, sink, agg); err != nil {
@@ -113,10 +113,12 @@ type trailAgg struct {
 	seen    map[string]*record.PrincipalSeen
 	act     activity
 	done    map[string]bool // 同じイベントが複数リージョン・重複配信で見えても 1 回だけ数える
+	// start は収集の始まり (再走査を含む)。始まりが途中の時の活動の集計は出さない (ADR 0064)。
+	start time.Time
 }
 
-func newTrailAgg(id string, notable func(record.TrailEvent) bool) *trailAgg {
-	return &trailAgg{id: id, notable: notable, seen: map[string]*record.PrincipalSeen{}, act: activity{}, done: map[string]bool{}}
+func newTrailAgg(id string, notable func(record.TrailEvent) bool, w collect.Window) *trailAgg {
+	return &trailAgg{id: id, notable: notable, seen: map[string]*record.PrincipalSeen{}, act: activity{}, done: map[string]bool{}, start: w.Start()}
 }
 
 // add は正規化したイベント 1 件を数える。同じ event_id は 2 度目から何もしない (false)。
@@ -167,10 +169,10 @@ func (a *trailAgg) flush(ctx context.Context, sink collect.RecordSink) error {
 			return err
 		}
 	}
-	return a.act.flush(ctx, a.id, sink)
+	return a.act.flush(ctx, a.id, a.start, sink)
 }
 
-// activity は主体の活動の日次集計 (date → metric → key → 件数。ADR 0027)。
+// activity は主体の活動の集計 ((時, metric, key) → 件数。ADR 0027)。決定 (ADR 0064): 時は UTC の YYYY-MM-DDTHH。
 type activity map[[3]string]float64
 
 // add は 1 件を数える。対象は IAM ユーザーとロール (のセッション)。サービス主体・root (root_usage が扱う)・正体の分からない主体は数えない。
@@ -184,7 +186,7 @@ func (a activity) add(e record.TrailEvent) {
 	if e.PrincipalARN == "" {
 		return
 	}
-	date := e.Time.UTC().Format(record.DateLayout)
+	date := e.Time.UTC().Format(record.HourLayout)
 	write := !e.ReadOnly && e.ErrorCode == ""
 	if p, ok := record.SourcePrefix(e.IP); ok {
 		k := record.ActivityKey(e.PrincipalARN, p)
@@ -198,9 +200,16 @@ func (a activity) add(e record.TrailEvent) {
 	}
 }
 
-func (a activity) flush(ctx context.Context, source string, sink collect.RecordSink) error {
+// flush は時ごとの集計を出す。決定 (ADR 0064): 収集の始まり start が途中にある時は出さない (一部だけの値で、前の収集が数えたその時の全件を
+// 置き換えない)。run は時の頭から引き直す (engine) ので、出さないのは手で範囲を決めた collect の最初の時だけ。終わりの時は途中までの値を出し、
+// 次の収集がその時の頭から引き直して置き換える。
+func (a activity) flush(ctx context.Context, source string, start time.Time, sink collect.RecordSink) error {
 	keys := make([][3]string, 0, len(a))
 	for k := range a {
+		h, err := time.Parse(record.HourLayout, k[0])
+		if err != nil || h.Before(start) {
+			continue
+		}
 		keys = append(keys, k)
 	}
 	sort.Slice(keys, func(i, j int) bool {
@@ -212,7 +221,7 @@ func (a activity) flush(ctx context.Context, source string, sink collect.RecordS
 		return false
 	})
 	for _, k := range keys {
-		if err := sink.Emit(ctx, record.Metric{Date: k[0], Source: source, From: record.KindTrailEvent, Metric: k[1], Key: k[2], Value: a[k]}); err != nil {
+		if err := sink.Emit(ctx, record.Metric{Date: k[0][:len(record.DateLayout)], Hour: k[0], Source: source, From: record.KindTrailEvent, Metric: k[1], Key: k[2], Value: a[k]}); err != nil {
 			return err
 		}
 	}

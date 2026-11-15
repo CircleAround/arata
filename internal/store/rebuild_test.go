@@ -101,6 +101,9 @@ func buildHistory(t *testing.T, st *Dir) {
 	// 同じ日を引き直した集計は後の値で置き換える
 	ingest(t, st, "nginx", record.Metric{Date: "2026-10-21", Source: "nginx", From: record.KindHTTPAccess, Metric: "admin_404", Key: "198.51.100.1", Value: 5}, "")
 	ingest(t, st, "nginx", record.Metric{Date: "2026-10-21", Source: "nginx", From: record.KindHTTPAccess, Metric: "admin_404", Key: "198.51.100.2", Value: 1}, "")
+	// 時ごとの集計 (ADR 0064) も行順に置き換えて入れ直す
+	ingest(t, st, "trail", record.Metric{Date: "2026-10-21", Hour: "2026-10-21T01", Source: "trail", From: record.KindTrailEvent, Metric: record.MetricPrincipalSource, Key: rbBob + "|198.51.100.0/24", Value: 1}, "")
+	ingest(t, st, "trail", record.Metric{Date: "2026-10-21", Hour: "2026-10-21T01", Source: "trail", From: record.KindTrailEvent, Metric: record.MetricPrincipalSource, Key: rbBob + "|198.51.100.0/24", Value: 3}, "")
 	// GuardDuty の収集が途中で失敗した: 項目は raw に残るが、表は置き換えない (印も無い)
 	ingest(t, st, "gd", record.SnapshotItem{Kind: record.KindGuardDuty, Time: c2, Source: "gd", Key: "g3", Data: map[string]any{"severity": 8}}, "")
 	if err := st.FinishRun(ctx, "r2", "partial", nil); err != nil {
@@ -187,7 +190,7 @@ func TestRebuildMatchesIncrementalStore(t *testing.T) {
 	if _, err := os.Stat(res.Backup); err != nil {
 		t.Fatal(err)
 	}
-	want := map[record.Kind]int{record.KindTrailEvent: 5, record.KindPrincipalSeen: 5, record.KindMetric: 3, record.KindGuardDuty: 3, record.KindCredentialReport: 1, record.KindSnapshotReplaced: 3}
+	want := map[record.Kind]int{record.KindTrailEvent: 5, record.KindPrincipalSeen: 5, record.KindMetric: 5, record.KindGuardDuty: 3, record.KindCredentialReport: 1, record.KindSnapshotReplaced: 3}
 	if !reflect.DeepEqual(res.Records, want) || res.Malformed != 0 || len(res.UnknownKinds) != 0 || len(res.Warnings) != 0 {
 		t.Fatalf("result: %+v", res)
 	}

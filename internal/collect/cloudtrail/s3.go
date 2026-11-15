@@ -106,7 +106,7 @@ type s3Stats struct {
 
 // Collect は窓の分のファイルを読み、LookupEvents の collector と同じレコードを出す。
 func (c *S3Collector) Collect(ctx context.Context, w collect.Window, sink collect.RecordSink) error {
-	agg := newTrailAgg(c.id, c.Notable)
+	agg := newTrailAgg(c.id, c.Notable, w)
 	var firstErr error
 	for _, region := range c.loc.Regions {
 		if err := c.collectRegion(ctx, region, w, sink, agg); err != nil {

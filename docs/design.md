@@ -557,6 +557,22 @@ sources:
 
 決定 (ADR 0038): 窓は全ソース共通だが、失敗したソースは stats の `source_covered_to` の位置から次の run で追いつく (`max_catchup` まで)。追いついた run は stats の `catchup_from` と `SOURCE_CATCHUP` の WARN で分かる。集計のソースが遅れたらチェックの窓も広げる。
 
+決定 (ADR 0064。続きだけの収集の 1 段目): ソースの位置はプロファイルをまたいで共有する。
+
+- 位置は、全プロファイルの ok / partial の run のうち、位置を持つ最も新しい run の stats から読む (どの run も前の位置を引き継いで書くので、最新の 1 件に全ソースが揃う)。
+  追いつき (ADR 0038) を判断するのは、そのプロファイルが読むソースだけ (hourly から見た daily だけのソースは常に古いので見ない)
+- 位置に加えて、そこまで途切れずに読めている始まり `source_covered_from` を持つ。成功したソースは、今回読み始めた所 (再走査を含む) が前の位置以前なら前の始まりを引き継ぎ、
+  そうでなければ今回読み始めた所にする。位置が窓の始まりより先にあり、始まりが「窓の始まり − ingest_delay」を覆うソース (CloudTrail・cloudwatch-logs) は、
+  **位置から続きだけを読む** (hourly が読み続けた CloudTrail を daily が読み直さない)。覆わない (hourly を始めたばかり・前の版の位置で始まりが無い) なら、今までどおり窓の頭から読む。
+  評価の窓 (`window_from`・`window_to`) はプロファイルごとのまま
+- CloudTrail (`cloudtrail-lookup`・`cloudtrail-s3`) は、再走査の始まりを**時の頭**に揃えて引き直す。主体の活動の集計を時ごとにして (`metrics_hourly`。5-2)、
+  その時の全件で置き換えるため。日の値は時の和で、その日の全件になる (前の版は「最後にその日を引いた run が見た件数」の下限だった)。
+  collector は、始まりが途中にある時の集計を出さない (手で範囲を決めた `collect` が、一部だけの値で全件を置き換えない)
+- イベント型チェックの「遅れて届いたもの」(ADR 0013) は、**このプロファイルの前回の評価 (前回の ok / partial の run の開始) の後に保存したもの**にする
+  (今までは、この run が保存したものだけ)。別のプロファイルの run が先に拾った遅れて届いたイベントも、このプロファイルが 1 回だけ評価する。遡る範囲は窓の始まり − 最大の ingest_delay の時の頭まで。
+  初めての run と試しの実行は、今までどおりこの run が保存したもの
+- 位置の記録の書式は RFC 3339 (ナノ秒まで)。前の版の秒までの値もそのまま読める
+
 決定 (実行が遅れた時の窓): `run` の窓は通常 `[now - window, now)` だが、同じ profile の直近の ok / partial な run があれば
 From = min(now - window, 前回の window_to) として、cron の遅延・欠落で空いた期間を取りこぼさない。追いつきは `profiles.<name>.max_catchup` (既定 7d) まで。
 超えた分は諦めて From = now - max_catchup とし、`RUN_MISSED` のログに `gap` と `covered_from`、`truncated: true` を添える。
@@ -584,7 +600,7 @@ From = min(now - window, 前回の window_to) として、cron の遅延・欠�
 
 - events は event_id で重複を排除し、最初に収集した run の時刻を `collected_at` に残す (再走査で同じイベントが来ても変わらない)。
 - イベント型チェック (root_usage / unknown_assume_role / iam_changes) は `[From, To)` に加えて、`[From - 最大の ingest_delay, From)` のうち
-  **今回の収集で初めて保存したもの** (遅れて届いたもの) を評価する。重なり区間の収集済みイベントは前回評価済みなので含めない
+  **今回の収集で初めて保存したもの** (遅れて届いたもの) を評価する (ADR 0064 で「このプロファイルの前回の評価の後に保存したもの」に広げた。3 章の上の決定)。重なり区間の収集済みイベントは前回評価済みなので含めない
   (件数の水増しと、resolve 済みの事象の再報告を防ぐ)。
 - recurred の境界は再走査を含まない本来の From (4-2)。前回の run で観測した事象が再走査で recurred になることは無い。
 - principal_seen の件数 (`principal_ips.count`) は `[From, To)` の分だけを足す。重なり区間の件数は (arn, ip) の行を初めて作るときだけ足す
@@ -754,6 +770,7 @@ SQLite ファイルは数十 MB 程度に収まる想定 (集計のみ保存す�
 | `principal_ips` | arn, ip, country, first_seen, last_seen, count | 主体 × IP の初出判定。決定: count は各 run の窓 [From, To) の件数の和 (再走査の重なり区間は行を初めて作るときだけ数える。3 章) |
 | `events` | time, source, name, principal_arn, ip, region, resource, data | 「注目イベント」のみ (ルート利用、IAM 変更など)。全 CloudTrail は保存しない。決定: 注目の判定は collector 側 (`cloudtrail.DefaultNotable`) で行い、ルート利用・AssumeRole*・IAM / CloudTrail / GuardDuty / Access Analyzer / Organizations の書き込み・秘匿値取得・SSM セッション・公開設定変更を残す。決定: defense_evasion / public_exposure が見る操作 (ログの削除・保持期間、フローログの削除、Config・Security Hub の停止、WAF のログ設定、S3 のバケットポリシーの削除・ライフサイクル、スナップショットの共有、Lambda の AddPermission など) だけを足し、全書き込みは足さない。一覧はチェック側 (`checks.DefenseEvasionAPIs` / `PublicExposureAPIs`) にあり、collector のテストで突き合わせる。該当する操作だけ requestParameters から判定に要る値を `data` に取り出す (ポリシー全文は残さない。ADR 0026)。決定: 拒否された呼び出し (errorCode が `checks.access_denied.error_codes` に入るもの) も読み取りを含めて残す (access_denied の元。コードは設定から `cloudtrail.NotableWith` に渡す。ADR 0021)。決定 (ADR 0027): 秘匿値の読み取り (GetSecretValue・BatchGetSecretValue・GetParameter(s)・GetParametersByPath) は名前 / ARN・パス・`recursive`・`with_decryption` (常に残す。無いのは以前の版で集めたもの) だけを `data` に取り出す (値は CloudTrail に入らない)。BatchGetSecretValue も注目イベントに足した (一覧は `checks.SecretReadAPIs`)。`event_id` で重複を排除する (複数リージョンを引いた場合の二重も同じ仕組みで防ぐ。collector 側でも同一 Collect 内の event_id は 1 回だけ数える)。決定: `collected_at` (最初に収集した run の時刻) を持ち、再走査で遅れて届いたイベントを見分ける (3 章、ADR 0013)。決定 (ADR 0032): `cloudtrail-unused-regions` のソースは、ふだん使わないリージョンの AWS のサービス以外の主体の書き込みを (失敗を含めて) すべて残す (使っていないリージョンでは 0〜数件)。source 列がそのソースの ID で、unused_region_activity だけが見る (他のチェックの Query は除く) |
 | `metrics` | date, source, metric, key, value | 日次集計 (`sign_in_failures` by ip、`admin_404` by ip、`waf_block` by rule)。平常帯の計算元。決定: 集計元のレコード種類 `from` 列を追加。主キーは (date, source, metric, key) で、後から来た値で**置き換える** (3 章の決定により後の値ほど完全)。raw JSONL には追記されるので rebuild は行順に適用すれば同じ結果になる (ソースが主キーに入るので、ソースの中の日付順・行順で足りる。5-4)。日は UTC。決定 (ADR 0027): cloudtrail collector も主体の活動の日次集計を出す: `principal_source` (key `<主体 ARN>\|<送信元の /24・/48>`)、`principal_source_writes` (同じ key の成功した書き込み)、`principal_write_region` (key `<主体 ARN>\|<リージョン>` の成功した書き込み)。対象は IAM ユーザーとロール (のセッション)、送信元は IP のときだけ。cloudtrail は日の頭から引き直さないので、置き換えの規則のため値は「その日を最後に引いた run が見た件数」(下限) になる。判定は「その日に有ったか」と下限値にだけ使う。期間レポートの推移表には出さない。Yields に metric は足さない (http_access / waf_action のチェックの skip 判定を変えないため)。行数の見積もり: 1 日あたり (主体数 × その日の送信元の数) × 2 + (主体数 × 書き込みのリージョン数)。主体 50・送信元 2 なら 1 日 250 行、400 日で 10 万行 (数十 MB 未満)。Lambda などサービスが引き受けるロールは送信元が多く、数十のロールが 1 日数十の /24 を使う環境では年 100 万行に近づく。多ければ prune を入れるときに `principal_*` の保持を baseline_days の数倍 (例 90 日) に短くする (判定は 30 日しか見ない)。決定 (ADR 0030): cloudwatch-logs の http_access のソースは endpoint_abuse の画面ごとに `endpoint_abuse_count` / `endpoint_abuse_ips` (key `<画面>\|<HH:MM>`。時間幅の始まり、UTC)、`endpoint_abuse_ua_ips` (key `<画面>\|<HH:MM>\|<UA のハッシュ>`。その幅で最も多くの IP にまたがった UA 1 つ、2 IP 以上のときだけ)、`endpoint_abuse_follow` (key `<from>><to>\|<HH:MM>`。1 以上のときだけ) を出す。IP と UA の原文は保存しない。行数の見積もり: 1 日あたり最大で画面数 × 144 (10 分幅) × 3 + 連鎖数 × 144。画面 3・連鎖 1 で 1 日最大 1,440 行、400 日で 58 万行 (実際は来訪のある幅だけなのでずっと少ない) |
+| `metrics_hourly` | hour, date, source, metric, key, value | 決定 (ADR 0064。schema 6): 時ごとの集計 (今は主体の活動の `principal_source`・`principal_source_writes`・`principal_write_region`)。同じ (hour, source, metric, key) は置き換える。`Metrics` は日の値を時の和として返し、時ごとの行がある (日, source, metric) では `metrics` の日の行 (前の版が書いた下限の値) を使わない。raw には `hour` の付いた metric の行として残り、rebuild は同じ規則で入れ直す |
 | `findings` | id, check, key, severity, first_seen, last_seen, last_changed, status (open/resolved/acked/snoozed), reported_at, fingerprint, data, suppressed_severity | 差分判定の中核。決定: `fingerprint` 列を追加 (4-2)。決定: `suppressed_severity` (ack / snooze したときの重大度。open / resolved では空) を追加 (schema 5、ADR 0022)。移行では既存の acked / snoozed の行に今の severity を入れる |
 | `posture` | check, resource, value, first_seen, last_changed | 姿勢チェックの現在値。決定: 作らず `snapshot_items` にまとめた (ADR 0015) |
 | `snapshot_items` | kind, source, key, data, collected_at | 決定: アカウント単位の状態 (認証情報レポート・GuardDuty・Access Analyzer・姿勢・WAF の WebACL の設定) の最新のスナップショット。収集が成功したときだけ (kind, source) 単位で丸ごと置き換える (ADR 0015)。決定 (ADR 0033): 置き換えたら raw に `snapshot_replaced` の行 (置き換えた収集の時刻と件数) を書く (0 件の置き換えと失敗した収集を rebuild が見分ける) |

@@ -189,7 +189,11 @@ func (p PrincipalSeen) RecordTime() time.Time { return p.Time }
 // 決定: 日付は UTC。同じ (Date, Source, Metric, Key) は後から来た値で置き換える (collector は日の頭から引き直すので、
 // 後の値ほど完全)。raw JSONL には追記されるので、rebuild は行順に適用すれば最後の値になる。
 type Metric struct {
-	Date   string  `json:"date"` // YYYY-MM-DD (UTC)
+	Date string `json:"date"` // YYYY-MM-DD (UTC)
+	// Hour は時ごとの集計の時 (YYYY-MM-DDTHH、UTC。Date はその日)。空なら日次の集計。
+	// 決定 (ADR 0064): 同じ (Hour, Source, Metric, Key) は置き換え、日の値は時の和で作る (ストアの Metrics が日の行として返す)。
+	// 主体の活動の集計 (MetricPrincipalSource など) は時ごとにする: 続きだけを集めると、日の頭から引き直さないので「最後に引いた run の件数」で日の値が欠けるため
+	Hour   string  `json:"hour,omitempty"`
 	Source string  `json:"source"`
 	From   Kind    `json:"from"`
 	Metric string  `json:"metric"`
@@ -199,8 +203,8 @@ type Metric struct {
 
 // cloudtrail collector が出す主体の活動の日次集計 (principal_new_source / secret_access。ADR 0027)。Key は ActivityKey の形。
 //
-// 決定: Metric の「同じ (Date, Source, Metric, Key) は後から来た値で置き換える」規則のため、値は「その日のうち、最後にその日を
-// 引いた run が見た件数」(下限) になる (cloudtrail は日の頭から引き直さない)。判定は「その日に有ったか」と、窓の日の下限値にだけ使う。
+// 決定 (ADR 0064): 時ごとの集計 (Metric.Hour) にし、collector は時の頭から引き直す。日の値は時の和で、その日の全件になる
+// (前の版は日の行を「最後にその日を引いた run が見た件数」で置き換えていたので下限だった)。前の版が書いた日の行は、時ごとの行の無い日にだけ使う。
 const (
 	// MetricPrincipalSource は主体 × 送信元 (/24・/48) の件数。
 	MetricPrincipalSource = "principal_source"
@@ -243,6 +247,9 @@ func SourcePrefix(ip string) (string, bool) {
 
 // DateLayout は Metric.Date の書式。
 const DateLayout = "2006-01-02"
+
+// HourLayout は Metric.Hour の書式 (UTC の時。ADR 0064)。
+const HourLayout = "2006-01-02T15"
 
 func (m Metric) RecordKind() Kind { return KindMetric }
 func (m Metric) RecordTime() time.Time {

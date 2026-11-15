@@ -489,6 +489,8 @@ type CollectResult struct {
 	partialItems bool
 	// outOfRange は範囲がロググループの作成前 / 保持期間外で問い合わせなかったソースと理由 (データなしとして成功扱い)。
 	outOfRange map[string]string
+	// scanFrom はソースごとに実際に読み始めた時刻 (再走査を含む)。途切れずに読めている始まり (source_covered_from) に使う (ADR 0064)。
+	scanFrom map[string]time.Time
 }
 
 func (r CollectResult) partial() bool { return len(r.SourcesFailed) > 0 || r.partialItems }
@@ -509,6 +511,8 @@ type CollectOptions struct {
 	// BaseFrom は再走査の基準 (ゼロなら窓の From)。SourceFrom はそこより前から引くソース (失敗した期間の追いつき。ADR 0038)。
 	BaseFrom   time.Time
 	SourceFrom map[string]time.Time
+	// SourceAhead は、別の run が窓の始まりより先まで読んだソースの位置 (ADR 0064)。そのソースは位置から続きだけを読む。
+	SourceAhead map[string]time.Time
 }
 
 // Collect は設定の sources から窓内を収集し、ストアへ反映する。失敗したソースは記録して続行する。
@@ -521,7 +525,8 @@ func (e *Engine) Collect(ctx context.Context, w collect.Window, o CollectOptions
 		w.CollectedAt = e.deps.Now()
 	}
 	res := CollectResult{SourcesOK: []string{}, SourcesFailed: []string{}, Errors: []report.CollectError{}, Formats: []report.FormatCoverage{},
-		yielded: map[string][]record.Kind{}, attempted: map[string]bool{}, unavailable: map[record.Kind]string{}, outOfRange: map[string]string{}}
+		yielded: map[string][]record.Kind{}, attempted: map[string]bool{}, unavailable: map[record.Kind]string{}, outOfRange: map[string]string{},
+		scanFrom: map[string]time.Time{}}
 	denied := map[string]bool{}
 	for _, c := range e.cfg.Checks.AccessDenied.ErrorCodes {
 		denied[c] = true
@@ -594,8 +599,19 @@ func (e *Engine) Collect(ctx context.Context, w collect.Window, o CollectOptions
 				if t, ok := o.SourceFrom[src.ID]; ok && t.Before(sw.From) {
 					sw.From = t
 				}
+				if t, ok := o.SourceAhead[src.ID]; ok && t.After(sw.From) {
+					sw.From = t
+					if sw.From.After(sw.To) {
+						sw.From = sw.To
+					}
+				}
 				sw.ScanFrom = sw.From.Add(-src.IngestDelay)
+				// 決定 (ADR 0064): CloudTrail は時の頭から引き直す (主体の活動の集計を時ごとに置き換えるので、その時の全件を数える)
+				if src.Kind == config.KindCloudTrailLookup || src.Kind == config.KindCloudTrailS3 {
+					sw.ScanFrom = sw.ScanFrom.Truncate(time.Hour)
+				}
 			}
+			res.scanFrom[src.ID] = sw.Start()
 			err = c.Collect(ctx, sw, sink)
 			res.Records += n
 			if ur, ok := c.(*cloudtrail.UnusedRegions); ok {
@@ -1207,8 +1223,19 @@ func (e *Engine) RunWithOptions(ctx context.Context, profileName string, o RunOp
 	if cu.metricsFrom.Before(w.From) && !cu.metricsFrom.IsZero() {
 		w.From = cu.metricsFrom
 	}
-	// 再走査 (ADR 0013)。収集はソースごとの ingest_delay、評価は最大の ingest_delay まで遡って遅れて届いたイベントを見る
-	w.ScanFrom, w.CollectedAt = w.From.Add(-e.cfg.MaxIngestDelay()), now
+	// 再走査 (ADR 0013)。収集はソースごとの ingest_delay、評価は最大の ingest_delay まで遡って遅れて届いたイベントを見る。
+	// 決定 (ADR 0064): CloudTrail は時の頭から引き直すので、評価もその時の頭まで遡る。遅れて届いたものは「このプロファイルの前回の評価の後に
+	// 保存したもの」(どの run が拾ったものでも、このプロファイルが 1 回だけ評価する)
+	w.ScanFrom, w.CollectedAt = w.From.Add(-e.cfg.MaxIngestDelay()).Truncate(time.Hour), now
+	if !o.DryRun {
+		last, err := e.st.LastRun(ctx, profileName, []string{"ok", "partial"})
+		if err != nil {
+			return nil, err
+		}
+		if last != nil {
+			w.EvaluatedSince = last.StartedAt.Add(time.Nanosecond)
+		}
+	}
 	// 追いついたイベントは「遅れて届いたもの」と同じ扱いで評価する
 	if t := cu.eventsFrom.Add(-e.cfg.MaxIngestDelay()); !cu.eventsFrom.IsZero() && t.Before(w.ScanFrom) {
 		w.ScanFrom = t
@@ -1219,7 +1246,8 @@ func (e *Engine) RunWithOptions(ctx context.Context, profileName string, o RunOp
 	if err := e.st.BeginRun(ctx, store.Run{ID: runID, Profile: profileName, WindowFrom: w.From, WindowTo: w.To, StartedAt: now, Status: "running"}); err != nil {
 		return nil, err
 	}
-	cr := e.Collect(ctx, w, CollectOptions{Needs: e.neededKinds(prof), PrincipalStatus: store.PrincipalUnknown, RunID: runID, Rescan: true, BaseFrom: base, SourceFrom: cu.from})
+	cr := e.Collect(ctx, w, CollectOptions{Needs: e.neededKinds(prof), PrincipalStatus: store.PrincipalUnknown, RunID: runID, Rescan: true, BaseFrom: base,
+		SourceFrom: cu.from, SourceAhead: cu.ahead})
 	ev, err := e.Evaluate(ctx, profileName, w, &cr)
 	if err != nil {
 		_ = e.st.FinishRun(ctx, runID, "failed", map[string]any{"error": err.Error()})
@@ -1251,7 +1279,7 @@ func (e *Engine) RunWithOptions(ctx context.Context, profileName string, o RunOp
 		"new": rep.Summary.New, "changed": rep.Summary.Changed, "recurred": rep.Summary.Recurred, "resolved": rep.Summary.Resolved, "still_open": rep.Summary.StillOpen,
 	}
 	stats[collectResultStat] = collectSummary{OK: cr.SourcesOK, Failed: cr.SourcesFailed, Errors: cr.Errors}
-	stats[sourceCoveredStat] = cu.advance(cr, base, w.To)
+	stats[sourceCoveredStat], stats[sourceCoveredFromStat] = cu.advance(cr, base, w.To)
 	if len(cu.from) > 0 {
 		stats[catchupStat] = timesText(cu.from)
 	}

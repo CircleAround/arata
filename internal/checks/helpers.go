@@ -15,7 +15,7 @@ import (
 // windowEvents は窓 [From, To) のイベントに、再走査の区間 [ScanFrom, From) で今回の収集で初めて保存したもの (遅れて届いたもの) を加えて返す。
 // 決定 (ADR 0013): 重なり区間の収集済みイベントは前回の run で評価済みなので含めない (件数の水増しと、resolve 済みの事象の再報告を防ぐ)。
 func windowEvents(ctx context.Context, q store.Query, w collect.Window, f store.EventFilter) ([]record.TrailEvent, error) {
-	f.LateFrom, f.CollectedSince = w.ScanFrom, w.CollectedAt
+	f.LateFrom, f.CollectedSince = w.ScanFrom, w.LateSince()
 	return q.Events(ctx, w.From, w.To, f)
 }
 

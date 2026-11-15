@@ -10,7 +10,7 @@
 - allowlist の主体の項目に `dynamic_source: true` があれば (CI のランナーなど) low は出ない (medium 以上は出る)。
   AWS のサービスが引き受けるロール (Lambda・ECS のタスク・EC2 のインスタンスプロファイル。`service_assumed: true`) も同じ扱い。
   allowlist の `source_ips` の内の送信元は新しい送信元にしない。導入直後 (CloudTrail を収集し終えた過去日が `min_baseline_days` 未満) は報告しない
-- 材料は日ごとの「主体 × 送信元」「主体 × 書き込みのリージョン」の有無。件数は下限 (日をまたぐ窓で一部しか数えないことがある)。国の判定はしない
+- 材料は日ごとの「主体 × 送信元」「主体 × 書き込みのリージョン」の有無と件数。件数は時ごとの集計の和でその日の全件 (以前の版で集めた日は一部しか数えていないことがある)。国の判定はしない
 - Key は主体の ARN。data: `principal`、`principal_kind`、`allowlist_status`、`reasons` (`new_source` / `new_source_writes` / `new_region` / `access_denied`)、
   `new_sources` (`prefix`・`events`・`writes`・`ips` (窓で観測した IP))、`new_regions` (`region`・`writes`)、`writes_from_new_sources`、
   `access_denied`、`active_in_baseline` (false なら過去 `baseline_days` は使われていなかった = 休眠していたキー)、`dynamic_source`、`service_assumed`、`baseline_days_with_data`
