@@ -58,6 +58,7 @@
             "ALLOWLIST_MISSING",
             "REBUILD_WARNING",
             "REBUILT_FROM_SCRATCH",
+            "ROLE_POLICY_LARGE",
             "REPO_SET_DIFFERS",
             "REPO_NOTIFY_MISMATCH",
             "REPO_ENVIRONMENT_MISSING",

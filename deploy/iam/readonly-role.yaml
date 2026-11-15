@@ -6,6 +6,11 @@
 #   どちらか、または両方を指定する。どちらも空ならスタックを作らせない (Rules)
 # - TrustedPrincipalArn が別のアカウントの主体なら、その引き受けはこのアカウントの CloudTrail に「外部アカウントの AssumeRole」として残る。
 #   既知リストに無いと unknown_assume_role が監査そのものを high で報告するので、設定を arata config init --audit-account <そのアカウントの ID> で作る (ADR 0045)
+# - ログの中身を読めるロググループは AllowedLogGroupNames に並べたものだけ (ADR 0062)。既定は無く、必ず値を渡す
+#   (既にあるスタックの更新でも要る)。値は arata の設定から `arata config role-params` で作る (sources の log_group の一覧)。
+#   全部のロググループを読ませる (ADR 0062 より前と同じ) なら `*`、どのロググループも読ませない (ロググループのソースが無い) なら `none` と書く
+#   (どちらも値の全体がその 1 語のときだけ。`none` という名前のロググループは読ませられない)。一覧に入れる前に、そのロググループの中身の種類を確かめる
+#   (利用者の操作のログ・個人情報が混ざっていないか。arata には判断できない)。一覧に無いソースは、run で ACCESS_DENIED になる
 # - 監査のロールにも読ませたくないロググループ (個人情報だけを書くログなど) は DeniedLogGroupNames に名前を書く。中身を読む操作を明示の Deny で止める
 #   (ADR 0053)。そのロググループは arata の設定の sources に書かない (書くと、そのソースだけが ACCESS_DENIED になる)
 # - CDK を使わずに配れるよう素の CloudFormation にしている。開発用の sandbox (deploy/sandbox) はこのファイルを CfnInclude で取り込む
@@ -14,12 +19,15 @@
 # 例:
 #   aws cloudformation deploy --stack-name arata-readonly --template-file readonly-role.yaml \
 #     --capabilities CAPABILITY_NAMED_IAM \
-#     --parameter-overrides TrustedPrincipalArn=arn:aws:iam::123456789012:role/arata-runner
+#     --parameter-overrides TrustedPrincipalArn=arn:aws:iam::123456789012:role/arata-runner \
+#       AllowedLogGroupNames=prod-nginx-access,prod-api
 #
-# 読ませないロググループを足す (既にあるスタックの更新も同じコマンド。書かなかったパラメータは前の値のまま):
+# 全部のロググループを読ませる (絞らない) なら AllowedLogGroupNames='*' (シェルが * を展開しないよう引用符で囲む)。
+#
+# 読ませるロググループを足す・読ませないロググループを足す (既にあるスタックの更新も同じコマンド。書かなかったパラメータは前の値のまま):
 #   aws cloudformation deploy --stack-name arata-readonly --template-file readonly-role.yaml \
 #     --capabilities CAPABILITY_NAMED_IAM \
-#     --parameter-overrides DeniedLogGroupNames=prod-mail-delivery,prod-mail-bounce
+#     --parameter-overrides AllowedLogGroupNames=prod-nginx-access,prod-api DeniedLogGroupNames=prod-mail-delivery,prod-mail-bounce
 AWSTemplateFormatVersion: '2010-09-09'
 Description: arata read-only audit role
 
@@ -43,6 +51,13 @@ Parameters:
     Default: ''
     AllowedPattern: '^$|^arn:aws[a-z-]*:rolesanywhere:[a-z0-9-]+:\d{12}:trust-anchor/.+$'
     Description: IAM Roles Anywhere のトラストアンカーの ARN。空なら Roles Anywhere からは引き受けさせない
+  AllowedLogGroupNames:
+    Type: String
+    # 既定は書かない (ADR 0062)。書かなかった更新は CloudFormation が止める (黙って全部を読める・全部が読めない、にしない)
+    # `*` 1 文字だけが「全部」、`none` 1 語だけが「どれも読ませない」(名前の規則にも合うが、Condition で予約語として扱う)。ほかは DeniedLogGroupNames と同じ文字の規則 (部分的なワイルドカード・空白・コロン・空の要素は通さない)
+    AllowedPattern: '^\*$|^[A-Za-z0-9_./#-]+(,[A-Za-z0-9_./#-]+)*$'
+    ConstraintDescription: ロググループの名前 (英数字と _ - / . #) をカンマで区切って書くか、全部を読ませるなら * だけ、どれも読ませないなら none だけを書いてください。空・空白・部分的なワイルドカード (prod-*)・ARN は書けません
+    Description: このロールにログの中身を読ませるロググループの名前 (完全一致。カンマ区切り。例 prod-nginx-access,prod-api)。全部を読ませるなら *、どれも読ませないなら none。arata config role-params が設定から作る
   DeniedLogGroupNames:
     Type: String
     Default: ''
@@ -57,6 +72,8 @@ Conditions:
   HasExternalId: !Not [!Equals [!Ref ExternalId, '']]
   HasRolesAnywhere: !Not [!Equals [!Ref RolesAnywhereTrustAnchorArn, '']]
   HasDeniedLogGroups: !Not [!Equals [!Ref DeniedLogGroupNames, '']]
+  AllowAllLogGroups: !Equals [!Ref AllowedLogGroupNames, '*']
+  AllowNoLogGroups: !Equals [!Ref AllowedLogGroupNames, 'none']
 
 Rules:
   RequireTrust:
@@ -113,14 +130,38 @@ Resources:
                   - cloudtrail:LookupEvents
                 Resource: '*'
               # cloudwatch-logs (Logs Insights の集計クエリ。doctor の解釈率の確認も同じ action)
-              - Sid: CloudWatchLogsInsights
+              # 一覧とクエリの停止。どちらもリソースの型を持たない (Service Authorization Reference) ので絞れない。ログの中身は返さない
+              - Sid: CloudWatchLogsList
                 Effect: Allow
                 Action:
                   - logs:DescribeLogGroups
-                  - logs:StartQuery
-                  - logs:GetQueryResults
                   - logs:StopQuery
                 Resource: '*'
+              # ログの中身を読む Logs Insights の action は、AllowedLogGroupNames のロググループだけ (ADR 0062)。`*` なら全部
+              # - ARN の組み立ては下の DenyLogGroupRead と同じ (名前ごとに `…:log-group:<名前>` と `…:log-group:<名前>:*`。完全一致。
+              #   リージョン・アカウント・パーティションは `*`)。一覧に無いロググループは、この Allow が無いので暗黙の拒否
+              # - ほかの中身を読む action (FilterLogEvents・GetLogEvents など) は、もともとこのロールに無い
+              # - none ならこの文を出さない (Resource を空にはできない)。一覧の文は残る
+              - !If
+                - AllowNoLogGroups
+                - !Ref AWS::NoValue
+                - Sid: CloudWatchLogsInsights
+                  Effect: Allow
+                  Action:
+                    - logs:StartQuery
+                    - logs:GetQueryResults
+                  Resource: !If
+                    - AllowAllLogGroups
+                    - '*'
+                    - !Split
+                      - ','
+                      - !Join
+                        - ''
+                        - - 'arn:*:logs:*:*:log-group:'
+                          - !Join [',arn:*:logs:*:*:log-group:', !Split [',', !Ref AllowedLogGroupNames]]
+                          - ',arn:*:logs:*:*:log-group:'
+                          - !Join [':*,arn:*:logs:*:*:log-group:', !Split [',', !Ref AllowedLogGroupNames]]
+                          - ':*'
               # iam-credential-report。GenerateCredentialReport は書き込み系 (レポートの生成のみ)
               - Sid: CredentialReport
                 Effect: Allow

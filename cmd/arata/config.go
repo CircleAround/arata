@@ -13,6 +13,7 @@ import (
 
 	"github.com/CircleAround/arata/internal/allowlist"
 	"github.com/CircleAround/arata/internal/checks"
+	"github.com/CircleAround/arata/internal/codes"
 	"github.com/CircleAround/arata/internal/config"
 	"github.com/CircleAround/arata/internal/engine"
 	"github.com/CircleAround/arata/internal/scaffold"
@@ -23,9 +24,9 @@ import (
 func newConfigCmd(d *Deps, g *globalFlags) *subcmd.Command {
 	cmd := &subcmd.Command{
 		Use:   "config",
-		Short: "設定の雛形を書き出す / 雛形と比べる (config init)、設定と allowlist をオフラインで検査する (config check)",
+		Short: "設定の雛形を書き出す / 雛形と比べる (config init)、設定と allowlist をオフラインで検査する (config check)、読み取り専用ロールに渡す値を出す (config role-params)",
 	}
-	cmd.AddCommand(newConfigInitCmd(d, g), newConfigCheckCmd(d, g))
+	cmd.AddCommand(newConfigInitCmd(d, g), newConfigCheckCmd(d, g), newConfigRoleParamsCmd(d, g))
 	return cmd
 }
 
@@ -314,6 +315,80 @@ text の出力は人向けで、文言と並びは版をまたいで変わるの
 		},
 	}
 	cmd.StringVar(&format, "format", "text", "出力形式 (text|json)。json は機械が読む形 (arata schema arata-config-check)")
+	return cmd
+}
+
+// config role-params --format json のスキーマの名前と版 (ADR 0054・0062)。
+const (
+	roleParamsSchema        = "arata-role-params"
+	roleParamsSchemaVersion = 1
+)
+
+// roleParamsOutput は config role-params --format json の出力。
+type roleParamsOutput struct {
+	Schema        string               `json:"schema" jsonschema:"const=arata-role-params"`
+	SchemaVersion int                  `json:"schema_version" jsonschema:"const=1"`
+	Parameters    roleParamsParameters `json:"parameters" desc:"deploy/iam/readonly-role.yaml に渡すパラメータ。キーはテンプレートのパラメータの名前"`
+	LogGroups     []string             `json:"log_groups" desc:"cloudwatch-logs のソースの log_group (重複を除き、設定の順)。AllowedLogGroupNames はこれをカンマでつないだもの"`
+}
+
+type roleParamsParameters struct {
+	AllowedLogGroupNames string `json:"AllowedLogGroupNames" desc:"ログの中身を読ませるロググループの名前のカンマ区切り。cloudwatch-logs のソースが無ければ none (どのロググループも読ませない。ADR 0062)。--parameter-overrides AllowedLogGroupNames=<この値> で渡す"`
+}
+
+func newConfigRoleParamsCmd(d *Deps, g *globalFlags) *subcmd.Command {
+	var format string
+	cmd := &subcmd.Command{
+		Use:   "role-params",
+		Short: "設定から、読み取り専用ロール (deploy/iam/readonly-role.yaml) に渡すパラメータ (AllowedLogGroupNames) を出す (AWS にもストアにも繋がない)",
+		Long: `設定 (-c、省略時は ARATA_CONFIG か ./arata.yaml) の cloudwatch-logs のソースの log_group を並べ、読み取り専用ロールの
+AllowedLogGroupNames に渡す値を出す (ADR 0062)。ロールは、この一覧のロググループの中身だけを読める。
+ソースを足した・変えたら、この値でロールのスタックを更新する (しないと、そのソースは run で ACCESS_DENIED になる)。
+
+  - 一覧に入れる前に、そのロググループの中身の種類を確かめる (利用者の操作のログ・個人情報が混ざっていないか。arata には判断できない)
+  - 全部のロググループを読ませる (AllowedLogGroupNames='*') かどうかは利用者が決める。このコマンドは '*' を出さない
+  - cloudwatch-logs のソースが無ければ none (どのロググループも読ませない) を出す
+  - ロールが受け付けない名前 (none という名前を含む) がある・値が CloudFormation の上限 (4,096 バイト) を超えるときは、出さずに終了コード 2
+  - ロールのインラインポリシーの上限 (10,240 文字) に近ければ、出したうえで警告する
+
+  aws cloudformation deploy --stack-name arata-readonly --template-file readonly-role.yaml --capabilities CAPABILITY_NAMED_IAM \
+    --parameter-overrides AllowedLogGroupNames="$(arata config role-params --format json | jq -r .parameters.AllowedLogGroupNames)"
+
+機械で読むときは --format json (スキーマは arata schema arata-role-params)。text の出力は人向けで、文言は版をまたいで変わるので、機械で読まない。`,
+		Args: subcmd.NoArgs,
+		Run: func(context.Context, []string) error {
+			if format != "text" && format != "json" {
+				return configErr(d, fmt.Errorf("unknown format %q (text|json)", format))
+			}
+			path, err := configPath(d, g)
+			if err != nil {
+				return err
+			}
+			cfg, err := config.Load(path)
+			if err != nil {
+				return configErr(d, err)
+			}
+			p, err := engine.BuildRoleParams(cfg)
+			if err != nil {
+				return configErr(d, err)
+			}
+			for _, w := range p.Warnings {
+				d.Engine.Logger.Warn(w, "code", codes.RolePolicyLarge)
+			}
+			if format == "json" {
+				return writeJSON(d, roleParamsOutput{Schema: roleParamsSchema, SchemaVersion: roleParamsSchemaVersion,
+					Parameters: roleParamsParameters{AllowedLogGroupNames: p.AllowedLogGroupNames}, LogGroups: p.LogGroups})
+			}
+			if len(p.LogGroups) == 0 {
+				fmt.Fprintln(d.Stdout, "cloudwatch-logs のソースが無いので、どのロググループも読ませない (AllowedLogGroupNames=none)")
+			} else {
+				fmt.Fprintf(d.Stdout, "読み取り専用ロールに読ませるロググループ (%d 個): %s\n", len(p.LogGroups), strings.Join(p.LogGroups, ", "))
+			}
+			fmt.Fprintf(d.Stdout, "--parameter-overrides AllowedLogGroupNames=%s\n", p.AllowedLogGroupNames)
+			return nil
+		},
+	}
+	cmd.StringVar(&format, "format", "text", "出力形式 (text|json)。json は機械が読む形 (arata schema arata-role-params)")
 	return cmd
 }
 

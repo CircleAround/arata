@@ -56,8 +56,14 @@ aws cloudformation deploy --stack-name arata-runner \
 aws cloudformation deploy --stack-name arata-readonly \
   --template-file deploy/iam/readonly-role.yaml \
   --capabilities CAPABILITY_NAMED_IAM \
-  --parameter-overrides TrustedPrincipalArn=<実行用ロールの ARN (上のスタックの出力 RunnerRoleArn)>
+  --parameter-overrides TrustedPrincipalArn=<実行用ロールの ARN (上のスタックの出力 RunnerRoleArn)> \
+    AllowedLogGroupNames="$(arata config role-params -c aws/<アカウント>/arata.yaml --format json | jq -r .parameters.AllowedLogGroupNames)"
 ```
+
+- `AllowedLogGroupNames` は、読み取り専用ロールにログの中身を読ませるロググループの一覧です (arata の ADR 0062)。既定は無く、作るときも更新するときも必ず渡します。
+  `aws/<アカウント>/arata.yaml` の `sources` にロググループがまだ無ければ、`arata config role-params` は `none` (どれも読ませない) を出します。
+  ロググループのソースを足したら、**一覧に入れる前にそのロググループの中身の種類を確かめ** (利用者の操作のログ・個人情報が混ざっていないか。arata には判断できません)、
+  同じコマンドでスタックを更新します。しないと、そのソースだけが `ACCESS_DENIED` になります。全部を読ませる (絞らない) なら `AllowedLogGroupNames='*'` です
 
 - `GitHubRepository` は、OIDC トークンの `sub` の形に合わせます。2026-07-15 より後に作ったリポジトリは ID 入りの形です (説明書の 1 の注意)。
   リポジトリをこれから作るなら、3 の後に ID が決まるので、3 → 1 の順でもかまいません

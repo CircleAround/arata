@@ -39,6 +39,8 @@ export class SandboxStack extends Stack {
       TrustedPrincipalArn: config.readonlyRole.trustedPrincipalArn,
       ExternalId: '',
       RolesAnywhereTrustAnchorArn: '',
+      // 決定 (ADR 0062): ログの中身を読ませるのは、この sandbox が作るロググループだけ (配布用のロールの絞った形を試す)
+      AllowedLogGroupNames: [config.nginxLogGroup.name, ...(config.waf.enabled ? [`aws-waf-logs-${p}`] : [])].join(','),
     };
     for (const [name, value] of Object.entries(defaults)) {
       readonly.getParameter(name).default = value;

@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:arata:schema:arata-role-params:1",
+  "title": "arata-role-params",
+  "description": "arata config role-params --format json の出力。設定から作った、読み取り専用ロール (deploy/iam/readonly-role.yaml) に渡すパラメータ。AWS にもストアにも繋がずに出す",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "arata-role-params"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "parameters": {
+      "description": "deploy/iam/readonly-role.yaml に渡すパラメータ。キーはテンプレートのパラメータの名前",
+      "$ref": "#/$defs/roleParamsParameters"
+    },
+    "log_groups": {
+      "description": "cloudwatch-logs のソースの log_group (重複を除き、設定の順)。AllowedLogGroupNames はこれをカンマでつないだもの",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "schema_version",
+    "parameters",
+    "log_groups"
+  ],
+  "$defs": {
+    "roleParamsParameters": {
+      "type": "object",
+      "properties": {
+        "AllowedLogGroupNames": {
+          "description": "ログの中身を読ませるロググループの名前のカンマ区切り。cloudwatch-logs のソースが無ければ none (どのロググループも読ませない。ADR 0062)。--parameter-overrides AllowedLogGroupNames=\u003cこの値\u003e で渡す",
+          "type": "string"
+        }
+      },
+      "required": [
+        "AllowedLogGroupNames"
+      ]
+    }
+  }
+}

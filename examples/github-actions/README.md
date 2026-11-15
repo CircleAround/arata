@@ -133,12 +133,20 @@ aws cloudformation describe-stacks --stack-name arata-runner --query 'Stacks[0].
 aws cloudformation deploy --stack-name arata-readonly \
   --template-file deploy/iam/readonly-role.yaml \
   --capabilities CAPABILITY_NAMED_IAM \
-  --parameter-overrides TrustedPrincipalArn=arn:aws:iam::123456789012:role/arata-runner
+  --parameter-overrides TrustedPrincipalArn=arn:aws:iam::123456789012:role/arata-runner \
+    AllowedLogGroupNames="$(arata config role-params -c aws/prod/arata.yaml --format json | jq -r .parameters.AllowedLogGroupNames)"
 ```
+
+`AllowedLogGroupNames` は、ログの中身を読ませるロググループの一覧です (ADR 0062)。既定は無く、作るときも更新するときも必ず渡します。
+値は、そのアカウントの arata の設定 (`sources` の `log_group`) から `arata config role-params` で作ります。全部のロググループを読ませる (絞らない) なら `AllowedLogGroupNames='*'`、ロググループのソースがまだ無ければ `none` (どれも読ませない。`arata config role-params` がそのまま出します) です。
+`*` と `none` は値の全体がその 1 語のときだけの意味で、`none` という名前のロググループは読ませられません。
+**一覧に入れる前に、そのロググループの中身の種類を確かめます** (利用者の操作のログ・個人情報が混ざっていないか。arata には判断できません)。
+ソースを足したら、同じコマンドでスタックを更新します。しないと、そのソースだけが `ACCESS_DENIED` になります (通知と coverage、`arata doctor` の `permission` の行に出ます)。
+`AllowedLogGroupNames` より前の版のロールから上げるときも、値を渡して更新します (渡さない更新は CloudFormation が止めます。手順は arata の README)。
 
 監査のロールにも読ませたくないロググループ (個人情報だけを書くメールの送信ログなど) があれば、`DeniedLogGroupNames=prod-mail-delivery,prod-mail-bounce` のように名前を足します。
 そのロググループの中身を読む操作を明示の Deny で止めます (ADR 0053)。読ませないロググループは arata の設定の `sources` に書きません。
-既にあるロールに足すときも同じコマンドです (`--parameter-overrides DeniedLogGroupNames=…` だけを書けば、ほかのパラメータは前の値のままです)。
+既にあるロールに足すときも同じコマンドです (`--parameter-overrides DeniedLogGroupNames=…` と `AllowedLogGroupNames=…` を書けば、ほかのパラメータは前の値のままです)。
 
 順序は 1 → 2 です。信頼ポリシーに書く主体 (実行用ロール) は、先に存在している必要があります。
 出力の `RoleArn` が手順 1 の `AuditRoleArns` と違う (ロールの名前を変えた) ときは、手順 1 を正しい ARN でもう一度実行します。

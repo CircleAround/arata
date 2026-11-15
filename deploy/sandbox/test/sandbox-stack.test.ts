@@ -56,6 +56,11 @@ test('読み取りロールは deploy/iam/readonly-role.yaml を取り込み、�
   assert.equal(params.TrustedPrincipalArn.Default, 'arn:aws:iam::123456789012:root');
   assert.equal(params.ExternalId.Default, '');
   assert.equal(params.RolesAnywhereTrustAnchorArn.Default, '');
+  // 決定 (ADR 0062): sandbox の読み取り専用ロールは、sandbox が作るロググループだけを読ませる (絞った形を試せるように)
+  assert.equal(params.AllowedLogGroupNames.Default, 'prod-nginx-access');
+  // WAF を有効にすると、WAF のログのロググループも読ませる
+  const withWaf = synth((raw) => (raw.waf.enabled = true)).toJSON().Parameters as Record<string, any>;
+  assert.equal(withWaf.AllowedLogGroupNames.Default, 'prod-nginx-access,aws-waf-logs-arata-sandbox');
   t.hasResourceProperties('AWS::IAM::Role', {
     RoleName: { Ref: 'RoleName' },
     Policies: Match.arrayWith([

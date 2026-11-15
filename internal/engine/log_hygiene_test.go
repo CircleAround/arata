@@ -352,7 +352,7 @@ func sourceFailed(rep *report.Report, id string) bool {
 	return false
 }
 
-// ロールが読ませないロググループ (readonly-role.yaml の DeniedLogGroupNames。ADR 0053) をソースに書いたとき:
+// ロールが読ませないロググループ (readonly-role.yaml の DeniedLogGroupNames にある・AllowedLogGroupNames に無い。ADR 0053・0062) をソースに書いたとき:
 // 一覧は通るので log_group は ok、StartQuery が拒否される。クエリごとに同じ行を並べず、permission の 1 行に action・ロググループ・対処を出す。
 func TestDoctorStartQueryDeniedOnOneLogGroup(t *testing.T) {
 	h := newHarnessWith(t, hygieneSources, hygieneChecks)
@@ -383,7 +383,8 @@ func TestDoctorStartQueryDeniedOnOneLogGroup(t *testing.T) {
 	if r.Status != DoctorNG || r.Code != "ACCESS_DENIED" {
 		t.Fatalf("%+v", r)
 	}
-	for _, want := range []string{"logs:StartQuery が拒否された", "prod-app", "DeniedLogGroupNames", "sources から外す", "explicit deny"} {
+	// 読ませる一覧 (AllowedLogGroupNames。ADR 0062) に無い場合の対処も書く。どちらなのかは AWS のエラーの文言でしか分からないので両方
+	for _, want := range []string{"logs:StartQuery が拒否された", "prod-app", "DeniedLogGroupNames", "sources から外す", "AllowedLogGroupNames", "arata config role-params", "explicit deny"} {
 		if !strings.Contains(r.Detail, want) {
 			t.Errorf("detail に %q が無い: %s", want, r.Detail)
 		}
