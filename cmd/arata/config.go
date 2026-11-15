@@ -333,14 +333,16 @@ type roleParamsOutput struct {
 }
 
 type roleParamsParameters struct {
-	AllowedLogGroupNames string `json:"AllowedLogGroupNames" desc:"ログの中身を読ませるロググループの名前のカンマ区切り。cloudwatch-logs のソースが無ければ none (どのロググループも読ませない。ADR 0062)。--parameter-overrides AllowedLogGroupNames=<この値> で渡す"`
+	AllowedLogGroupNames   string `json:"AllowedLogGroupNames" desc:"ログの中身を読ませるロググループの名前のカンマ区切り。cloudwatch-logs のソースが無ければ none (どのロググループも読ませない。ADR 0062)。--parameter-overrides AllowedLogGroupNames=<この値> で渡す"`
+	CloudTrailBucketName   string `json:"CloudTrailBucketName" desc:"cloudtrail-s3 のソースの bucket (trail の配信先のバケット)。ソースが無ければ空 (S3 を読ませない。ADR 0063)"`
+	CloudTrailBucketPrefix string `json:"CloudTrailBucketPrefix" desc:"cloudtrail-s3 のソースの prefix から前後の / を外したもの。無ければ空。CloudTrailKmsKeyArn (SSE-KMS の鍵) は設定から分からないので出さない"`
 }
 
 func newConfigRoleParamsCmd(d *Deps, g *globalFlags) *subcmd.Command {
 	var format string
 	cmd := &subcmd.Command{
 		Use:   "role-params",
-		Short: "設定から、読み取り専用ロール (deploy/iam/readonly-role.yaml) に渡すパラメータ (AllowedLogGroupNames) を出す (AWS にもストアにも繋がない)",
+		Short: "設定から、読み取り専用ロール (deploy/iam/readonly-role.yaml) に渡すパラメータ (AllowedLogGroupNames・CloudTrailBucketName など) を出す (AWS にもストアにも繋がない)",
 		Long: `設定 (-c、省略時は ARATA_CONFIG か ./arata.yaml) の cloudwatch-logs のソースの log_group を並べ、読み取り専用ロールの
 AllowedLogGroupNames に渡す値を出す (ADR 0062)。ロールは、この一覧のロググループの中身だけを読める。
 ソースを足した・変えたら、この値でロールのスタックを更新する (しないと、そのソースは run で ACCESS_DENIED になる)。
@@ -350,6 +352,8 @@ AllowedLogGroupNames に渡す値を出す (ADR 0062)。ロールは、この一
   - cloudwatch-logs のソースが無ければ none (どのロググループも読ませない) を出す
   - ロールが受け付けない名前 (none という名前を含む) がある・値が CloudFormation の上限 (4,096 バイト) を超えるときは、出さずに終了コード 2
   - ロールのインラインポリシーの上限 (10,240 文字) に近ければ、出したうえで警告する
+  - cloudtrail-s3 のソースがあれば、CloudTrailBucketName と CloudTrailBucketPrefix も出す (ADR 0063)。
+    trail のファイルが SSE-KMS なら、CloudTrailKmsKeyArn (鍵の ARN) は利用者が足す (arata は鍵を知らない)
 
   aws cloudformation deploy --stack-name arata-readonly --template-file readonly-role.yaml --capabilities CAPABILITY_NAMED_IAM \
     --parameter-overrides AllowedLogGroupNames="$(arata config role-params --format json | jq -r .parameters.AllowedLogGroupNames)"
@@ -377,14 +381,23 @@ AllowedLogGroupNames に渡す値を出す (ADR 0062)。ロールは、この一
 			}
 			if format == "json" {
 				return writeJSON(d, roleParamsOutput{Schema: roleParamsSchema, SchemaVersion: roleParamsSchemaVersion,
-					Parameters: roleParamsParameters{AllowedLogGroupNames: p.AllowedLogGroupNames}, LogGroups: p.LogGroups})
+					Parameters: roleParamsParameters{AllowedLogGroupNames: p.AllowedLogGroupNames, CloudTrailBucketName: p.CloudTrailBucketName,
+						CloudTrailBucketPrefix: p.CloudTrailBucketPrefix}, LogGroups: p.LogGroups})
 			}
 			if len(p.LogGroups) == 0 {
 				fmt.Fprintln(d.Stdout, "cloudwatch-logs のソースが無いので、どのロググループも読ませない (AllowedLogGroupNames=none)")
 			} else {
 				fmt.Fprintf(d.Stdout, "読み取り専用ロールに読ませるロググループ (%d 個): %s\n", len(p.LogGroups), strings.Join(p.LogGroups, ", "))
 			}
-			fmt.Fprintf(d.Stdout, "--parameter-overrides AllowedLogGroupNames=%s\n", p.AllowedLogGroupNames)
+			overrides := "AllowedLogGroupNames=" + p.AllowedLogGroupNames
+			if p.CloudTrailBucketName != "" {
+				fmt.Fprintf(d.Stdout, "trail の配信先のバケット (cloudtrail-s3): %s。SSE-KMS なら CloudTrailKmsKeyArn=<鍵の ARN> も足す\n", p.CloudTrailBucketName)
+				overrides += " CloudTrailBucketName=" + p.CloudTrailBucketName
+				if p.CloudTrailBucketPrefix != "" {
+					overrides += " CloudTrailBucketPrefix=" + p.CloudTrailBucketPrefix
+				}
+			}
+			fmt.Fprintf(d.Stdout, "--parameter-overrides %s\n", overrides)
 			return nil
 		},
 	}

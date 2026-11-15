@@ -1,0 +1,39 @@
+# arata の設定サンプル (CloudTrail を trail の S3 への配信から読む。ADR 0063)。
+# arata.yaml の cloudtrail-lookup の代わりに使う。同じ設定に cloudtrail-lookup と cloudtrail-s3 は並べられない
+# (どちらも同じ管理イベントを出し、主体の件数が二重に足されるため。arata config check が止める)。
+#
+# LookupEvents は 1 ページ 50 件・毎秒 2 回までなので、記録の多いアカウントでは収集に時間がかかる (1 日 20 万件で 30 分ほど)。
+# trail の S3 は件数にほぼ依らない時間で読める。要る準備:
+#   - 管理イベントの読み取り・書き込みの両方を記録し、種類を除いていない trail (arata doctor が GetEventSelectors で確かめる)
+#   - 読み取り専用ロールのパラメータ CloudTrailBucketName (と CloudTrailBucketPrefix・CloudTrailKmsKeyArn)。arata config role-params が設定から作る
+#   - 組織の trail で、バケットがログ用の別のアカウントにあるときは、バケットポリシーとキーポリシーで読み取り専用ロールを許す (docs/ai/logs.md)
+
+name: example
+
+store: dir:///var/lib/arata/example
+allowlist: allowlist.yaml
+audit_account: none
+
+aws:
+  region: ap-northeast-1
+
+sources:
+  - id: trail
+    kind: cloudtrail-s3
+    bucket: example-trail-logs        # trail の配信先のバケット (名前だけ。ARN・s3:// は書かない)
+    # prefix: logs                    # trail の S3 キーの接頭辞 (AWSLogs/ の手前まで)。無ければ書かない
+    # organization_id: o-exampleorg1  # 組織の trail ならキーに入る組織の ID
+    account_id: "123456789012"        # 記録を読むアカウント (監査されるアカウント)。キーの AWSLogs/<account-id>/
+    regions: [ap-northeast-1, us-east-1]   # 必須。IAM・ConsoleLogin・STS の一部は us-east-1 にしか記録されない
+    # bucket_region: ap-northeast-1   # バケットのリージョン。省略時は aws.region
+    # ingest_delay: 15m               # 記録の遅れの見込み。窓の前をこの分だけ引き直し、窓の後にこの分だけ遅れて配信されたファイルも読む
+  - id: trail_unused_regions
+    kind: cloudtrail-unused-regions   # 対象 = 有効なリージョン − 上の cloudtrail-s3 の regions (LookupEvents で書き込みだけを引く)
+
+profiles:
+  hourly:
+    window: 1h
+    checks: [root_usage, unknown_assume_role, oidc_assume_role]
+  daily:
+    window: 24h
+    checks: [default-daily, root_usage, unknown_assume_role, oidc_assume_role]

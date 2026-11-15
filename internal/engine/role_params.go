@@ -18,8 +18,10 @@ const (
 	rolePolicyMax = 10240
 	// rolePolicyBase は、AllowedLogGroupNames が無い (全部 `*`) ときのポリシーの大きさ (空白を除いた JSON の文字数) の上限の見積もり。
 	// rolePolicyPerName は名前 1 つあたりに足される文字数 (名前の長さの 2 倍を除く)。readonly_role_test.go が実際のテンプレートと突き合わせる
-	rolePolicyBase    = 1500
+	rolePolicyBase    = 1600
 	rolePolicyPerName = 60
+	// rolePolicyTrail は CloudTrailBucketName を渡したときに足される文 (ListBucket・GetObject) の文字数 (バケットの名前の 2 倍と接頭辞の 2 倍を除く。ADR 0063)
+	rolePolicyTrail = 260
 )
 
 // roleLogGroupName は readonly-role.yaml の AllowedLogGroupNames / DeniedLogGroupNames の 1 要素の規則 (AllowedPattern と同じ文字)。
@@ -35,6 +37,10 @@ type RoleParams struct {
 	AllowedLogGroupNames string
 	// LogGroups は cloudwatch-logs のソースの log_group (重複を除き、設定の順)。
 	LogGroups []string
+	// CloudTrailBucketName / CloudTrailBucketPrefix は cloudtrail-s3 のソースの bucket と prefix (前後の / を外したもの)。ソースが無ければ空 (ADR 0063)。
+	// CloudTrailKmsKeyArn は設定から分からない (arata は trail の暗号化の鍵を設定に持たない) ので出さない。
+	CloudTrailBucketName   string
+	CloudTrailBucketPrefix string
 	// Warnings は、出した値で困るおそれ (人向けの文)。
 	Warnings []string
 }
@@ -49,12 +55,21 @@ type RoleParams struct {
 //   - ロールの AllowedPattern に合わない名前・パラメータの値の上限を超える並びは error (スタックの更新で弾かれる前に分かる)
 //   - ロールのインラインポリシーの上限に近ければ warning。Deny (DeniedLogGroupNames) の分は設定から分からないので、見積もりは Allow の分だけ
 func BuildRoleParams(cfg *config.Config) (RoleParams, error) {
+	var bucket, prefix string
+	for _, s := range cfg.Sources {
+		if s.Kind == config.KindCloudTrailS3 {
+			bucket, prefix = s.Bucket, strings.Trim(s.Prefix, "/")
+		}
+	}
 	groups := cfg.AuditLogGroups()
 	if len(groups) == 0 {
-		return RoleParams{AllowedLogGroupNames: RoleNoLogGroups, LogGroups: []string{}}, nil
+		return RoleParams{AllowedLogGroupNames: RoleNoLogGroups, LogGroups: []string{}, CloudTrailBucketName: bucket, CloudTrailBucketPrefix: prefix}, nil
 	}
 	var bad []string
 	size := rolePolicyBase
+	if bucket != "" {
+		size += rolePolicyTrail + 2*len(bucket) + 2*len(prefix)
+	}
 	for _, g := range groups {
 		if !roleLogGroupName.MatchString(g) || g == RoleNoLogGroups {
 			bad = append(bad, fmt.Sprintf("%q", g))
@@ -64,7 +79,7 @@ func BuildRoleParams(cfg *config.Config) (RoleParams, error) {
 	if len(bad) > 0 {
 		return RoleParams{}, fmt.Errorf("config: log_group %s cannot be passed to the role (AllowedLogGroupNames takes letters, digits and _ - / . # only, and %q alone means no log group)", strings.Join(bad, ", "), RoleNoLogGroups)
 	}
-	p := RoleParams{AllowedLogGroupNames: strings.Join(groups, ","), LogGroups: groups}
+	p := RoleParams{AllowedLogGroupNames: strings.Join(groups, ","), LogGroups: groups, CloudTrailBucketName: bucket, CloudTrailBucketPrefix: prefix}
 	if n := len(p.AllowedLogGroupNames); n > roleParamValueMax {
 		return RoleParams{}, fmt.Errorf("config: AllowedLogGroupNames would be %d bytes, over the CloudFormation parameter value limit of 4,096 bytes (%d log groups)", n, len(groups))
 	}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -85,6 +86,13 @@ sources:
 		},
 		Account: func(ctx context.Context, cfg *config.Config, src config.Source, region string) (account.Clients, error) {
 			return h.acct.Clients(region), nil
+		},
+		// 実 AWS に繋がないように、偽物を入れていないクライアントはエラーにする (既定の SDK のクライアントにしない)
+		CloudTrailS3: func(context.Context, *config.Config, config.Source) (cloudtrail.S3API, error) {
+			return nil, errors.New("cloudtrail-s3 is not faked in this test")
+		},
+		TrailInfo: func(context.Context, *config.Config, string) (cloudtrail.TrailInfoAPI, error) {
+			return nil, errors.New("trail info is not faked in this test")
 		},
 		Sleep:   func(context.Context, time.Duration) error { return nil },
 		Logger:  slog.New(slog.NewJSONHandler(h.stderr, nil)),

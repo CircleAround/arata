@@ -48,6 +48,7 @@
             "SOURCE_CATCHUP_TRUNCATED",
             "NO_LOG_LINES",
             "LOG_GROUP_UNVERIFIED",
+            "TRAIL_FILE_INVALID",
             "AGGREGATE_TRUNCATED",
             "REQUESTS_UNTAGGED",
             "USER_ID_MISSING",

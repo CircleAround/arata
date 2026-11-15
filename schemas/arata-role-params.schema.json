@@ -38,10 +38,20 @@
         "AllowedLogGroupNames": {
           "description": "ログの中身を読ませるロググループの名前のカンマ区切り。cloudwatch-logs のソースが無ければ none (どのロググループも読ませない。ADR 0062)。--parameter-overrides AllowedLogGroupNames=\u003cこの値\u003e で渡す",
           "type": "string"
+        },
+        "CloudTrailBucketName": {
+          "description": "cloudtrail-s3 のソースの bucket (trail の配信先のバケット)。ソースが無ければ空 (S3 を読ませない。ADR 0063)",
+          "type": "string"
+        },
+        "CloudTrailBucketPrefix": {
+          "description": "cloudtrail-s3 のソースの prefix から前後の / を外したもの。無ければ空。CloudTrailKmsKeyArn (SSE-KMS の鍵) は設定から分からないので出さない",
+          "type": "string"
         }
       },
       "required": [
-        "AllowedLogGroupNames"
+        "AllowedLogGroupNames",
+        "CloudTrailBucketName",
+        "CloudTrailBucketPrefix"
       ]
     }
   }

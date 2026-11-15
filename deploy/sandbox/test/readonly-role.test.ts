@@ -15,6 +15,7 @@ const EXPECTED_ACTIONS = [
   'ce:GetAnomalies',
   'ce:GetAnomalyMonitors',
   'cloudtrail:DescribeTrails',
+  'cloudtrail:GetEventSelectors',
   'cloudtrail:GetTrailStatus',
   'cloudtrail:LookupEvents',
   'elasticloadbalancing:DescribeLoadBalancers',
@@ -54,9 +55,10 @@ test('読み取りロールの権限は決めた action だけ (ワイルドカ�
   const t = rawTemplate();
   const role = roleOf(t);
   const all = role.Properties.Policies.flatMap((p: any) => p.PolicyDocument.Statement);
-  // 条件付きの文 (Fn::If) は、DeniedLogGroupNames の Deny と、AllowedLogGroupNames=none で出さない Logs Insights の Allow の 2 つ。下のテストで見る
+  // 条件付きの文 (Fn::If) は、DeniedLogGroupNames の Deny、AllowedLogGroupNames=none で出さない Logs Insights の Allow、
+  // CloudTrailBucketName・CloudTrailKmsKeyArn を渡したときだけの S3 と KMS の 3 つ (ADR 0063) の計 5 つ。下のテストで見る
   const statements = all.filter((s: any) => !s['Fn::If']);
-  assert.equal(all.length - statements.length, 2, '条件付きの文は 2 つ');
+  assert.equal(all.length - statements.length, 5, '条件付きの文は 5 つ');
   const insights = all.filter((s: any) => s['Fn::If']?.[0] === 'AllowNoLogGroups').map((s: any) => s['Fn::If'][2]);
   const actions = [...statements, ...insights].flatMap((s: any) => [s.Action].flat()).sort();
   assert.deepEqual(actions, EXPECTED_ACTIONS);
@@ -158,6 +160,39 @@ test('AllowedLogGroupNames のロググループだけ、ログの中身を読�
   const list = statements.find((s: any) => s.Sid === 'CloudWatchLogsList');
   assert.deepEqual([...list.Action].sort(), ['logs:DescribeLogGroups', 'logs:StopQuery']);
   assert.equal(list.Resource, '*');
+});
+
+test('cloudtrail-s3 の S3 と KMS の文は、パラメータを渡したときだけ (既定は空で、今までのロールと同じ。ADR 0063)', () => {
+  const t = rawTemplate();
+  for (const name of ['CloudTrailBucketName', 'CloudTrailBucketPrefix', 'CloudTrailKmsKeyArn']) {
+    assert.equal(t.Parameters[name].Type, 'String');
+    assert.equal(t.Parameters[name].Default, '', `${name} の既定は空`);
+  }
+  const bucket = new RegExp(t.Parameters.CloudTrailBucketName.AllowedPattern);
+  for (const ng of ['arn:aws:s3:::example-trail-logs', 's3://example-trail-logs', 'Example', 'x*']) {
+    assert.ok(!bucket.test(ng), `弾くはず: ${ng}`);
+  }
+  const prefix = new RegExp(t.Parameters.CloudTrailBucketPrefix.AllowedPattern);
+  for (const ng of ['/logs', 'logs/', 'logs/*', 'lo?gs']) {
+    assert.ok(!prefix.test(ng), `弾くはず: ${ng}`);
+  }
+  assert.deepEqual(t.Conditions.HasTrailBucket, { 'Fn::Not': [{ 'Fn::Equals': [{ Ref: 'CloudTrailBucketName' }, ''] }] });
+  assert.deepEqual(t.Conditions.HasTrailKmsKey, { 'Fn::Not': [{ 'Fn::Equals': [{ Ref: 'CloudTrailKmsKeyArn' }, ''] }] });
+
+  const statements = roleOf(t).Properties.Policies.flatMap((p: any) => p.PolicyDocument.Statement);
+  const byCond = (cond: string) => statements.filter((s: any) => s['Fn::If']?.[0] === cond).map((s: any) => {
+    const [, value, otherwise] = s['Fn::If'];
+    assert.deepEqual(otherwise, { Ref: 'AWS::NoValue' }, `${cond} が偽なら文を出さない`);
+    return value;
+  });
+  const s3 = byCond('HasTrailBucket');
+  assert.deepEqual(s3.map((s: any) => [s.Sid, s.Action]), [['CloudTrailS3List', ['s3:ListBucket']], ['CloudTrailS3Read', ['s3:GetObject']]]);
+  assert.ok(JSON.stringify(s3[0].Condition).includes('AWSLogs/*'), '一覧は AWSLogs/ の下に絞る');
+  assert.ok(JSON.stringify(s3[1].Resource).includes('/AWSLogs/*'), '読み取りは AWSLogs/ の下だけ');
+  const [kms] = byCond('HasTrailKmsKey');
+  assert.deepEqual(kms.Action, ['kms:Decrypt']);
+  assert.deepEqual(kms.Resource, { Ref: 'CloudTrailKmsKeyArn' });
+  assert.deepEqual(kms.Condition, { Null: { 'kms:EncryptionContext:aws:cloudtrail:arn': 'false' } });
 });
 
 test('信頼先が 1 つも無いスタックは作らせない (Rules)', () => {

@@ -116,6 +116,11 @@ func Doctor(ctx context.Context, cfg *config.Config, deps Deps, window time.Dura
 		case config.KindCloudTrailLookup:
 			actions["cloudtrail:LookupEvents"] = true
 			d.cloudtrail(ctx, src)
+		case config.KindCloudTrailS3:
+			for _, a := range CloudTrailS3Actions {
+				actions[a] = true
+			}
+			d.trailS3(ctx, src)
 		case config.KindCloudWatchLogs:
 			for _, a := range cwlogs.RequiredActions {
 				actions[a] = true

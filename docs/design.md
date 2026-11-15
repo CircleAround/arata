@@ -58,6 +58,28 @@ sources:
 決定: `cloudtrail-lookup` の `regions` (配列。`region` 単数も 1 要素として受ける) の既定は `[aws.region, us-east-1]` の重複除去。
 LookupEvents はリージョン単位で、グローバルサービス (IAM の書き込み、ルート / IAM ユーザーの ConsoleLogin、STS の一部) は us-east-1 にしか記録されないため、既定で両方を引く。
 
+決定 (ADR 0063): `cloudtrail-s3` は trail の S3 への配信 (`<prefix>/AWSLogs/[<organization_id>/]<account_id>/CloudTrail/<region>/YYYY/MM/DD/*.json.gz`) を読み、
+`cloudtrail-lookup` と同じ記録 (trail_event・principal_seen・主体の活動の日次集計) を出す。正規化と集計は同じ関数を通す (同じ記録から同じレコードが出ることをテストで固定)。
+
+- 設定: `bucket`・`account_id`・`regions` は必須 (既定を持たない)。`prefix`・`organization_id`・`bucket_region` (既定 aws.region) は任意で、どれも cloudtrail-s3 にしか書けない。
+  `account_id` は**監査されるアカウント** (キーに入る)。ADR 0063 の例は「省略すると監査する側のアカウント」としたが、`audit_account` は監査する側 (引き受ける側) の
+  アカウントで、読む記録のアカウントとは違う。取り違えると別のアカウントの記録を読むか何も読まないので、省略させない
+- 決定: 同じ設定に `cloudtrail-lookup` と `cloudtrail-s3` を並べない。`cloudtrail-s3` も 1 つだけ (どれも同じ管理イベントを出し、`principal_ips` の件数と主体の活動の集計が二重に足される)。
+  ふだん使うリージョン (`cloudtrail-unused-regions` が除く) は両方の種類の `regions` の和。`examples/arata-trail-s3.yaml` が例 (`examples/arata.yaml` とは別のファイル)
+- 範囲: 配信時刻 (日のプレフィックスとファイル名の `YYYYMMDDTHHmmZ`) が `[窓の始まり (再走査を含む) の分, 窓の終わり + ingest_delay)` のファイルを読み、
+  記録の `eventTime` が `[窓の始まり, 窓の終わり)` のものだけを使う。始まりの日は `StartAfter` で手前を飛ばす。ファイル名の形に合わないキー (ダイジェスト・別のアカウント) は読まない。
+  `ingest_delay` の既定は 15m (cloudtrail-lookup と同じ)
+- `eventCategory` が `Management` (と、項目の無い古い記録) だけを使う。data event・ネットワークアクティビティは trail_event にも principal_seen にもしない。
+  `CloudTrail-Insight`・`CloudTrail-Digest` の段は引かない。同じ eventID は 1 回だけ数える (重複配信)
+- ファイルは信用できない入力: gzip を解いた大きさの上限 64 MB (公式の上限 50 MB に余裕)。中身の誤り (gzip・JSON の形・上限) は `TRAIL_FILE_INVALID` の WARN で飛ばし、
+  ほかのファイルを読み続ける。読んでいる途中の通信の失敗 (途中で切れたなど) はソースの失敗にする (次の run が読み直す。黙って記録を落とさない)
+- doctor: リージョンごとに直近 2 日のファイルの一覧と、直近の 1 ファイルの読み取りを試す (GetObject の拒否には、バケットポリシー・キーポリシーの可能性を添える)。
+  `DescribeTrails` で配信先が同じ trail を探し、`GetEventSelectors` で管理イベントの読み取り・書き込みを全部、種類を除かずに記録しているかを見る (足りなければ warn)。
+  マルチリージョンでない trail が `regions` を覆わないときも warn
+- 読み取り専用ロール: `CloudTrailBucketName` (と `CloudTrailBucketPrefix`・`CloudTrailKmsKeyArn`) を渡したときだけ、`<接頭辞>/AWSLogs/*` の `s3:GetObject`、
+  `s3:prefix` の条件付きの `s3:ListBucket`、CloudTrail の暗号化文脈に絞った `kms:Decrypt` を足す。`cloudtrail:GetEventSelectors` は常に足す (読むだけ)。
+  `arata config role-params` はバケットと接頭辞を出す (KMS の鍵は設定から分からないので利用者が足す)
+
 - **形式プロファイル**は「このログからどんな正規化レコードが取れるか」を宣言する。
   `nginx_access` と `alb_access` はどちらも `http_access` レコード (time, ip, method, path, status, ua, duration) を出す。
   `wafv2` は `waf_action` レコード、`regex` は名前付きキャプチャをそのままフィールドにする。
@@ -258,6 +280,7 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
 | `REPORT_NOT_FOUND` | 決定: `arata report` で出す報告が無い (そのプロファイルの run がまだ無い。終了コード 2) |
 | `SOURCE_CATCHUP` / `SOURCE_CATCHUP_TRUNCATED` | 決定 (ADR 0038): 前に失敗したソースを取れていた位置から引き直している (警告) / 遅れが `max_catchup` を超え、古い分を取りこぼした (警告) |
 | `NO_LOG_LINES` / `LOG_GROUP_UNVERIFIED` | 決定 (ADR 0054): 窓の中にログの行が無い (警告) / ロググループの保存期間などを確かめられないまま問い合わせた (範囲の確認をしていない。警告) |
+| `TRAIL_FILE_INVALID` | 決定 (ADR 0063): `cloudtrail-s3` で trail の S3 のファイルを読めず (gzip・JSON の誤り、大きさの上限)、飛ばした (警告。`key` にオブジェクトのキー)。他のファイルは読み続ける |
 | `AGGREGATE_TRUNCATED` / `REQUESTS_UNTAGGED` | 決定 (ADR 0054): 集計が行の上限で切れ、件数が下限になった (警告) / request id の無い最初の行を数えていない (警告) |
 | `USER_ID_MISSING` / `USER_ID_INVALID` | 決定 (ADR 0054): ユーザー ID の付いたリクエストが無く、要るチェックを skip した (警告) / 形に合わないユーザー ID・ログインの結果を捨てた (警告) |
 | `WAF_RESOURCES_UNKNOWN` | 決定 (ADR 0054): WebACL に付いた資源の一覧を取れず、不明として扱った (警告) |
@@ -556,7 +579,7 @@ From = min(now - window, 前回の window_to) として、cron の遅延・欠�
 
 決定 (記録の遅延と再走査。ADR 0013): CloudTrail はイベントの記録まで通常 5〜15 分、CloudWatch Logs は取り込みに数分遅れる。
 窓の終わり To は now のまま記録し (次回の From になる)、**各ソースの収集範囲は `[From - ingest_delay, To)`** とする (前回の窓の末尾を遅延分だけ再走査する)。
-`sources[].ingest_delay` は ParseDuration 形式で、既定は cloudtrail-lookup = 15m、cloudwatch-logs = 5m (`0` で再走査しない)。
+`sources[].ingest_delay` は ParseDuration 形式で、既定は cloudtrail-lookup・cloudtrail-s3 = 15m、cloudwatch-logs = 5m (`0` で再走査しない)。
 決定 (ADR 0041): `d` (日) で書ける上限は time.Duration に収まる日数 (約 292 年)。超える値は桁あふれで別の長さになる (`213504d` が 25 分になった) ので、エラーにする (aratam の `max_age` も同じ)。
 
 - events は event_id で重複を排除し、最初に収集した run の時刻を `collected_at` に残す (再走査で同じイベントが来ても変わらない)。

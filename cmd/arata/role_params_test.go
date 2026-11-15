@@ -149,3 +149,42 @@ func TestRoleParamsSizeLimits(t *testing.T) {
 		t.Fatalf("codes %v\n%s", c.codes(), c.stderr)
 	}
 }
+
+// 決定 (ADR 0063): cloudtrail-s3 のソースがあれば、バケットの名前と接頭辞 (前後の / を外す) も出す。無ければ空。
+func TestRoleParamsCloudTrailS3(t *testing.T) {
+	c := newCLI(t)
+	c.offline()
+	c.writeConfig(fmt.Sprintf(`
+name: acme
+store: dir://%s/store
+aws:
+  region: ap-northeast-1
+sources:
+  - id: trail
+    kind: cloudtrail-s3
+    bucket: example-trail-logs
+    prefix: logs/org-1/
+    account_id: "123456789012"
+    regions: [ap-northeast-1, us-east-1]
+profiles:
+  daily:
+    window: 24h
+    checks: [root_usage]
+audit_account: none
+`, c.dir))
+	out := c.roleParamsJSON(0)
+	if out.Parameters.CloudTrailBucketName != "example-trail-logs" || out.Parameters.CloudTrailBucketPrefix != "logs/org-1" || out.Parameters.AllowedLogGroupNames != "none" {
+		t.Fatalf("parameters = %+v", out.Parameters)
+	}
+	if code := c.run("config", "role-params", "-c", c.cfg); code != 0 {
+		t.Fatalf("exit %d\n%s", code, c.stderr)
+	}
+	if !strings.Contains(c.stdout.String(), "--parameter-overrides AllowedLogGroupNames=none CloudTrailBucketName=example-trail-logs CloudTrailBucketPrefix=logs/org-1") {
+		t.Fatalf("text: %s", c.stdout)
+	}
+
+	c.logSources("")
+	if out := c.roleParamsJSON(0); out.Parameters.CloudTrailBucketName != "" || out.Parameters.CloudTrailBucketPrefix != "" {
+		t.Fatalf("without cloudtrail-s3: %+v", out.Parameters)
+	}
+}

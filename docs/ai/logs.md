@@ -15,7 +15,7 @@ arata のチェックは、設定の `sources` に書いた記録からしか動
 
 | ソース (kind。括弧は format) | 出る記録 | 動くチェック (周期) |
 |---|---|---|
-| cloudtrail-lookup | trail_event, principal_seen | root_usage (hourly), unknown_assume_role (hourly), oidc_assume_role (hourly), new_principal (daily), iam_changes (daily), access_denied (daily), defense_evasion (daily), public_exposure (daily), principal_new_source (daily), secret_access (daily), ai_path_usage (daily) |
+| cloudtrail-lookup か cloudtrail-s3 | trail_event, principal_seen | root_usage (hourly), unknown_assume_role (hourly), oidc_assume_role (hourly), new_principal (daily), iam_changes (daily), access_denied (daily), defense_evasion (daily), public_exposure (daily), principal_new_source (daily), secret_access (daily), ai_path_usage (daily) |
 | cloudwatch-logs (alb_access / json / nginx_access / regex / request_lines) | http_access | login_bruteforce (daily), probe_paths (daily), endpoint_abuse (daily) |
 | cloudtrail-unused-regions | unused_region_event | unused_region_activity (daily) |
 | cost-anomaly | cost_anomaly | cost_anomaly (daily) |
@@ -27,7 +27,7 @@ arata のチェックは、設定の `sources` に書いた記録からしか動
 | waf-config + cloudwatch-logs (wafv2) | waf_config, waf_action | waf_review (weekly) |
 | cloudwatch-logs (text) | log_hygiene | log_hygiene (weekly) |
 
-- `cloudtrail-lookup` だけで 10 個のチェックが動く。最初はこれとアカウント単位のソース (追加の準備が要らない) から始め、アプリ層 (`cloudwatch-logs`) を足していく
+- `cloudtrail-lookup` (か `cloudtrail-s3`) だけで 10 個のチェックが動く。最初はこれとアカウント単位のソース (追加の準備が要らない) から始め、アプリ層 (`cloudwatch-logs`) を足していく
 - `http_access` は、送信元 IP・パス・ステータスが**同じ 1 行**にあるアクセスログ。ALB・nginx・アプリの JSON 行ログのどれか 1 つあればよい (同じリクエストを二重に数えないよう、1 つの入口につき 1 つ)。
   1 リクエストが複数行に分かれるアプリのログしか無いときは、`format: request_lines` でリクエスト単位にまとめて読む (書き方は `arata help ai request_lines`)
 - `waf_review` は weekly に WebACL の設定を読み、daily が貯めた wafv2 の日次集計と突き合わせる (両方のソースが要る)
@@ -136,7 +136,7 @@ sources:
 - **nginx が ALB の後ろにある**: `$remote_addr` が ALB の IP になり、全リクエストが同じ送信元に見える。realip モジュールで X-Forwarded-For から戻すか、ALB のログを使う。
   アプリの JSON ログも同じで、プロキシを信頼する設定をしたうえでの送信元 IP (Rails なら `request.remote_ip`) を出す
 - **ヘルスチェックの行が多い**: 解釈率は変わらないが、スキャン量と取り込みの費用が増える。出さない設定にできるなら出さない
-- **CloudTrail の証跡も CloudWatch Logs への配信も無い**: `cloudtrail-lookup` は LookupEvents で読むので動く (遡れるのは 90 日)。証跡は posture の指摘として別に直す。作っても arata の設定は変えなくてよい
+- **CloudTrail が多い** (LookupEvents は 1 ページ 50 件・毎秒 2 回までで、20 万件 / 日で 30 分ほど): 証跡の S3 への配信を `cloudtrail-s3` で読む。`bucket`・`account_id` (監査されるアカウント)・`regions` が必須で、`cloudtrail-lookup` とは並べず入れ替える (例 `examples/arata-trail-s3.yaml`)。読み取り専用ロールに `arata config role-params` の `CloudTrailBucketName` などを渡し、組織の証跡でバケットやキーが別のアカウントにあれば、そのバケットポリシーとキーポリシーでもロールを許す。証跡が管理イベントの読み取り・書き込みを全部記録しているかは doctor が確かめる (data event は読み飛ばす)。記録が少なければ、証跡を作っても `cloudtrail-lookup` のままでよい
 
 ## 外部の拠り所
 
