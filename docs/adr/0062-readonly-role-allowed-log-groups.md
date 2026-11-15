@@ -191,3 +191,15 @@ arata は 1 回に 1 つしか渡さない。クエリ文字列の `SOURCE` コ�
 - IAM の評価 (一覧の内外、Deny との併用、`GetQueryResults` の評価) は、リポジトリのテストでは固定できない。
   ADR 0053 と同じく、IAM Access Analyzer の `validate-policy` とポリシーシミュレーター (`simulate-custom-policy`。架空のアカウント ID と名前) で確かめた結果を PR に書く。
   `GetQueryResults` はシミュレーターでは確かめられない (実際の API の挙動) ので、上の開発用のアカウントでの確認による
+
+## 追記 (2026-11-15、実装の PR)
+
+- **予約語 `none` を足した** (開発リードの判断)。`AllowedLogGroupNames=none` は、どのロググループの中身も読ませない (`StartQuery`・`GetQueryResults` の文を出さない)。
+  cloudwatch-logs のソースが無い設定 (`arata repo init` が書き出す設定は、ロググループのソースがコメントだけ) では、渡せる値が `*` か存在しない名前しか無かったため。
+  arata の「無し」の書き方 (`audit_account: none` など) にそろえた。`*` と `none` は、値の全体がその 1 語のときだけ予約語。`none` という名前のロググループは読ませられない。
+  `arata config role-params` は、ソースが無ければ `none` を出す (error にしない)
+- **`GetQueryResults` の評価を確かめた** (3 の未確認の点)。そのクエリが問い合わせたロググループの ARN で評価される。開発用のアカウントで、
+  読み取り専用ロールを、`StartQuery`・`GetQueryResults` を 1 つのロググループの ARN に絞るセッションポリシー付きで引き受けて確かめた (資源は変えていない)。
+  絞っていない資格情報で別のロググループのクエリを始め、その ID を絞った資格情報で `GetQueryResults` に渡すと、
+  `AccessDeniedException` (`not authorized to perform GetQueryResults on resources <そのロググループ>`) になった。一覧に絞った形で `arata doctor` のクエリは通った。
+  したがって `GetQueryResults` も一覧に絞ったまま (クエリの ID を知っていても、一覧の外のロググループの結果は取れない)

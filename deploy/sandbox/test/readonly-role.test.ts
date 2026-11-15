@@ -54,10 +54,11 @@ test('読み取りロールの権限は決めた action だけ (ワイルドカ�
   const t = rawTemplate();
   const role = roleOf(t);
   const all = role.Properties.Policies.flatMap((p: any) => p.PolicyDocument.Statement);
-  // 条件付きの文 (Fn::If) は DeniedLogGroupNames の Deny だけ。下のテストで見る
+  // 条件付きの文 (Fn::If) は、DeniedLogGroupNames の Deny と、AllowedLogGroupNames=none で出さない Logs Insights の Allow の 2 つ。下のテストで見る
   const statements = all.filter((s: any) => !s['Fn::If']);
-  assert.equal(all.length - statements.length, 1, '条件付きの文は 1 つ (Deny) だけ');
-  const actions = statements.flatMap((s: any) => [s.Action].flat()).sort();
+  assert.equal(all.length - statements.length, 2, '条件付きの文は 2 つ');
+  const insights = all.filter((s: any) => s['Fn::If']?.[0] === 'AllowNoLogGroups').map((s: any) => s['Fn::If'][2]);
+  const actions = [...statements, ...insights].flatMap((s: any) => [s.Action].flat()).sort();
   assert.deepEqual(actions, EXPECTED_ACTIONS);
   for (const s of statements) {
     assert.equal(s.Effect, 'Allow');
@@ -99,7 +100,7 @@ test('DeniedLogGroupNames のロググループは明示の Deny で読ませな
   assert.deepEqual(t.Conditions.HasDeniedLogGroups, { 'Fn::Not': [{ 'Fn::Equals': [{ Ref: 'DeniedLogGroupNames' }, ''] }] });
 
   const statements = roleOf(t).Properties.Policies.flatMap((p: any) => p.PolicyDocument.Statement);
-  const conditional = statements.filter((s: any) => s['Fn::If']);
+  const conditional = statements.filter((s: any) => s['Fn::If']?.[0] === 'HasDeniedLogGroups');
   assert.equal(conditional.length, 1);
   const [cond, deny, otherwise] = conditional[0]['Fn::If'];
   assert.equal(cond, 'HasDeniedLogGroups');
@@ -123,6 +124,40 @@ test('DeniedLogGroupNames のロググループは明示の Deny で読ませな
   assert.ok(resource.includes('"Ref":"DeniedLogGroupNames"'), resource);
   assert.ok(resource.includes('arn:*:logs:*:*:log-group:'), resource);
   assert.notEqual(deny.Resource, '*');
+});
+
+test('AllowedLogGroupNames のロググループだけ、ログの中身を読める (既定は無く、全部なら *、どれも読ませないなら none。ADR 0062)', () => {
+  const t = rawTemplate();
+  const p = t.Parameters.AllowedLogGroupNames;
+  assert.equal(p.Type, 'String');
+  assert.ok(!('Default' in p), '既定は書かない (更新でも値が要る)');
+  const pattern = new RegExp(p.AllowedPattern);
+  for (const ok of ['*', 'none', 'prod-nginx-access', 'prod-nginx-access,/app/prod/api']) {
+    assert.ok(pattern.test(ok), `通るはず: ${ok}`);
+  }
+  for (const ng of ['', '**', 'prod-*', 'a,*', 'a, b', 'a,', 'a:*', 'arn:aws:logs:ap-northeast-1:123456789012:log-group:a']) {
+    assert.ok(!pattern.test(ng), `弾くはず: ${ng}`);
+  }
+  assert.deepEqual(t.Conditions.AllowAllLogGroups, { 'Fn::Equals': [{ Ref: 'AllowedLogGroupNames' }, '*'] });
+  assert.deepEqual(t.Conditions.AllowNoLogGroups, { 'Fn::Equals': [{ Ref: 'AllowedLogGroupNames' }, 'none'] });
+
+  const statements = roleOf(t).Properties.Policies.flatMap((p: any) => p.PolicyDocument.Statement);
+  // none (どのロググループも読ませない) なら、中身を読む文を出さない
+  const [noneCond, noneValue, read] = statements.find((s: any) => s['Fn::If']?.[0] === 'AllowNoLogGroups')['Fn::If'];
+  assert.equal(noneCond, 'AllowNoLogGroups');
+  assert.deepEqual(noneValue, { Ref: 'AWS::NoValue' });
+  assert.equal(read.Sid, 'CloudWatchLogsInsights');
+  assert.deepEqual([...read.Action].sort(), ['logs:GetQueryResults', 'logs:StartQuery']);
+  const [cond, all, listed] = read.Resource['Fn::If'];
+  assert.equal(cond, 'AllowAllLogGroups');
+  assert.equal(all, '*');
+  // 名前の並びから組み立てる (解いた結果は internal/engine/readonly_role_test.go が確かめる)
+  const resource = JSON.stringify(listed);
+  assert.ok(resource.includes('"Ref":"AllowedLogGroupNames"'), resource);
+  assert.ok(resource.includes('arn:*:logs:*:*:log-group:'), resource);
+  const list = statements.find((s: any) => s.Sid === 'CloudWatchLogsList');
+  assert.deepEqual([...list.Action].sort(), ['logs:DescribeLogGroups', 'logs:StopQuery']);
+  assert.equal(list.Resource, '*');
 });
 
 test('信頼先が 1 つも無いスタックは作らせない (Rules)', () => {

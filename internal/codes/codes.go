@@ -50,6 +50,7 @@ const (
 	AllowlistMissing            = "ALLOWLIST_MISSING"
 	RebuildWarning              = "REBUILD_WARNING"
 	RebuiltFromScratch          = "REBUILT_FROM_SCRATCH"
+	RolePolicyLarge             = "ROLE_POLICY_LARGE"
 	// arata repo check (監査を回すリポジトリの一式と、GitHub の設定。ADR 0060)
 	RepoSetDiffers               = "REPO_SET_DIFFERS"
 	RepoNotifyMismatch           = "REPO_NOTIFY_MISMATCH"
@@ -150,6 +151,7 @@ var All = []Code{
 	{AllowlistMissing, arataOnly, "allowlist のファイルが無く、空として扱った (警告)"},
 	{RebuildWarning, arataOnly, "rebuild の警告 (読み飛ばした行など)"},
 	{RebuiltFromScratch, arataOnly, "raw だけから作り直した。次の run で未解決の指摘がすべて new として再報告される (警告)"},
+	{RolePolicyLarge, arataOnly, "config role-params の一覧で、読み取り専用ロールのインラインポリシーが IAM の上限に近い・超える見込み (警告。値は出す)"},
 	{RepoSetDiffers, arataOnly, "監査を回すリポジトリの一式が、この版の一式と揃っていない (生成物の違い・残りもの・ワークフローの使う秘密・アカウントの設定が無い。repo check)"},
 	{RepoNotifyMismatch, arataOnly, "aratam.yaml が、一式のワークフローの渡す秘密 (bot トークン) で送る設定でない (repo check)"},
 	{RepoEnvironmentMissing, arataOnly, "GitHub の environment が無い (repo check --github)"},

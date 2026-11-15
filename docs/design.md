@@ -254,6 +254,7 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
 | `RUN_MISSED` | 前回実行から profile の周期の 2 倍以上空いた (起動側の障害) |
 | `COLLECT_FAILED` | 決定: 上記に分類できない収集エラー (ネットワーク断など) |
 | `CONFIG_INVALID` | 決定: 設定ファイルの読み込み・検証エラー (終了コード 2) |
+| `ROLE_POLICY_LARGE` | 決定 (ADR 0062): `arata config role-params` の一覧で、読み取り専用ロールのインラインポリシーが IAM の上限 (10,240 文字。空白は数えない) の 9 割を超える見込み。値は出す (警告。Deny の分は設定から分からないので見積もりに入れない) |
 | `REPORT_NOT_FOUND` | 決定: `arata report` で出す報告が無い (そのプロファイルの run がまだ無い。終了コード 2) |
 | `SOURCE_CATCHUP` / `SOURCE_CATCHUP_TRUNCATED` | 決定 (ADR 0038): 前に失敗したソースを取れていた位置から引き直している (警告) / 遅れが `max_catchup` を超え、古い分を取りこぼした (警告) |
 | `NO_LOG_LINES` / `LOG_GROUP_UNVERIFIED` | 決定 (ADR 0054): 窓の中にログの行が無い (警告) / ロググループの保存期間などを確かめられないまま問い合わせた (範囲の確認をしていない。警告) |
@@ -1413,9 +1414,18 @@ arata rebuild   [--from-scratch [--baseline]] [--format text|json]   # raw JSONL
     この場合を明記した AWS の文書は見つけられなかったので、IAM のポリシーシミュレーターで確かめた。ADR 0053)。arata は 1 回の StartQuery に 1 つのロググループ (`logGroupName`) しか渡さないので、ほかのソースには影響しない。
   - 読ませないロググループは `sources` に書かない。書くと、run はそのソースだけを `ACCESS_DENIED` で失敗にして続ける。
   - 決定: doctor は、クエリの検査で StartQuery が拒否されたら、クエリごとの `queries` の行を並べず、`permission` の 1 行
-    (`logs:StartQuery が拒否された (<ロググループ>): ロールに action が無いか、読ませない設定 (DeniedLogGroupNames)。後者なら sources から外す: <AWS のエラー>`) にまとめ、
+    (`logs:StartQuery が拒否された (<ロググループ>): ロールに action が無いか、読ませない設定 (AllowedLogGroupNames に無い・DeniedLogGroupNames にある)。…: <AWS のエラー>`) にまとめ、
     そのソースの残りの検査 (ほかのクエリ・解釈率・費用) は行わない。`log_group` の行は ok のまま (一覧は止めないため)。
     action が無いのか明示の Deny なのかは、AWS のエラーの文言でしか分からないので、arata は判定せず両方を書く。
+- 決定 (ADR 0062): ログの中身を読めるロググループは、配布用のロールのパラメータ `AllowedLogGroupNames` (名前のカンマ区切り。完全一致) に並べたものだけ。
+  既定は無い (更新でも値が要る)。全部を読ませるなら `*`、どのロググループも読ませないなら `none` を書く (どちらも値の全体がその 1 語のときだけ予約語。
+  `none` という名前のロググループは読ませられない。`none` は `StartQuery`・`GetQueryResults` の文を出さない)。`logs:StartQuery`・`GetQueryResults` の Allow をその ARN (ADR 0053 と同じ 2 つの形) に絞り、
+  `DescribeLogGroups`・`StopQuery` (リソースの型を持たず、中身を返さない) は `*` のまま。`DeniedLogGroupNames` と併用でき、Deny が勝つ。
+  - 決定: 値は設定から `arata config role-params` (`--format json`、スキーマ `arata-role-params`) で作る。cloudwatch-logs のソースの `log_group` を重複を除いて設定の順に並べる。
+    決定: ソースが無ければ `none` を出す (error にしない。repo init の設定はロググループのソースがコメントだけ)。ロールが受け付けない名前 (`none` を含む) がある・値が 4,096 バイト (CloudFormation のパラメータの上限) を超えるときは `CONFIG_INVALID`。
+    インラインポリシーが 10,240 文字 (IAM の上限。空白は数えない) の 9 割を超える見込みなら `ROLE_POLICY_LARGE` (警告。値は出す。Deny の分は入れない)。`*` は出さない (利用者が選ぶ)。
+  - 食い違い (ソースにあるのに一覧に無い) は、run の `ACCESS_DENIED` (通知と coverage) と doctor の `permission` の行で分かる。arata はロールのパラメータを読まない。
+  - `GetQueryResults` は、そのクエリが問い合わせたロググループの ARN で評価される (開発用のアカウントで確かめた。一覧の外のロググループのクエリの結果は、クエリの ID を知っていても取れない)。
 - 決定 (Step 3): アカウント単位のソースは、collector の読み取り API を 1 回ずつ試して action ごとに permission 行を出す (拒否は ng / ACCESS_DENIED)。
   必要な action: iam-credential-report = `iam:GenerateCredentialReport` (書き込み系。doctor では試さない)・`iam:GetCredentialReport`、
   guardduty = `guardduty:ListDetectors`・`ListFindings`・`GetFindings`、access-analyzer = `access-analyzer:ListAnalyzers`・`ListFindings`、

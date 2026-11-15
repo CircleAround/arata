@@ -32,7 +32,7 @@ LLM の役割は「危険の判定を代行する」ことではなく「人が�
 |---|---|---|
 | `arata config init --audit-account <12 桁の ID>\|none [--out FILE]` | 推奨設定の雛形を書き出す (既定は `./arata.yaml`。`--out -` で標準出力。既存ファイルは `--force` 無しでは上書きしない)。`--audit-account` は必須で、既定は無い: 別のアカウントのロールが読み取り専用ロールを引き受けて監査するならそのアカウントの ID (allowlist.yaml にも `account:` で書く)、外から監査しないなら `none`。どちらかは人に確かめる (推測で選ばない) | 人の指示があれば |
 | `arata config init --diff` | 今の設定とこの版の雛形の差分 (入っていないチェック、既定値と違う値、未知のキー、選んでいない `audit_account`) | よい (読み取りのみ) |
-| `arata config check [--format json]` | 設定と allowlist.yaml の形をオフラインで検査 (AWS・ストアに繋がない。`ok` / `warn` / `ng` と「ファイル:行」。問題があれば終了コード 2)。allowlist.yaml を編集したら実行する | よい (読み取りのみ) |
+| `arata config check [--format json]` | 設定と allowlist.yaml の形をオフラインで検査 (AWS・ストアに繋がない。`ok` / `warn` / `ng` と「ファイル:行」。問題があれば終了コード 2)。allowlist.yaml を編集したら実行する。`arata config role-params [--format json]` は、読み取り専用ロールの `AllowedLogGroupNames` に渡す値 (sources の log_group の一覧) を設定から出す (AWS に繋がない) | よい (読み取りのみ) |
 | `arata profiles [--format json]` | プロファイルごとに実際に走るチェックとパラメータ、その由来 (overrides / checks: / 既定値) | よい (読み取りのみ) |
 | `arata doctor` | 権限・ロググループ・形式の解釈率を検査 | よい (読み取りのみ) |
 | `arata init [--window 7d] [--resume]` | ベースライン収集 (findings は出さない) | 人の指示があれば |
@@ -63,7 +63,7 @@ LLM の役割は「危険の判定を代行する」ことではなく「人が�
 
 | code | 意味 | 対処 |
 |---|---|---|
-| `ACCESS_DENIED` | IAM 権限不足 (`action` に不足した action) | 読み取りロールに action を足す。`arata doctor` の表の最後に必要な action が出る。1 つのロググループの `logs:StartQuery` だけなら、ロールが読ませない設定 (`DeniedLogGroupNames`) なので、そのソースを設定から外す |
+| `ACCESS_DENIED` | IAM 権限不足 (`action` に不足した action) | 読み取りロールに action を足す。`arata doctor` の表の最後に必要な action が出る。1 つのロググループの `logs:StartQuery` だけなら、ロールの `AllowedLogGroupNames` (読ませる一覧) に無いか、`DeniedLogGroupNames` (読ませない一覧) にある。前者なら、人がロググループの中身の種類を確かめたうえで `arata config role-params` の値でスタックを更新する。後者なら、そのソースを設定から外す |
 | `LOG_GROUP_MISSING` | ロググループが無い / 名前変更 | config.yaml の `log_group` を直す |
 | `FORMAT_MISMATCH` | 解釈率が閾値未満 (そのソースは失敗扱い) | `samples` を見て `format` / `fields` / `regex` / `stream_prefix` を直す。混在ストリームなら `expected_match_rate` を下げる。`request_lines` で `reason` が `request_id` / `complete_rate` なら `request.id` と最初の行の正規表現を直す (`arata help ai request_lines`) |
 | `FORMAT_DRIFT` | 解釈率が直近平均から急落 (警告) | アプリのデプロイでログ形式が変わっていないか確認する |
@@ -76,7 +76,7 @@ LLM の役割は「危険の判定を代行する」ことではなく「人が�
 | `INTERRUPTED` | SIGINT / SIGTERM で止まった (終了コード 2。`s3://` のストアには保存していない) | 同じコマンドをもう一度実行する |
 | `RUN_MISSED` | 前回実行から周期の 2 倍以上空いた | 起動側 (cron など) の障害を疑う。`truncated: true` なら取りこぼしあり |
 | `COLLECT_FAILED` | 上記に分類できない収集エラー | ネットワークなどを確認して再実行 |
-| `CONFIG_INVALID` | 設定ファイルの読み込み・検証エラー | エラーメッセージに従い設定を直す |
+| `CONFIG_INVALID` / `ROLE_POLICY_LARGE` | 設定ファイルの読み込み・検証エラー / `arata config role-params` の一覧で、読み取り専用ロールのインラインポリシーが IAM の上限 (10,240 文字) に近い見込み (警告。値は出す) | エラーメッセージに従い設定を直す / スタックの更新が失敗するおそれがある。ソースのロググループを減らせないか人に確かめる |
 | `CHECK_UNUSED` | どのプロファイルにも入っていないチェックがある (警告。`checks` に名前) | 入れ忘れなら profiles に足す。`arata config init --diff` で雛形と比べる。意図して外したなら人に確認するだけでよい |
 | `REPORT_NOT_FOUND` | `arata report --profile X` で、そのプロファイルの run がまだ無い (終了コード 2) | 先に `arata run --profile X` を実行する。プロファイル名の打ち間違いも疑う |
 | `SOURCE_CATCHUP` / `SOURCE_CATCHUP_TRUNCATED` | 前に失敗したソースを取れていた位置から引き直している (警告) / 遅れが `max_catchup` を超え、古い分を取りこぼした (警告) | 前者は何もしなくてよい (続くなら前の run の code を見る)。後者は取りこぼした期間を人に知らせる |
@@ -130,7 +130,7 @@ oidc_subjects:                    # OIDC でのロールの引き受け (GitHub 
 - 権限は読み取りのみ。追加の裏取りをするときも読み取り API だけを使う
 - 例外は `iam:GenerateCredentialReport` (書き込み系: 認証情報レポートの生成のみ)。拒否されても 4 時間以内に生成済みのレポートがあれば使う。
   必要な action の一覧は `arata doctor` の表の最後に出る
-- 利用者が読み取り専用ロールの `DeniedLogGroupNames` に書いたロググループ (個人情報だけを書くログなど) は、明示の Deny で読めない。`sources` に書かない
+- 読み取り専用ロールが中身を読めるのは `AllowedLogGroupNames` に並べたロググループだけ (`*` なら全部、`none` ならどれも読めない)。`DeniedLogGroupNames` に書いたもの (個人情報だけを書くログなど) は明示の Deny で読めない。`sources` に書かない。ソースを足したら `arata config role-params` の値でロールのスタックを更新する。一覧に足すのは人が中身の種類 (個人情報が混ざらないか) を確かめてから
 
 ## 次に読むもの
 

@@ -375,6 +375,16 @@ daily のソースのうち、追加の権限が要るもの:
 - 既に配ったロールには上の 3 つの action を足す必要がある (無ければそのソースだけが ACCESS_DENIED になり、そのチェックが skip される)。
   `cost_anomaly` は Cost Anomaly Detection のモニター (無料) が無ければ skip される (doctor は warn)
 - `iam:GenerateCredentialReport` だけは書き込み系。読み取り専用ロールで拒否されても、4 時間以内に生成済みのレポートがあればそれを使う (生成時刻は finding の Data に残る)
+- **ログの中身を読めるのは、`deploy/iam/readonly-role.yaml` の `AllowedLogGroupNames` に並べたロググループだけ** (ADR 0062)。既定は無く、作るときも更新するときも値を渡す。
+  値は設定から `arata config role-params` で作る (sources の `log_group` の一覧。`--format json` はスキーマ `arata-role-params`)。全部のロググループを読ませる (絞らない) なら `'*'`、どれも読ませない (ロググループのソースが無い。`config role-params` はこのとき `none` を出す) なら `none` を渡す
+  (どちらも値の全体がその 1 語のときだけ。`none` という名前のロググループは読ませられない)。
+  **一覧に入れる前に、そのロググループの中身の種類を確かめる** (利用者の操作のログ・個人情報が同じロググループに混ざっていないか。arata には判断できない。
+  IAM はロググループより細かく絞れないので、混ざっているなら一覧に入れず、アプリかログの送り方の側で分ける)。
+  ソースを足したら同じ値でスタックを更新する (しないと、そのソースだけが ACCESS_DENIED になり、doctor が `permission` の行に出す):
+  `aws cloudformation deploy --stack-name arata-readonly --template-file deploy/iam/readonly-role.yaml --capabilities CAPABILITY_NAMED_IAM --parameter-overrides AllowedLogGroupNames="$(arata config role-params --format json | jq -r .parameters.AllowedLogGroupNames)"`
+  - **AllowedLogGroupNames より前の版のロールから上げるとき (必須の手順)**: 1. 設定の `sources` を見直し、読ませてよいロググループだけにする (中身の種類を確かめる)。
+    2. `arata config role-params` の値で、ロールのスタックを更新する (値を渡さない更新は CloudFormation が止める)。今と同じに全部を読ませるなら `AllowedLogGroupNames='*'`。
+    3. `arata doctor` で、各ソースの `permission` の行が出ないことを確かめる
 - 監査のロールにも読ませたくないロググループ (個人情報だけを書くメールの送信ログなど) は、`deploy/iam/readonly-role.yaml` の `DeniedLogGroupNames` に
   名前をカンマ区切りで書く (既定は空 = 何も止めない。ADR 0053)。そのロググループの中身を読む操作 (`logs:StartQuery`・`GetQueryResults`・`GetLogEvents`・
   `FilterLogEvents`・`StartLiveTail` など) を明示の Deny で止めるので、後からほかのポリシーが付いても読めない。名前は完全一致で、どのリージョンの同じ名前にも効く。
