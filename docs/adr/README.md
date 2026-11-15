@@ -90,3 +90,4 @@
 | [0064](0064-incremental-collect-and-store-evaluation.md) | 集めることと判定することを分ける (ソースごとの位置から続きだけを集め、日単位の判定はストアから組み立てる) | 採用 |
 | [0065](0065-insights-hourly-parts.md) | Logs Insights を時の単位で続きだけ読み、時ごとの部分の行を残して日の値を Go で組み立てる。集計のクエリは確かめてから 1 本にまとめる | 採用 |
 | [0066](0066-volume-spike-flash.md) | 量の急変を、時間帯ごとの平常帯と比べて速報する (`access_denied_spike`・`sign_in_failure_spike`。LLM を通さない短い通知) | 採用 |
+| [0067](0067-waf-query-regroup.md) | WAF の集計クエリを、行の多い種類ごとに組み替える (本数は 4 本のまま。BLOCK 側とカウントの一致の合計を上限から守る) | 提案 |
