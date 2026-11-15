@@ -54,6 +54,8 @@ var carriedTables = []struct{ name, cols string }{
 	{"findings", `id, "check", key, severity, summary, first_seen, last_seen, last_changed, status, reported_at, snooze_until, fingerprint, data, suppressed_severity`},
 	{"finding_events", `seq, finding_id, "check", key, class, severity, summary, at, run_id, profile, data`},
 	{"meta", `key, value`},
+	// 部分の行は raw に書かない作業用の行 (ADR 0065)
+	{"metric_parts", `source, query, hour, date, rows`},
 }
 
 const maxLineWarnings = 20

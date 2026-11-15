@@ -108,6 +108,8 @@ type Source struct {
 	AccountID string `yaml:"account_id"`
 	// BucketRegion はバケットのリージョン (既定は aws.region)。
 	BucketRegion string `yaml:"bucket_region"`
+	// Collect は cloudwatch-logs の読み方。"hourly" なら時の単位で続きだけを読み、部分の行から日の値を作る (ADR 0065)。空なら日の頭から読み直す (今まで)。
+	Collect string `yaml:"collect"`
 	// MaxCollect は 1 回の収集でこのソースが集める範囲の上限 (0 なら上限なし)。超えたら上限まで集めて位置を進め、run は partial。
 	// 決定 (ADR 0064): 資格情報が 1 時間で切れる環境 (GitHub Actions の役割の連鎖) で、止まった後の追いつきが毎回途中で失敗し続けないため。
 	// CloudTrail の種類 (cloudtrail-lookup・cloudtrail-s3・cloudtrail-unused-regions) だけ。1h 以上
@@ -404,6 +406,9 @@ func (c *Config) Validate() error {
 		if !SupportedKinds[s.Kind] {
 			return fmt.Errorf("config: source %s: unsupported kind %q", s.ID, s.Kind)
 		}
+		if err := s.validateCollect(); err != nil {
+			return fmt.Errorf("config: source %s: %w", s.ID, err)
+		}
 		if s.Kind == KindCloudWatchLogs {
 			if err := s.validateLogs(); err != nil {
 				return fmt.Errorf("config: source %s: %w", s.ID, err)
@@ -423,6 +428,9 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("config: checks: %w", err)
 	}
 	if err := c.validateEndpointSources(); err != nil {
+		return fmt.Errorf("config: checks: endpoint_abuse: %w", err)
+	}
+	if err := c.validateHourlyEndpoints(); err != nil {
 		return fmt.Errorf("config: checks: endpoint_abuse: %w", err)
 	}
 	if err := c.validateLogHygiene(); err != nil {

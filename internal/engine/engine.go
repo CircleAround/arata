@@ -493,6 +493,9 @@ type CollectResult struct {
 	scanFrom map[string]time.Time
 	// scanTo は max_collect で窓の終わりより前で止めたソースの、読み終えた時刻 (ADR 0064)。位置はここまで進める。
 	scanTo map[string]time.Time
+	// coveredTo は時の単位で読む cloudwatch-logs のソース (collect: hourly) が読み終えた時 (ADR 0065)。位置はここまで進める (partial にはしない)。
+	// ゼロなら読む時が無かった (前の位置のまま)。
+	coveredTo map[string]time.Time
 }
 
 func (r CollectResult) partial() bool {
@@ -533,7 +536,7 @@ func (e *Engine) Collect(ctx context.Context, w collect.Window, o CollectOptions
 	}
 	res := CollectResult{SourcesOK: []string{}, SourcesFailed: []string{}, Errors: []report.CollectError{}, Formats: []report.FormatCoverage{},
 		yielded: map[string][]record.Kind{}, attempted: map[string]bool{}, unavailable: map[record.Kind]string{}, outOfRange: map[string]string{},
-		scanFrom: map[string]time.Time{}, scanTo: map[string]time.Time{}}
+		scanFrom: map[string]time.Time{}, scanTo: map[string]time.Time{}, coveredTo: map[string]time.Time{}}
 	denied := map[string]bool{}
 	for _, c := range e.cfg.Checks.AccessDenied.ErrorCodes {
 		denied[c] = true
@@ -626,6 +629,9 @@ func (e *Engine) Collect(ctx context.Context, w collect.Window, o CollectOptions
 			}
 			res.scanFrom[src.ID] = sw.Start()
 			err = c.Collect(ctx, sw, sink)
+			if lc, ok := c.(*cwlogs.Collector); ok && src.CollectHourly() {
+				res.coveredTo[src.ID] = lc.CoveredTo()
+			}
 			res.Records += n
 			if ur, ok := c.(*cloudtrail.UnusedRegions); ok {
 				res.UnusedRegionsScanned = append(res.UnusedRegionsScanned, ur.ScannedRegions()...)
@@ -788,6 +794,10 @@ func (e *Engine) collector(ctx context.Context, src config.Source) (collect.Coll
 		c, err := cwlogs.New(src, e.cfg.Checks, api)
 		if err != nil {
 			return nil, err
+		}
+		if src.CollectHourly() {
+			// 部分の行の置き場所はストア (ADR 0065)
+			c.Parts = e.st
 		}
 		if e.deps.Sleep != nil {
 			c.Sleep = e.deps.Sleep
@@ -1264,7 +1274,7 @@ func (e *Engine) RunWithOptions(ctx context.Context, profileName string, o RunOp
 	}
 	limits := e.limitCollect(e.collectStarts(prof, base, cu), w.To, runID)
 	cr := e.Collect(ctx, w, CollectOptions{Needs: e.neededKinds(prof), PrincipalStatus: store.PrincipalUnknown, RunID: runID, Rescan: true, BaseFrom: base,
-		SourceFrom: cu.from, SourceAhead: cu.ahead, SourceTo: limits})
+		SourceFrom: cu.from, SourceAhead: cu.ahead, SourceStart: cu.start, SourceTo: limits})
 	ev, err := e.Evaluate(ctx, profileName, w, &cr)
 	if err != nil {
 		_ = e.st.FinishRun(ctx, runID, "failed", map[string]any{"error": err.Error()})

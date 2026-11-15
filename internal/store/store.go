@@ -175,6 +175,9 @@ type Store interface {
 	// ReplaceSnapshot は (kind, source) のスナップショットを items で丸ごと置き換える (空なら空にする)。
 	// 置き換えたら raw に印 (record.SnapshotReplaced) を追記する (rebuild 用。ADR 0033)。項目そのものの raw への追記は呼び出し側 (AppendRaw)。
 	ReplaceSnapshot(ctx context.Context, kind record.Kind, source string, items []record.SnapshotItem, at time.Time) error
+	// PutParts / Parts は Logs Insights の部分の行 (ADR 0065)。PutParts は (source, query, hour) を丸ごと置き換え、retentionDays より古い日を消す。
+	PutParts(ctx context.Context, source, query string, hour time.Time, rows []map[string]string, retentionDays int) error
+	Parts(ctx context.Context, source, query string, from, to time.Time) ([]map[string]string, int, error)
 	// AddFindingEvents は状態遷移を追記する。
 	AddFindingEvents(ctx context.Context, evs []FindingEvent) error
 	// Path はストアのファイルがあるローカルのディレクトリ (s3 では一時ディレクトリ)。
