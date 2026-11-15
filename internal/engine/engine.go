@@ -686,6 +686,13 @@ func (e *Engine) Collect(ctx context.Context, w collect.Window, o CollectOptions
 			res.scanTo[src.ID] = t
 		}
 		attrs := []any{"source", src.ID, "from", w.From.UTC().Format(time.RFC3339), "to", w.To.UTC().Format(time.RFC3339)}
+		if f, ok := c.(collect.FormatReporter); ok && f.FormatStats() != nil {
+			// Logs Insights の読み取り量 (max_scan_gb に対してどれだけ使ったか)
+			attrs = append(attrs, "bytes_scanned", f.FormatStats().BytesScanned)
+		}
+		if t, ok := res.coveredTo[src.ID]; ok && !t.IsZero() {
+			attrs = append(attrs, "covered_to", t.UTC().Format(time.RFC3339))
+		}
 		if o.Rescan {
 			attrs = append(attrs, "scan_from", w.From.Add(-src.IngestDelay).UTC().Format(time.RFC3339))
 		}

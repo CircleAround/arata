@@ -60,3 +60,22 @@ func TestHourlyLogsSource(t *testing.T) {
 		t.Fatalf("an hourly source behind by less than an hour is not catching up: %s", h.stderr.String())
 	}
 }
+
+// 収集だけの run も、ソースごとの読み取り量を profile の run と同じ形で stats (bytes_scanned) とログ ("collect ok") に残す。
+func TestIncrementalScanStats(t *testing.T) {
+	h := newHarnessWith(t, nginxSource+"    collect: hourly\n", "")
+	h.logs.On("as lines_total", cwlogstest.Response{Rows: []map[string]string{cwlogstest.Rows("day", "2026-10-21 05:00:00.000", "lines_total", "10", "lines_matched", "10")}, BytesScanned: 2e6})
+	e := h.open(t)
+	h.now = day0
+	if _, err := e.CollectIncremental(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	runs, _ := e.Store().RecentRuns(context.Background(), 1)
+	scanned, ok := runs[0].Stats["bytes_scanned"].(map[string]any)
+	if !ok || scanned["web"].(float64) <= 0 {
+		t.Fatalf("stats: %+v", runs[0].Stats)
+	}
+	if !strings.Contains(h.stderr.String(), `"msg":"collect ok","source":"web"`) || !strings.Contains(h.stderr.String(), `"bytes_scanned":`) {
+		t.Fatalf("collect ok must carry bytes_scanned: %s", h.stderr.String())
+	}
+}
