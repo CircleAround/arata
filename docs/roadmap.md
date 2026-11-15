@@ -64,7 +64,7 @@
 | 中 | allowlist の雛形共有 | 監査対象をまたいで共通になる承認 (開発会社の switch role、CDK の bootstrap ロール `cdk-hnb659fds-*` など) | 設計書 11 章の未決。CDK を使うアカウントでは deploy のたびに unknown_assume_role / iam_changes が出る |
 | 中 | ack / snooze / resolve の理由と操作した人の記録 | `--by` / `--reason` を足し、ストア (findings か finding_events) に残して report / review に出す | ADR 0042 で見送り。今は GitHub Actions の見本 (`arata-triage.yml`) が実行の Summary に残すだけで、保持期間で消える。スキーマの変更と移行、S3 ストアの互換が要る |
 | 中 | `allowlist_stale` | 承認済みの主体で長く観測が無いものを棚卸しとして報告 | weekly / info。承認の期限 (`expires`) との関係を整理 |
-| 高 | 大きなアカウントの収集 (ADR 0063・0064・0065。提案) | (1) CloudTrail を trail の S3 から読む `cloudtrail-s3` (2) ソースごとの位置から続きだけを集め、日単位の判定はストアから組み立てる (3) Logs Insights を時の単位で続きだけ読み、部分の行から日の値を作る。クエリは確かめてから 1 本に | 推奨の順は 0063 → 0064 → 0065。量の急変の速報は 0064 の 5 節で今後の候補。フィールドインデックス (`filterIndex`) は ADR 0031・0065 で記録だけ |
+| 高 | 大きなアカウントの収集 (ADR 0063・0064・0065) | (1) CloudTrail を trail の S3 から読む `cloudtrail-s3` (2) ソースごとの位置から続きだけを集め、日単位の判定はストアから組み立てる (3) Logs Insights を時の単位で続きだけ読み、部分の行から日の値を作る。クエリは確かめてから 1 本に | 順は 0063 → 0064 → 0066 の拒否 → 0065 → 0066 のログインの失敗。量の急変の速報は ADR 0066。フィールドインデックス (`filterIndex`) は ADR 0031・0065 で記録だけ |
 | 中 | endpoint_abuse の複数ソースの異なり IP | 1 つの画面を複数のソースで数えると、異なり IP 数が和集合でなく足し算になる | ADR 0031。ソースは別のロググループなので 1 本にまとめられない |
 | 中 | Insights の 1 日あたり費用上限 | ソース単位の `max_scan_gb` に加え、監査対象全体の 1 日上限と縮退 | 設計書 11 章の未決。WAF ログを読むと量が増える |
 | 低 | 古いパスワード | 認証情報レポートからパスワード未変更の期間を見る | `credential_hygiene` に閾値を足す形 |
