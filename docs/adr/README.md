@@ -86,3 +86,7 @@
 | [0060](0060-repo-check-no-secret-boxes.md) | 秘密の箱をやめ、一式の送り方は bot だけにして、足りない秘密は `arata repo check` が登録のコマンドと一緒に出す | 採用 |
 | [0061](0061-slack-bot-only-webhook-deprecated.md) | Slack への送り方を bot にそろえ、aratam の Webhook の方式は非推奨にする (当面は動くまま残す) | 採用 |
 | [0062](0062-readonly-role-allowed-log-groups.md) | 読み取り専用ロールに、読ませるロググループの名前を受けるパラメータを足し、ログの中身を読む Allow をそのロググループだけに絞る | 採用 |
+| [0063](0063-cloudtrail-s3-source.md) | CloudTrail を trail の S3 への配信から読むソースの種類 (`cloudtrail-s3`) を足す | 採用 |
+| [0064](0064-incremental-collect-and-store-evaluation.md) | 集めることと判定することを分ける (ソースごとの位置から続きだけを集め、日単位の判定はストアから組み立てる) | 採用 |
+| [0065](0065-insights-hourly-parts.md) | Logs Insights を時の単位で続きだけ読み、時ごとの部分の行を残して日の値を Go で組み立てる。集計のクエリは確かめてから 1 本にまとめる | 採用 |
+| [0066](0066-volume-spike-flash.md) | 量の急変を、時間帯ごとの平常帯と比べて速報する (`access_denied_spike`・`sign_in_failure_spike`。LLM を通さない短い通知) | 採用 |
