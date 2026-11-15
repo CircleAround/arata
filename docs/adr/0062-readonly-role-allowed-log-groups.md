@@ -129,6 +129,22 @@ arata は 1 回に 1 つしか渡さない。クエリ文字列の `SOURCE` コ�
   - 未確認: 認可が存在の確認より先に行われること (`ResourceNotFoundException` が「認可を通った」の印になること)。実装の PR で確かめる。
     確かめられなければこの検査は入れず、文書 (onboarding) で `*` の扱いを伝えるだけにする
   - 存在しないロググループへの `StartQuery` は、CloudTrail に `StartQuery` の失敗として 1 件残る。doctor の検査のたびに残るので、doctor の表と文書に書く
+    (未確認: CloudWatch Logs の `StartQuery` が CloudTrail の管理イベントとして記録されるか。記録されないなら、下の扱いは要らない)
+  - **arata 自身の `access_denied` のチェックに、この拒否を数えさせない。** 一覧に絞っていれば、検査は必ず `AccessDenied` で失敗し、
+    監査のロールの拒否として CloudTrail に残る。arata が自分の検査で自分に指摘を出すと、利用者は「監査のロールが何かを試している」と読み、
+    毎回確かめる手間が生じる。件数は doctor 1 回につき 1 件で、`access_denied` の閾値 (種類 `min_distinct_apis` 既定 5、件数 `min_count` 既定 50) には
+    1 件だけでは届かない。しかし平常帯に吸収されることに頼ると、ほかの拒否と合わせて閾値を越えた日や、利用者が閾値を下げたときに、自分の検査が指摘に混ざる。
+    そこで次のように決める
+    - 探り用の名前に固定の接頭辞 (`arata-doctor-probe-`) を付け、**`logs:StartQuery` で、ロググループの名前がこの接頭辞で始まる拒否は、
+      `access_denied` の窓にも平常帯にも数えない** (expected_denied と同じく、数える前に除く)。除いた件数は Data に残す (`expected_denied_excluded` と同じ形)
+    - 主体では絞らない (監査のロールの ARN は arata の設定から分からない場合がある)。この接頭辞のロググループを利用者が作って問い合わせても数えないが、
+      存在しない名前を選ぶための接頭辞なので、実害は小さいと見る。接頭辞は文書 (`docs/ai`) に書く
+    - 見分けるには、拒否された `StartQuery` の `requestParameters` のロググループの名前が要る。cloudtrail の collector は今、拒否されたイベントの
+      `data` にこの値を取り出していないので、`logs:StartQuery` の拒否に限って、ロググループの名前 (`logGroupName` / `logGroupIdentifiers`) だけを `data` に取り出す
+      (ADR 0026 と同じく、判定に要る値だけ)。未確認: 拒否された `StartQuery` の CloudTrail の記録に `requestParameters` が入るか。
+      入らないなら、この見分け方はできないので、doctor の検査は入れない
+    - **検査を入れるなら、この扱いを `access_denied` のテストで固定する** (接頭辞の拒否は数えない、接頭辞の前方だけが同じ別の名前と、ほかの action の拒否は数える、
+      除いた件数が Data に残る)。ほかのチェックがこの拒否を指摘にしないことも、テストで確かめる
 - `arata repo check` (GitHub を読むだけ。ADR 0060) は AWS を読まないので、この食い違いは見ない
 
 ### 5. 導入の手順 (onboarding) への反映
@@ -170,7 +186,8 @@ arata は 1 回に 1 つしか渡さない。クエリ文字列の `SOURCE` コ�
 - ソースを足すたびにロールの更新が要る (ADR 0053 で避けた手間を、一覧を選んだ利用者は引き受ける)。`arata config role-params` と doctor の案内で手間を減らす
 - arata の読み取り専用の性質・必要な action の一覧は変わらない (Allow の範囲を狭めるだけ)。`readonly_role_test.go` の action の突き合わせは、絞った形でもそのまま通る
 - Allow の絞り込みはこのロールの中だけに効く。ほかのポリシーが付けば読める (Deny の `NotResource` は判断を仰ぐ)
-- doctor の検査 (存在しない名前への `StartQuery`) は、未確認の挙動に頼る。確かめられなければ入れない
+- doctor の検査 (存在しない名前への `StartQuery`) は、未確認の挙動に頼る。確かめられなければ入れない。入れるなら、その拒否を `access_denied` が数えないための
+  接頭辞の規則と、collector が拒否された `StartQuery` のロググループの名前を残す変更も要る (4)
 
 ### 確かめ方 (実装の PR)
 
