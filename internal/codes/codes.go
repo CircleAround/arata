@@ -37,6 +37,7 @@ const (
 	ReportNotFound         = "REPORT_NOT_FOUND"
 	SourceCatchup          = "SOURCE_CATCHUP"
 	SourceCatchupTruncated = "SOURCE_CATCHUP_TRUNCATED"
+	SourceCollectLimited   = "SOURCE_COLLECT_LIMITED"
 	// 警告 (結果が欠ける・少なく出る・設定を直す必要がある)
 	NoLogLines                  = "NO_LOG_LINES"
 	LogGroupUnverified          = "LOG_GROUP_UNVERIFIED"
@@ -140,6 +141,7 @@ var All = []Code{
 	{ReportNotFound, arataOnly, "arata report で出す報告が無い (そのプロファイルの run がまだ無い)"},
 	{SourceCatchup, arataOnly, "前に失敗したソースを、取れていた位置から引き直している (警告)"},
 	{SourceCatchupTruncated, arataOnly, "ソースの遅れが max_catchup を超え、古い分を取りこぼした (警告)"},
+	{SourceCollectLimited, arataOnly, "ソースの 1 回の収集が max_collect に当たり、そこまで集めて止めた (続きは次の回。警告)"},
 	{NoLogLines, arataOnly, "窓の中にログの行が無い (log_group / stream_prefix の誤りの疑い。警告)"},
 	{LogGroupUnverified, arataOnly, "ロググループの保存期間などを確かめられないまま問い合わせた (範囲の確認をしていない。警告)"},
 	{TrailFileInvalid, arataOnly, "trail の S3 のファイルを読めず (gzip・JSON の誤り、大きさの上限)、飛ばした (その中の記録は数えていない。警告)"},

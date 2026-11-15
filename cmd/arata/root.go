@@ -468,10 +468,26 @@ coverage.notes に、入っていない期間と、日次集計を使うチェ�
 func newCollectCmd(d *Deps, g *globalFlags) *subcmd.Command {
 	var window string
 	var sources []string
+	var incremental bool
 	cmd := &subcmd.Command{
 		Use:   "collect",
-		Short: "収集だけを行いストアへ反映する",
+		Short: "収集だけを行いストアへ反映する (--incremental で、位置から続きだけ)",
+		Long: `収集だけを行い、ストアへ反映する。評価も報告もしない (aratam は送らない)。
+
+  --window <期間>   今から遡ってその期間を集める (既定 24h)。位置は進めない (手で過去を足すとき)
+  --incremental     全プロファイルが要る CloudTrail のソースの続きだけを、共有の位置から集めて位置を進める (ADR 0064)。
+                    短い間隔 (6 時間ごとなど) で回すと、プロファイルの run (daily など) は読み直さずに評価だけをする。
+                    cloudwatch-logs は今は集めない (Logs Insights は日の頭から読み直すので、短い間隔だと費用が増える。ADR 0065 で入れる)。
+                    1 回に集める範囲の上限はソースの max_collect。--window・--source とは一緒に使えない`,
 		Run: func(ctx context.Context, _ []string) error {
+			if incremental && (window != "" || len(sources) > 0) {
+				err := errors.New("--incremental collects every source from its position; it cannot be used with --window or --source")
+				d.Engine.Logger.Error("invalid flags", "code", engine.CodeConfigInvalid, "error", err.Error())
+				return &engine.ExitError{Code: engine.CodeConfigInvalid, Exit: engine.ExitConfig, Err: err}
+			}
+			if window == "" {
+				window = "24h"
+			}
 			w, err := config.ParseDuration(window)
 			if err != nil {
 				d.Engine.Logger.Error("invalid --window", "code", engine.CodeConfigInvalid, "error", err.Error())
@@ -482,7 +498,12 @@ func newCollectCmd(d *Deps, g *globalFlags) *subcmd.Command {
 				return err
 			}
 			defer e.Close()
-			cr, err := e.CollectOnly(ctx, w, sources)
+			var cr *engine.CollectResult
+			if incremental {
+				cr, err = e.CollectIncremental(ctx)
+			} else {
+				cr, err = e.CollectOnly(ctx, w, sources)
+			}
 			if err != nil {
 				return err
 			}
@@ -490,13 +511,14 @@ func newCollectCmd(d *Deps, g *globalFlags) *subcmd.Command {
 				return err
 			}
 			fmt.Fprintf(d.Stdout, "sources ok: %s\nsources failed: %s\nrecords: %d\n", orNone(cr.SourcesOK), orNone(cr.SourcesFailed), cr.Records)
-			if len(cr.SourcesFailed) > 0 {
+			if len(cr.SourcesFailed) > 0 || cr.Limited() {
 				return errPartial
 			}
 			return nil
 		},
 	}
-	cmd.StringVar(&window, "window", "24h", "収集する期間 (例: 24h, 7d)")
+	cmd.StringVar(&window, "window", "", "収集する期間 (例: 24h, 7d。既定 24h)。--incremental とは一緒に使えない")
+	cmd.BoolVar(&incremental, "incremental", false, "全プロファイルが要る CloudTrail のソースの続きだけを、共有の位置から集める (ADR 0064)")
 	cmd.StringArrayVar(&sources, "source", "対象ソース ID (複数可。省略時は全部)")
 	return cmd
 }

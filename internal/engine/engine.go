@@ -491,9 +491,13 @@ type CollectResult struct {
 	outOfRange map[string]string
 	// scanFrom はソースごとに実際に読み始めた時刻 (再走査を含む)。途切れずに読めている始まり (source_covered_from) に使う (ADR 0064)。
 	scanFrom map[string]time.Time
+	// scanTo は max_collect で窓の終わりより前で止めたソースの、読み終えた時刻 (ADR 0064)。位置はここまで進める。
+	scanTo map[string]time.Time
 }
 
-func (r CollectResult) partial() bool { return len(r.SourcesFailed) > 0 || r.partialItems }
+func (r CollectResult) partial() bool {
+	return len(r.SourcesFailed) > 0 || r.partialItems || len(r.scanTo) > 0
+}
 
 // CollectOptions は Collect の対象の絞り込み。
 type CollectOptions struct {
@@ -513,6 +517,9 @@ type CollectOptions struct {
 	SourceFrom map[string]time.Time
 	// SourceAhead は、別の run が窓の始まりより先まで読んだソースの位置 (ADR 0064)。そのソースは位置から続きだけを読む。
 	SourceAhead map[string]time.Time
+	// SourceStart はソースの読み始め (再走査の前) をそのまま決める (収集だけの run。ADR 0064)。SourceTo は max_collect で止める時刻。
+	SourceStart map[string]time.Time
+	SourceTo    map[string]time.Time
 }
 
 // Collect は設定の sources から窓内を収集し、ストアへ反映する。失敗したソースは記録して続行する。
@@ -526,7 +533,7 @@ func (e *Engine) Collect(ctx context.Context, w collect.Window, o CollectOptions
 	}
 	res := CollectResult{SourcesOK: []string{}, SourcesFailed: []string{}, Errors: []report.CollectError{}, Formats: []report.FormatCoverage{},
 		yielded: map[string][]record.Kind{}, attempted: map[string]bool{}, unavailable: map[record.Kind]string{}, outOfRange: map[string]string{},
-		scanFrom: map[string]time.Time{}}
+		scanFrom: map[string]time.Time{}, scanTo: map[string]time.Time{}}
 	denied := map[string]bool{}
 	for _, c := range e.cfg.Checks.AccessDenied.ErrorCodes {
 		denied[c] = true
@@ -601,9 +608,15 @@ func (e *Engine) Collect(ctx context.Context, w collect.Window, o CollectOptions
 				}
 				if t, ok := o.SourceAhead[src.ID]; ok && t.After(sw.From) {
 					sw.From = t
-					if sw.From.After(sw.To) {
-						sw.From = sw.To
-					}
+				}
+				if t, ok := o.SourceStart[src.ID]; ok {
+					sw.From = t
+				}
+				if t, ok := o.SourceTo[src.ID]; ok && t.Before(sw.To) {
+					sw.To = t
+				}
+				if sw.From.After(sw.To) {
+					sw.From = sw.To
 				}
 				sw.ScanFrom = sw.From.Add(-src.IngestDelay)
 				// 決定 (ADR 0064): CloudTrail は時の頭から引き直す (主体の活動の集計を時ごとに置き換えるので、その時の全件を数える)
@@ -658,6 +671,9 @@ func (e *Engine) Collect(ctx context.Context, w collect.Window, o CollectOptions
 			continue
 		}
 		res.SourcesOK = append(res.SourcesOK, src.ID)
+		if t, ok := o.SourceTo[src.ID]; ok && t.Before(w.To) {
+			res.scanTo[src.ID] = t
+		}
 		attrs := []any{"source", src.ID, "from", w.From.UTC().Format(time.RFC3339), "to", w.To.UTC().Format(time.RFC3339)}
 		if o.Rescan {
 			attrs = append(attrs, "scan_from", w.From.Add(-src.IngestDelay).UTC().Format(time.RFC3339))
@@ -1246,14 +1262,16 @@ func (e *Engine) RunWithOptions(ctx context.Context, profileName string, o RunOp
 	if err := e.st.BeginRun(ctx, store.Run{ID: runID, Profile: profileName, WindowFrom: w.From, WindowTo: w.To, StartedAt: now, Status: "running"}); err != nil {
 		return nil, err
 	}
+	limits := e.limitCollect(e.collectStarts(prof, base, cu), w.To, runID)
 	cr := e.Collect(ctx, w, CollectOptions{Needs: e.neededKinds(prof), PrincipalStatus: store.PrincipalUnknown, RunID: runID, Rescan: true, BaseFrom: base,
-		SourceFrom: cu.from, SourceAhead: cu.ahead})
+		SourceFrom: cu.from, SourceAhead: cu.ahead, SourceTo: limits})
 	ev, err := e.Evaluate(ctx, profileName, w, &cr)
 	if err != nil {
 		_ = e.st.FinishRun(ctx, runID, "failed", map[string]any{"error": err.Error()})
 		return nil, err
 	}
 	rep := e.buildReport(profileName, runID, w, now, cr, ev)
+	rep.Coverage.Notes = append(rep.Coverage.Notes, limitedNotes(cr)...)
 	if dry != nil {
 		rep.DryRun = true
 		rep.Coverage.Notes = append(e.dryRunNotes(prof, w, dry, ev), rep.Coverage.Notes...)
