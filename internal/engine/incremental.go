@@ -158,6 +158,8 @@ func (e *Engine) CollectIncremental(ctx context.Context) (*CollectResult, error)
 	if len(cr.scanTo) > 0 {
 		stats["collect_limited"] = timesText(cr.scanTo)
 	}
+	// 解釈率・ソースごとの読み取り量 (bytes_scanned)・truncated を profile の run と同じ形で残す
+	addFormatStats(stats, cr.Formats)
 	if err := e.st.FinishRun(ctx, runID, status, stats); err != nil {
 		return nil, err
 	}

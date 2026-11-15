@@ -2,6 +2,8 @@ package cwlogs
 
 import (
 	"context"
+	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -283,6 +285,8 @@ func TestHourlyQueriesEachHourOnce(t *testing.T) {
 	}
 	c.Sleep = func(context.Context, time.Duration) error { return nil }
 	c.Parts = &memParts{}
+	var logs strings.Builder
+	c.Logger = slog.New(slog.NewJSONHandler(&logs, nil))
 	// 00:00 〜 06:00 の 6 時間
 	if err := c.Collect(context.Background(), collect.Window{From: DayStart(now), To: DayStart(now).Add(6*time.Hour + 5*time.Minute)}, &sinkRecorder{}); err != nil {
 		t.Fatal(err)
@@ -317,6 +321,21 @@ func TestHourlyQueriesEachHourOnce(t *testing.T) {
 	if tr := c.FormatStats().Truncated; len(tr) == 0 {
 		t.Fatal("the hours at the row limit must be marked truncated")
 	}
+	// AGGREGATE_TRUNCATED の WARN は、上限に当たったクエリ (query)・その時 (hour)・truncated にした metric (metrics。カンマ区切り) を持つ
+	for _, l := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		if !strings.Contains(l, `"AGGREGATE_TRUNCATED"`) {
+			continue
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(l), &m); err != nil {
+			t.Fatal(err)
+		}
+		if m["query"] != wafActions || m["hour"] == nil || !strings.Contains(m["metrics"].(string), MetricWAFBlockIP) {
+			t.Fatalf("warn line: %s", l)
+		}
+		return
+	}
+	t.Fatalf("no AGGREGATE_TRUNCATED warning: %s", logs.String())
 }
 
 // max_collect (ADR 0064) は collect: hourly の cloudwatch-logs にも効く。古い側から決めた時間の分だけ読み、位置をそこまで進める (初回の日の頭からの読み直しを含む)。
