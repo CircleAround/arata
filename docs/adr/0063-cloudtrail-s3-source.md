@@ -154,6 +154,8 @@ sources:
   `CloudTrailBucketPrefix` に `AWSLogs/<o-id>/<account-id>/` までを書けるようにする (その場合、上の Resource と条件の `AWSLogs` を前に含めない形にする。実装の PR で型を決める)
 - 組織の trail のバケットは、多くはログ用の別アカウントにある。その場合はロールのポリシーだけでは読めず、**バケットポリシーとキーポリシーで読み取り専用ロールを許す**
   必要がある (ログ用のアカウント側の作業)。`arata config role-params` は上のパラメータを設定から作り、ログ用のアカウントに貼る文の雛形を `--format json` で出す
+- trail が監査するアカウント自身にあり、バケットも同じアカウントにあり、SSE-S3 (KMS を使わない) なら、`CloudTrailBucketName` (と `CloudTrailBucketPrefix`) を渡すだけで足りる
+  (バケットポリシー・キーポリシーの作業は要らない)。上の組織の trail・別アカウントのバケット・SSE-KMS の手順は、そうでない利用者のために残す
 - doctor: 読み取り専用ロールで `ListObjectsV2` (1 件)・`GetObject` (直近の 1 ファイル)・`GetEventSelectors` を試し、拒否されたら足りない action と「どこの
   ポリシー (ロール・バケット・キー) か」の候補を出す。trail が書き込みだけ・管理イベントの種類を除いている・マルチリージョンでなく `regions` を覆わない、なら WARN
 
