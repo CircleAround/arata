@@ -12,7 +12,6 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	ct "github.com/aws/aws-sdk-go-v2/service/cloudtrail"
-	"github.com/aws/aws-sdk-go-v2/service/cloudtrail/types"
 	cttypes "github.com/aws/aws-sdk-go-v2/service/cloudtrail/types"
 
 	"github.com/CircleAround/arata/internal/collect/cloudtrail"
@@ -61,7 +60,7 @@ profiles:
 	return h, bucket
 }
 
-func putTrail(b *cloudtrailtest.S3, region string, delivered time.Time, suffix string, evs ...types.Event) {
+func putTrail(b *cloudtrailtest.S3, region string, delivered time.Time, suffix string, evs ...cttypes.Event) {
 	b.Put(cloudtrailtest.TrailKey("", "", acct, region, delivered, suffix), cloudtrailtest.TrailFile("Management", evs...))
 }
 
@@ -71,7 +70,7 @@ func TestRunCloudTrailS3(t *testing.T) {
 	ctx := context.Background()
 	at := h.now.Add(-2 * time.Hour)
 	scanner := cloudtrailtest.AssumedRole(acct, "example-scanner", "s1")
-	var denied []types.Event
+	var denied []cttypes.Event
 	for i, api := range [][2]string{{"iam.amazonaws.com", "ListUsers"}, {"s3.amazonaws.com", "ListBuckets"}, {"secretsmanager.amazonaws.com", "ListSecrets"},
 		{"iam.amazonaws.com", "ListRoles"}, {"ec2.amazonaws.com", "DescribeInstances"}, {"kms.amazonaws.com", "ListKeys"}} {
 		denied = append(denied, cloudtrailtest.WithError(cloudtrailtest.Event(fmt.Sprintf("d%d", i), at, scanner, api[0], api[1], "ap-northeast-1", "198.51.100.1", true, nil), "AccessDenied"))
