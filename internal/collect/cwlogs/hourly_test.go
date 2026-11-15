@@ -330,7 +330,9 @@ func TestHourlyQueriesEachHourOnce(t *testing.T) {
 		if err := json.Unmarshal([]byte(l), &m); err != nil {
 			t.Fatal(err)
 		}
-		if m["query"] != wafActions || m["hour"] == nil || !strings.Contains(m["metrics"].(string), MetricWAFBlockIP) {
+		// rows_by_action: 上限を埋めた行の action ごとの数 (ここでは全部 BLOCK)
+		if m["query"] != wafActions || m["hour"] == nil || !strings.Contains(m["metrics"].(string), MetricWAFBlockIP) ||
+			m["rows_by_action"].(map[string]any)["BLOCK"].(float64) != float64(MaxRows) {
 			t.Fatalf("warn line: %s", l)
 		}
 		return

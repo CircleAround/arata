@@ -110,12 +110,32 @@ func (c *Collector) queryHour(ctx context.Context, q MergedQuery, h time.Time) (
 	}
 	if len(rows) >= MaxRows {
 		c.Logger.Warn("aggregate truncated at row limit; counts are lower bounds", "code", codes.AggregateTruncated, "source", c.src.ID, "query", q.Name,
-			"metrics", strings.Join(q.Metrics, ","), "limit", MaxRows, "hour", h.Format(time.RFC3339))
+			"metrics", strings.Join(q.Metrics, ","), "limit", MaxRows, "hour", h.Format(time.RFC3339), "rows_by_action", rowsByAction(rows))
 		for _, m := range q.Metrics {
 			c.stats.AddTruncated(m)
 		}
 	}
 	return inRange(rows, q.Bin, end), nil
+}
+
+// rowsByAction は、上限に当たった結果の行を action ごとに数える (どの種類の行が上限を埋めたかを、軸を減らす判断に使う。人向けの属性)。
+// action の軸を持たないクエリでは nil。
+func rowsByAction(rows []map[string]string) map[string]int {
+	var out map[string]int
+	for _, r := range rows {
+		a, ok := r["action"]
+		if !ok {
+			continue
+		}
+		if out == nil {
+			out = map[string]int{}
+		}
+		if a == "" {
+			a = "-"
+		}
+		out[a]++
+	}
+	return out
 }
 
 // putHours は行を時ごとに分けて部分の行として書く (行の無い時も空で書く)。
