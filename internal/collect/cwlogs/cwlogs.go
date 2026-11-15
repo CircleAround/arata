@@ -530,7 +530,8 @@ func (c *Collector) splitRange(ctx context.Context, q MergedQuery, from, to time
 		}
 		return append(a, b...), nil
 	}
-	c.Logger.Warn("aggregate truncated at row limit; counts are lower bounds", "code", codes.AggregateTruncated, "source", c.src.ID, "query", q.Name, "metrics", strings.Join(q.Metrics, ","), "limit", MaxRows)
+	c.Logger.Warn("aggregate truncated at row limit; counts are lower bounds", "code", codes.AggregateTruncated, "source", c.src.ID, "query", q.Name, "metrics", strings.Join(q.Metrics, ","), "limit", MaxRows,
+		"rows_by_action", rowsByAction(rows))
 	for _, m := range q.Metrics {
 		c.stats.AddTruncated(m)
 	}
