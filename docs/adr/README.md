@@ -85,4 +85,4 @@
 | [0059](0059-repo-init.md) | 監査を回すリポジトリの一式を `arata repo init` で書き出し、見本はその出力から作る (GitHub の設定は Terraform。秘密の箱は、既にある秘密を取り込んでから作る) | 採用 (秘密の箱と送り方の判別は 0060 で置き換え) |
 | [0060](0060-repo-check-no-secret-boxes.md) | 秘密の箱をやめ、一式の送り方は bot だけにして、足りない秘密は `arata repo check` が登録のコマンドと一緒に出す | 採用 |
 | [0061](0061-slack-bot-only-webhook-deprecated.md) | Slack への送り方を bot にそろえ、aratam の Webhook の方式は非推奨にする (当面は動くまま残す) | 採用 |
-| [0062](0062-readonly-role-allowed-log-groups.md) | 読み取り専用ロールに、読ませるロググループの名前を受けるパラメータを足し、ログの中身を読む Allow をそのロググループだけに絞る | 提案 |
+| [0062](0062-readonly-role-allowed-log-groups.md) | 読み取り専用ロールに、読ませるロググループの名前を受けるパラメータを足し、ログの中身を読む Allow をそのロググループだけに絞る | 採用 |

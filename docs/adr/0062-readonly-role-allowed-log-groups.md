@@ -1,7 +1,7 @@
 # 0062. 読み取り専用ロールに、読ませるロググループの名前を受けるパラメータを足し、ログの中身を読む Allow をそのロググループだけに絞る
 
 - 日付: 2026-11-15
-- 状態: 提案
+- 状態: 採用
 
 ## 背景
 
@@ -19,7 +19,9 @@
 - 「監査のロールは個人情報を読まない」を守るには、読めるものを明示する形 (許可リスト) が要る。ADR 0053 では
   「ソースを足すたびにロールの更新が要る」として許可リストを採らなかったが、上の事情で、その手間を引き受ける利用者がいる
 
-オーナーが、許可リストの形を足すことを決めた (2026-11-15)。この ADR はその形を決める。ADR 0053 (Deny) は置き換えず、併用する。
+オーナーが、許可リストの形を足すことを決めた (2026-11-15)。この ADR はその形を決める。
+2 の既定・一覧の外の Deny・doctor の探りの検査は、提案の段階で判断を仰ぎ、オーナーの答え (2026-11-15) で決めた。
+「仕組みを足しすぎない。次の版では、スタックの更新と設定の書き換えを必須にする」という方針で、仕組みは軽くした。ADR 0053 (Deny) は置き換えず、併用する。
 
 ## 決定
 
@@ -41,7 +43,7 @@
   ([Determining whether a request is allowed or denied within an account](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic_policy-eval-denyallow.html))
 - 一覧に無いロググループは、Allow が無いので読めない (暗黙の拒否)。「By default, all requests are implicitly denied」
   「If there are no identity-based policies or no statements in identity-based policies that allow the requested action, then the request is implicitly denied」(同じ文書)。
-  ただし暗黙の拒否なので、**ほかのポリシー (管理ポリシーなど) がこのロールに付けば読める**。この点は 3 の「検討した選択肢」を参照
+  ただし暗黙の拒否なので、**ほかのポリシー (管理ポリシーなど) がこのロールに付けば読める**。一覧の外を明示の Deny で止める仕組みは入れない (「検討した選択肢」)
 
 ### 2. 既定の扱い: 既定を持たない (必須のパラメータにし、全部を読ませるなら `*` と書く)
 
@@ -53,20 +55,21 @@
 - 既にあるスタックを更新するとき、値を渡さなければ **更新そのものが失敗する** (新しいパラメータに既定が無いため)。
   黙って全部が読めなくなる事故 (空 = 何も読めない) も、黙って全部が読めるまま残る (空 = 全部) も起きない。利用者は、更新のときに 1 度だけ `*` か一覧かを選ぶ
   - 未確認: `aws cloudformation deploy` で、既定の無い新しいパラメータを渡さずに既にあるスタックを更新したときの、エラーの文言と、
-    変更セットを作る前に止まるか。実装の PR で sandbox ではない手元の検証 (下の「確かめ方」) で確かめ、README に書く
+    変更セットを作る前に止まるか。実装の PR で確かめ、README に書く
+- **次の版に上げるときは、スタックの更新と設定の書き換えを必須の手順にする。** 読み取り専用ロールのスタックを `AllowedLogGroupNames` を付けて更新し、
+  arata の設定 (`sources`) をその一覧と合わせる。移し方 (一覧の作り方、`*` を選ぶ場合、順番) を Release の本文と README に書く
 
-比べた案 (推奨は上の C):
+比べた案 (C に決めた):
 
 | 案 | 新しいスタック | 既にあるスタックの更新 | ADR 0014 (暗黙の既定を持たない) |
 |---|---|---|---|
-| A. 空 = 全部 (今と同じ) | 何も書かないと全部読める | 変わらない | 外れる。「絞っていない」を doctor の warn で見せて補う |
+| A. 空 = 全部 (今と同じ) | 何も書かないと全部読める | 変わらない | 外れる |
 | B. 空 = 何も読めない | 何も書かないと監査が全部 `ACCESS_DENIED` | **更新で全部が読めなくなる** (次の run で気付く) | 合う。ただし事故の形が悪い |
 | **C. 既定なし、全部は `*`** | 値が要る (書かないと作れない) | 値が要る (書かないと更新が止まる) | 合う。選んだ値がスタックのパラメータに残る |
 
-A を採らない理由: 許可リストを足す目的は「黙って読める状態」を無くすことで、何も書かない利用者がその状態のまま残る。doctor の warn は、
-doctor を回さなければ見えない。C は 1 度だけ手間が増えるが、決めた値がスタックのパラメータ (`*` か一覧か) として誰からも見える。
-
-C でも、**「`*` のまま」かどうかを arata の側で見えるようにする** (5 の doctor の検査)。`*` は利用者が選んだ値なので error にはせず、warn にする。
+A を採らない理由: 許可リストを足す目的は「黙って読める状態」を無くすことで、何も書かない利用者がその状態のまま残る。
+C は 1 度だけ手間が増えるが、決めた値がスタックのパラメータ (`*` か一覧か) として誰からも見える。
+`*` を選んだかどうかを arata の側で検査する仕組みは入れない (「検討した選択肢」の doctor の探り)。
 
 ### 3. 絞る action
 
@@ -103,16 +106,20 @@ action ごとのリソースの型は、AWS の Service Authorization Reference 
 - Service Reference の `Operations` では、`GetQueryResults` の操作が `FilterLogEvents`・`GetQueryResults`・`Unmask` の action で認可されうる、
   `StartQuery` の操作が `DescribeLogGroups`・`DescribeQueryDefinitions`・`FilterLogEvents`・`iam:PassRole`・`StartQuery`・`Unmask` で認可されうる、とある。
   今のロールはこのうち `FilterLogEvents` と `Unmask` を持たずに動いているので、それらは特定の使い方 (マスクを外す、など) のときだけと読んでいる (未確認)
-- 実装の PR で、`GetQueryResults` を一覧に絞った形で arata の run が通ることを確かめる。通らなければ、`GetQueryResults` だけ `'*'` に戻し、
+- 実装の PR で、**最初に**、`GetQueryResults` を一覧に絞った形で arata の run が通ることを開発用のアカウントで確かめる。通らなければ、`GetQueryResults` だけ `'*'` に戻し、
   理由 (クエリ ID を知らなければ結果を取れない。このロールは `DescribeQueries` を持たないので、ほかの主体のクエリ ID を一覧できない) を ADR に追記する
 
 `StartQuery` で 1 回に複数のロググループを渡すと、1 つでも一覧に無ければ全体が拒否されると見込む (Allow は要求したすべてのリソースに要る)。
 arata は 1 回に 1 つしか渡さない。クエリ文字列の `SOURCE` コマンドなど、`logGroupNames` を渡さずに対象を選ぶ書き方の認可は未確認で、arata は使わない。
 
-### 4. arata の設定とロールのパラメータの食い違いを防ぐ
+### 4. arata の設定とロールのパラメータの食い違いに気付く手段
 
-一覧の正は arata の設定 (`sources` の `log_group`) とし、ロールのパラメータは設定から作る。
+一覧の正は arata の設定 (`sources` の `log_group`) とし、ロールのパラメータは設定から作る。食い違いに気付く手段は、次の 2 つだけにする。
 
+- **読めないソースは `ACCESS_DENIED` として通知と coverage に出る** (今の仕組みのまま。run はそのソースだけを失敗にして続ける)。
+  `arata doctor` は、ロググループの `StartQuery` が拒否されたら `permission` の 1 行にまとめている (ADR 0053)。その案内に
+  「`AllowedLogGroupNames` に無い (→ `arata config role-params` の値でスタックを更新する)」を足す。action が無いのか、Deny か、Allow の一覧に無いのかは、
+  AWS のエラーの文言でしか分からないので、arata は判定しない (ADR 0053 と同じ)
 - **`arata config role-params` を足す** (名前は実装の PR で決める)。設定を読み、`readonly-role.yaml` に渡すパラメータを出す。
   `--format json` は `{"schema_version": 1, "parameters": {"AllowedLogGroupNames": "prod-nginx-access,prod-api"}, "log_groups": ["prod-nginx-access", "prod-api"]}`
   の形にし、スキーマ (`schemas/`) とテストで固定する (ADR 0054)。人向けの出力 (`text`) は、そのまま打てる `--parameter-overrides AllowedLogGroupNames=…` を出す
@@ -120,32 +127,8 @@ arata は 1 回に 1 つしか渡さない。クエリ文字列の `SOURCE` コ�
   - 名前が `AllowedPattern` に合わない (使えない文字がある) ときは、出さずに error にする (スタックの更新で弾かれる前に分かる)
   - 名前の並びが CloudFormation のパラメータの値の上限 (4,096 バイト) や、ロールのインラインポリシーの大きさの上限を超えるおそれがあるときは warn。
     名前 1 つにつき、Allow と Deny を合わせて名前の長さの 2 倍 + 60 文字ほどを使う (ADR 0053)。上限の値は実装の PR で公式文書から確かめて書く
-- **`arata doctor` で見分ける**。既に、ロググループの `StartQuery` が拒否されたら `permission` の 1 行にまとめている (ADR 0053)。
-  その案内に「`AllowedLogGroupNames` に無い (→ `arata config role-params` の値でスタックを更新する)」を足す。action が無いのか、Deny か、Allow の一覧に無いのかは、
-  AWS のエラーの文言でしか分からないので、arata は判定しない (ADR 0053 と同じ)
-- **`arata doctor` で「絞っていない (`*`)」を warn にする**。ロールのパラメータは IAM や CloudFormation を読まないと分からないが、そのための権限は足したくない。
-  そこで、**存在しないロググループの名前** (`arata-doctor-probe-<乱数>` のような、`sources` に無く、誰も作らない名前) に `StartQuery` を投げる。
-  一覧に絞っていれば `AccessDeniedException`、`*` なら認可を通って `ResourceNotFoundException` になる、と見込む。存在しないので中身は読まない
-  - 未確認: 認可が存在の確認より先に行われること (`ResourceNotFoundException` が「認可を通った」の印になること)。実装の PR で確かめる。
-    確かめられなければこの検査は入れず、文書 (onboarding) で `*` の扱いを伝えるだけにする
-  - 存在しないロググループへの `StartQuery` は、CloudTrail に `StartQuery` の失敗として 1 件残る。doctor の検査のたびに残るので、doctor の表と文書に書く
-    (未確認: CloudWatch Logs の `StartQuery` が CloudTrail の管理イベントとして記録されるか。記録されないなら、下の扱いは要らない)
-  - **arata 自身の `access_denied` のチェックに、この拒否を数えさせない。** 一覧に絞っていれば、検査は必ず `AccessDenied` で失敗し、
-    監査のロールの拒否として CloudTrail に残る。arata が自分の検査で自分に指摘を出すと、利用者は「監査のロールが何かを試している」と読み、
-    毎回確かめる手間が生じる。件数は doctor 1 回につき 1 件で、`access_denied` の閾値 (種類 `min_distinct_apis` 既定 5、件数 `min_count` 既定 50) には
-    1 件だけでは届かない。しかし平常帯に吸収されることに頼ると、ほかの拒否と合わせて閾値を越えた日や、利用者が閾値を下げたときに、自分の検査が指摘に混ざる。
-    そこで次のように決める
-    - 探り用の名前に固定の接頭辞 (`arata-doctor-probe-`) を付け、**`logs:StartQuery` で、ロググループの名前がこの接頭辞で始まる拒否は、
-      `access_denied` の窓にも平常帯にも数えない** (expected_denied と同じく、数える前に除く)。除いた件数は Data に残す (`expected_denied_excluded` と同じ形)
-    - 主体では絞らない (監査のロールの ARN は arata の設定から分からない場合がある)。この接頭辞のロググループを利用者が作って問い合わせても数えないが、
-      存在しない名前を選ぶための接頭辞なので、実害は小さいと見る。接頭辞は文書 (`docs/ai`) に書く
-    - 見分けるには、拒否された `StartQuery` の `requestParameters` のロググループの名前が要る。cloudtrail の collector は今、拒否されたイベントの
-      `data` にこの値を取り出していないので、`logs:StartQuery` の拒否に限って、ロググループの名前 (`logGroupName` / `logGroupIdentifiers`) だけを `data` に取り出す
-      (ADR 0026 と同じく、判定に要る値だけ)。未確認: 拒否された `StartQuery` の CloudTrail の記録に `requestParameters` が入るか。
-      入らないなら、この見分け方はできないので、doctor の検査は入れない
-    - **検査を入れるなら、この扱いを `access_denied` のテストで固定する** (接頭辞の拒否は数えない、接頭辞の前方だけが同じ別の名前と、ほかの action の拒否は数える、
-      除いた件数が Data に残る)。ほかのチェックがこの拒否を指摘にしないことも、テストで確かめる
-- `arata repo check` (GitHub を読むだけ。ADR 0060) は AWS を読まないので、この食い違いは見ない
+
+`arata repo check` (GitHub を読むだけ。ADR 0060) は AWS を読まないので、この食い違いは見ない。
 
 ### 5. 導入の手順 (onboarding) への反映
 
@@ -158,17 +141,26 @@ arata は 1 回に 1 つしか渡さない。クエリ文字列の `SOURCE` コ�
   設定の後に一覧で更新する、と書く
 - `docs/ai/index.md`・`docs/ai/logs.md` の `ACCESS_DENIED` の案内 (Allow の一覧に無い場合を足す)、`docs/design.md` の該当の「決定:」
 - **ソースを足す手順に、ロールの更新を足す** (`sources` に書いたら、`arata config role-params` の値でスタックを更新する。しないと、そのソースだけが `ACCESS_DENIED`)
+- **一覧に入れる前に、そのロググループの中身の種類を確かめる**、と書く。同じロググループに利用者の操作のログ (個人情報) が混ざっていないかは、
+  arata では判断できない (arata は中身の良し悪しを見ない)。混ざっているなら、一覧に入れず、アプリかログの送り方の側で分ける
 
 ## 検討した選択肢
 
 - **既定を空 = 全部にする (2 の A)**: 既にあるスタックが何も変わらず、いちばん穏やか。しかし何も書かない利用者が「黙って読める」状態のまま残り、
-  この ADR の目的 (読めるものを明示する) が既定で外れる。ADR 0014 にも合わない。採らなかった。オーナーの判断で A に倒す場合は、4 の doctor の warn を必ず入れる
+  この ADR の目的 (読めるものを明示する) が既定で外れる。ADR 0014 にも合わない。採らなかった
 - **既定を空 = 何も読めないにする (2 の B)**: 安全側だが、既にあるスタックを別の目的 (action の追加など) で更新しただけで、全部のロググループが読めなくなる。
   次の run の `ACCESS_DENIED` まで気付かない。採らなかった
 - **一覧の外を明示の Deny (`NotResource`) で止める**: Allow を絞るだけだと、ほかのポリシーがこのロールに付けば読める。`Effect: Deny`・`NotResource: <一覧の ARN>` なら、
   ほかのポリシーが付いても一覧の外は読めない。しかし `NotResource` の Deny は当たる範囲を読み違えやすく (ADR 0053 のテストは Deny の文に `Not*` を使わないことを固定している)、
-  リソースの型を持たない action を入れると全部を止める。このロールはテンプレートが作り、ほかのポリシーを付ける前提が無いので、まずは Allow を絞るだけにする。
-  判断を仰ぐ (オーナーが「ほかのポリシーが付いても読ませない」まで求めるなら、この案を足す)
+  リソースの型を持たない action を入れると全部を止める。このロールはテンプレートが作り、ほかのポリシーを付ける前提が無い。
+  仕組みの重さに見合わないので、入れなかった (オーナーの判断、2026-11-15)
+- **doctor で「絞っていない (`*`)」を warn にする探り**: 存在しないロググループの名前 (固定の接頭辞付き) に `StartQuery` を投げ、
+  `AccessDeniedException` なら絞っている、`ResourceNotFoundException` なら `*`、と見分ける案。入れなかった (オーナーの判断、2026-11-15)。
+  - 仕組みの重さに見合わない。探りの拒否が CloudTrail に残るので、arata 自身の `access_denied` がそれを数えないよう、
+    接頭辞で除く規則と、collector が拒否された `StartQuery` のロググループの名前を残す変更まで要る
+  - その見分けが成り立たないおそれがある。拒否された呼び出しの CloudTrail の記録で `requestParameters` が null だった例がある
+    (ADR 0055 の、拒否された `AssumeRoleWithWebIdentity`)。`StartQuery` でも同じなら、接頭辞で見分けられない
+  - 認可が存在の確認より先に行われることも未確認だった
 - **ARN をそのまま受ける (`AllowedLogGroupArns`)**: ADR 0053 と同じ理由 (`:*` の付け忘れで当たらない) で採らなかった
 - **接頭辞で許す (`prod-nginx-*`)**: 新しいロググループが、名前が合うだけで読める状態になる。この ADR が無くしたい状態そのもの。採らなかった
 - **タグで許す (`aws:ResourceTag/...`)**: ロググループの側で宣言できるが、タグを付けられる主体が読める範囲を広げられる。action ごとに条件の評価を確かめる必要もある。採らなかった
@@ -184,10 +176,9 @@ arata は 1 回に 1 つしか渡さない。クエリ文字列の `SOURCE` コ�
 - **互換を壊す**: 既にあるスタックの更新に、`AllowedLogGroupNames` の値 (`*` か一覧) が要る。Release の本文と README に書く。
   arata のバイナリや出力の互換は変わらない (`config role-params` は新しい出力で、スキーマを足す)
 - ソースを足すたびにロールの更新が要る (ADR 0053 で避けた手間を、一覧を選んだ利用者は引き受ける)。`arata config role-params` と doctor の案内で手間を減らす
+- `*` を選んだまま (絞っていない) かどうかを、arata は検査しない。スタックのパラメータに残る値が、利用者の選んだ印になる
 - arata の読み取り専用の性質・必要な action の一覧は変わらない (Allow の範囲を狭めるだけ)。`readonly_role_test.go` の action の突き合わせは、絞った形でもそのまま通る
-- Allow の絞り込みはこのロールの中だけに効く。ほかのポリシーが付けば読める (Deny の `NotResource` は判断を仰ぐ)
-- doctor の検査 (存在しない名前への `StartQuery`) は、未確認の挙動に頼る。確かめられなければ入れない。入れるなら、その拒否を `access_denied` が数えないための
-  接頭辞の規則と、collector が拒否された `StartQuery` のロググループの名前を残す変更も要る (4)
+- Allow の絞り込みはこのロールの中だけに効く。ほかのポリシーが付けば読める (一覧の外の明示の Deny は入れない)
 
 ### 確かめ方 (実装の PR)
 
@@ -196,6 +187,7 @@ arata は 1 回に 1 つしか渡さない。クエリ文字列の `SOURCE` コ�
   `AllowedPattern` が `*` だけ・名前の並びを通し、空・`prod-*`・`a,*`・空白・コロンなどを弾くこと、`Default` が無いこと
 - `deploy/sandbox`: CfnInclude に値を渡し、`pnpm test` / `pnpm typecheck` / `pnpm synth` (deploy はしない)
 - `arata config role-params`: 型・スキーマ・`schematest` のテスト、名前が規則に合わないときの error
-- IAM の評価 (一覧の内外、Deny との併用、`GetQueryResults` の評価、doctor の検査の `ResourceNotFoundException`) は、リポジトリのテストでは固定できない。
+- 最初に、開発用のアカウントで、`GetQueryResults` を一覧に絞った形で arata の run が通るかを確かめる (3)
+- IAM の評価 (一覧の内外、Deny との併用、`GetQueryResults` の評価) は、リポジトリのテストでは固定できない。
   ADR 0053 と同じく、IAM Access Analyzer の `validate-policy` とポリシーシミュレーター (`simulate-custom-policy`。架空のアカウント ID と名前) で確かめた結果を PR に書く。
-  `GetQueryResults` と doctor の検査は、シミュレーターでは確かめられない (実際の API の挙動) ので、開発用の環境で確かめるか、確かめられなければ未確認として扱いを決める
+  `GetQueryResults` はシミュレーターでは確かめられない (実際の API の挙動) ので、上の開発用のアカウントでの確認による
