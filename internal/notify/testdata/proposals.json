@@ -43,5 +43,11 @@
     "rule": "count-geo",
     "summary": "prod-waf: COUNT の count-geo: 直近 7 日で 12 件一致、うち怪しい通信 25%、一致した日 3 / 7 日",
     "evidence": {"matches": 12, "suspect_ratio": 0.25, "matching_days": 3, "days": 7}
+  },
+  {
+    "kind": "observation", "about": "label_rule", "reason": "informational", "stage": "none", "web_acl": "prod-waf", "scope": "REGIONAL", "region": "ap-northeast-1",
+    "rule": "bot", "rule_in_group": "CategoryHttpLibrary",
+    "summary": "prod-waf: 目印のルール: COUNT の bot の CategoryHttpLibrary: 直近 7 日でラベル awswaf:managed:aws:bot-control:bot:category:http_library を 70 件付けた。使っているルール: block-libs",
+    "evidence": {"matches": 70, "matching_days": 7, "days": 7, "labels": ["awswaf:managed:aws:bot-control:bot:category:http_library"], "consumers": ["block-libs"]}
   }
 ]

@@ -105,6 +105,9 @@ func (c *WAFConfig) Collect(ctx context.Context, w collect.Window, sink collect.
 			for _, r := range acl.Rules {
 				rd := ruleData(r)
 				rd["acl"], rd["scope"], rd["region"] = name, string(sc.scope), sc.region
+				if m := r.Statement; m != nil && m.ManagedRuleGroupStatement != nil {
+					c.labelNamespace(ctx, sc, name, m.ManagedRuleGroupStatement, rd)
+				}
 				if err := sink.Emit(ctx, item(record.KindWAFConfig, at, c.id, "rule|"+prefix+"|"+aws.ToString(r.Name), rd)); err != nil {
 					return err
 				}
@@ -136,6 +139,8 @@ func listWebACLs(ctx context.Context, sc wafScope) ([]waftypes.WebACLSummary, er
 func (c *WAFConfig) aclData(ctx context.Context, sc wafScope, acl *waftypes.WebACL) (map[string]any, error) {
 	d := map[string]any{
 		"item": "web_acl", "acl": aws.ToString(acl.Name), "arn": aws.ToString(acl.ARN), "scope": string(sc.scope), "region": sc.region,
+		// WebACL のルールが付けるラベルの前の部分 (awswaf:<アカウント>:webacl:<名前>:。ADR 0070)
+		"label_prefix":   "awswaf:" + arnAccount(aws.ToString(acl.ARN)) + ":webacl:" + aws.ToString(acl.Name) + ":",
 		"default_action": "ALLOW", "rules": len(acl.Rules), "logging": false, "log_destinations": "", "resources": "",
 	}
 	if acl.DefaultAction != nil && acl.DefaultAction.Block != nil {
@@ -173,6 +178,15 @@ func (c *WAFConfig) aclData(ctx context.Context, sc wafScope, acl *waftypes.WebA
 		d["resources"], d["resources_unknown"] = strings.Join(res, ","), strings.Join(unknown, ",")
 	}
 	return d, nil
+}
+
+// arnAccount は ARN のアカウントの区間 (arn:<partition>:<service>:<region>:<account>:...)。
+func arnAccount(arn string) string {
+	parts := strings.SplitN(arn, ":", 6)
+	if len(parts) < 6 {
+		return ""
+	}
+	return parts[4]
 }
 
 // resourceTypes は ListResourcesForWebACL を呼ぶ資源の種類。wafv2 の権限だけで呼べる APPLICATION_LOAD_BALANCER を最初に呼ぶ。
@@ -213,8 +227,65 @@ func destinationName(arn string) string {
 	return arn
 }
 
+// labelNamespace はマネージドのルールグループのラベルの名前空間 (DescribeManagedRuleGroup の LabelNamespace) を label_namespace に入れる (ADR 0070)。
+// 決定: 読めなくてもソースを失敗にしない (目印のルールを見分ける補助なので)。label_namespace_unknown を立て、WAF_LABELS_UNKNOWN の WARN を出す。
+// waf_review はそのグループの COUNT のルールを、今までどおり BLOCK にするかの材料として出し、見分けられなかったことを書く
+func (c *WAFConfig) labelNamespace(ctx context.Context, sc wafScope, acl string, m *waftypes.ManagedRuleGroupStatement, rd map[string]any) {
+	out, err := sc.api.DescribeManagedRuleGroup(ctx, &wafv2.DescribeManagedRuleGroupInput{Scope: sc.scope, VendorName: m.VendorName, Name: m.Name, VersionName: m.Version})
+	if err == nil && aws.ToString(out.LabelNamespace) != "" {
+		rd["label_namespace"] = aws.ToString(out.LabelNamespace)
+		return
+	}
+	rd["label_namespace_unknown"] = true
+	attrs := []any{"code", codes.WAFLabelsUnknown, "source", c.id, "web_acl", acl, "region", sc.region,
+		"rule_group", aws.ToString(m.VendorName) + "/" + aws.ToString(m.Name), "action", ActionDescribeManagedRuleGroup}
+	if err != nil {
+		attrs = append(attrs, "error", err.Error())
+	}
+	c.Logger.Warn("cannot read the label namespace of a managed rule group; its COUNT rules are not told apart as label rules", attrs...)
+}
+
+// labelMatches は文の中の LabelMatchStatement を "<LABEL|NAMESPACE>:<key>" の並びにする (And・Or・Not と、レートベース・マネージドの
+// scope-down の中も見る。どの深さにも入れ子にできる。公式文書)。
+func labelMatches(st *waftypes.Statement, out *[]string) {
+	if st == nil {
+		return
+	}
+	if l := st.LabelMatchStatement; l != nil {
+		*out = append(*out, string(l.Scope)+":"+aws.ToString(l.Key))
+	}
+	if a := st.AndStatement; a != nil {
+		for i := range a.Statements {
+			labelMatches(&a.Statements[i], out)
+		}
+	}
+	if o := st.OrStatement; o != nil {
+		for i := range o.Statements {
+			labelMatches(&o.Statements[i], out)
+		}
+	}
+	if n := st.NotStatement; n != nil {
+		labelMatches(n.Statement, out)
+	}
+	if rb := st.RateBasedStatement; rb != nil {
+		labelMatches(rb.ScopeDownStatement, out)
+	}
+	if m := st.ManagedRuleGroupStatement; m != nil {
+		labelMatches(m.ScopeDownStatement, out)
+	}
+}
+
 func ruleData(r waftypes.Rule) map[string]any {
 	d := map[string]any{"item": "rule", "rule": aws.ToString(r.Name), "priority": int(r.Priority), "type": WAFRuleRegular, "action": ruleAction(r.Action)}
+	// 決定 (ADR 0070): ルールが付けるラベル (RuleLabels の名前。WebACL の名前空間の下) と、使うラベル (LabelMatchStatement) を残す
+	var labels, matches []string
+	for _, l := range r.RuleLabels {
+		labels = append(labels, aws.ToString(l.Name))
+	}
+	labelMatches(r.Statement, &matches)
+	sort.Strings(labels)
+	sort.Strings(matches)
+	d["labels"], d["label_matches"] = strings.Join(labels, ","), strings.Join(matches, ",")
 	if r.OverrideAction != nil {
 		d["action"] = "NONE"
 		if r.OverrideAction.Count != nil {
@@ -329,8 +400,25 @@ func (c *WAFConfig) Probe(ctx context.Context) []collect.ProbeResult {
 		return out
 	}
 	detail := aws.ToString(acl.Name)
-	_, err := first.api.GetWebACL(ctx, &wafv2.GetWebACLInput{Id: acl.Id, Name: acl.Name, Scope: first.scope})
+	got, err := first.api.GetWebACL(ctx, &wafv2.GetWebACLInput{Id: acl.Id, Name: acl.Name, Scope: first.scope})
 	out = append(out, collect.ProbeResult{Action: ActionGetWebACL, Detail: detail, Err: err})
+	// 決定 (ADR 0070): WebACL にマネージドのルールグループがあれば、ラベルの名前空間を読めるかを試す。読めなくても収集は続く (目印のルールを見分けないだけ) ので warn
+	if err == nil && got.WebACL != nil {
+		for _, r := range got.WebACL.Rules {
+			m := r.Statement
+			if m == nil || m.ManagedRuleGroupStatement == nil {
+				continue
+			}
+			g := m.ManagedRuleGroupStatement
+			_, derr := first.api.DescribeManagedRuleGroup(ctx, &wafv2.DescribeManagedRuleGroupInput{Scope: first.scope, VendorName: g.VendorName, Name: g.Name, VersionName: g.Version})
+			pr := collect.ProbeResult{Action: ActionDescribeManagedRuleGroup, Detail: aws.ToString(g.VendorName) + "/" + aws.ToString(g.Name)}
+			if derr != nil {
+				pr.Warn = "目印のルール (ラベルを付けるための COUNT) を見分けられない (" + derr.Error() + ")"
+			}
+			out = append(out, pr)
+			break
+		}
+	}
 	_, err = first.api.GetLoggingConfiguration(ctx, &wafv2.GetLoggingConfigurationInput{ResourceArn: acl.ARN})
 	if collect.APICode(err) == "WAFNonexistentItemException" {
 		err = nil

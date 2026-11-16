@@ -107,7 +107,7 @@ func TestProposalsObservationsOnly(t *testing.T) {
 	}
 	s := &fakeSender{}
 	run(t, inputDir(t, withProposals(t, goldenRun(t), obs), ""), s)
-	if len(s.got) != 2 || !strings.Contains(s.got[1].text, "提案 0 件 / 観察 3 件") || !strings.Contains(s.got[1].text, "提案はありません") {
+	if len(s.got) != 2 || !strings.Contains(s.got[1].text, "提案 0 件 / 観察 4 件") || !strings.Contains(s.got[1].text, "提案はありません") {
 		t.Fatalf("%+v", s.got)
 	}
 }
@@ -172,10 +172,11 @@ func TestProposalsManyObservations(t *testing.T) {
 	s := &fakeSender{}
 	run(t, inputDir(t, withProposals(t, goldenRun(t), ps), ""), s)
 	text := s.got[1].text
-	if !strings.Contains(text, "count-06") || strings.Contains(text, "count-07") || !strings.Contains(text, "ほか 8 件は report.json") {
+	// テストのデータの観察 4 件 (目印のルールを含む) の後に、10 行まで
+	if !strings.Contains(text, "count-05") || strings.Contains(text, "count-06") || !strings.Contains(text, "ほか 9 件は report.json") {
 		t.Fatalf("observations must be capped at 10 lines:\n%s", text)
 	}
-	if !strings.Contains(text, "観察 18 件") {
+	if !strings.Contains(text, "観察 19 件") {
 		t.Fatalf("the header must count all observations:\n%s", text)
 	}
 }

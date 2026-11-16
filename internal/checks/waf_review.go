@@ -54,6 +54,9 @@ const AboutChallengeImpact = "challenge_impact"
 // AboutCountRuleStatus は COUNT のルールの状況 (observation の about)。提案ではなく計画の材料。
 const AboutCountRuleStatus = "count_rule_status"
 
+// AboutLabelRule は目印のルール (後ろのルールが使うラベルを付けるための COUNT。BLOCK にする候補ではない。ADR 0070) の observation の about。
+const AboutLabelRule = "label_rule"
+
 var proposalOrder = map[string]int{ProposalFalsePositive: 0, ProposalChallengeOnAppPath: 1, ProposalProbeAllowed: 2, ProposalRateMissing: 3,
 	ProposalRateLoose: 4, ProposalRateTight: 5, ProposalUnusedRule: 6, ProposalObservation: 7}
 
@@ -101,6 +104,8 @@ type wafACLConf struct {
 	scope, region string
 	ambiguous     bool
 	rules         map[string]record.SnapshotItem
+	// labelPrefix は WebACL のルールが付けるラベルの前の部分 (awswaf:<アカウント>:webacl:<名前>:。ADR 0070)
+	labelPrefix string
 }
 
 func loadWAFConfig(items []record.SnapshotItem) map[string]*wafACLConf {
@@ -114,7 +119,7 @@ func loadWAFConfig(items []record.SnapshotItem) map[string]*wafACLConf {
 			a.ambiguous = true
 			continue
 		}
-		acls[name] = &wafACLConf{scope: it.String("scope"), region: it.String("region"), rules: map[string]record.SnapshotItem{}}
+		acls[name] = &wafACLConf{scope: it.String("scope"), region: it.String("region"), rules: map[string]record.SnapshotItem{}, labelPrefix: it.String("label_prefix")}
 	}
 	for _, it := range items {
 		if it.String("item") != "rule" {
@@ -625,6 +630,17 @@ func (r *reviewer) countRuleStatus(ctx context.Context) error {
 			if cr.inner != "" {
 				label += " の " + cr.inner
 			}
+			// 決定 (ADR 0070): 目印のルール (付けたラベルを後ろのルールが使っている COUNT) は、BLOCK にするかの材料から外して別に出す
+			use, known := labelRuleOf(a, cr)
+			if known && len(use.consumers) > 0 {
+				o := r.observation(AboutLabelRule, ReasonInformational, acl)
+				o.Rule, o.RuleInGroup = cr.rule, cr.inner
+				o.Evidence = map[string]any{"matches": n, "matching_days": matched, "days": cfg.Days, "labels": use.labels, "consumers": use.consumers}
+				o.Summary = fmt.Sprintf("%s: 目印のルール: COUNT の %s: 直近 %d 日でラベル %s を %.0f 件付けた。使っているルール: %s",
+					acl, label, cfg.Days, strings.Join(use.labels, ", "), n, strings.Join(use.consumers, ", "))
+				notes = append(notes, o)
+				continue
+			}
 			o := r.observation(AboutCountRuleStatus, ReasonInformational, acl)
 			o.Rule, o.RuleInGroup = cr.rule, cr.inner
 			o.Evidence = map[string]any{"matches": n, "suspect_matches": s, "matching_days": matched, "days": cfg.Days, "suspect_blocked_ip_excludes": cwlogs.SuspectBlockExcludes}
@@ -634,6 +650,11 @@ func (r *reviewer) countRuleStatus(ctx context.Context) error {
 				ratio := math.Round(s/n*1000) / 1000
 				o.Evidence["suspect_ratio"] = ratio
 				o.Summary = fmt.Sprintf("%s: COUNT の %s: 直近 %d 日で %.0f 件一致、うち怪しい通信 %.0f%%、一致した日 %d / %d 日", acl, label, cfg.Days, n, ratio*100, matched, cfg.Days)
+			}
+			if !known {
+				// マネージドのグループのラベルの名前空間を読めなかった・自分のルールグループ (中のラベルを読んでいない)
+				o.Evidence["label_rule"] = "undetermined"
+				o.Summary += "。目印のルールかどうかは見分けられなかった"
 			}
 			notes = append(notes, o)
 		}

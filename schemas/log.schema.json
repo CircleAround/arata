@@ -55,6 +55,7 @@
             "USER_ID_MISSING",
             "USER_ID_INVALID",
             "WAF_RESOURCES_UNKNOWN",
+            "WAF_LABELS_UNKNOWN",
             "MATCH_RATE_HISTORY_UNAVAILABLE",
             "INIT_INCOMPLETE",
             "ALLOWLIST_MISSING",

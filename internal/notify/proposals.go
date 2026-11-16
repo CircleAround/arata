@@ -35,8 +35,10 @@ const (
 const ProposalsFallbackNotice = "(提案の書き起こしに失敗したため、候補をそのまま載せます)"
 
 const (
-	kindObservation     = "observation"
-	aboutCountRule      = "count_rule_status"
+	kindObservation = "observation"
+	aboutCountRule  = "count_rule_status"
+	// aboutLabelRule は目印のルール (後ろのルールが使うラベルを付ける COUNT。BLOCK の候補ではない。ADR 0070)。COUNT のルールの組に並べる
+	aboutLabelRule      = "label_rule"
 	maxObservationLines = 10
 )
 
@@ -74,13 +76,13 @@ type Writeup struct {
 	Next string `json:"next"`
 }
 
-// splitProposals は提案・observation (count_rule_status 以外)・count_rule_status に分ける (report.json の順)。
+// splitProposals は提案・observation (COUNT のルールの組以外)・COUNT のルールの組 (count_rule_status と label_rule) に分ける (report.json の順)。
 func splitProposals(ps []schema.Proposal) (props, obs, status []schema.Proposal) {
 	for _, p := range ps {
 		switch {
 		case p.Kind != kindObservation:
 			props = append(props, p)
-		case p.About == aboutCountRule:
+		case p.About == aboutCountRule || p.About == aboutLabelRule:
 			status = append(status, p)
 		default:
 			obs = append(obs, p)
@@ -397,7 +399,7 @@ func observationLines(obs, status []schema.Proposal) []string {
 		}
 	}
 	if len(status) > 0 && shown < maxObservationLines {
-		out = append(out, "", "*COUNT のルールの状況* (提案ではない。COUNT → BLOCK の切り替えは人が計画して決める)")
+		out = append(out, "", "*COUNT のルールの状況* (提案ではない。COUNT → BLOCK の切り替えは人が計画して決める。目印のルールは BLOCK の候補ではない)")
 		for _, p := range status {
 			if shown == maxObservationLines {
 				break

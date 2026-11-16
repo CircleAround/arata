@@ -1,6 +1,6 @@
-[通知] arata daily (acme): WAF の改善提案 5 件 (観察 4 件)
+[通知] arata daily (acme): WAF の改善提案 5 件 (観察 5 件)
 # 🛡️ WAF の改善提案 — acme
-(小) 10/20 09:00 〜 10/21 09:00 (UTC) ・ 提案 5 件 ・ 観察 4 件 | arata の規則による候補です。適用は人が判断します (aratam は WAF の設定を変えません)
+(小) 10/20 09:00 〜 10/21 09:00 (UTC) ・ 提案 5 件 ・ 観察 5 件 | arata の規則による候補です。適用は人が判断します (aratam は WAF の設定を変えません)
 ---
 🛡️ *誤検知の疑い* — `CrossSiteScripting_BODY` が POST /posts/:id で 250 件 / 7 日
 正規の画面らしい通信が BLOCK されている (7 日で 250 件・IP 最大 60/日)
@@ -25,8 +25,9 @@ limit が観測よりずっと高く、大量アクセスを止められない (
 ---
 *観察* (提案はしないが気づいたこと)
 • 誤検知の疑い (除外設定に一致) — `AWS-AWSManagedRulesSQLiRuleSet` が POST /checkout/pay で 30 件 / 7 日
-*COUNT のルール* (提案ではない。BLOCK への切り替えは人が計画して決める)
+*COUNT のルール* (提案ではない。BLOCK への切り替えは人が計画して決める。目印のルールは BLOCK の候補ではない)
 • `AWS-AWSManagedRulesKnownBadInputsRuleSet` 140 件・怪しい 100%・7/7 日
 • `count-geo` 12 件・怪しい 25%・3/7 日
+• 目印 `CategoryHttpLibrary` 70 件 ラベル `awswaf:managed:aws:bot-control:bot:category:http_library` → 使っている `block-libs`
 • 一致なし: `SizeRestrictions_BODY`
 (小) 設定例と詳しい説明: `<dir>/waf-proposals.md` | 対処手順: `arata help ai playbook waf_review`

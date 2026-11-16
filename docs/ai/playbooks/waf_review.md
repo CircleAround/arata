@@ -8,6 +8,7 @@ finding になるのは、正規の画面で多数の IP が BLOCK された誤�
 - 提案 (`kind`): `false_positive` (誤検知の疑い)、`challenge_on_app_path` (正規の画面に Challenge / CAPTCHA を出し、人が解いている疑い)、`probe_allowed` (すり抜けている探索)、`rate_limit_missing` (レート制限の不足)、`rate_limit_loose` / `rate_limit_tight` (値の見直し)、`unused_rule` (使われていないルール)
 - `stage`: `count_first` = まず COUNT で様子を見てから確定する、`review` = 人が見直す (変更を勧めるものではない)
 - `observation` (`stage: none`): 提案に至らなかったが不審な観測。`about` (関わる候補の種類) と `reason` (提案しなかった理由: `below_threshold`・`undetermined`・`excluded_by_config`・`excluded_by_rule`・`position_limit`)
+- `about: label_rule` (`reason: informational`): 目印のルール。後ろのルール (`consumers`) が使うラベル (`labels`) を付けるための COUNT で、BLOCK にする候補ではない。COUNT のままが正しい (ADR 0070)
 - `about: count_rule_status` (`reason: informational`): COUNT で動いているルールの状況 (`matches`・`suspect_ratio`・`matching_days` / `days`。`suspect_ratio` は探索パスへの一致と、BLOCK されたリクエストでの一致の割合)。提案ではなく、COUNT → BLOCK を計画する材料
 - `about: challenge_impact` (`reason: informational`): Challenge / CAPTCHA を出した数の多いルールの、出した数 (`issued`)・解かれた割合 (`solve_ratio`)・GET 以外の件数 (`issued_non_get`)・主なパス
 - 読み方の詳細は `arata help ai report` の「WAF の修正提案の候補 (proposals)」
