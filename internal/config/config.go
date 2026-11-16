@@ -32,6 +32,8 @@ type Config struct {
 	Sources      []Source           `yaml:"sources"`
 	Profiles     map[string]Profile `yaml:"profiles"`
 	Retention    Retention          `yaml:"retention"`
+	// IPList は怪しい IP の一覧 (ADR 0069)。nil なら一覧を作らない。
+	IPList *IPList `yaml:"ip_list"`
 	// Checks はアプリ層チェックのパス・閾値 (省略時は既定値)。
 	Checks Checks `yaml:"checks"`
 	// checksRaw は既定値を埋める前の checks: (パラメータの由来の判定に使う)。
@@ -151,16 +153,19 @@ type Retention struct {
 	Metrics  time.Duration `yaml:"-"`
 	Findings time.Duration `yaml:"-"`
 	Runs     time.Duration `yaml:"-"`
+	// IPList は怪しい IP の一覧 (ip_list_days) の保持の期間 M (ADR 0069)。M より前の日の行は書くときに消す。
+	IPList time.Duration `yaml:"-"`
 
 	RawJSONLRaw string `yaml:"raw_jsonl"`
 	EventsRaw   string `yaml:"events"`
 	MetricsRaw  string `yaml:"metrics"`
 	FindingsRaw string `yaml:"findings"`
 	RunsRaw     string `yaml:"runs"`
+	IPListRaw   string `yaml:"ip_list"`
 }
 
 // DefaultRetention は保持期間の既定値 (設計書 5-3)。
-var DefaultRetention = Retention{RawJSONLRaw: "365d", EventsRaw: "90d", MetricsRaw: "400d", FindingsRaw: "180d", RunsRaw: "400d"}
+var DefaultRetention = Retention{RawJSONLRaw: "365d", EventsRaw: "90d", MetricsRaw: "400d", FindingsRaw: "180d", RunsRaw: "400d", IPListRaw: "30d"}
 
 // DefaultRegion は aws.region の既定値。
 const DefaultRegion = "ap-northeast-1"
@@ -310,6 +315,7 @@ func (c *Config) applyDefaults() error {
 		{&c.Retention.MetricsRaw, &c.Retention.Metrics, DefaultRetention.MetricsRaw},
 		{&c.Retention.FindingsRaw, &c.Retention.Findings, DefaultRetention.FindingsRaw},
 		{&c.Retention.RunsRaw, &c.Retention.Runs, DefaultRetention.RunsRaw},
+		{&c.Retention.IPListRaw, &c.Retention.IPList, DefaultRetention.IPListRaw},
 	}
 	for _, d := range defaults {
 		if *d.raw == "" {
@@ -320,6 +326,12 @@ func (c *Config) applyDefaults() error {
 			return fmt.Errorf("config: retention %q: %w", *d.raw, err)
 		}
 		*d.dst = v
+	}
+	if c.IPList != nil {
+		c.IPList.applyDefaults()
+		if err := c.IPList.validate(c.Retention.IPList, c.Retention.IPListRaw); err != nil {
+			return err
+		}
 	}
 	for name, p := range c.Profiles {
 		if p.WindowRaw == "" {

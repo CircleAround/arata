@@ -45,6 +45,7 @@ type rawConfig struct {
 	} `yaml:"profiles"`
 	Checks       map[string]map[string]any `yaml:"checks"`
 	AuditAccount yaml.Node                 `yaml:"audit_account"`
+	IPList       map[string]any            `yaml:"ip_list"`
 }
 
 // Diff は現在の設定 (YAML) とこの版の雛形の差分を返す。設定が Load で失敗する状態 (未知のキーなど) でも動く。
@@ -109,6 +110,7 @@ func Diff(current []byte, reg *checks.Registry) ([]DiffItem, error) {
 				"allowlist の principals に account: \"<同じ ID>\" を足す (無いと unknown_assume_role が監査そのものを high で報告する)。" +
 				"同じアカウントの中・手元から直接なら audit_account: none を書く"})
 	}
+	out = append(out, diffIPList(current, cur.IPList)...)
 	unknown, err := config.UnknownKeys(current)
 	if err != nil {
 		return nil, err
@@ -141,4 +143,36 @@ func WriteDiff(w io.Writer, items []DiffItem) error {
 		}
 	}
 	return nil
+}
+
+// diffIPList は ip_list: の差分 (ADR 0069)。無ければ missing_key (一覧を作らない)、書いた値が既定値と違えば param_changed。
+// 書いていない項目は既定値が効くので差分にしない (checks: と同じ)。
+func diffIPList(current []byte, l map[string]any) []DiffItem {
+	var top map[string]any
+	if err := yaml.Unmarshal(current, &top); err != nil {
+		return nil
+	}
+	if _, ok := top["ip_list"]; !ok {
+		return []DiffItem{{Kind: DiffMissingKey, Path: "ip_list", Template: "active: " + config.DefaultIPListActive + ", reasons: waf_block / probe / sign_in_failure",
+			Detail: "怪しい IP の一覧を作らない (ADR 0069)。作るなら雛形の ip_list: を写す (書いた理由だけが効く)"}}
+	}
+	var out []DiffItem
+	for _, p := range config.DefaultIPListParams() {
+		var v any = l
+		for _, k := range strings.Split(p.Path, ".") {
+			m, ok := v.(map[string]any)
+			if !ok {
+				v = nil
+				break
+			}
+			v = m[k]
+		}
+		if v == nil {
+			continue
+		}
+		if c, t := flow(v), flow(p.Value); c != t {
+			out = append(out, DiffItem{Kind: DiffParamChanged, Path: "ip_list." + p.Path, Current: c, Template: t, Detail: "この版の既定値と違う"})
+		}
+	}
+	return out
 }

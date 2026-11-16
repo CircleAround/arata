@@ -329,3 +329,50 @@ func TestWAFResourcesFilter(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+// 怪しい IP の一覧の元 (ADR 0069): ip_list: を書いたときだけ、BLOCK の IP (suspect の「BLOCK された IP」と同じ除外の後) と
+// 許可された探索の IP を、key = ip の日の値で出す。
+func TestWAFIPListMetrics(t *testing.T) {
+	src := wafSource()
+	src.StripPathPrefix = "/sandbox"
+	day := "2026-10-21 00:00:00.000"
+	b := func(action, ip, rule, typ, path, n string) map[string]string {
+		return row("day", day, "acl", "prod-waf", "action", action, "rule", rule, "terminatingRuleType", typ, "path", path, "ip", ip, "waf_actions", n, "method", "GET")
+	}
+	blocks := []map[string]string{
+		b("BLOCK", "198.51.100.1", "block-admin", "REGULAR", "/sandbox/admin", "2"),
+		b("BLOCK", "198.51.100.1", "block-admin", "REGULAR", "/sandbox/.env", "1"),  // 探索パスの BLOCK も数える
+		b("BLOCK", "198.51.100.2", "rate-login", "RATE_BASED", "/sandbox/api", "5"), // レートベース
+		b("BLOCK", "198.51.100.3", "Default_Action", "REGULAR", "/sandbox/x", "5"),  // 既定の action
+		b("BLOCK", "198.51.100.4", "block-geo", "REGULAR", "/sandbox/users/sign_in", "5"),
+		b("BLOCK", "203.0.113.9", "block-admin", "REGULAR", "/sandbox/admin", "5"), // 正規の送信元
+		b("ALLOW", "198.51.100.7", "Default_Action", "REGULAR", "/sandbox/wp-login.php", "4"),
+		b("ALLOW", "203.0.113.8", "Default_Action", "REGULAR", "/sandbox/wp-login.php", "4"), // 正規の送信元
+	}
+	for _, on := range []bool{false, true} {
+		c, _ := New(src, wafChecks(), &cwlogstest.Fake{})
+		c.stats = &collect.FormatStats{}
+		c.IPList = on
+		sink := &sinkRecorder{}
+		if err := c.emitActions(context.Background(), blocks, nil, dayCounts{}, sink); err != nil {
+			t.Fatal(err)
+		}
+		m := sink.metrics()
+		got := map[string]float64{}
+		for k, v := range m {
+			if strings.Contains(k, "|"+MetricWAFBlockIPSuspect+"|") || strings.Contains(k, "|"+MetricWAFAllowProbeIP+"|") {
+				got[k] = v
+			}
+		}
+		want := map[string]float64{}
+		if on {
+			want = map[string]float64{
+				"2026-10-21|waf_block_ip_suspect|198.51.100.1": 3,
+				"2026-10-21|waf_allow_probe_ip|198.51.100.7":   4,
+			}
+		}
+		if fmt.Sprint(got) != fmt.Sprint(want) {
+			t.Errorf("ip_list %v: %v, want %v", on, got, want)
+		}
+	}
+}

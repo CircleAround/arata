@@ -109,7 +109,7 @@ func TestConfigInitDiff(t *testing.T) {
 	}
 	schematest.Conforms(t, scaffold.DiffSchema, c.stdout.Bytes(), &[]scaffold.DiffItem{})
 	var items []struct{ Kind, Path string }
-	if err := json.Unmarshal(c.stdout.Bytes(), &items); err != nil || len(items) != 2 {
+	if err := json.Unmarshal(c.stdout.Bytes(), &items); err != nil || len(items) != 3 || items[1].Path != "ip_list" {
 		t.Fatalf("json: %v %s", err, c.stdout)
 	}
 	t.Chdir(t.TempDir()) // ./arata.yaml も無い

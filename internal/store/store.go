@@ -158,6 +158,15 @@ type MetricFilter struct {
 	Sources []string
 }
 
+// IPListRow は怪しい IP の一覧の 1 行 (ip_list_days。ADR 0069)。Date は YYYY-MM-DD (UTC)、IP は正規の形 (netip.Addr.String())。
+type IPListRow struct {
+	Date   string
+	Source string
+	Reason string
+	IP     string
+	Count  float64
+}
+
 // Query は読み取り側。チェックの Evaluate にはこれだけを渡す。
 type Query interface {
 	Events(ctx context.Context, from, to time.Time, f EventFilter) ([]record.TrailEvent, error)
@@ -180,6 +189,8 @@ type Query interface {
 	LastFindingActions(ctx context.Context) (map[string]FindingAction, error)
 	// HistorySince は状態遷移の履歴を記録し始めた時刻 (schema 4 以降の最初の run の開始時刻)。まだ run が無ければゼロ。
 	HistorySince(ctx context.Context) (time.Time, error)
+	// IPListDays は怪しい IP の一覧の、date が [from, to] の行 (ADR 0069)。空の from / to は条件にしない。
+	IPListDays(ctx context.Context, from, to string) ([]IPListRow, error)
 }
 
 // Store は読み書き全体。dir バックエンド (Dir: SQLite + JSONL) と s3 バックエンド (S3: Dir の作業用の複製を出し入れする) が実装する。
@@ -215,6 +226,8 @@ type Store interface {
 	// PutParts / Parts は Logs Insights の部分の行 (ADR 0065)。PutParts は (source, query, hour) を丸ごと置き換え、retentionDays より古い日を消す。
 	PutParts(ctx context.Context, source, query string, hour time.Time, rows []map[string]string, retentionDays int) error
 	Parts(ctx context.Context, source, query string, from, to time.Time) ([]map[string]string, int, error)
+	// ReplaceIPListDay は (source, date) の一覧の行を丸ごと置き換え、keepFrom より前の日の行を消す (ADR 0069)。
+	ReplaceIPListDay(ctx context.Context, source, date string, rows []IPListRow, keepFrom string) error
 	// AddFindingEvents は状態遷移を追記する。
 	AddFindingEvents(ctx context.Context, evs []FindingEvent) error
 	// Path はストアのファイルがあるローカルのディレクトリ (s3 では一時ディレクトリ)。

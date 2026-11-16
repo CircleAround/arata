@@ -498,6 +498,8 @@ type CollectResult struct {
 	// coveredTo は時の単位で読む cloudwatch-logs のソース (collect: hourly) が読み終えた時 (ADR 0065)。位置はここまで進める (partial にはしない)。
 	// ゼロなら読む時が無かった (前の位置のまま)。
 	coveredTo map[string]time.Time
+	// ipList は作り直した怪しい IP の一覧の数 (ADR 0069。ip_list: が無ければ空)。
+	ipList ipListStats
 }
 
 func (r CollectResult) partial() bool {
@@ -538,7 +540,7 @@ func (e *Engine) Collect(ctx context.Context, w collect.Window, o CollectOptions
 	}
 	res := CollectResult{SourcesOK: []string{}, SourcesFailed: []string{}, Errors: []report.CollectError{}, Formats: []report.FormatCoverage{},
 		yielded: map[string][]record.Kind{}, attempted: map[string]bool{}, unavailable: map[record.Kind]string{}, outOfRange: map[string]string{},
-		scanFrom: map[string]time.Time{}, scanTo: map[string]time.Time{}, coveredTo: map[string]time.Time{}}
+		scanFrom: map[string]time.Time{}, scanTo: map[string]time.Time{}, coveredTo: map[string]time.Time{}, ipList: ipListStats{}}
 	denied := map[string]bool{}
 	for _, c := range e.cfg.Checks.AccessDenied.ErrorCodes {
 		denied[c] = true
@@ -654,6 +656,13 @@ func (e *Engine) Collect(ctx context.Context, w collect.Window, o CollectOptions
 			}
 			if err == nil {
 				e.partialProblems(c, src, o.RunID, &res)
+			}
+			if err == nil {
+				to := sw.To.Add(-time.Nanosecond)
+				if t, ok := res.coveredTo[src.ID]; ok && !t.IsZero() {
+					to = t.Add(-time.Nanosecond)
+				}
+				err = e.updateIPList(ctx, src, sw.Start(), to, res.ipList)
 			}
 		}
 		if err != nil {
@@ -813,6 +822,8 @@ func (e *Engine) collector(ctx context.Context, src config.Source) (collect.Coll
 			// 部分の行の置き場所はストア (ADR 0065)
 			c.Parts = e.st
 		}
+		// 怪しい IP の一覧の元の日の値は、一覧を作るときだけ出す (ADR 0069)
+		c.IPList = e.cfg.IPList != nil
 		if e.deps.Sleep != nil {
 			c.Sleep = e.deps.Sleep
 		}
@@ -1321,6 +1332,7 @@ func (e *Engine) RunWithOptions(ctx context.Context, profileName string, o RunOp
 		"new": rep.Summary.New, "changed": rep.Summary.Changed, "recurred": rep.Summary.Recurred, "resolved": rep.Summary.Resolved, "still_open": rep.Summary.StillOpen,
 	}
 	stats[collectResultStat] = collectSummary{OK: cr.SourcesOK, Failed: cr.SourcesFailed, Errors: cr.Errors}
+	cr.addIPListStats(stats)
 	stats[sourceCoveredStat], stats[sourceCoveredFromStat] = cu.advance(cr, base, w.To)
 	if len(cu.from) > 0 {
 		stats[catchupStat] = timesText(cu.from)
@@ -1413,6 +1425,7 @@ func (e *Engine) CollectOnly(ctx context.Context, window time.Duration, sourceID
 		status = "partial"
 	}
 	stats := map[string]any{collectResultStat: collectSummary{OK: cr.SourcesOK, Failed: cr.SourcesFailed, Errors: cr.Errors}}
+	cr.addIPListStats(stats)
 	if err := e.st.FinishRun(ctx, runID, status, stats); err != nil {
 		return nil, err
 	}
