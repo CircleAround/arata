@@ -1,3 +1,4 @@
-この版の雛形との差分: 2 件
+この版の雛形との差分: 3 件
   [param_changed] checks.probe_paths.min_count: 設定 3 / 雛形 10 — この版の既定値と違う
+  [missing_key] ip_list (雛形では active: 7d, reasons: waf_block / probe / sign_in_failure) — 怪しい IP の一覧を作らない (ADR 0069)。作るなら雛形の ip_list: を写す (書いた理由だけが効く)
   [unknown_key] profiles.hourly.max_catchupp — arata が知らないキー (綴りの誤りか、この版で無くなったキー。設定の読み込みは失敗する)

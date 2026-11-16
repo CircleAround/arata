@@ -41,6 +41,12 @@ const (
 	MetricWAFChallengeSolvedIPs = "waf_challenge_solved_ips"
 	// MetricWAFPositionLimit は配列の位置の上限を超えた (それより後ろを数えていない) リクエストの数。key = <WebACL>|<配列の名前>
 	MetricWAFPositionLimit = "waf_position_limit"
+	// MetricWAFBlockIPSuspect は BLOCK の件数 (key = ip) のうち、suspect の「BLOCK された IP」と同じものを除いたもの
+	// (レートベースのルール・既定の action・sign-in のパス・trusted_cidrs)。怪しい IP の一覧の waf_block の元 (ADR 0069)。
+	// MetricWAFAllowProbeIP は許可された探索の件数 (key = ip。trusted_cidrs を除く)。一覧の probe の元。
+	// どちらも ip_list: を書いたときだけ出す (IP を key に持つ行を、使わない利用者のストアに足さない)。
+	MetricWAFBlockIPSuspect = "waf_block_ip_suspect"
+	MetricWAFAllowProbeIP   = "waf_allow_probe_ip"
 )
 
 // suspectBlockIP は「BLOCK された IP」の集計の名前 (保存しない)。
@@ -484,7 +490,7 @@ func (c *Collector) emitActions(ctx context.Context, blockRows, chRows []map[str
 		signIn[sp+s] = true
 	}
 	trusted := parseCIDRs(wr.TrustedCIDRs)
-	blockIP := dayCounts{}
+	blockIP, blockIPSuspect, allowProbeIP := dayCounts{}, dayCounts{}, dayCounts{}
 	blockPath, allowProbe, issued := pathAgg{}, pathAgg{}, pathAgg{}
 	solved := map[string]map[string]map[string]bool{} // 日 → <WebACL>|<種類>|<method>|<パス> → トークンが受理された IP
 	for pass, rows := range [][]map[string]string{blockRows, chRows} {
@@ -499,6 +505,10 @@ func (c *Collector) emitActions(ctx context.Context, blockRows, chRows []map[str
 			normal := !inCIDRs(ip, trusted) // 正規の送信元 (trusted_cidrs) でない
 			if action == "BLOCK" && !ch {
 				blockIP.add(day, Mask(ip), n)
+				// suspect の「BLOCK された IP」と同じ除外 (emitCountMatches・設計書 2 章の決定)。探索パスの BLOCK は数える
+				if normal && r["terminatingRuleType"] != "RATE_BASED" && r["rule"] != "Default_Action" && !signIn[path] {
+					blockIPSuspect.add(day, ip, n)
+				}
 				if !probe && normal {
 					rule := r["rule"]
 					inner, limited := blockInner(r)
@@ -516,6 +526,7 @@ func (c *Collector) emitActions(ctx context.Context, blockRows, chRows []map[str
 			}
 			if action == "ALLOW" && probe && !ch {
 				allowProbe.add(day, r["acl"]+"|"+c.normalize(path), ip, n)
+				allowProbeIP.add(day, ip, n)
 			}
 			if !ch {
 				continue
@@ -549,6 +560,20 @@ func (c *Collector) emitActions(ctx context.Context, blockRows, chRows []map[str
 		for _, k := range sortedNames(blockIP[day]) {
 			if err := sink.Emit(ctx, c.metric(day, MetricWAFBlockIP, k, blockIP[day][k])); err != nil {
 				return err
+			}
+		}
+	}
+	if c.IPList {
+		for _, out := range []struct {
+			name string
+			m    dayCounts
+		}{{MetricWAFBlockIPSuspect, blockIPSuspect}, {MetricWAFAllowProbeIP, allowProbeIP}} {
+			for _, day := range sortedDays(out.m) {
+				for _, k := range sortedNames(out.m[day]) {
+					if err := sink.Emit(ctx, c.metric(day, out.name, k, out.m[day][k])); err != nil {
+						return err
+					}
+				}
 			}
 		}
 	}
