@@ -91,3 +91,4 @@
 | [0065](0065-insights-hourly-parts.md) | Logs Insights を時の単位で続きだけ読み、時ごとの部分の行を残して日の値を Go で組み立てる。集計のクエリは確かめてから 1 本にまとめる | 採用 |
 | [0066](0066-volume-spike-flash.md) | 量の急変を、時間帯ごとの平常帯と比べて速報する (`access_denied_spike`・`sign_in_failure_spike`。LLM を通さない短い通知) | 採用 |
 | [0067](0067-waf-query-regroup.md) | WAF の集計クエリを、行の多い種類ごとに組み替える (本数は 4 本のまま。BLOCK 側とカウントの一致の合計を上限から守る) | 採用 |
+| [0068](0068-triage-guard.md) | 片付けの守り: 理由と操作した人をストアに残し、high 以上の ack を止め (`--force` は理由が必須)、黙らせているものを週次に出し、許す操作を review に載せる | 提案 |
