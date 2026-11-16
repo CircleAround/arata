@@ -23,7 +23,7 @@ Usage:
   arata [command]
 
 Available Commands:
-  ack         finding を acked にする (再報告しないが review の未対応一覧には残る)
+  ack         finding を acked にする (再報告しないが review の未対応一覧には残る。high・critical は --force --reason が要る)
   ai          AI (LLM) 向けの使い方 (arata help ai と同じ。最初に読む)
   approve     finding の主体を allowlist.yaml に追記し、finding を resolved にする (人が判断して実行する)
   collect     収集だけを行いストアへ反映する (--incremental で、位置から続きだけ)

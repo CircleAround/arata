@@ -285,6 +285,7 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
 | `RUN_MISSED` | 前回実行から profile の周期の 2 倍以上空いた (起動側の障害) |
 | `COLLECT_FAILED` | 決定: 上記に分類できない収集エラー (ネットワーク断など) |
 | `CONFIG_INVALID` | 決定: 設定ファイルの読み込み・検証エラー (終了コード 2) |
+| `ACK_REFUSED` | 決定 (ADR 0068): 重大度が high・critical の finding の `arata ack` を止めた (終了コード 2。ストアは変えない)。標準出力に approve / snooze / resolve の使いどころと playbook の場所を出す。`--force --reason` でだけ通す |
 | `ROLE_POLICY_LARGE` | 決定 (ADR 0062): `arata config role-params` の一覧で、読み取り専用ロールのインラインポリシーが IAM の上限 (10,240 文字。空白は数えない) の 9 割を超える見込み。値は出す (警告。Deny の分は設定から分からないので見積もりに入れない) |
 | `REPORT_NOT_FOUND` | 決定: `arata report` で出す報告が無い (そのプロファイルの run がまだ無い。終了コード 2) |
 | `SOURCE_CATCHUP` / `SOURCE_CATCHUP_TRUNCATED` / `SOURCE_COLLECT_LIMITED` | 決定 (ADR 0038): 前に失敗したソースを取れていた位置から引き直している (警告) / 遅れが `max_catchup` を超え、古い分を取りこぼした (警告) / 決定 (ADR 0064): 1 回の収集が `max_collect` に当たり、そこまで集めて止めた (警告。run は partial。続きは次の回) |
@@ -1062,6 +1063,7 @@ oidc_subjects:                   # OIDC でのロールの引き受けの、既�
    │     → 同じ行き先への外向き・MFA ありの他の finding (ack 済みを含む) も resolved
    │     (ack / snooze / resolve / approve は --reason (approve は --note) と --by を finding_actions に残す。ADR 0068)
    ├─ arata ack <finding-id>         → acked。再報告しないが週次の未対応一覧には残る (重大度が上がれば changed で再報告)
+   │     → 重大度が high・critical なら止める (ACK_REFUSED。approve / snooze / resolve を案内)。--force --reason でだけ通し、記録に forced (守りを越えたときだけ真。--force には --reason が要る。ADR 0068)
    ├─ arata snooze <finding-id> --until 2026-11-01   → 期日まで沈黙、期日に再報告
    ├─ arata resolve <finding-id>     → resolved。再び観測されたら new
    └─ 放置                              → still_open。週次の未対応一覧に残り続ける

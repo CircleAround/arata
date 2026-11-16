@@ -54,7 +54,7 @@ func FuzzValidateTriageInput(f *testing.F) {
 				t.Fatalf("reason %q accepted", s)
 			}
 			for _, r := range s {
-				if unicode.Is(unicode.Cc, r) || unicode.Is(unicode.Cf, r) || r == '\u2028' || r == ' ' {
+				if unicode.Is(unicode.Cc, r) || unicode.Is(unicode.Cf, r) || r == '\u2028' || r == '\u2029' {
 					t.Fatalf("reason %q has a control / format rune %U", s, r)
 				}
 			}

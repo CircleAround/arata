@@ -82,7 +82,7 @@ AWS のサービス主体 (EC2・Lambda などのインスタンスロール) �
 2. **承認**: 正規なら `arata approve <id> --note "<理由>"` を人に提案する。`caller_identity: account_only` の finding は `account:` で承認される。期限付きの委託は `--expires`。基準は `arata help ai approve`
 3. **行き先を既知にする**: 外向きで `mfa: true`、受託先などへの通常業務なら `arata approve <id> --destination --note "<理由>"` を人に提案する
    (呼び出し元は承認されない。基準は `arata help ai approve`)。expected_denied は対象外
-4. **ack / snooze**: 承認したくないが当面続くもの (移行期間など) は ack、終わりが決まっているものは snooze
+4. **ack / snooze**: 承認したくないが当面続くもの (移行期間など) は、期日を決めて snooze。high・critical は ack できない (arata が止める)
 5. **設定の修正**: SaaS 連携の信頼ポリシーに `sts:ExternalId` の条件を付ける、Principal をアカウント全体ではなく特定のロールにする
 
 ## やってはいけないこと

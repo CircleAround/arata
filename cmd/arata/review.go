@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"text/tabwriter"
 	"time"
@@ -153,6 +154,10 @@ func newStatusCmd(d *Deps, g *globalFlags, use, status, short string) *subcmd.Co
 			}
 			defer e.Close()
 			f, err := e.SetStatus(ctx, args[0], status, u, o)
+			var refused *engine.AckRefusedError
+			if errors.As(err, &refused) {
+				fmt.Fprint(d.Stdout, refused.Guidance())
+			}
 			if err != nil {
 				return err
 			}
@@ -172,6 +177,9 @@ func newStatusCmd(d *Deps, g *globalFlags, use, status, short string) *subcmd.Co
 		cmd.MarkFlagRequired("until")
 	}
 	cmd.StringVar(&o.Reason, "reason", "", "理由 (1 行、300 文字まで。ストアに残り、review と報告に出る。ARN・アカウント ID などは書かない)")
+	if status == store.FindingAcked {
+		cmd.BoolVar(&o.Force, "force", false, "重大度が high・critical の finding も ack する (--reason が必須。記録に force が残る。ADR 0068)")
+	}
 	cmd.StringVar(&o.By, "by", "", "操作した人 (英数字と . _ - のハンドル。省略時は OS のユーザー名。メールアドレスや氏名は書けない)")
 	return cmd
 }
@@ -201,7 +209,7 @@ func reviewCommands(d *Deps, g *globalFlags) []*subcmd.Command {
 	return []*subcmd.Command{
 		newReviewCmd(d, g),
 		newApproveCmd(d, g),
-		newStatusCmd(d, g, "ack", store.FindingAcked, "finding を acked にする (再報告しないが review の未対応一覧には残る)"),
+		newStatusCmd(d, g, "ack", store.FindingAcked, "finding を acked にする (再報告しないが review の未対応一覧には残る。high・critical は --force --reason が要る)"),
 		newStatusCmd(d, g, "snooze", store.FindingSnoozed, "finding を期日まで沈黙させる (--until。期日以降の再観測で new として再報告)"),
 		newStatusCmd(d, g, "resolve", store.FindingResolved, "finding を resolved にする (再び観測されたら new として報告)"),
 	}

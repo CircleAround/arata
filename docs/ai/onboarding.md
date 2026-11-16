@@ -49,7 +49,8 @@ secret_access の一括読み出しの注: 閾値は `max(min_distinct, その�
 毎日同じ十数個を読むだけの正規のロールも high になる。
 
 - 正規の読み手だと確かめたら、導入から `baseline_days` が過ぎる日まで `arata snooze <id> --until YYYY-MM-DD`。平常帯がそろえば出なくなる。期日の後も出るなら調べる
-- **ack しない**。high は secret_access の最も重い重大度なので、ack すると本物の持ち出しが後で起きても報告されない (下の「使い分け」)
+- **ack しない**。high は secret_access の最も重い重大度なので、ack すると本物の持ち出しが後で起きても報告されない (下の「使い分け」)。
+  arata も high・critical の ack を止める (`ACK_REFUSED`)
 - allowlist.yaml の `secrets_access` は初出 (low / medium) を止めるだけで、一括読み出しの数には数える。書いても high は消えない。初出を止めたいときだけ書く
 
 チェックごとの確かめ方は `arata help ai playbook <check>`、承認してよいかの基準は `arata help ai approve`。
@@ -90,7 +91,9 @@ ack と snooze の選び方:
 - **報告が来なくなると困るものを ack にしない**。「いつか直す」「後で調べる」を ack にすると、直さないまま誰にも報されなくなる。期日を決めて snooze にする
 - ack / snooze 中でも、重大度がそのときより上がれば変化 (changed) として再報告される。ただし当てにできない場面がある:
   **そのチェックの最も重い重大度 (例: secret_access の high) で出た finding を ack すると、重大度が上がる余地が無いので、後で本物が起きても二度と報告されない**。
-  最も重い重大度のものは ack せず、期日を決めて snooze にする
+  最も重い重大度のものは ack せず、期日を決めて snooze にする。
+  **arata は重大度が high・critical の ack を止める** (`ACK_REFUSED`。チェックを問わない)。止まったら案内のとおり approve / snooze / resolve を選ぶ。
+  終わった出来事だと確かめたものだけ、人が `--force --reason "<理由>"` で ack する (記録に force が残る)。LLM は `--force` を提案しない
 - まだ観測され続けるもの (今の状態を見るチェックや、数日分を集計するチェック) を `resolve` すると、次の run で同じものが新規に戻る。直る前に `resolve` しない
 - 状態型 (new_principal と週次のチェック) は、直して観測されなくなれば自動で解消になる。`resolve` を打たなくてよい
 - 主体の承認は approve (allowlist.yaml に残る)。ack は承認ではなく、その finding を黙らせるだけ

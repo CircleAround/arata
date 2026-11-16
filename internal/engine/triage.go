@@ -4,8 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/CircleAround/arata/internal/checks"
+	"github.com/CircleAround/arata/internal/store"
 )
 
 // 片付けの理由と操作した人の形 (ADR 0068 の 1 節)。
@@ -40,9 +44,61 @@ func ValidateReason(reason string) error {
 		return fmt.Errorf("--reason: %d characters (up to %d, one line)", n, maxReasonRunes)
 	}
 	for _, r := range reason {
-		if unicode.Is(unicode.Cc, r) || unicode.Is(unicode.Cf, r) || r == ' ' || r == ' ' {
+		if unicode.Is(unicode.Cc, r) || unicode.Is(unicode.Cf, r) || r == '\u2028' || r == '\u2029' {
 			return fmt.Errorf("--reason: control or invisible character %U is not allowed (one line of visible text)", r)
 		}
 	}
 	return nil
+}
+
+// ackGuarded は ack を止める重大度か (high・critical。チェックを問わない。ADR 0068 の 2 節)。
+// 最も重い重大度で ack すると、重大度が上がる余地が無く、後で本物が起きても再報告されない (ADR 0022)。
+func ackGuarded(severity string) bool {
+	return checks.Severity(severity).Rank() >= checks.High.Rank()
+}
+
+// approvable は finding を arata approve で片付けられるか (主体・行き先の承認、access_denied の想定済みの拒否)。
+func approvable(f store.Finding) bool {
+	if _, err := ApproveTargetOf(f); err == nil {
+		return true
+	}
+	if _, _, err := destinationTargetOf(f); err == nil {
+		return true
+	}
+	return f.Check == "access_denied"
+}
+
+// AckRefusedError は ack を止めた理由と案内 (code: ACK_REFUSED)。CLI は Guidance を標準出力に出す。
+type AckRefusedError struct {
+	ID, Check, Severity string
+	// Approvable は approve を案内するか。
+	Approvable bool
+	// NoReason は --force に --reason が無かった。
+	NoReason bool
+}
+
+func (e *AckRefusedError) Error() string {
+	if e.NoReason {
+		return fmt.Sprintf("ack --force of finding %s needs --reason (why this %s finding may stay silent)", e.ID, e.Severity)
+	}
+	return fmt.Sprintf("finding %s (%s) is %s and cannot be acked: use approve / snooze --until / resolve (arata help ai playbook %s), or --force --reason", e.ID, e.Check, e.Severity, e.Check)
+}
+
+// Guidance は止めたときに人へ出す案内 (人向け。機械は code の ACK_REFUSED を読む)。
+func (e *AckRefusedError) Guidance() string {
+	var b strings.Builder
+	if e.NoReason {
+		fmt.Fprintf(&b, "--force には --reason (なぜ黙らせてよいか、1 行) が要ります。finding %s (%s、%s) は ack していません。\n", e.ID, e.Check, e.Severity)
+		return b.String()
+	}
+	fmt.Fprintf(&b, "finding %s (%s) は重大度 %s なので ack できません (ストアは変えていません)。\n", e.ID, e.Check, e.Severity)
+	b.WriteString("ack すると、重大度が上がる余地が無く、後で本物が起きても二度と報告されません。次のどれかを使ってください:\n")
+	if e.Approvable {
+		b.WriteString("  - approve: 正規の主体だと確かめた (arata approve <id> --note \"<理由>\"。Actions の運用では allowlist.yaml を PR で直す)\n")
+	}
+	b.WriteString("  - snooze --until YYYY-MM-DD: 期日を決めて見直す (期日の後に再び観測されたら再報告される)\n")
+	b.WriteString("  - resolve: 直した (再び観測されたら新規として報告される)\n")
+	fmt.Fprintf(&b, "根拠: arata help ai playbook %s の「片付け」\n", e.Check)
+	b.WriteString("終わった出来事だと確かめたうえでどうしても ack するなら、人が --force --reason \"<理由>\" を付けて実行します (記録に force が残り、週次の報告に出ます)。\n")
+	return b.String()
 }

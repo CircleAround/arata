@@ -54,6 +54,8 @@ const (
 	CodeStoreCorrupt = codes.StoreCorrupt
 	// CodeStoreConflict は s3:// のストアを別の実行が先に書いた (何も上書きしていない。もう一度実行する)。
 	CodeStoreConflict = codes.StoreConflict
+	// CodeAckRefused は high 以上の finding の ack を止めたとき (ADR 0068)。
+	CodeAckRefused = codes.AckRefused
 	// CodeStoreUnavailable は s3:// のストアに問い合わせられない (権限・通信)。破損ではないので rebuild はしない。
 	CodeStoreUnavailable = codes.StoreUnavailable
 	// CodeInterrupted は SIGINT / SIGTERM で止まった (設定の誤りではない。もう一度実行する)。

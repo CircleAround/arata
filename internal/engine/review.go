@@ -595,6 +595,8 @@ func checkPatternTarget(pattern, arn, account string) error {
 type StatusOptions struct {
 	By     string
 	Reason string
+	// Force は high 以上の ack の守りを越える (ack だけ。--reason が必須。ADR 0068 の 2 節)。
+	Force bool
 }
 
 // statusActions は状態 → 片付けの記録の操作の名前。
@@ -609,6 +611,18 @@ func (e *Engine) SetStatus(ctx context.Context, id, status string, until time.Ti
 	if err != nil {
 		return nil, err
 	}
+	if status == store.FindingAcked {
+		// 止める場所はここ 1 か所 (CLI もワークフローも通る)。ストアを書く前に止める
+		if o.Force && strings.TrimSpace(o.Reason) == "" {
+			return nil, e.ackRefused(f, true)
+		}
+		if ackGuarded(f.Severity) {
+			if !o.Force {
+				return nil, e.ackRefused(f, false)
+			}
+			act.Forced = true
+		}
+	}
 	now := e.deps.Now()
 	if status == store.FindingSnoozed && !until.After(now) {
 		return nil, e.configErr(fmt.Errorf("--until must be in the future"))
@@ -622,6 +636,12 @@ func (e *Engine) SetStatus(ctx context.Context, id, status string, until time.Ti
 	}
 	e.log.Info("finding status changed", "finding", f.ID, "check", f.Check, "status", status)
 	return f, nil
+}
+
+func (e *Engine) ackRefused(f *store.Finding, noReason bool) error {
+	err := &AckRefusedError{ID: f.ID, Check: f.Check, Severity: f.Severity, Approvable: approvable(*f), NoReason: noReason}
+	e.log.Error("ack refused", "code", CodeAckRefused, "finding", f.ID, "check", f.Check, "severity", f.Severity, "error", err.Error())
+	return &ExitError{Code: CodeAckRefused, Exit: ExitConfig, Err: err}
 }
 
 // triageAction は片付けの記録を作る。by が空なら OS のユーザー名。形の誤りは CONFIG_INVALID (ストアを開いた後でも何も書かない)。

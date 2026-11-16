@@ -201,7 +201,7 @@ func TestKnownAssumeDestinationResolvesAckedFindings(t *testing.T) {
 		t.Fatalf("行き先が既知リストに無ければ今までどおり: %+v", items)
 	}
 	for _, id := range []string{withMFA.ID, noMFA.ID} {
-		if code := c.run("ack", id, "--config", c.cfg); code != 0 {
+		if code := c.run("ack", id, "--config", c.cfg, "--force", "--reason", "known destination"); code != 0 {
 			t.Fatalf("ack exit %d: %s", code, c.stderr)
 		}
 	}
