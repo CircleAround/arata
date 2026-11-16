@@ -583,7 +583,7 @@ func countRules(a *wafACLConf) map[string]countRule {
 // 決定 (ADR 0023): COUNT → BLOCK の切り替えは運用で計画して行う作業 (COUNT で入れるときに期間を決めて様子を見る) で、アプリの事情も絡むので、
 // ログの数字だけで BLOCK を勧めない (count_to_block の提案は廃止した)。事実 (一致件数・怪しい通信の割合・一致した日数) だけを書く。
 // 一致 0 のルールも載せる (使われていないルールの候補からは COUNT のルールを外し、重ならないようにする)。
-// 怪しい通信 = 探索パスか、同じ日にレートベース以外のルールで BLOCK された IP からの一致 (既定の action と sign-in のパスの BLOCK も除く)。
+// 怪しい通信 = 探索パスへの一致か、レートベース以外のルールで BLOCK されたリクエストでの一致 (既定の action と sign-in のパスの BLOCK も除く。ADR 0067)。
 func (r *reviewer) countRuleStatus(ctx context.Context) error {
 	cfg := r.c.Config
 	total, err := r.load(ctx, cwlogs.MetricWAFCountMatch, cfg.Days)
