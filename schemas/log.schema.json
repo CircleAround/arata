@@ -37,6 +37,7 @@
             "STORE_LOCKED",
             "STORE_CORRUPT",
             "STORE_CONFLICT",
+            "ACK_REFUSED",
             "STORE_UNAVAILABLE",
             "INTERRUPTED",
             "RUN_MISSED",

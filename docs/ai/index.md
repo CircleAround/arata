@@ -71,9 +71,9 @@ LLM の役割は「危険の判定を代行する」ことではなく「人が�
 | `QUERY_INVALID` | クエリ / 設定の不備 (Insights の構文エラーなど) | `arata doctor` の `queries` 行を見る |
 | `STORE_LOCKED` | 同じストアを別プロセスが使用中 (`run --dry-run` は、ストアを複製する間に書き込み中の実行がいるとき) | 前の実行が終わるのを待つ |
 | `STORE_CORRUPT` | SQLite を開けない (`arata rebuild` で既存の SQLite が無い・読めないときも)。`s3://` のストアで raw があるのに SQLite が無いときも、書き込み系のコマンドはこれで止まる (`report` / `review` は警告して続く) | 人に知らせる。`arata rebuild` で raw から作り直せる。SQLite が読めなければ `--from-scratch` (findings が空になり次の run で全部が再報告されるので、人の判断を仰ぐ) |
-| `STORE_CONFLICT` | `s3://` のストアを別の実行が先に書いた (終了コード 2。何も上書きしていない。この実行の結果は保存されず、report も出ない) | 同じコマンドをもう一度実行する。繰り返すなら同時に走っている実行を止める |
+| `STORE_CONFLICT` / `INTERRUPTED` | `s3://` のストアを別の実行が先に書いた / SIGINT / SIGTERM で止まった (どちらも終了コード 2。何も上書きしていない・`s3://` のストアには保存していない。この実行の結果は保存されず、report も出ない) | 同じコマンドをもう一度実行する。衝突を繰り返すなら同時に走っている実行を止める |
 | `STORE_UNAVAILABLE` | `s3://` のストアに問い合わせられない (権限・通信。終了コード 2) | `arata doctor` の `store_read` を見る。破損ではないので `rebuild` はしない |
-| `INTERRUPTED` | SIGINT / SIGTERM で止まった (終了コード 2。`s3://` のストアには保存していない) | 同じコマンドをもう一度実行する |
+| `ACK_REFUSED` | 重大度が high・critical の finding の `arata ack` を止めた (終了コード 2。ストアは変えていない) | ack しない。正規の主体なら approve、期日を決めて見直すなら snooze、直したなら resolve (標準出力と `arata help ai playbook <check>` の「片付け」)。どうしても ack するなら人が `--force --reason` で |
 | `RUN_MISSED` | 前回実行から周期の 2 倍以上空いた | 起動側 (cron など) の障害を疑う。`truncated: true` なら取りこぼしあり |
 | `COLLECT_FAILED` | 上記に分類できない収集エラー | ネットワークなどを確認して再実行 |
 | `CONFIG_INVALID` / `ROLE_POLICY_LARGE` | 設定ファイルの読み込み・検証エラー / `arata config role-params` の一覧で、読み取り専用ロールのインラインポリシーが IAM の上限 (10,240 文字) に近い見込み (警告。値は出す) | エラーメッセージに従い設定を直す / スタックの更新が失敗するおそれがある。ソースのロググループを減らせないか人に確かめる |

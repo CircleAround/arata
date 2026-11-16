@@ -61,6 +61,7 @@ type workflow struct {
 				Type     string   `yaml:"type"`
 				Options  []string `yaml:"options"`
 				Required bool     `yaml:"required"`
+				Default  any      `yaml:"default"`
 			} `yaml:"inputs"`
 		} `yaml:"workflow_dispatch"`
 	} `yaml:"on"`

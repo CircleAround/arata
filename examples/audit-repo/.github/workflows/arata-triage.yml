@@ -35,6 +35,11 @@ on:
         description: snooze の期日 (YYYY-MM-DD。その日の 0 時 UTC まで沈黙)。snooze のときだけ書く
         type: string
         required: false
+      force:
+        description: 'ack だけ。重大度が high・critical の finding も ack する (ふつうは止まる。approve / snooze / resolve を先に考える。理由と実行した人が force として残る)'
+        type: boolean
+        default: false
+        required: false
 
 permissions: {}
 
@@ -70,6 +75,7 @@ jobs:
       FINDING_ID: ${{ inputs.finding_id }}
       REASON: ${{ inputs.reason }}
       UNTIL: ${{ inputs.until }}
+      FORCE: ${{ inputs.force }}
     steps:
       # 入力の形は認証より先に確かめる。API からの実行は画面の選択肢を通らないので、choice の値も確かめる。
       # finding の ID は arata が振る 12 桁の 16 進。形を決めておけば、引数がフラグとして読まれることも無い。
@@ -91,6 +97,16 @@ jobs:
               ;;
             *)
               fail "action は ack / snooze / resolve"
+              ;;
+          esac
+          # API からの実行では boolean の入力が空で届くことがある (false と同じに扱う)
+          case "$FORCE" in
+            true)
+              [ "$ACTION" = ack ] || fail "force は ack のときだけ"
+              ;;
+            false | "") ;;
+            *)
+              fail "force は true / false"
               ;;
           esac
           [[ "$REASON" =~ [^[:space:]] ]] || fail "reason が空"
@@ -149,7 +165,9 @@ jobs:
           mask-aws-account-id: true
 
       # ログの方針は監査と同じ: 出力は実行環境の一時ファイルに書き、Actions には INFO 以外の level / code / source だけを出す。
-      # 失敗の見分け: CONFIG_INVALID = ID が無い・既に resolved・期日が過去・理由に使えない文字 / STORE_CONFLICT = 同時に書かれた (もう一度実行する)。
+      # 重大度が high・critical の ack は arata が止める (ACK_REFUSED。ADR 0068)。止める規則はここに書かない (arata の 1 か所)。
+      # 止められたら、ログと Summary に案内を出す (refused の出力を Summary の step が読む)。
+      # 失敗の見分け: ACK_REFUSED = high 以上の ack / CONFIG_INVALID = ID が無い・既に resolved・期日が過去・理由に使えない文字 / STORE_CONFLICT = 同時に書かれた (もう一度実行する)。
       - id: triage
         name: arata ack / snooze / resolve
         timeout-minutes: 10
@@ -159,11 +177,19 @@ jobs:
           if [ "$ACTION" = snooze ]; then
             args+=(--until "$UNTIL")
           fi
+          if [ "$FORCE" = true ]; then
+            args+=(--force)
+          fi
           # 理由と操作した人はストアに残る (ADR 0068)。理由の形 (見えない文字など) は arata も確かめる
           args+=(--reason "$REASON" --by "$GITHUB_ACTOR")
           status=0
           arata "${args[@]}" "$FINDING_ID" >"$log" 2>&1 || status=$?
           jq -Rc 'fromjson? | objects | select(.level != "INFO") | {level, code, source}' "$log" || true
+          # code は機械が読む値 (人向けの文言は読まない。ADR 0054)
+          if jq -Re 'fromjson? | objects | select(.code == "ACK_REFUSED")' "$log" >/dev/null; then
+            echo "refused=true" >>"$GITHUB_OUTPUT"
+            echo "::error::ACK_REFUSED: 重大度が high・critical の finding は ack できない (ack すると後で本物が起きても再報告されない)。正規の主体なら allowlist.yaml を PR で直す (approve に当たる)、期日を決めて見直すなら snooze、直したなら resolve。根拠は arata help ai playbook <check> の「片付け」。終わった出来事だと確かめてどうしても ack するなら force を付けて実行し直す"
+          fi
           echo "arata exit=$status"
           exit "$status"
 
@@ -174,6 +200,7 @@ jobs:
         if: always() && steps.validate.outcome == 'success'
         env:
           RESULT: ${{ steps.triage.outcome }}
+          REFUSED: ${{ steps.triage.outputs.refused }}
         run: |
           {
             echo "### arata-triage"
@@ -186,6 +213,7 @@ jobs:
             if [ "$ACTION" = snooze ]; then
               echo "| until | \`$UNTIL\` (UTC) |"
             fi
+            echo "| force | \`${FORCE:-false}\` |"
             echo "| by | \`$GITHUB_ACTOR\` |"
             echo "| result | \`$RESULT\` |"
             echo
@@ -194,4 +222,14 @@ jobs:
             echo '```text'
             printf '%s\n' "$REASON" | tr '`' "'"
             echo '```'
+            if [ "$REFUSED" = true ]; then
+              echo
+              echo "**ack は止められました (ACK_REFUSED)**。重大度が high・critical の finding は ack できません。ack すると、後で本物が起きても二度と報告されません。"
+              echo
+              echo "- 正規の主体だと確かめた: allowlist.yaml を PR で直す (approve に当たる)"
+              echo "- 期日を決めて見直す: action を snooze にして until を書く"
+              echo "- 直した: action を resolve にする"
+              echo
+              echo "根拠は \`arata help ai playbook <check>\` の「片付け」。終わった出来事だと確かめたうえでどうしても ack するなら、force を付けて実行し直します (記録に force が残ります)。"
+            fi
           } >>"$GITHUB_STEP_SUMMARY"

@@ -159,6 +159,10 @@ func TestTriageTriggerAndInputs(t *testing.T) {
 	if u, ok := in["until"]; !ok || u.Required {
 		t.Errorf("until is only for snooze: %+v", u)
 	}
+	// high 以上の ack の守りを越える入力 (ADR 0068 の 2 節)。既定は false で、理由は今も必須
+	if f, ok := in["force"]; !ok || f.Type != "boolean" || f.Required || f.Default != false {
+		t.Errorf("force must be an optional boolean defaulting to false: %+v", f)
+	}
 	j := w.Jobs["triage"]
 	// 定時の監査 (書き込む実行) と同じ group (アカウントごと) で、順番に動かす。試しの実行の group は別 (ストアに書かない。dryrun_test.go)
 	want := strings.Replace(strings.Replace(multi.Jobs["audit"].Concurrency.Group, dryRunGroupSuffix, "", 1), "matrix.account", "inputs.account", 1)
@@ -169,7 +173,7 @@ func TestTriageTriggerAndInputs(t *testing.T) {
 		t.Errorf("permissions must be id-token: write and contents: read only: %v", p)
 	}
 	for k, v := range map[string]string{"ACCOUNT": "${{ inputs.account }}", "ARATA_CONFIG_DIR": "aws/${{ inputs.account }}", "ACTION": "${{ inputs.action }}",
-		"FINDING_ID": "${{ inputs.finding_id }}", "REASON": "${{ inputs.reason }}", "UNTIL": "${{ inputs.until }}"} {
+		"FINDING_ID": "${{ inputs.finding_id }}", "REASON": "${{ inputs.reason }}", "UNTIL": "${{ inputs.until }}", "FORCE": "${{ inputs.force }}"} {
 		if j.Env[k] != v {
 			t.Errorf("job env %s = %q, want %q", k, j.Env[k], v)
 		}
@@ -195,7 +199,7 @@ func TestTriageTriggerAndInputs(t *testing.T) {
 }
 
 func triageEnv(kv ...string) []string {
-	env := map[string]string{"ACCOUNT": "prod", "ARATA_CONFIG_DIR": "aws/prod", "ACTION": "ack", "FINDING_ID": "0123456789ab", "REASON": "既知の作業", "UNTIL": ""}
+	env := map[string]string{"ACCOUNT": "prod", "ARATA_CONFIG_DIR": "aws/prod", "ACTION": "ack", "FINDING_ID": "0123456789ab", "REASON": "既知の作業", "UNTIL": "", "FORCE": "false"}
 	for i := 0; i+1 < len(kv); i += 2 {
 		env[kv[i]] = kv[i+1]
 	}
@@ -217,6 +221,9 @@ func TestTriageValidatesInputs(t *testing.T) {
 		// arata が実際に振る ID の形を受け付ける (形が変わったらここで気づく)
 		{"FINDING_ID", engine.RandomID()},
 		{"REASON", "$(touch pwned) `id` ; echo ${{ github.token }}"}, // ただの文字列として扱う
+		{"FORCE", "true"},
+		// 画面から実行しない (API) と、boolean の入力は空で届くことがある
+		{"FORCE", ""},
 	}
 	for _, kv := range ok {
 		t.Run("ok/"+strings.Join(kv, " "), func(t *testing.T) {
@@ -252,8 +259,11 @@ func TestTriageValidatesInputs(t *testing.T) {
 		"account upper":        {"ACCOUNT", "Prod"},
 		"empty account":        {"ACCOUNT", ""},
 		// 操作した人は arata の --by の形 (ADR 0068)。bot からの実行は受け付けない
-		"bot actor":   {"GITHUB_ACTOR", "github-actions[bot]"},
-		"empty actor": {"GITHUB_ACTOR", ""},
+		"force on snooze":  {"ACTION", "snooze", "UNTIL", "2027-03-31", "FORCE", "true"},
+		"force on resolve": {"ACTION", "resolve", "FORCE", "true"},
+		"force not bool":   {"FORCE", "yes"},
+		"bot actor":        {"GITHUB_ACTOR", "github-actions[bot]"},
+		"empty actor":      {"GITHUB_ACTOR", ""},
 	}
 	for name, kv := range bad {
 		t.Run("bad/"+name, func(t *testing.T) {
@@ -277,6 +287,7 @@ func TestTriageRunsArataWithExpectedArguments(t *testing.T) {
 		"resolve": {[]string{"ACTION", "resolve", "ACCOUNT", "staging", "ARATA_CONFIG_DIR", "aws/staging"}, "resolve\n-c\naws/staging/arata.yaml\n--reason\n既知の作業\n--by\nalice\n0123456789ab\n"},
 		"snooze":  {[]string{"ACTION", "snooze", "UNTIL", "2027-03-31"}, "snooze\n-c\naws/prod/arata.yaml\n--until\n2027-03-31\n--reason\n既知の作業\n--by\nalice\n0123456789ab\n"},
 		// 理由はそのまま 1 つの引数として渡す (シェルに解釈させない)。形の検査は arata が行う (ADR 0068)
+		"ack force":      {[]string{"FORCE", "true"}, "ack\n-c\naws/prod/arata.yaml\n--force\n--reason\n既知の作業\n--by\nalice\n0123456789ab\n"},
 		"hostile reason": {[]string{"REASON", "$(touch pwned) `id` --force"}, "ack\n-c\naws/prod/arata.yaml\n--reason\n$(touch pwned) `id` --force\n--by\nalice\n0123456789ab\n"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -292,6 +303,49 @@ func TestTriageRunsArataWithExpectedArguments(t *testing.T) {
 				t.Errorf("args:\n%s\nwant:\n%s", b, tc.want)
 			}
 		})
+	}
+}
+
+// high 以上の ack を arata が止めたら (ACK_REFUSED)、ログに案内を出し、Summary の step に知らせる。終了コードは保つ (ADR 0068)。
+func TestTriageGuidesWhenAckIsRefused(t *testing.T) {
+	w, _ := load(t, triageFile)
+	refused := `echo '{"level":"ERROR","msg":"ack refused at arn:aws:iam::123456789012:root","code":"ACK_REFUSED","finding":"0123456789ab","check":"secret_access","severity":"high","error":"alice@example.com"}' >&2
+echo 'finding 0123456789ab は重大度 high なので ack できません'
+exit 2
+`
+	out, code, tmp := runStep(t, stepByID(t, w, "triage").Run, fakeBin(t, "arata", refused), triageEnv()...)
+	if code != 2 {
+		t.Fatalf("exit code must be kept: %d\n%s", code, out)
+	}
+	for _, want := range []string{"::error::", "ACK_REFUSED", "snooze", "resolve", "allowlist.yaml", "force", "arata help ai playbook"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log lacks %q:\n%s", want, out)
+		}
+	}
+	for _, secret := range []string{"123456789012", "alice@example.com"} {
+		if strings.Contains(out, secret) {
+			t.Errorf("leaked %q:\n%s", secret, out)
+		}
+	}
+	if b, _ := os.ReadFile(filepath.Join(tmp, "github_output")); !strings.Contains(string(b), "refused=true") {
+		t.Errorf("the summary step must learn the refusal: %q", b)
+	}
+	// 止められなかったときは知らせない
+	_, _, tmp = runStep(t, stepByID(t, w, "triage").Run, fakeBin(t, "arata", "exit 0\n"), triageEnv()...)
+	if b, _ := os.ReadFile(filepath.Join(tmp, "github_output")); strings.Contains(string(b), "refused=true") {
+		t.Errorf("no refusal: %q", b)
+	}
+
+	s := stepByID(t, w, "summary")
+	if s.Env["REFUSED"] != "${{ steps.triage.outputs.refused }}" {
+		t.Errorf("REFUSED: %v", s.Env)
+	}
+	_, _, tmp = runStep(t, s.Run, t.TempDir(), append(triageEnv("FORCE", "true"), "RESULT=failure", "REFUSED=true")...)
+	sum, _ := os.ReadFile(filepath.Join(tmp, "summary"))
+	for _, want := range []string{"| force | `true` |", "high", "snooze", "resolve", "allowlist.yaml", "arata help ai playbook"} {
+		if !strings.Contains(string(sum), want) {
+			t.Errorf("summary lacks %q:\n%s", want, sum)
+		}
 	}
 }
 

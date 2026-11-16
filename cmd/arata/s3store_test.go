@@ -88,7 +88,7 @@ func TestS3StoreCommands(t *testing.T) {
 	}
 
 	// ack は SQLite を書き、次の実行に残る
-	if code := c.run("ack", "--config", c.cfg, id); code != 0 {
+	if code := c.run("ack", "--config", c.cfg, "--force", "--reason", "known", id); code != 0 {
 		t.Fatalf("ack: exit %d\n%s", code, c.stderr)
 	}
 	if puts := f.Requests("PUT"); len(puts) != 1 || puts[0].Key != s3DB || puts[0].IfMatch != before[s3DB] {

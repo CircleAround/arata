@@ -154,7 +154,7 @@ func TestAckSnoozeResolve(t *testing.T) {
 	np := items["new_principal|arn:aws:iam::"+acct+":user/mallory"]
 	ext := items["new_principal|arn:aws:iam::"+saas+":root"]
 
-	if code := c.run("ack", root.ID, "--config", c.cfg); code != 0 || !strings.Contains(c.stdout.String(), "acked") {
+	if code := c.run("ack", root.ID, "--config", c.cfg, "--force", "--reason", "known setup work"); code != 0 || !strings.Contains(c.stdout.String(), "acked") {
 		t.Fatalf("ack exit %d: %s%s", code, c.stdout, c.stderr)
 	}
 	if code := c.run("snooze", np.ID, "--config", c.cfg); code != 2 {
@@ -307,7 +307,7 @@ func TestTriageWorkflowArguments(t *testing.T) {
 	root := items["root_usage|arn:aws:iam::"+acct+":root|198.51.100.8"]
 	np := items["new_principal|arn:aws:iam::"+acct+":user/mallory"]
 	ext := items["new_principal|arn:aws:iam::"+saas+":root"]
-	if code := c.run("ack", "-c", c.cfg, root.ID); code != 0 || !strings.Contains(c.stdout.String(), "acked") {
+	if code := c.run("ack", "-c", c.cfg, "--force", "--reason", "known setup work", root.ID); code != 0 || !strings.Contains(c.stdout.String(), "acked") {
 		t.Fatalf("ack exit %d: %s%s", code, c.stdout, c.stderr)
 	}
 	if code := c.run("snooze", "-c", c.cfg, "--until", "2026-11-01", np.ID); code != 0 || !strings.Contains(c.stdout.String(), "snoozed") {
@@ -330,7 +330,7 @@ func TestTriageRecordsReasonAndBy(t *testing.T) {
 	np := items["new_principal|arn:aws:iam::"+acct+":user/mallory"]
 	ext := items["new_principal|arn:aws:iam::"+saas+":root"]
 
-	if code := c.run("ack", "-c", c.cfg, "--reason", "setup work by the team", "--by", "alice", root.ID); code != 0 {
+	if code := c.run("ack", "-c", c.cfg, "--force", "--reason", "setup work by the team", "--by", "alice", root.ID); code != 0 {
 		t.Fatalf("ack exit %d: %s%s", code, c.stdout, c.stderr)
 	}
 	if code := c.run("snooze", "-c", c.cfg, "--until", "2026-11-01", "--by", "bob", np.ID); code != 0 {
@@ -388,6 +388,77 @@ func TestTriageRecordsReasonAndBy(t *testing.T) {
 	}
 	if s := review(t, c, "--status", "acked")["new_principal|arn:aws:iam::"+saas+":root"]; s.Status != "acked" {
 		t.Fatalf("a rejected resolve must not change the finding: %+v", s)
+	}
+	c.assertCodesInVocabulary()
+}
+
+// 重大度が high・critical の finding は ack を受け付けない。案内と playbook の場所を出し、ACK_REFUSED で止める。
+// --force は --reason が必須で、記録に forced を残す (ADR 0068 の 2 節)。
+func TestAckRefusesHighSeverity(t *testing.T) {
+	c := newCLI(t)
+	items := seedFindings(t, c)
+	root := items["root_usage|arn:aws:iam::"+acct+":root|198.51.100.8"]                                      // critical。approve できない
+	uar := items["unknown_assume_role|arn:aws:iam::"+acct+":user/mallory->arn:aws:iam::"+acct+":role/Admin"] // high。approve できる
+	np := items["new_principal|arn:aws:iam::"+acct+":user/mallory"]                                          // medium
+	if root.Severity != "critical" || uar.Severity != "high" || np.Severity != "medium" {
+		t.Fatalf("scenario: %+v %+v %+v", root, uar, np)
+	}
+
+	if code := c.run("ack", "-c", c.cfg, "--reason", "known", root.ID); code != 2 || strings.Join(c.codes(), ",") != "ACK_REFUSED" {
+		t.Fatalf("ack critical: exit %d %v\n%s", code, c.codes(), c.stdout)
+	}
+	out := c.stdout.String()
+	for _, want := range []string{"critical", "snooze", "--until", "resolve", "arata help ai playbook root_usage", "片付け", "--force"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("guidance lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "approve") {
+		t.Errorf("root_usage cannot be approved; do not suggest it:\n%s", out)
+	}
+	if code := c.run("ack", "-c", c.cfg, uar.ID); code != 2 || !strings.Contains(c.stdout.String(), "approve") || !strings.Contains(c.stdout.String(), "arata help ai playbook unknown_assume_role") {
+		t.Fatalf("ack high: exit %d\n%s", code, c.stdout)
+	}
+	// 止めた ack はストアを変えない
+	if got := review(t, c); got["root_usage|arn:aws:iam::"+acct+":root|198.51.100.8"].Status != "open" || got["unknown_assume_role|arn:aws:iam::"+acct+":user/mallory->arn:aws:iam::"+acct+":role/Admin"].Status != "open" {
+		t.Fatalf("refused acks must not change the findings: %+v", got)
+	}
+	// --force には --reason が要る
+	for _, reason := range []string{"", "   "} {
+		if code := c.run("ack", "-c", c.cfg, "--force", "--reason", reason, root.ID); code != 2 || strings.Join(c.codes(), ",") != "ACK_REFUSED" {
+			t.Fatalf("--force without a reason %q: exit %d %v", reason, code, c.codes())
+		}
+	}
+	if code := c.run("ack", "-c", c.cfg, "--force", "--reason", "setup work, confirmed with the owner", "--by", "alice", root.ID); code != 0 {
+		t.Fatalf("ack --force: exit %d %s%s", code, c.stdout, c.stderr)
+	}
+	// medium は今までどおり ack できる (force ではない)
+	if code := c.run("ack", "-c", c.cfg, np.ID); code != 0 {
+		t.Fatalf("ack medium: exit %d %s", code, c.stderr)
+	}
+	// snooze と resolve は止めない
+	if code := c.run("snooze", "-c", c.cfg, "--until", "2026-11-01", uar.ID); code != 0 {
+		t.Fatalf("snooze high: exit %d %s", code, c.stderr)
+	}
+	if code := c.run("review", "-c", c.cfg, "--format", "json", "--status", "acked"); code != 0 {
+		t.Fatal(c.stderr.String())
+	}
+	var acked []engine.ReviewItem
+	if err := json.Unmarshal(c.stdout.Bytes(), &acked); err != nil {
+		t.Fatal(err)
+	}
+	forced := map[string]bool{}
+	for _, it := range acked {
+		if it.LastAction == nil {
+			t.Fatalf("%s has no record", it.ID)
+		}
+		forced[it.ID] = it.LastAction.Forced
+	}
+	if len(forced) != 2 || !forced[root.ID] || forced[np.ID] {
+		t.Fatalf("forced must be recorded only for the ack that passed the guard: %v", forced)
+	}
+	if code := c.run("review", "-c", c.cfg, "--status", "acked"); code != 0 || !strings.Contains(c.stdout.String(), "ack alice ") || !strings.Contains(c.stdout.String(), "(force)") {
+		t.Fatalf("table:\n%s", c.stdout)
 	}
 	c.assertCodesInVocabulary()
 }
