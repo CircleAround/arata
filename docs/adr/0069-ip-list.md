@@ -1,7 +1,7 @@
 # 0069. 怪しい IP の一覧をストアに持ち、チェックをまたいで使う (判定に使う期間と保持の期間を分ける。最初の使い道は count_rule_status の suspect)
 
 - 日付: 2026-11-17
-- 状態: 提案 (ADR 0067 の (i) の suspect に、一覧の IP からの一致を足す。ADR 0065 の部分の行と ADR 0064 の位置を前提にする)
+- 状態: 採用 (2026-11-17、オーナーの判断。ADR 0067 の (i) の suspect に、一覧の IP からの一致を足す。ADR 0065 の部分の行と ADR 0064 の位置を前提にする)
 
 ## 背景
 
@@ -31,7 +31,7 @@
 | `waf_block` | wafv2 | 2' (`waf_blocks`。ADR 0067) の行。日ごとの IP の件数 | BLOCK が `min_count` (1) 件以上。**suspect の「BLOCK された IP」と同じものを除く**: レートベースのルール・既定の action・sign-in のパス (`login_bruteforce.paths`) での BLOCK、`trusted_cidrs` (設計書 2 章の決定) |
 | `probe` | http_access | `probe_hits` (key = ip) | 日に `min_count` (3) 件以上 |
 | `probe` | wafv2 | 2' の許可された探索の行 | 日に `min_count` (3) 件以上 (WAF をすり抜けた探索) |
-| `sign_in_failure` | http_access | `sign_in_failures` (key = ip) | その IP の 1 日の失敗が `min_count` (20) 件以上、**かつ** その IP 自身の平常帯 (直近 `baseline_days` 日の中央値 × `factor`。login_bruteforce と同じ形) を超えた。下の決定 |
+| `sign_in_failure` | http_access | `sign_in_failures` (key = ip) | その IP の 1 日の失敗が `min_count` (20) 件以上、**かつ** その IP 自身の平常帯 (直近 `baseline_days` 日の中央値 × `factor`。login_bruteforce と同じ形) を超えた。**または** 直近 N 日の窓で、合計が `min_count_window` (50) 件以上・失敗のあった日が `min_days` (3) 日以上・窓の平常帯を超えた (ゆっくりした総当たり)。下の決定 |
 | `sign_in_spray` (後の段) | http_access (auth の行のあるソース) | 時ごとの部品の (IP, 利用者の ID) | 1 日に失敗した異なる利用者の ID が `min_distinct_users` 件以上。下の決定 |
 
 - 決定 (`sign_in_failure`): **閾値を超えた IP だけを載せる**。打ち間違い (1 日に数回) は載らない。
@@ -40,6 +40,16 @@
   - 件数だけでなく**その IP 自身の平常帯を超えたこと**も条件にする (平常帯の設定 `baseline_days`・`factor`・`min_baseline_days` も `ip_list.reasons.sign_in_failure` に持ち、既定は login_bruteforce と同じ 14・3・7)。
     大学・会社の回線のように、正規の利用者が毎日たくさん失敗する共有の IP は、平常帯が高いので載らない。悪い 1 人が急に増やした日だけ載る。
     過去の日が `min_baseline_days` に足りない IP は件数だけで判定する (login_bruteforce と同じ)
+- 決定 (`sign_in_failure` の窓での載り方。ゆっくりした総当たり): 1 日に数回ずつ、何日にも分けて試す送信元は、1 日の閾値 (20) をくぐる。そこで、もう 1 つの載り方を持つ:
+  - 条件: 評価する日 D に失敗が 1 件以上あり、D を含む直近 N 日 (`ip_list.active`。7d) の失敗の合計が `min_count_window` 以上、かつ失敗のあった日が `min_days` 日以上
+  - 既定の案は `min_count_window: 50`・`min_days: 3` (7 日で 50 件以上、3 日以上)。**仮の値で、実データで見直す**。雛形が書き出し、`--diff` で見える
+  - **Insights を増やさない**: `sign_in_failures` の metric は、失敗のあった IP の全部を日ごとに key = ip で残している (上位に絞らない。`collectHTTP`)。保持は 400 日 (設計書 5-3)。
+    窓の合計と日数は、この metric を Go で足し上げて作る。`ip_list_days` は閾値を超えた IP しか持たないので、窓の材料にはしない
+  - 上限に当たった日 (`truncated`) の値は下限なので、窓の合計も下限になる (載りにくい側に間違える)
+  - 決定 (**窓にも平常帯を掛ける**): 共有の IP (大学・会社の回線) は、正規の利用者が毎日数回ずつ失敗するので、ゆっくりした総当たりと件数の形が同じになる。違いは「前からそうか」なので、
+    窓の合計が、窓の前の `baseline_days` 日の日ごとの値の中央値 × N の日数 × `factor` を超えたことも条件にする (日の判定と同じ設定を使う)。窓の前の日が `min_baseline_days` に足りない IP は、件数と日数だけで判定する。
+    限界: 平常帯の日数 (14 日) より長く同じ速さで続ける送信元は、自分の平常帯に入って載らなくなる
+  - 行は D の日に、理由 `sign_in_failure`・count = D の件数で書く (表の形は変えない)。どちらの載り方かは run の stats に件数で残す (`ip_list_sign_in_by_day`・`_by_window`)
 - 決定 (`sign_in_spray`。**後の段**): 利用者の ID の行 (auth の行。ADR 0052) があるソースでは、1 日に失敗した異なる利用者の ID が `min_distinct_users` 件以上の IP も載せる
   (1 つの IP から多数のアカウントを試す、パスワードスプレーの形。1 つのアカウントあたりの失敗は少なく、件数の閾値をくぐる)。
   今は IP ごとの件数しか持っていないので、時ごとの部品に (IP, ID) を持つ仕組み (source_multi_user と同じ。ADR 0051 の段 1) ができてから入れる。
@@ -63,7 +73,8 @@ ip_list:
   reasons:
     waf_block:       { min_count: 1 }
     probe:           { min_count: 3 }
-    sign_in_failure: { min_count: 20, baseline_days: 14, factor: 3, min_baseline_days: 7 }   # login_bruteforce と同じ値。別に持つ
+    sign_in_failure: { min_count: 20, baseline_days: 14, factor: 3, min_baseline_days: 7,   # login_bruteforce と同じ値。別に持つ
+                       min_count_window: 50, min_days: 3 }                              # 直近 N 日の窓 (ゆっくりした総当たり。仮の値)
 retention:
   ip_list: 30d        # 保持の期間 (M)。最後に見てから M を過ぎたら、記録ごと消す。N ≦ M
 ```
@@ -251,6 +262,7 @@ fields httpRequest.clientIp as ip, ...
 - 上位 K 個: 並べ方 (理由の数・件数・last_seen・文字列) が決まった順になること、K が `max_ips` と文の上限の小さい方になること、`listed_block_share` の分子と分母、
   `min_block_share` の境目で `listed_coverage: low` になること、K を全部の数以上にすると `listed_is_lower_bound: false`・割合 1 になること
 - `sign_in_failure`: 19 件は載らない・20 件で平常帯以下なら載らない・平常帯の日数が足りないときは件数だけ、の境目
+- 窓での載り方: 7 日で 49 件・50 件、2 日・3 日の境目、D に失敗が無い日は載せない、窓の平常帯 (毎日同じ件数の IP は載らず、新しく始まった IP は載る)、truncated の日を含む窓
 - 一覧の規則: 作り直しで二重に数えない (同じ日を 2 回作っても行が同じ)・N と M の境目・休止の後の戻り (first_seen が残り、active_since が変わる)・M を過ぎたら IP の全部の行が消える・
   `source_ips` と `trusted_cidrs` が載らず使われない・読めない IP を捨てる
 - ファズ: 問い合わせの文の組み立て (4 節の規則)
@@ -307,6 +319,7 @@ fields httpRequest.clientIp as ip, ...
 
 ## 未確認の点
 
+- 窓での載り方の既定 (`min_count_window: 50`・`min_days: 3`) が、実データで何 IP を載せるか。共有の IP が載っていないか
 - 上位 K 個が BLOCK の何割を占めるかは、1 日の範囲でだけ測った (K = 1,000 で 87%)。7 日の範囲と、ほかの利用者での偏りは未確認
 - N = 7d でアクティブな IP の数 (1 日の異なる IP 約 10,400 の何倍になるか)。一覧ができてから run の stats で見る
 - 1 本の問い合わせ (1 日分、`in` の要素が数百) の実行時間。GitHub Actions の実行時間 (有料の前提) に効く
