@@ -112,6 +112,10 @@ func ReadInput(dir string, now time.Time, maxAge time.Duration) (*Input, error) 
 		in.Kind = KindRun
 		in.Run = &schema.Report{}
 		err = json.Unmarshal(b, in.Run)
+		if err == nil && in.Run.Silenced != nil {
+			// 決定 (ADR 0068): 「黙らせているもの」は LLM に渡さない (通知には規則の 1 行だけを出す)
+			in.JSON = withoutSilenced(b)
+		}
 	default:
 		return nil, &InputError{Code: CodeInputInvalid, Reason: fmt.Sprintf("%s の kind %q は知らない種類です", path, head.Kind)}
 	}

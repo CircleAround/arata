@@ -165,6 +165,7 @@ profiles:
   weekly:                                        # 設定不備・衛生状態の差分
     window: 7d
     # max_catchup: 7d                            # cron が遅れた時に前回の窓の終わりから追いつく上限
+    silenced: true                               # 報告に「黙らせているもの」(ack・snooze 中の finding、7 日以内に期日の snooze、30 日以内に期限の allowlist の項目) の節を出す。aratam の通知にも件数の 1 行が出る (ADR 0068)
     checks:
       - credential_hygiene      # 未使用のアクセスキー・MFA 無しのコンソールユーザー・ルートのアクセスキー (medium / high)
       - guardduty_findings      # GuardDuty の findings。新規と件数の増加 (重大度は GuardDuty 準拠)

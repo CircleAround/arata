@@ -1567,7 +1567,13 @@ arata rebuild   [--from-scratch [--baseline]] [--format text|json]   # raw JSONL
 - `summary.max_severity` は new / changed / recurred の最大。still_open を含めると毎回鳴るため含めない。
 - severity=info の finding は new / changed でも `findings` には入れず `info` に入れ、summary のカウントにも含めない。
 - `already_reported` は still_open のうち first_seen が窓内かつ reported_at が付いているもの (hourly で報告済みの事象が daily に現れた場合)。
-- acked / snoozed 中の finding はレポートに出さない。決定 (ADR 0022): ただし重大度が ack / snooze したときより上がったものは `changed` に出す (Data の `escalated_from_suppressed`)。
+- acked / snoozed 中の finding はレポートの findings に出さない。決定 (ADR 0022): ただし重大度が ack / snooze したときより上がったものは `changed` に出す (Data の `escalated_from_suppressed`)。
+- 決定 (ADR 0068 の 3 節・9 節): プロファイルに `silenced: true` を書いたときだけ (雛形では weekly)、`silenced` (黙らせているもの) を足す。
+  ストアの acked / snoozed の finding 全部 (このプロファイルのチェックに限らない)、`snooze_expiring` (7 日以内に期日)、`snooze_expired` (期日を過ぎても snoozed のまま。event 型は観測されなければ残る)、
+  `allowlist_expiring` (principals・assume_destinations・oidc_subjects の `expires` が 30 日以内か過ぎたもの。期限の日は有効)、`summary` (件数)。
+  high 以上は今の重大度と黙らせたときの重大度の重いほうで決め、並びはその重大度の高い順 → 黙らせた時刻の古い順。各 finding に最後の片付けの操作 (`last_action`: 理由・人・日時・forced)。
+  Key・要約・理由・allowlist の対象は findings と同じく個人を特定できる値を伏せる。7 日・30 日は固定値 (設定は足さない)。状態は変えない。
+  report.md には「黙らせているもの」の節を出し、理由はコードの中に入れる (Markdown として解釈させない)。`silenced` が無い報告は今までと 1 バイトも変わらない
 - `coverage.checks_run` を追加し、実際に走ったチェック名を出す。
 - 決定 (Step 3): `coverage.sources_failed` / `summary.collect_errors` に `action` (不足した IAM action) と `partial` (一部の項目だけ取れず、取れた項目で評価した) を足す。
 - 決定 (ADR 0023): `proposals` (WAF の修正提案の候補と observation。waf_review が走った run だけ。無ければ節ごと出さない) を足す。1 件は `kind` / `stage` / `web_acl` / `scope` / `region` /

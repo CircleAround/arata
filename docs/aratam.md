@@ -39,6 +39,8 @@ aratam notify --in /var/lib/arata/out/daily
 2. **規則による振り分け** (LLM を使わない)
    - 送り先: `summary.max_severity` が `urgent_severity` (既定 high) 以上、または `coverage.sources_failed` がある → 緊急用。それ以外 → 通常用。
    - 新規・変化・再発が 0 件で、取れなかったものも無い → `on_quiet` に従う (`short` = 「新規なし」と 1 行、`silent` = 送らない)。
+   - 決定 (ADR 0068 の 3 節): report.json に `silenced` (黙らせているもの) があり 0 件でなければ、件数の 1 行を警告の行として規則で足す (どの書式にも出る)。
+     high 以上の ack が 1 件でもあれば、`on_quiet: silent` でも送る。理由と操作した人は通知に出さず、`silenced` は LLM の入力 (`report.json`) から除く
 3. **LLM による要約** (`llm.provider` が `none` 以外のとき)
    - 入力は `report.json` だけ。system には `docs/ai/report.md` (arata が `arata help ai report` で出すのと同じ文書) を埋め込んで渡す。
    - system には、その run に出たチェックの対処手順 (playbook。3-3 章) も入れる。

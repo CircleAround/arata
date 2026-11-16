@@ -45,6 +45,9 @@ type Report struct {
 	// window は実際に見た範囲で、定時の実行との違いは coverage.notes にある。aratam はこの報告を送らない。
 	// 定時の実行の報告には出さない (omitempty。既存の報告の形を変えない)。
 	DryRun bool `json:"dry_run,omitempty"`
+	// Silenced は「黙らせているもの」(ADR 0068 の 3 節)。プロファイルに silenced: true を書いたときだけ出す (雛形では weekly)。
+	// 出さない報告では項目が無い (omitempty)。読む側は、無い節を「出していない」と扱う (0 件とは違う)。
+	Silenced *Silenced `json:"silenced,omitempty"`
 }
 
 // Proposal は WAF の修正提案の候補 1 件。arata が決まった規則で作り、根拠の数字を Evidence に持つ。適用は人が判断する。

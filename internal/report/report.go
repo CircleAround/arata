@@ -23,6 +23,7 @@ type (
 	Findings       = schema.Findings
 	Finding        = schema.Finding
 	Coverage       = schema.Coverage
+	Silenced       = schema.Silenced
 	FormatCoverage = schema.FormatCoverage
 	// RequestCoverage は request_lines 形式のリクエスト単位の集計。
 	RequestCoverage = schema.RequestCoverage
@@ -43,6 +44,8 @@ type Input struct {
 	ChecksSkipped []SkippedCheck
 	Formats       []FormatCoverage
 	Proposals     []schema.Proposal
+	// Silenced は「黙らせているもの」の節 (ADR 0068)。nil なら出さない。
+	Silenced *schema.Silenced
 	// DiffFrom は差分判定の境界 (ゼロなら Window.From)。試しの実行が定時の実行の境界に合わせるのに使う (ADR 0049)。
 	DiffFrom time.Time
 }
@@ -77,6 +80,7 @@ func Build(in Input) *Report {
 			Formats:       nonNil(in.Formats),
 		},
 		Proposals: in.Proposals,
+		Silenced:  in.Silenced,
 	}
 	var sevs []checks.Severity
 	for _, res := range in.Results {
