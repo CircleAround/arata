@@ -527,6 +527,10 @@ type CollectOptions struct {
 	// SourceStart はソースの読み始め (再走査の前) をそのまま決める (収集だけの run。ADR 0064)。SourceTo は max_collect で止める時刻。
 	SourceStart map[string]time.Time
 	SourceTo    map[string]time.Time
+	// Listed は、確定した日の count_rule_status の listed (一覧の IP に絞った問い合わせ。ADR 0069) を流す (run と collect。init は流さない)。
+	Listed bool
+	// ListedWholeWindow は、listed を直近の確定した日だけでなく、読んだ範囲の確定した日の全部について流す (collect --window で過去を足すとき)。
+	ListedWholeWindow bool
 }
 
 // Collect は設定の sources から窓内を収集し、ストアへ反映する。失敗したソースは記録して続行する。
@@ -663,6 +667,17 @@ func (e *Engine) Collect(ctx context.Context, w collect.Window, o CollectOptions
 					to = t.Add(-time.Nanosecond)
 				}
 				err = e.updateIPList(ctx, src, sw.Start(), to, res.ipList)
+			}
+			if lc, ok := c.(*cwlogs.Collector); ok && err == nil && o.Listed {
+				until := sw.To
+				if t, ok := res.coveredTo[src.ID]; ok && !t.IsZero() {
+					until = t.Add(src.IngestDelay) // 時の単位で読んだソースは、読み終えた時がもう ingest_delay を引いてある
+				}
+				from := time.Time{}
+				if o.ListedWholeWindow {
+					from = sw.Start()
+				}
+				err = e.updateListed(ctx, src, lc, from, until, o.RunID)
 			}
 		}
 		if err != nil {
@@ -1299,7 +1314,7 @@ func (e *Engine) RunWithOptions(ctx context.Context, profileName string, o RunOp
 	}
 	limits := e.limitCollect(e.collectStarts(prof, base, cu), w.To, runID)
 	cr := e.Collect(ctx, w, CollectOptions{Needs: e.neededKinds(prof), PrincipalStatus: store.PrincipalUnknown, RunID: runID, Rescan: true, BaseFrom: base,
-		SourceFrom: cu.from, SourceAhead: cu.ahead, SourceStart: cu.start, SourceTo: limits})
+		SourceFrom: cu.from, SourceAhead: cu.ahead, SourceStart: cu.start, SourceTo: limits, Listed: true})
 	ev, err := e.Evaluate(ctx, profileName, w, &cr)
 	if err != nil {
 		_ = e.st.FinishRun(ctx, runID, "failed", map[string]any{"error": err.Error()})
@@ -1426,7 +1441,7 @@ func (e *Engine) CollectOnly(ctx context.Context, window time.Duration, sourceID
 	if err := e.st.BeginRun(ctx, store.Run{ID: runID, Profile: collectRunProfile, WindowFrom: w.From, WindowTo: w.To, StartedAt: now, Status: "running"}); err != nil {
 		return nil, err
 	}
-	cr := e.Collect(ctx, w, CollectOptions{SourceIDs: sourceIDs, PrincipalStatus: store.PrincipalUnknown, RunID: runID})
+	cr := e.Collect(ctx, w, CollectOptions{SourceIDs: sourceIDs, PrincipalStatus: store.PrincipalUnknown, RunID: runID, Listed: true, ListedWholeWindow: true})
 	status := "ok"
 	if cr.partial() {
 		status = "partial"

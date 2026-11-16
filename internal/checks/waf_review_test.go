@@ -399,3 +399,57 @@ func TestWAFReviewChallengeTopRules(t *testing.T) {
 		t.Fatalf("%+v", props)
 	}
 }
+
+// count_rule_status の listed (ADR 0069 の 4 節): suspect は (i) + 一覧の IP からの一致。listed を流した日があれば、
+// 数えた範囲 (流した日の数・渡した IP が占める BLOCK の割合の最も低い日・下限か・偏りの小さい日) を evidence と Summary に出す。
+func TestCountRuleStatusListed(t *testing.T) {
+	st := seedWAFReview(t)
+	m := metricSeed{st: st, t: t}
+	const key = "prod-waf|AWS#AWSManagedRulesCommonRuleSet/SizeRestrictions_BODY"
+	m.put("2026-10-20", "waf", cwlogs.MetricWAFCountMatchListed, key, 10)
+	m.put("2026-10-21", "waf", cwlogs.MetricWAFCountMatchListed, key, 10)
+	for _, d := range []struct {
+		date                  string
+		total, queried, share float64
+	}{{"2026-10-19", 900, 900, 1}, {"2026-10-20", 2000, 1000, 0.3}, {"2026-10-21", 500, 500, 1}} {
+		m.put(d.date, "waf", cwlogs.MetricWAFListedIPsTotal, "", d.total)
+		m.put(d.date, "waf", cwlogs.MetricWAFListedIPsQueried, "", d.queried)
+		m.put(d.date, "waf", cwlogs.MetricWAFListedBlockShare, "", d.share)
+	}
+	m.put("2026-10-20", "waf", cwlogs.MetricWAFListedCoverageLow, "", 1)
+	props, _ := reviewWAF(t, st)
+	var crs, kbi *schema.Proposal
+	for i, p := range props {
+		if p.About == AboutCountRuleStatus && p.RuleInGroup == "SizeRestrictions_BODY" {
+			crs = &props[i]
+		}
+		if p.About == AboutCountRuleStatus && p.Rule == "AWS-AWSManagedRulesKnownBadInputsRuleSet" {
+			kbi = &props[i]
+		}
+	}
+	if crs == nil || kbi == nil {
+		t.Fatal("no count_rule_status")
+	}
+	ev := crs.Evidence
+	if ev["suspect_matches"] != 55.0 || ev["suspect_ratio"] != 0.393 || ev["listed_matches"] != 20.0 || ev["listed_days"] != 3 ||
+		ev["listed_min_block_share"] != 0.3 || ev["listed_is_lower_bound"] != true || ev["listed_coverage"] != "low" {
+		t.Fatalf("evidence: %+v", ev)
+	}
+	want := "prod-waf: COUNT の AWSManagedRulesCommonRuleSet の SizeRestrictions_BODY: 直近 7 日で 140 件一致、うち怪しい通信 39%、一致した日 7 / 7 日。" +
+		"怪しい通信は一覧の IP からの一致 20 件を含む (上位の IP で数えた下限。渡した IP が占める BLOCK の割合は最も低い日で 30%)。上位の IP に偏っていない日があり、下限の意味が弱い"
+	if !strings.HasPrefix(crs.Summary, strings.SplitN(want, ":", 2)[0]) || !strings.Contains(crs.Summary, "怪しい通信は一覧の IP からの一致 20 件を含む (上位の IP で数えた下限。渡した IP が占める BLOCK の割合は最も低い日で 30%)。上位の IP に偏っていない日があり、下限の意味が弱い") {
+		t.Errorf("summary: %s", crs.Summary)
+	}
+	if kbi.Evidence["listed_matches"] != 0.0 || kbi.Evidence["listed_days"] != 3 {
+		t.Errorf("kbi evidence: %+v", kbi.Evidence)
+	}
+	// listed を流した日が無ければ、今と同じ (項目も文も足さない)
+	props, _ = reviewWAF(t, seedWAFReview(t))
+	for _, p := range props {
+		if p.About == AboutCountRuleStatus {
+			if _, ok := p.Evidence["listed_days"]; ok || strings.Contains(p.Summary, "一覧の IP") {
+				t.Fatalf("without listed: %+v", p)
+			}
+		}
+	}
+}

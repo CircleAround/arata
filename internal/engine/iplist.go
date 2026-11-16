@@ -2,8 +2,12 @@ package engine
 
 import (
 	"context"
+	"math"
+	"sort"
 	"time"
 
+	"github.com/CircleAround/arata/internal/codes"
+	"github.com/CircleAround/arata/internal/collect/cwlogs"
 	"github.com/CircleAround/arata/internal/config"
 	"github.com/CircleAround/arata/internal/iplist"
 	"github.com/CircleAround/arata/internal/record"
@@ -90,4 +94,91 @@ func (r CollectResult) addIPListStats(stats map[string]any) {
 		return
 	}
 	stats["ip_list"] = map[string]int(r.ipList)
+}
+
+// listedLookbackDays は listed を流す確定した日の数 (直近の確定した日から遡る)。導入した日や失敗の後に、古い日を何日も読み直して費用を増やさない。
+const listedLookbackDays = 2
+
+// updateListed は wafv2 のソースについて、確定した UTC の日ごとに 1 回、一覧の上位 K 個の IP に絞った問い合わせを流し、
+// count_rule_status の listed と、数えた範囲を日の値に残す (ADR 0069 の 4 節)。until はそのソースが読み終えた時刻。
+// from がゼロなら直近の確定した listedLookbackDays 日、ゼロでなければ from の日から確定した日までの全部 (collect --window で過去を足すとき)。
+//
+// 決定: 流した日の印は waf_listed_ips_total (日の値。raw にも残るので rebuild の後も流し直さない)。一覧が空の日も印だけ残し、問い合わせない。
+// 決定: 問い合わせの失敗はソースの失敗にしない (失敗したソースは全部を引き直すので、listed 1 本のために読み取りを増やさない)。
+// LISTED_QUERY_FAILED の WARN を出し、印を残さず、次の run で流し直す。
+func (e *Engine) updateListed(ctx context.Context, src config.Source, c *cwlogs.Collector, from, until time.Time, runID string) error {
+	l := e.cfg.IPList
+	if l == nil || l.CountSuspect == nil || src.Format != config.FormatWAFv2 {
+		return nil
+	}
+	cs := l.CountSuspect
+	last := dayStart(until.Add(-src.IngestDelay)).AddDate(0, 0, -1) // 終わりまで読めた日
+	keep := dayStart(e.deps.Now()).Add(-e.cfg.Retention.IPList).Add(24 * time.Hour)
+	first := last.AddDate(0, 0, -(listedLookbackDays - 1))
+	if !from.IsZero() {
+		first = dayStart(from)
+	}
+	for d := first; !d.After(last); d = d.AddDate(0, 0, 1) {
+		date := d.Format(record.DateLayout)
+		if d.Before(keep) {
+			continue
+		}
+		done, err := e.st.Metrics(ctx, store.MetricFilter{Metric: cwlogs.MetricWAFListedIPsTotal, From: date, To: date, Sources: []string{src.ID}})
+		if err != nil {
+			return err
+		}
+		if len(done) > 0 {
+			continue
+		}
+		rows, err := e.st.IPListDays(ctx, d.AddDate(0, 0, -(l.ActiveDays()-1)).Format(record.DateLayout), date)
+		if err != nil {
+			return err
+		}
+		sel := iplist.Select(rows, date, l.ActiveDays(), cs.Reasons, func(ip string) bool { return e.al != nil && e.al.SourceIPAllowed(ip) })
+		ips := sel.IPs
+		if len(ips) > cs.MaxIPs {
+			ips = ips[:cs.MaxIPs]
+		}
+		counts, used := map[string]float64{}, 0
+		if len(ips) > 0 {
+			counts, used, err = c.CollectListed(ctx, d, ips, cs.MaxQueries)
+			if err != nil {
+				e.log.Warn("listed query failed; count_rule_status uses suspect without the IP list for this day until the next run", "code", codes.ListedQueryFailed,
+					"source", src.ID, "date", date, "error", record.MaskIdentity(err.Error()), "run_id", runID)
+				continue
+			}
+		}
+		m := func(name, key string, v float64) record.Metric {
+			return record.Metric{Date: date, Source: src.ID, From: record.KindWAFAction, Metric: name, Key: key, Value: v}
+		}
+		var out []record.Metric
+		keys := make([]string, 0, len(counts))
+		for k := range counts {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			out = append(out, m(cwlogs.MetricWAFCountMatchListed, k, counts[k]))
+		}
+		out = append(out, m(cwlogs.MetricWAFListedIPsQueried, "", float64(used)))
+		block, probe := sel.Share(used)
+		if block >= 0 {
+			out = append(out, m(cwlogs.MetricWAFListedBlockShare, "", math.Round(block*1000)/1000))
+			if block < cs.MinBlockShare {
+				out = append(out, m(cwlogs.MetricWAFListedCoverageLow, "", 1))
+			}
+		}
+		if probe >= 0 {
+			out = append(out, m(cwlogs.MetricWAFListedProbeShare, "", math.Round(probe*1000)/1000))
+		}
+		// 印は最後に書く (途中で止まったら次の run で流し直す)
+		out = append(out, m(cwlogs.MetricWAFListedIPsTotal, "", float64(len(sel.IPs))))
+		for _, r := range out {
+			if err := e.ingest(ctx, src.ID, r, ""); err != nil {
+				return err
+			}
+		}
+		e.log.Info("listed counted", "source", src.ID, "date", date, "ips_total", len(sel.IPs), "ips_queried", used, "block_share", block, "run_id", runID)
+	}
+	return nil
 }

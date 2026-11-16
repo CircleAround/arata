@@ -175,6 +175,8 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
 | `waf_ip_rate_p50` / `_p99` / `_max` | `<WebACL>\|<パスの群>` | 1 IP あたり 5 分間の件数の分布。群は `rate_path_groups` の接頭辞 (最長一致)、どれにも当たらなければ `*` |
 | `waf_position_limit` | `<WebACL>\|<配列の名前>` | 配列の位置の上限を超えた (数え漏れの可能性がある) リクエストの数 |
 | `waf_block_ip_suspect` / `waf_allow_probe_ip` | `<ip>` | 怪しい IP の一覧の元 (ADR 0069)。BLOCK の件数のうち suspect の「BLOCK された IP」と同じものを除いたもの (レートベース・既定の action・sign-in のパス・`trusted_cidrs`。探索パスの BLOCK は数える) / 許可された探索の件数 (`trusted_cidrs` を除く)。`ip_list:` を書いたときだけ出す |
+| `waf_rule_count_match_listed` | `<WebACL>\|<ルール>` | 決定 (ADR 0069 の 4 節): 一覧の IP からの、BLOCK 以外のリクエストでのカウントのルールの一致 (探索パスを除く)。`ip_list.count_suspect` があるとき、確定した UTC の日ごとに 1 回、一覧の上位 K 個の IP に絞った問い合わせ (`filter ip in [...]`。軸に ip を持たない) で数える。waf_review の suspect は `waf_rule_count_match_suspect` との和 |
+| `waf_listed_ips_total` / `_queried` / `waf_listed_block_share` / `_probe_share` / `waf_listed_coverage_low` | (空) | 同じ日の、アクティブな一覧の IP の数 (流した日の印) / 渡した IP の数 / 渡した IP が占める直近 N 日の waf_block・probe の件数の割合 (分母が 0 なら出さない) / 割合が `min_block_share` より低い日に 1 |
 | `waf_challenge_issued` / `_issued_ips` / `_solved_ips` | `<WebACL>\|<challenge\|captcha>\|<ルール>[/<グループの中のルール>]\|<method>\|<正規化パス>` | Challenge / CAPTCHA を出した件数 / 出した異なり IP / そのうち解いた異なり IP (ADR 0028)。日ごとに上位 `top_paths` |
 
 - 決定: ヘッダー・クエリ文字列・Cookie・User-Agent・本文は引かない。WebACL 名は `webaclId` の ARN から `parse` で取る
@@ -302,6 +304,7 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
 | `REPO_ENVIRONMENT_MISSING` / `REPO_ENVIRONMENT_OPEN` / `REPO_ENVIRONMENT_PROTECTED` | 決定 (ADR 0060): `repo check --github`。environment が無い / デプロイできるブランチが既定のブランチだけでない / レビュー担当か待ち時間が付いている (警告) |
 | `REPO_SECRET_MISSING` / `REPO_SECRET_UNUSED` / `REPO_SECRET_OUTSIDE_ENVIRONMENT` | 決定 (ADR 0060): `repo check --github`。使う秘密が environment に無い / 使わない秘密が残っている (警告) / リポジトリの (environment でない) 秘密が残っている (この一式の名前なら ng、ほかは警告) |
 | `GITHUB_API_FAILED` | 決定 (ADR 0060): `repo check --github` が GitHub の API を読めなかった (応答の本文は出さない) |
+| `LISTED_QUERY_FAILED` | 決定 (ADR 0069): 一覧の IP に絞った問い合わせ (count_rule_status の listed) が失敗した (警告)。ソースの失敗にはしない (失敗したソースは全部を引き直すので)。その日の印 (`waf_listed_ips_total`) を残さず、次の run で流し直す |
 | `CHECK_UNUSED` | 決定: どのプロファイルにも入っていないチェックがある (警告。run / evaluate / doctor が出す。3 章、ADR 0014) |
 
 決定 (ADR 0054): ログの行で機械が読んでよい (安定な) 項目は、`time`・`level` (`DEBUG` / `INFO` / `WARN` / `ERROR`。大文字)・`code`・`source`・`run_id` と、
@@ -1343,7 +1346,11 @@ arata は LLM を使わず候補だけを作り、aratam の LLM は候補を文
 - 決定: COUNT → BLOCK の切り替えは提案しない (当初の `count_to_block` は廃止)。切り替えは運用で計画して行う作業 (COUNT で入れるときに期間を決めて様子を見る) で、
   アプリの事情も絡むので、ログの数字だけで勧めると正規の利用者を止める危険がある。代わりに COUNT のルールの状況を計画の材料として毎回載せ、Summary は事実だけを書く
   (例「COUNT の X: 直近 7 日で 6 件一致、うち怪しい通信 100%、一致した日 1 / 7 日」)。怪しい通信 = 探索パスへの一致か、レート制限・既定の action・sign-in のパス以外で BLOCK されたリクエストでの一致 (ADR 0067)。
-  COUNT のルールは一致 0 でも count_rule_status に載るので、`unused_rule` の対象から外す (重ならないように)。閾値 `count_days` / `count_ratio` / `count_min_matches` は設定から外した
+  COUNT のルールは一致 0 でも count_rule_status に載るので、`unused_rule` の対象から外す (重ならないように)。
+  決定 (ADR 0069 の 4 節): `ip_list.count_suspect` があれば、怪しい通信に一覧の IP からの一致 (`waf_rule_count_match_listed`) も足す。listed を流した日があれば、evidence に
+  `listed_matches`・`listed_days`・`listed_is_lower_bound`・`listed_min_block_share`・`listed_coverage` (低い日があれば `low`) を足し、Summary に「一覧の IP からの一致 N 件を含む (上位の IP で数えた下限…)」を添える。
+  listed は、確定した日の直近 2 日 (`waf_listed_ips_total` が無い日) だけを、run・collect・`collect --incremental` が流す (init は流さない。導入した日に古い日を何日も読み直さない)。
+  渡す IP は一覧の並べ方 (理由の数・直近 N 日の waf_block の件数・全部の件数・last_seen・文字列) の上位 min(`max_ips`, `max_queries` 本に収まる数) 個。問い合わせの失敗はソースの失敗にせず `LISTED_QUERY_FAILED` (次の run で流し直す)閾値 `count_days` / `count_ratio` / `count_min_matches` は設定から外した
   (書いたままの設定は `config init --diff` で unknown_key と出る。Load は未知のキーで止まるので消す)
 - 決定: 「迷ったら提案しない」。設定と突き合わせられない (WebACL が waf-config に無い・同じ名前の WebACL が複数ある・ルールが設定に無い)、scope-down を解釈できない、
   IP 以外の集約のレートベースのルール、複数の条件の scope-down、群の一部だけを受け持つルール、データの日数が足りない、のどれでも提案しない

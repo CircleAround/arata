@@ -72,6 +72,7 @@
             "REPO_SECRET_UNUSED",
             "REPO_SECRET_OUTSIDE_ENVIRONMENT",
             "GITHUB_API_FAILED",
+            "LISTED_QUERY_FAILED",
             "INPUT_MISSING",
             "INPUT_INVALID",
             "INPUT_STALE",

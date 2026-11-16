@@ -361,6 +361,17 @@ func TestDoctorWAF(t *testing.T) {
 		t.Fatalf("cost: %v", cost)
 	}
 
+	// count_suspect (ADR 0069 の 4 節): 一覧の IP に絞った問い合わせは、1 本ごとに 1 日分を読む。1 日に max_queries 本 (既定 2) を見積もりに足す
+	c = setup(t, "")
+	b, _ := os.ReadFile(c.cfg)
+	c.writeConfig(string(b) + "ip_list:\n  reasons: { waf_block: {} }\n  count_suspect: {}\n")
+	cost = rows(t, c)["cost"]
+	for _, want := range []string{"count_suspect: 1 日に最大 2 本 × 1 日分 (約 8.00 GB、約 0.06 USD/日)", "0.30 USD/日", "推奨 61"} {
+		if !strings.Contains(cost[1], want) {
+			t.Fatalf("cost lacks %q: %v", want, cost)
+		}
+	}
+
 	// 直近の daily の run (保存したレポートの窓の終わり) が UTC 22:00 (JST 07:00) なら、範囲は前日の 0 時からの約 46 時間
 	c = setup(t, "")
 	if err := os.MkdirAll(filepath.Join(c.dir, "store", "reports"), 0o755); err != nil {

@@ -24,7 +24,7 @@ type Event struct {
 //     `fields coalesce(<g>, if(<f> > 0, "<値>", "")) as <name>` (stats の後の補い。collector が作る形だけ)。
 //     `fields if(<条件>, "<値>", <項目>)` は受け付けない: 本物は else に項目を置くと null を返し、取れていた値が消える (実データで確認)
 //   - `parse <field> /<re>/` (名前付きキャプチャをフィールドにする。同じ名前を 2 度定義するクエリは、本物と同じく受け付けない)
-//   - `filter ispresent(<f>)`。それ以外の `filter` はクエリから読まず、テストが Go で渡す (Response に渡す関数)。
+//   - `filter ispresent(<f>)`、`filter <f> in ["<値>", ...]` (完全な文字列の一致。本物と同じ)。それ以外の `filter` はクエリから読まず、テストが Go で渡す (Response に渡す関数)。
 //     評価する位置は、最初の stats より後ろに filter があればその位置 (リクエスト単位の filter)、無ければ最初の stats の直前
 //   - `stats <集計>, ... [by <軸>, ...]` を何段でも (ADR 0051。2 段目以降は前の段の結果の行を集計する)。
 //     集計は count(*) / count(<f>) / sum(<f>) / min(<f>) / max(<f>) / earliest(<f>) / latest(<f>)。
@@ -52,6 +52,8 @@ var (
 	ifExpr      = regexp.MustCompile(`^fields if\((.+), "([^"]*)", ([A-Za-z_]\w*)\) as (\S+)$`)
 	coalesceIf  = regexp.MustCompile(`^fields coalesce\((\S+), if\((\S+) > 0, "([^"]*)", ""\)\) as (\S+)$`)
 	presentExpr = regexp.MustCompile(`^filter ispresent\((\S+)\)$`)
+	inExpr      = regexp.MustCompile(`^filter (\S+) in \[("[^"\\]*"(?:, "[^"\\]*")*)\]$`)
+	inItem      = regexp.MustCompile(`^"([^"\\]*)"$`)
 )
 
 const simTime = "2006-01-02 15:04:05.000"
@@ -178,6 +180,18 @@ func (s *Sim) Rows(query string, from, to time.Time, filter func(map[string]stri
 		case presentExpr.MatchString(line):
 			name := presentExpr.FindStringSubmatch(line)[1]
 			ops = append(ops, keep(func(f map[string]string) bool { return f[name] != "" }))
+		case inExpr.MatchString(line):
+			m := inExpr.FindStringSubmatch(line)
+			set := map[string]bool{}
+			for _, it := range strings.Split(m[2], ", ") {
+				im := inItem.FindStringSubmatch(it)
+				if im == nil {
+					panic("sim: unsupported item in `in [...]`: " + it)
+				}
+				set[im[1]] = true
+			}
+			name := m[1]
+			ops = append(ops, keep(func(f map[string]string) bool { v, ok := f[name]; return ok && set[v] }))
 		case strings.HasPrefix(line, "filter "):
 			if firstStats >= 0 {
 				userFilter = len(ops)

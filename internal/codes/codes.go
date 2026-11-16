@@ -55,6 +55,7 @@ const (
 	RebuildWarning              = "REBUILD_WARNING"
 	RebuiltFromScratch          = "REBUILT_FROM_SCRATCH"
 	RolePolicyLarge             = "ROLE_POLICY_LARGE"
+	ListedQueryFailed           = "LISTED_QUERY_FAILED"
 	// arata repo check (監査を回すリポジトリの一式と、GitHub の設定。ADR 0060)
 	RepoSetDiffers               = "REPO_SET_DIFFERS"
 	RepoNotifyMismatch           = "REPO_NOTIFY_MISMATCH"
@@ -169,6 +170,7 @@ var All = []Code{
 	{RepoSecretUnused, arataOnly, "一式の使わない秘密が environment に残っている (repo check --github。警告)"},
 	{RepoSecretOutsideEnvironment, arataOnly, "リポジトリの (environment でない) 秘密が残っている (どのブランチのジョブにも渡る。repo check --github)"},
 	{GitHubAPIFailed, arataOnly, "GitHub の API を読めなかった (認証・権限・リポジトリの名前。repo check --github)"},
+	{ListedQueryFailed, arataOnly, "一覧の IP に絞った問い合わせ (count_rule_status の listed。ADR 0069) が失敗し、その日の listed を作っていない (次の run で流し直す。警告)"},
 
 	{InputMissing, aratamOnly, "report.json が無い・読めない (その旨を緊急用に送る)"},
 	{InputInvalid, aratamOnly, "report.json を解釈できない・知らない版 (その旨を緊急用に送る)"},

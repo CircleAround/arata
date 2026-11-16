@@ -45,6 +45,7 @@ CI は `.github/workflows/fuzz.yml` が週 1 回と手動 (`workflow_dispatch`�
 | `internal/checks` (waf_review) | `FuzzLabelMatches` | WAF の設定のラベル・ルール名・LabelMatchStatement の鍵 | 前の名前空間を省いた鍵は、マネージドのグループのラベルにも WebACL の外のラベルにも一致しない (ADR 0070) |
 | | `FuzzQueryLiterals` | 設定の glob・接頭辞・正規表現 | Insights の `/.../` と `"..."` を抜け出さない。Go の regexp でも同じ意味 |
 | | `FuzzParseValues` | Insights の結果の値 | 時刻・日・件数 (有限で負でない)・IP の範囲 |
+| | `FuzzListedQueries` | 怪しい IP の一覧の IP (ストアから読む値。count_rule_status の listed。ADR 0069) | 文は 10,000 文字以内で、IP の並びの外は固定の部品と同じ。並びの要素はすべて `"<正規の形の IP>"`。数えた IP の数と要素の数が同じ |
 | | `FuzzCollectHTTPRows` `FuzzCollectWAFRows` `FuzzMismatchSamples` | Insights の結果の行 (偽の API) | 収集の全体がパニックしない。record を JSON にできる。メールアドレスと User-Agent の原文が残らない |
 | | `FuzzPrefixCaptures` | 設定の `request.id`・`request.lines` の正規表現 (`request_lines`。ADR 0051) | キャプチャを `rl_` の名前に付け替えても RE2 で読め、数と順番が同じで、同じ文字列の同じ位置に一致する (エスケープ・文字クラスの中を書き換えない)。`/` が残らない |
 | | `FuzzRequestRows` `FuzzCollectRequestRows` | `request_lines` の Insights の結果の行 | 件数は有限で負でない。最初の行のある数 ≤ request_id の数、使い回しの数 ≤ 最初の行のある数。数えるリクエストの数は最初の行のあるリクエストの数より減らない。鍵の数が最初の行の数の半分未満なら必ず止める。`FORMAT_MISMATCH` なら record を出さない |

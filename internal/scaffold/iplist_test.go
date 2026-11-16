@@ -30,6 +30,9 @@ func TestGenerateIPList(t *testing.T) {
 		r.SignInFailure == nil || !reflect.DeepEqual(*r.SignInFailure, config.DefaultIPListSignIn) {
 		t.Fatalf("reasons = %+v %+v %+v", r.WAFBlock, r.Probe, r.SignInFailure)
 	}
+	if cs := l.CountSuspect; cs == nil || !reflect.DeepEqual(*cs, config.DefaultIPListCountSuspect) {
+		t.Fatalf("count_suspect = %+v", cs)
+	}
 }
 
 // --diff: ip_list: が無い設定には missing_key、書いた値が既定値と違えば param_changed。
@@ -45,6 +48,9 @@ func TestDiffIPList(t *testing.T) {
 	items, err := Diff([]byte(without), reg)
 	if err != nil || len(items) != 1 || items[0].Kind != DiffMissingKey || items[0].Path != "ip_list" || !strings.Contains(items[0].Detail, "ADR 0069") {
 		t.Fatalf("%v %+v", err, items)
+	}
+	if items, err := Diff([]byte(strings.Replace(b, "max_queries: 2", "max_queries: 1", 1)), reg); err != nil || len(items) != 1 || items[0].Path != "ip_list.count_suspect.max_queries" {
+		t.Fatalf("count_suspect: %v %+v", err, items)
 	}
 	changed := strings.Replace(b, "min_count_window: 50", "min_count_window: 80", 1)
 	items, err = Diff([]byte(changed), reg)
