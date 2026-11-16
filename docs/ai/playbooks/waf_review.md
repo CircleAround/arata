@@ -42,8 +42,20 @@ finding になるのは、正規の画面で多数の IP が BLOCK された誤�
 1. **封じ込め**: 攻撃そのものは findings 側 (waf_block_trend・probe_paths・login_bruteforce) の手順で扱う。`probe_allowed` で探索が当たっていたら probe_paths の封じ込め
 2. **承認**: 対象外
 3. **expected_denied**: 対象外
-4. **ack / snooze**: `false_positive` の finding は、確認して直す予定なら snooze、意図した BLOCK なら ack。proposals 自体は状態を持たないので操作は無い
+4. **片付け**: 片付けは下の「片付け」の節。proposals 自体は状態を持たないので操作は無い
 5. **設定の修正**: 候補を文章と設定の例に書き起こす (何を・なぜ (evidence の数字)・段階)。適用は IaC で、`count_first` はまず COUNT にしてから確定する。`unused_rule` の削除は勧めない
+
+## 片付け
+
+| 重大度 | 上がる余地 | 許す操作 |
+|---|---|---|
+| low | なし | snooze・resolve |
+
+上がる余地は、同じ Key のまま、より重い重大度で観測されうるか。ack を許すのは余地のある行だけ (ack 中に出直すのは重大度が上がったときだけ)。このチェックは state 型 (観測されなくなれば解消になる)。
+
+- `false_positive` の finding は、直す予定の日まで snooze。意図した BLOCK なら、見直す日を決めて snooze
+- resolve: 直したとき。proposals 自体は状態を持たないので操作は無い
+- 表で許さない ack は arata が止める (`ACK_REFUSED`)。終わった出来事だと確かめたうえでどうしても ack するなら、人が `--force --reason "<理由>"` を付ける (記録に force が残り、週次の報告に出る)。LLM は `--force` を提案しない
 
 ## やってはいけないこと
 

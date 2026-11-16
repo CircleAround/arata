@@ -2,6 +2,9 @@ package engine
 
 import (
 	"strings"
+
+	"github.com/CircleAround/arata/internal/checks"
+	"github.com/CircleAround/arata/internal/store"
 	"testing"
 	"unicode"
 	"unicode/utf8"
@@ -60,4 +63,24 @@ func FuzzValidateTriageInput(f *testing.F) {
 			}
 		}
 	})
+}
+
+// 片付けの表の approve の列 (checks.ApproveChecks) は、arata approve が受け付けるチェックと同じ (ADR 0068 の 4 節)。
+// approve の判定 (ApproveTargetOf) は、受け付けないチェックを「主体の指摘ではない」で止め、受け付けるチェックは中身 (主体) を見る。
+func TestApproveChecksMatchApprove(t *testing.T) {
+	for _, c := range checks.NewRegistry().Names() {
+		_, err := ApproveTargetOf(store.Finding{Check: c})
+		rejectedByCheck := err != nil && (strings.Contains(err.Error(), "not about a principal") || strings.Contains(err.Error(), "does not write oidc_subjects"))
+		switch {
+		case c == "access_denied":
+			// --expected-denied でだけ approve できる (主体の承認は拒む)
+			if !checks.ApproveChecks[c] {
+				t.Errorf("access_denied must be approvable (--expected-denied)")
+			}
+		case checks.ApproveChecks[c] && rejectedByCheck:
+			t.Errorf("%s is approvable in the triage table, but arata approve rejects the check: %v", c, err)
+		case !checks.ApproveChecks[c] && !rejectedByCheck:
+			t.Errorf("%s is not approvable in the triage table, but arata approve looks into it: %v", c, err)
+		}
+	}
 }

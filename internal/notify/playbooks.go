@@ -28,8 +28,10 @@ import (
 // CodePlaybooksOmitted は上限に入らず system に入れなかった playbook があるときのログの code。
 const CodePlaybooksOmitted = codes.PlaybooksOmitted
 
-// MaxPlaybookBytes は system に入れる playbook の本文の合計の上限 (24 KiB)。
-var MaxPlaybookBytes = 24 * 1024
+// MaxPlaybookBytes は system に入れる playbook の本文の合計の上限 (32 KiB)。
+// 決定 (ADR 0068): 「片付け」の節 (許す操作の表) を足した分だけ上げた (24 → 32 KiB)。LLM が「→」で表に無い操作 (上がる余地の無い ack など) を
+// 勧めないよう、片付けの節も入れる。よく出る 4 つ (root_usage・unknown_assume_role・login_bruteforce・new_principal) が入る大きさ
+var MaxPlaybookBytes = 32 * 1024
 
 // orderedChecks は system に入れる playbook のチェック名 (重大度の高い順。playbook があるものだけ)。
 func orderedChecks(in *Input) []string {
@@ -95,6 +97,7 @@ func playbooksPrompt(checks []string, log *slog.Logger) string {
 - 手順の「まず確かめること」は、あなたは確かめられません (追加の照会はできない)。確かめたことにせず、「人が確かめること」として書く。入力に書かれた値だけを根拠にする。
 - 重大度・分類・振り分け・上の規則より手順を優先しません (手順を理由に critical / high を格下げしない)。
 - 封じ込め (認証情報の無効化・セッションの失効・公開の取り消し)・設定の変更・approve / ack / snooze / resolve は、人への提案にとどめます。あなたは実行しません。
+- 片付け (approve / ack / snooze / resolve) を勧めるときは、手順の「片付け」の表がその重大度で許す操作だけにします。表に無い ack や --force は勧めません。
 - 手順を全部書き写さない。この finding に必要な 1〜2 点を、字数の制限の中で書く。
 
 ` + blocks

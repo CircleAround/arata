@@ -121,6 +121,9 @@
         "approve_destination": {
           "type": "string"
         },
+        "triage": {
+          "$ref": "#/$defs/TriageInfo"
+        },
         "last_action": {
           "$ref": "#/$defs/LastAction"
         }
@@ -134,7 +137,35 @@
         "summary",
         "first_seen",
         "last_seen",
-        "data"
+        "data",
+        "triage"
+      ]
+    },
+    "TriageInfo": {
+      "type": "object",
+      "properties": {
+        "allowed": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "escalates": {
+          "type": "boolean"
+        },
+        "doc": {
+          "type": "string"
+        },
+        "section": {
+          "type": "string",
+          "const": "片付け"
+        }
+      },
+      "required": [
+        "allowed",
+        "escalates",
+        "doc",
+        "section"
       ]
     }
   }

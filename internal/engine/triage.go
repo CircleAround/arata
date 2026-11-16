@@ -51,14 +51,47 @@ func ValidateReason(reason string) error {
 	return nil
 }
 
-// ackGuarded は ack を止める重大度か (high・critical。チェックを問わない。ADR 0068 の 2 節)。
-// 最も重い重大度で ack すると、重大度が上がる余地が無く、後で本物が起きても再報告されない (ADR 0022)。
-func ackGuarded(severity string) bool {
-	return checks.Severity(severity).Rank() >= checks.High.Rank()
+// ackGuarded は ack を止めるか。片付けの表 (checks.TriageRows。正は playbook の「片付け」) が、その check × 重大度で ack を許さなければ止める
+// (ADR 0068 の 2 節・6 節)。表は high・critical と、同じ Key で重大度の上がる余地の無い行で ack を許さない。
+// 上がる余地が無いまま ack すると、ack 中に出直すのは重大度が上がったときだけ (ADR 0022) なので、後で本物が起きても再報告されない。
+func ackGuarded(f store.Finding) bool {
+	return !checks.TriageAllows(f.Check, checks.Severity(f.Severity), checks.TriageAck)
+}
+
+// TriageInfo は review の各 finding に載せる、許す操作と根拠の文書 (ADR 0068 の 4 節)。
+type TriageInfo struct {
+	// Allowed は許す操作 (approve・ack・snooze・resolve の順)。片付けの表の行から、この finding で approve できなければ approve を除く。
+	Allowed []string `json:"allowed"`
+	// Escalates は、同じ Key のまま重大度が上がりうるか (false なら ack は最後になるので許さない)。
+	Escalates bool `json:"escalates"`
+	// Doc は根拠の文書を引くコマンド、Section はその節。
+	Doc     string `json:"doc"`
+	Section string `json:"section" jsonschema:"const=片付け"`
+}
+
+// triageOf は finding の許す操作。表に無い組 (この版が知らない重大度など) は snooze と resolve だけ。
+func triageOf(f store.Finding) TriageInfo {
+	info := TriageInfo{Doc: "arata help ai playbook " + f.Check, Section: "片付け"}
+	row, ok := checks.TriageRowOf(f.Check, checks.Severity(f.Severity))
+	if !ok {
+		info.Allowed = []string{checks.TriageSnooze, checks.TriageResolve}
+		return info
+	}
+	info.Escalates = row.Escalates
+	for _, a := range row.Allowed {
+		if a == checks.TriageApprove && !approvable(f) {
+			continue
+		}
+		info.Allowed = append(info.Allowed, a)
+	}
+	return info
 }
 
 // approvable は finding を arata approve で片付けられるか (主体・行き先の承認、access_denied の想定済みの拒否)。
 func approvable(f store.Finding) bool {
+	if !checks.ApproveChecks[f.Check] {
+		return false
+	}
 	if _, err := ApproveTargetOf(f); err == nil {
 		return true
 	}
@@ -81,7 +114,7 @@ func (e *AckRefusedError) Error() string {
 	if e.NoReason {
 		return fmt.Sprintf("ack --force of finding %s needs --reason (why this %s finding may stay silent)", e.ID, e.Severity)
 	}
-	return fmt.Sprintf("finding %s (%s) is %s and cannot be acked: use approve / snooze --until / resolve (arata help ai playbook %s), or --force --reason", e.ID, e.Check, e.Severity, e.Check)
+	return fmt.Sprintf("finding %s (%s, %s) cannot be acked: the triage table allows no ack here (high or critical, or no room for the severity to rise for the same key); use approve / snooze --until / resolve (arata help ai playbook %s), or --force --reason", e.ID, e.Check, e.Severity, e.Check)
 }
 
 // Guidance は止めたときに人へ出す案内 (人向け。機械は code の ACK_REFUSED を読む)。
@@ -91,8 +124,8 @@ func (e *AckRefusedError) Guidance() string {
 		fmt.Fprintf(&b, "--force には --reason (なぜ黙らせてよいか、1 行) が要ります。finding %s (%s、%s) は ack していません。\n", e.ID, e.Check, e.Severity)
 		return b.String()
 	}
-	fmt.Fprintf(&b, "finding %s (%s) は重大度 %s なので ack できません (ストアは変えていません)。\n", e.ID, e.Check, e.Severity)
-	b.WriteString("ack すると、重大度が上がる余地が無く、後で本物が起きても二度と報告されません。次のどれかを使ってください:\n")
+	fmt.Fprintf(&b, "finding %s (%s、重大度 %s) は ack できません (ストアは変えていません)。\n", e.ID, e.Check, e.Severity)
+	b.WriteString("このチェックのこの重大度は、同じ指摘のまま重大度が上がる余地が無い (または最も重い側) ので、ack すると後で本物が起きても二度と報告されません。次のどれかを使ってください:\n")
 	if e.Approvable {
 		b.WriteString("  - approve: 正規の主体だと確かめた (arata approve <id> --note \"<理由>\"。Actions の運用では allowlist.yaml を PR で直す)\n")
 	}

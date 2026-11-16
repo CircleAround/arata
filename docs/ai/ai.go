@@ -40,8 +40,9 @@ const playbookDir = "playbooks"
 
 // PlaybookSections は playbook の見出し (## ) で、この順に必ず持つ。
 // aratam などが LLM の system に埋め込むときの約束でもあるので、変えるときは読む側も見直す。
+// 決定 (ADR 0068): 「片付け」は、チェック × 重大度 → 上がる余地・許す操作の表 (正。internal/checks の表がテストで突き合わせる) と使いどころ。
 // 決定 (ADR 0058): 最後の「関連する事例」には、公開の事例 (`arata help ai threats <id>`) か「対応する公開の事例はまだ無い」を書く。
-var PlaybookSections = []string{"この指摘の意味", "まず確かめること", "判断の分かれ目", "対処の選択肢", "やってはいけないこと", "関連する事例"}
+var PlaybookSections = []string{"この指摘の意味", "まず確かめること", "判断の分かれ目", "対処の選択肢", "片付け", "やってはいけないこと", "関連する事例"}
 
 // PlaybookNames は playbook のあるチェック名 (名前順)。
 func PlaybookNames() []string {

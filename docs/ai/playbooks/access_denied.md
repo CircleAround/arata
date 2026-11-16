@@ -39,8 +39,23 @@ allowlist で承認済みの主体でも出る (承認は「居ること」を�
 2. **承認**: 主体の承認では止まらない。`--expected-denied` を付けない approve は拒否される
 3. **expected_denied**: 想定内の拒否なら、主体 × API の単位で `arata approve <id> --expected-denied '<サービス:操作>' --note "<なぜ想定内か>"` を人に提案する。
    広い glob (`*:*`、`iam:*`) は列挙を隠すので勧めない。詳しくは `arata help ai approve` の「access_denied が鳴ったとき」
-4. **ack / snooze**: 権限の足りないバッチの修正待ちなどは ack / snooze (重大度が上がれば再報告される)
+4. **片付け**: 片付けは下の「片付け」の節。権限の足りないバッチの修正待ちなどは snooze (medium なら ack も使える)
 5. **設定の修正**: アプリに必要な権限を足す、不要な呼び出しをやめる (アプリ側の修正)
+
+## 片付け
+
+| 重大度 | 上がる余地 | 許す操作 |
+|---|---|---|
+| high | なし | approve・snooze・resolve |
+| medium | あり | approve・ack・snooze・resolve |
+
+上がる余地は、同じ Key のまま、より重い重大度で観測されうるか。ack を許すのは余地のある行だけ (ack 中に出直すのは重大度が上がったときだけ)。このチェックは event 型 (観測されなくても解消にならない)。
+
+- approve: 想定内の拒否は `--expected-denied` で (上の 3)
+- ack: medium だけ。権限の足りないバッチの修正待ちなど。拒否の種類が増えれば high で出直す
+- snooze: 修正の予定が決まっていれば、その日まで
+- resolve: 直した (権限を足した・呼び出しをやめた)。また拒否が増えれば新規として報告される
+- 表で許さない ack は arata が止める (`ACK_REFUSED`)。終わった出来事だと確かめたうえでどうしても ack するなら、人が `--force --reason "<理由>"` を付ける (記録に force が残り、週次の報告に出る)。LLM は `--force` を提案しない
 
 ## やってはいけないこと
 

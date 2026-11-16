@@ -36,7 +36,7 @@ on:
         type: string
         required: false
       force:
-        description: 'ack だけ。重大度が high・critical の finding も ack する (ふつうは止まる。approve / snooze / resolve を先に考える。理由と実行した人が force として残る)'
+        description: 'ack だけ。片付けの表が ack を許さない finding (high・critical など) も ack する (ふつうは止まる。approve / snooze / resolve を先に考える。理由と実行した人が force として残る)'
         type: boolean
         default: false
         required: false
@@ -167,9 +167,9 @@ jobs:
           mask-aws-account-id: true
 
       # ログの方針は監査と同じ: 出力は実行環境の一時ファイルに書き、Actions には INFO 以外の level / code / source だけを出す。
-      # 重大度が high・critical の ack は arata が止める (ACK_REFUSED。ADR 0068)。止める規則はここに書かない (arata の 1 か所)。
+      # 片付けの表 (playbook の「片付け」) が許さない ack は arata が止める (ACK_REFUSED。high・critical と、重大度の上がる余地の無いもの。ADR 0068)。止める規則はここに書かない (arata の 1 か所)。
       # 止められたら、ログと Summary に案内を出す (refused の出力を Summary の step が読む)。
-      # 失敗の見分け: ACK_REFUSED = high 以上の ack / CONFIG_INVALID = ID が無い・既に resolved・期日が過去・理由に使えない文字 / STORE_CONFLICT = 同時に書かれた (もう一度実行する)。
+      # 失敗の見分け: ACK_REFUSED = 表が許さない ack / CONFIG_INVALID = ID が無い・既に resolved・期日が過去・理由に使えない文字 / STORE_CONFLICT = 同時に書かれた (もう一度実行する)。
       - id: triage
         name: arata ack / snooze / resolve
         timeout-minutes: 10
@@ -190,7 +190,7 @@ jobs:
           # code は機械が読む値 (人向けの文言は読まない。ADR 0054)
           if jq -Re 'fromjson? | objects | select(.code == "ACK_REFUSED")' "$log" >/dev/null; then
             echo "refused=true" >>"$GITHUB_OUTPUT"
-            echo "::error::ACK_REFUSED: 重大度が high・critical の finding は ack できない (ack すると後で本物が起きても再報告されない)。正規の主体なら allowlist.yaml を PR で直す (approve に当たる)、期日を決めて見直すなら snooze、直したなら resolve。根拠は arata help ai playbook <check> の「片付け」。終わった出来事だと確かめてどうしても ack するなら force を付けて実行し直す"
+            echo "::error::ACK_REFUSED: この finding は ack できない (high・critical か、同じ指摘のまま重大度が上がる余地が無い。ack すると後で本物が起きても再報告されない)。正規の主体なら allowlist.yaml を PR で直す (approve に当たる)、期日を決めて見直すなら snooze、直したなら resolve。根拠は arata help ai playbook <check> の「片付け」。終わった出来事だと確かめてどうしても ack するなら force を付けて実行し直す"
           fi
           echo "arata exit=$status"
           exit "$status"
@@ -226,7 +226,7 @@ jobs:
             echo '```'
             if [ "$REFUSED" = true ]; then
               echo
-              echo "**ack は止められました (ACK_REFUSED)**。重大度が high・critical の finding は ack できません。ack すると、後で本物が起きても二度と報告されません。"
+              echo "**ack は止められました (ACK_REFUSED)**。この finding は ack できません (high・critical か、同じ指摘のまま重大度が上がる余地が無い)。ack すると、後で本物が起きても二度と報告されません。"
               echo
               echo "- 正規の主体だと確かめた: allowlist.yaml を PR で直す (approve に当たる)"
               echo "- 期日を決めて見直す: action を snooze にして until を書く"

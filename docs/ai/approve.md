@@ -129,7 +129,7 @@ access_denied は allowlist で主体を承認しても止まらない (承認�
   - 書式は「サービス:操作」の glob (`apis` と同じ形。`*` は任意の文字列)。広すぎるもの (`*:*`、`iam:*` など) は列挙を隠すので避ける。
     期限を付けられる (`--expires`)。期限を過ぎたら再び数える
   - 注意: 項目を新しく作ると、その主体そのものも承認される (new_principal なども止まる)。主体の承認として妥当でないなら作らない
-- **主体ごと止めたい** (権限の足りないバッチの修正待ちなど): `ack` か `snooze`。ただし ack / snooze しても、重大度が上がれば (medium → high など) 再報告される
+- **主体ごと止めたい** (権限の足りないバッチの修正待ちなど): `ack` (medium だけ) か `snooze`。ただし ack / snooze しても、重大度が上がれば (medium → high など) 再報告される
 - **説明が付かない**: 承認も ack もせず、要対処として扱う (乗っ取り・SaaS 側の侵害の疑い。`arata help ai report` の相関付け)
 
 ## principal_new_source・secret_access が鳴ったとき
@@ -138,13 +138,13 @@ access_denied は allowlist で主体を承認しても止まらない (承認�
 (approve は書かない)。調べる前に提案しない。
 
 - principal_new_source: 恒常的な拠点の送信元は `source_ips` に (`cidr` と `note`)。CI のランナーのように送信元が毎回変わる主体は、主体の項目に `dynamic_source: true`
-  (low が出なくなる。書き込みが多い・新しいリージョン・拒否も出ているときの medium 以上は出る)。一時的な出張などは ack / snooze
+  (low が出なくなる。書き込みが多い・新しいリージョン・拒否も出ているときの medium 以上は出る)。一時的な出張などは snooze (low・medium なら ack も)
 - secret_access: 恒常的な「主体 × 秘匿値」は `secrets_access` に (`principal` と `secrets` の glob。例 `["prod/app-a/*"]`)。初出に数えなくなる (一括読み出しには数える)。
-  広い glob (`*`) は初出を隠すので勧めない。一時的な読み取りは ack / snooze
+  広い glob (`*`) は初出を隠すので勧めない。一時的な読み取りは snooze (low・medium なら ack も。high は ack できない)
 
 ## approve ではなく ack / snooze / resolve にするもの
 
 - 主体の承認ではない finding (root_usage、login_bruteforce、probe_paths、endpoint_abuse、waf_block_trend、principal_new_source、secret_access など) は approve できない。access_denied は上の `--expected-denied` だけ
-- `ack`: 確認したが allowlist に入れたくないもの。再報告しないが未対応一覧に残る。ack したときより重大度が上がったら変化 (changed) として再報告される
+- `ack`: 確認したが allowlist に入れたくないもの。再報告しないが未対応一覧に残る。ack したときより重大度が上がったら変化 (changed) として再報告される。使えるのは、playbook の「片付け」の表 (`arata review --format json` の `triage.allowed`) が許す重大度だけ
 - `snooze --until YYYY-MM-DD`: 対処の予定が決まっているもの。期日以降に再び観測されたら新規として再報告される。期日前でも重大度が上がれば再報告される
 - `resolve`: 対処が終わったもの。再び観測されたら新規として報告される。選び方の基準と導入直後に片付ける流れは `arata help ai onboarding`

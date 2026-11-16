@@ -46,12 +46,25 @@
 1. **封じ込め** (守りが外された): 外した主体を突き止め、その認証情報を止める (キーの無効化・`Revoke sessions`)。CloudTrail は `aws cloudtrail start-logging --name <証跡>` で再開する
 2. **承認**: 対象外
 3. **expected_denied**: 対象外
-4. **ack / snooze**: 直す予定の日が決まっていれば snooze。意図して外している (例: 使わないリージョンを SCP で止めていて GuardDuty を入れない) なら理由を記録して ack
+4. **片付け**: 片付けは下の「片付け」の節。直す予定の日が決まっていれば snooze
 5. **設定の修正**: マルチリージョンの証跡を作る (`--is-multi-region-trail`)、ログファイルの検証を有効にする (`--enable-log-file-validation`)、
    GuardDuty を有効にする、ルートに MFA を付ける、S3 の Public Access Block の 4 項目を有効にする、パスワードポリシーを設定する
    (`aws iam update-account-password-policy --minimum-password-length 14` など)。可能なら IaC で。
    ALB の WAF は、REGIONAL の WebACL を作って ALB に関連付ける (`aws wafv2 associate-web-acl`)。**マネージドルールはまず COUNT で入れ**、
    WAF のログで誤検知が無いことを確かめてから BLOCK に変える。ログを CloudWatch Logs に出せば waf_block_trend・waf_review でも見られる
+
+## 片付け
+
+| 重大度 | 上がる余地 | 許す操作 |
+|---|---|---|
+| high・medium | なし | snooze・resolve |
+
+上がる余地は、同じ Key のまま、より重い重大度で観測されうるか。ack を許すのは余地のある行だけ (ack 中に出直すのは重大度が上がったときだけ)。このチェックは state 型 (観測されなくなれば解消になる)。
+
+- snooze: 直す予定の日が決まっていれば、その日まで
+- 意図して外している (例: 使わないリージョンを SCP で止めていて GuardDuty を入れない) ものも、理由を付けて見直す日まで snooze。ack はできない
+- resolve: 直したとき。直っていなければ次の run で新規として出直す
+- 表で許さない ack は arata が止める (`ACK_REFUSED`)。終わった出来事だと確かめたうえでどうしても ack するなら、人が `--force --reason "<理由>"` を付ける (記録に force が残り、週次の報告に出る)。LLM は `--force` を提案しない
 
 ## やってはいけないこと
 

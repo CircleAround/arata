@@ -40,8 +40,20 @@
    MFA を登録し直す。ルートの操作で作られた IAM ユーザー・アクセスキー・ロールの信頼ポリシーの変更を洗い出して取り消す
 2. **承認**: できない (root_usage は主体の承認の対象ではない)
 3. **expected_denied**: 対象外
-4. **ack / snooze**: 正規の作業と確認できたら `arata ack <id>` (人が実行)。同じ IP から続けて使う予定なら作業の終わりの日で `arata snooze <id> --until YYYY-MM-DD`
+4. **片付け**: 片付けは下の「片付け」の節。critical は ack できない (終わった作業は resolve、続く作業は snooze)
 5. **設定の修正**: ルートに MFA を付ける、ルートのアクセスキーを持たない、日常の作業は IAM の主体 (IAM Identity Center など) で行う。ルートを使う作業は記録に残す
+
+## 片付け
+
+| 重大度 | 上がる余地 | 許す操作 |
+|---|---|---|
+| critical | なし | snooze・resolve |
+
+上がる余地は、同じ Key のまま、より重い重大度で観測されうるか。ack を許すのは余地のある行だけ (ack 中に出直すのは重大度が上がったときだけ)。このチェックは event 型 (観測されなくても解消にならない)。
+
+- snooze: 同じ IP から続けて使う予定の作業は、作業の終わりの日まで `arata snooze <id> --until YYYY-MM-DD`
+- resolve: 正規の作業と確かめ、終わったら `arata resolve <id> --reason "<作業>"`。また使われれば新規として報告される
+- 表で許さない ack は arata が止める (`ACK_REFUSED`)。終わった出来事だと確かめたうえでどうしても ack するなら、人が `--force --reason "<理由>"` を付ける (記録に force が残り、週次の報告に出る)。LLM は `--force` を提案しない
 
 ## やってはいけないこと
 

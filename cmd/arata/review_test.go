@@ -251,7 +251,7 @@ func TestAllowlistEditResolves(t *testing.T) {
 	if code := c.run("approve", np.ID, "--config", c.cfg); code != 2 {
 		t.Fatalf("approve without --note exit %d", code)
 	}
-	if code := c.run("ack", np.ID, "--config", c.cfg); code != 0 { // acked でも解消の対象
+	if code := c.run("ack", np.ID, "--config", c.cfg, "--force", "--reason", "pending approval"); code != 0 { // acked でも解消の対象
 		t.Fatalf("ack exit %d", code)
 	}
 	p := filepath.Join(c.dir, "allowlist.yaml")
@@ -337,7 +337,7 @@ func TestTriageRecordsReasonAndBy(t *testing.T) {
 		t.Fatalf("snooze exit %d: %s%s", code, c.stdout, c.stderr)
 	}
 	// --by を省けば OS のユーザー名 (approve と同じ)。ここでは空でないことだけを見る
-	if code := c.run("ack", "-c", c.cfg, ext.ID); code != 0 {
+	if code := c.run("ack", "-c", c.cfg, "--force", "--reason", "known SaaS", ext.ID); code != 0 {
 		t.Fatalf("ack exit %d: %s%s", code, c.stdout, c.stderr)
 	}
 	var items2 []struct {
@@ -432,9 +432,13 @@ func TestAckRefusesHighSeverity(t *testing.T) {
 	if code := c.run("ack", "-c", c.cfg, "--force", "--reason", "setup work, confirmed with the owner", "--by", "alice", root.ID); code != 0 {
 		t.Fatalf("ack --force: exit %d %s%s", code, c.stdout, c.stderr)
 	}
-	// medium は今までどおり ack できる (force ではない)
-	if code := c.run("ack", "-c", c.cfg, np.ID); code != 0 {
-		t.Fatalf("ack medium: exit %d %s", code, c.stderr)
+	// medium でも、同じ Key で重大度の上がる余地の無いもの (new_principal) は止める (ADR 0068 の 6 節。片付けの表)
+	if code := c.run("ack", "-c", c.cfg, np.ID); code != 2 || strings.Join(c.codes(), ",") != "ACK_REFUSED" ||
+		!strings.Contains(c.stdout.String(), "approve") || !strings.Contains(c.stdout.String(), "arata help ai playbook new_principal") {
+		t.Fatalf("ack medium without room to escalate: exit %d %v\n%s", code, c.codes(), c.stdout)
+	}
+	if code := c.run("ack", "-c", c.cfg, "--force", "--reason", "kept for the migration", np.ID); code != 0 {
+		t.Fatalf("ack medium --force: exit %d %s", code, c.stderr)
 	}
 	// snooze と resolve は止めない
 	if code := c.run("snooze", "-c", c.cfg, "--until", "2026-11-01", uar.ID); code != 0 {
@@ -454,11 +458,43 @@ func TestAckRefusesHighSeverity(t *testing.T) {
 		}
 		forced[it.ID] = it.LastAction.Forced
 	}
-	if len(forced) != 2 || !forced[root.ID] || forced[np.ID] {
-		t.Fatalf("forced must be recorded only for the ack that passed the guard: %v", forced)
+	if len(forced) != 2 || !forced[root.ID] || !forced[np.ID] {
+		t.Fatalf("forced must be recorded for the acks that passed the guard: %v", forced)
 	}
 	if code := c.run("review", "-c", c.cfg, "--status", "acked"); code != 0 || !strings.Contains(c.stdout.String(), "ack alice ") || !strings.Contains(c.stdout.String(), "(force)") {
 		t.Fatalf("table:\n%s", c.stdout)
 	}
 	c.assertCodesInVocabulary()
+}
+
+// review --format json の各 finding に、許す操作と根拠の文書が載る (ADR 0068 の 4 節)。表は checks の片付けの表 (正は playbook)。
+func TestReviewTriage(t *testing.T) {
+	c := newCLI(t)
+	seedFindings(t, c)
+	if code := c.run("review", "-c", c.cfg, "--format", "json"); code != 0 {
+		t.Fatal(c.stderr.String())
+	}
+	schematest.Conforms(t, engine.ReviewSchema, c.stdout.Bytes(), &[]engine.ReviewItem{})
+	var items []engine.ReviewItem
+	if err := json.Unmarshal(c.stdout.Bytes(), &items); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"root_usage|arn:aws:iam::" + acct + ":root|198.51.100.8":                                           "snooze,resolve",
+		"unknown_assume_role|arn:aws:iam::" + acct + ":user/mallory->arn:aws:iam::" + acct + ":role/Admin": "approve,snooze,resolve",
+		"new_principal|arn:aws:iam::" + acct + ":user/mallory":                                             "approve,snooze,resolve",
+	}
+	for _, it := range items {
+		w, ok := want[it.Check+"|"+it.Key]
+		if !ok {
+			continue
+		}
+		delete(want, it.Check+"|"+it.Key)
+		if got := strings.Join(it.Triage.Allowed, ","); got != w || it.Triage.Escalates || it.Triage.Doc != "arata help ai playbook "+it.Check || it.Triage.Section != "片付け" {
+			t.Errorf("%s: %+v (want %s)", it.Check, it.Triage, w)
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("not in review: %v", want)
+	}
 }

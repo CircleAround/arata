@@ -82,8 +82,21 @@ AWS のサービス主体 (EC2・Lambda などのインスタンスロール) �
 2. **承認**: 正規なら `arata approve <id> --note "<理由>"` を人に提案する。`caller_identity: account_only` の finding は `account:` で承認される。期限付きの委託は `--expires`。基準は `arata help ai approve`
 3. **行き先を既知にする**: 外向きで `mfa: true`、受託先などへの通常業務なら `arata approve <id> --destination --note "<理由>"` を人に提案する
    (呼び出し元は承認されない。基準は `arata help ai approve`)。expected_denied は対象外
-4. **ack / snooze**: 承認したくないが当面続くもの (移行期間など) は、期日を決めて snooze。high・critical は ack できない (arata が止める)
+4. **片付け**: 片付けは下の「片付け」の節。承認したくないが当面続くもの (移行期間など) は、期日を決めて snooze。ack はできない
 5. **設定の修正**: SaaS 連携の信頼ポリシーに `sts:ExternalId` の条件を付ける、Principal をアカウント全体ではなく特定のロールにする
+
+## 片付け
+
+| 重大度 | 上がる余地 | 許す操作 |
+|---|---|---|
+| high・info | なし | approve・snooze・resolve |
+
+上がる余地は、同じ Key のまま、より重い重大度で観測されうるか。ack を許すのは余地のある行だけ (ack 中に出直すのは重大度が上がったときだけ)。このチェックは event 型 (観測されなくても解消にならない)。
+
+- approve: 正規の呼び出し元なら approve (外向きで MFA ありの通常業務なら `--destination`)。基準は `arata help ai approve`
+- snooze: 承認したくないが当面続くもの (移行期間など) は、期日を決めて
+- resolve: 終わった 1 回の引き受け (調べて説明がついたもの)。同じ組がまた起きれば新規として報告される
+- 表で許さない ack は arata が止める (`ACK_REFUSED`)。終わった出来事だと確かめたうえでどうしても ack するなら、人が `--force --reason "<理由>"` を付ける (記録に force が残り、週次の報告に出る)。LLM は `--force` を提案しない
 
 ## やってはいけないこと
 

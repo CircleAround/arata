@@ -37,11 +37,11 @@ LLM がこの流れを手伝うときも、run と review を読んで材料を�
 | 出やすいもの | チェック | 典型的な片付け方 |
 |---|---|---|
 | アプリの起動時に、実行用のロールが秘匿値をまとめて読む (一括読み出し。high) | secret_access | 正規の読み手なら、平常帯がそろう日まで snooze (下の注)。ack しない |
-| 導入作業の IAM 変更 (読み取り専用ロールを作る・ポリシーを付ける) | iam_changes | 作業として確認できたら ack。IaC のデプロイ主体なら approve (`--tag deploy`) |
+| 導入作業の IAM 変更 (読み取り専用ロールを作る・ポリシーを付ける) | iam_changes | 作業として確認できたら resolve (終わった出来事)。IaC のデプロイ主体なら approve (`--tag deploy`) |
 | 監査の仕組みや社員によるロールの引き受け | unknown_assume_role / new_principal | 説明できる主体は approve。受託先などへのスイッチロールは行き先を `assume_destinations` に |
-| 設定していない守り (証跡・GuardDuty・パスワードポリシー・ALB の WAF など) | posture | 直す日を決めて snooze。意図して外しているなら理由を残して ack |
+| 設定していない守り (証跡・GuardDuty・パスワードポリシー・ALB の WAF など) | posture | 直す日を決めて snooze。意図して外しているものも、理由を残して見直す日まで snooze |
 | 古いアクセスキー・MFA の無いユーザー | credential_hygiene | 直す日を決めて snooze |
-| アプリのログに残った秘密の値の形・署名付き URL・隠されていない送信項目 (設定に書いたロググループだけ) | log_hygiene | 秘密の値は先に無効化。出力元を直すと次の次の週に解消する。誤検知は確かめて ack (`arata help ai playbook log_hygiene`) |
+| アプリのログに残った秘密の値の形・署名付き URL・隠されていない送信項目 (設定に書いたロググループだけ) | log_hygiene | 秘密の値は先に無効化。出力元を直すと次の次の週に解消する。誤検知は確かめて、見直す日まで snooze (`arata help ai playbook log_hygiene`) |
 | 監査の主体や調査用のロールの、想定内の拒否 | access_denied | 設定で直す (`expected_denied`) |
 
 secret_access の一括読み出しの注: 閾値は `max(min_distinct, その主体の日ごとの数の中央値 × factor)`。中央値は過去 `baseline_days` (既定 14) 日で取り、記録の無い日は 0 と数える。
@@ -63,9 +63,9 @@ finding の ID は `arata review` と report に出る。手段は 4 つで、�
    LLM は提案まで。approve できるのは主体の承認になるチェックだけで、`arata review` が対象を示す
 2. **設定で直す**: 主体の承認ではない正常な動作は、allowlist.yaml の該当する節に人が書く
    (`secrets_access` / `source_ips` / `assume_destinations` / `expected_denied`。形式は `arata help ai`)。編集したら `arata config check`。
-   何が止まるかは節ごとに違う (`secrets_access` が止めるのは初出だけ。一括読み出しは止まらない)。既に出た finding が残ったら、下の選び方で snooze か ack を選ぶ
+   何が止まるかは節ごとに違う (`secrets_access` が止めるのは初出だけ。一括読み出しは止まらない)。既に出た finding が残ったら、下の選び方で snooze か resolve を選ぶ
 3. **直す予定を決める**: 直すつもりのもの (設定していない守り、使っていないキーなど) は、期日を決めて `arata snooze <id> --until YYYY-MM-DD`
-4. **確認して残す**: 正規の動きか、もう終わった出来事だと確かめたものだけ `arata ack <id>`
+4. **確認して閉じる**: もう終わった出来事だと確かめたものは `arata resolve <id>`。ack は、そのチェックの playbook の「片付け」の表が許す重大度だけ
 
 - 説明の付かないものは片付けない。playbook の「封じ込め」に進み、人が判断する
 - critical / high を、数が多いことを理由に ack で流さない
@@ -76,7 +76,7 @@ finding の ID は `arata review` と report に出る。手段は 4 つで、�
 
 | コマンド | 以後の動き | 使うとき |
 |---|---|---|
-| `ack` | 再報告しない (二度と報告されない)。`arata review` の未対応一覧には残る (acked) | 正規の動き、またはもう終わった出来事 |
+| `ack` | 再報告しない (重大度が上がらない限り二度と報告されない)。`arata review` の未対応一覧には残る (acked) | 同じ指摘のまま重大度が上がる余地のあるもの (playbook の「片付け」の表が許す行) だけ |
 | `snooze --until YYYY-MM-DD` | 期日まで沈黙する。期日以降に再び観測されたら新規として再報告する。直って観測されなくなれば解消になるのは state 型だけ (event 型は snoozed のまま残る) | 直すつもりのもの。期日は直す予定の日 |
 | `resolve` | 解消にする。再び観測されたら新規として報告する | 対処が終わり、もう観測されないはずのもの |
 
@@ -86,13 +86,14 @@ finding の ID は `arata review` と report に出る。手段は 4 つで、�
 ack と snooze の選び方:
 
 - **直すつもりなら snooze**。例: 証跡のログファイルの検証が無効、90 日使っていないアクセスキー。期日までに直せば解消になり、直っていなければ期日以降にまた報告される (忘れない)
-- **ack は、正規の動きか、もう終わった出来事にだけ**使う。例: 導入作業で読み取り専用ロールを作った IAM 変更 (終わった出来事)、
-  意図して入れていない守り (理由を記録したうえで)。ack したものは、同じ内容である限り二度と報告されない
+- **終わった出来事は resolve**。例: 導入作業で読み取り専用ロールを作った IAM 変更。同じことがまた起きれば新規として報告される (ack と違って最後にならない)。
+  意図して入れていない守りは、理由を記録して見直す日まで snooze
 - **報告が来なくなると困るものを ack にしない**。「いつか直す」「後で調べる」を ack にすると、直さないまま誰にも報されなくなる。期日を決めて snooze にする
 - ack / snooze 中でも、重大度がそのときより上がれば変化 (changed) として再報告される。ただし当てにできない場面がある:
   **そのチェックの最も重い重大度 (例: secret_access の high) で出た finding を ack すると、重大度が上がる余地が無いので、後で本物が起きても二度と報告されない**。
-  最も重い重大度のものは ack せず、期日を決めて snooze にする。
-  **arata は重大度が high・critical の ack を止める** (`ACK_REFUSED`。チェックを問わない)。止まったら案内のとおり approve / snooze / resolve を選ぶ。
+  同じ Key のまま重大度が上がらないチェック (root_usage・new_principal・posture など) も同じで、medium・low でも ack すると最後になる。
+  **arata は、playbook の「片付け」の表が許さない ack を止める** (`ACK_REFUSED`。high・critical と、上がる余地の無い行)。止まったら案内のとおり approve / snooze / resolve を選ぶ。
+  許す操作は `arata review --format json` の `triage.allowed` にも出る。
   終わった出来事だと確かめたものだけ、人が `--force --reason "<理由>"` で ack する (記録に force が残る)。LLM は `--force` を提案しない
 - まだ観測され続けるもの (今の状態を見るチェックや、数日分を集計するチェック) を `resolve` すると、次の run で同じものが新規に戻る。直る前に `resolve` しない
 - 状態型 (new_principal と週次のチェック) は、直して観測されなくなれば自動で解消になる。`resolve` を打たなくてよい
@@ -105,7 +106,7 @@ CloudTrail は記録まで最大 15 分ほど遅れるので、最初の run に
 
 - 最後の作業から 15 分以上置いて、`arata run --profile daily --out /tmp/arata-first/daily` をもう一度流す
   (run は前回の窓の終わりから続け、`ingest_delay` の分だけ前を引き直す。収集済みの出来事は再報告しない)
-- 出たものは上と同じ手順で片付ける。自分たちの作業だと確認できたもの (終わった出来事) は ack、監査の主体は approve か `audit_account` の設定で
+- 出たものは上と同じ手順で片付ける。自分たちの作業だと確認できたもの (終わった出来事) は resolve、監査の主体は approve か `audit_account` の設定で
 - この run で新しい指摘が出ず、`arata review` に見ていないものが残っていなければ、片付けは終わり
 
 ## 定時の通知を始める
