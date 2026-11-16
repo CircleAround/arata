@@ -598,14 +598,33 @@ func checkPatternTarget(pattern, arn, account string) error {
 type StatusOptions struct {
 	By     string
 	Reason string
-	// Force は high 以上の ack の守りを越える (ack だけ。--reason が必須。ADR 0068 の 2 節)。
+	// Force は片付けの表が許さない ack の守りを越える (ack だけ。--reason が必須。ADR 0068 の 2 節・6 節)。
 	Force bool
+	// DryRun は検査 (形・finding の有無・片付けの表・期日) を本番と同じに行い、ストアを書かない (ADR 0068 の 8 節)。
+	DryRun bool
+}
+
+// StatusChange は SetStatus の結果。Before は操作の前の状態、Forced は守りを越えたか。
+type StatusChange struct {
+	Finding store.Finding
+	Before  string
+	Forced  bool
+	DryRun  bool
 }
 
 // statusActions は状態 → 片付けの記録の操作の名前。
 var statusActions = map[string]string{store.FindingAcked: store.ActionAck, store.FindingSnoozed: store.ActionSnooze, store.FindingResolved: store.ActionResolve}
 
 func (e *Engine) SetStatus(ctx context.Context, id, status string, until time.Time, o StatusOptions) (*store.Finding, error) {
+	c, err := e.ChangeStatus(ctx, id, status, until, o)
+	if err != nil {
+		return nil, err
+	}
+	return &c.Finding, nil
+}
+
+// ChangeStatus は SetStatus の本体。o.DryRun なら何も書かずに、変えるはずの結果を返す。
+func (e *Engine) ChangeStatus(ctx context.Context, id, status string, until time.Time, o StatusOptions) (*StatusChange, error) {
 	act, err := e.triageAction(statusActions[status], o.By, o.Reason)
 	if err != nil {
 		return nil, err
@@ -630,15 +649,23 @@ func (e *Engine) SetStatus(ctx context.Context, id, status string, until time.Ti
 	if status == store.FindingSnoozed && !until.After(now) {
 		return nil, e.configErr(fmt.Errorf("--until must be in the future"))
 	}
-	if err := e.st.SetFindingStatus(ctx, f.ID, status, until, now, act); err != nil {
-		return nil, err
+	change := &StatusChange{Before: f.Status, Forced: act.Forced, DryRun: o.DryRun}
+	if !o.DryRun {
+		if err := e.st.SetFindingStatus(ctx, f.ID, status, until, now, act); err != nil {
+			return nil, err
+		}
 	}
 	f.Status, f.LastChanged = status, now
 	if status == store.FindingSnoozed {
 		f.SnoozeUntil = until
 	}
-	e.log.Info("finding status changed", "finding", f.ID, "check", f.Check, "status", status)
-	return f, nil
+	if o.DryRun {
+		e.log.Info("finding status dry run (nothing written)", "finding", f.ID, "check", f.Check, "status", status)
+	} else {
+		e.log.Info("finding status changed", "finding", f.ID, "check", f.Check, "status", status)
+	}
+	change.Finding = *f
+	return change, nil
 }
 
 func (e *Engine) ackRefused(f *store.Finding, noReason bool) error {

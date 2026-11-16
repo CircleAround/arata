@@ -1067,6 +1067,7 @@ oidc_subjects:                   # OIDC でのロールの引き受けの、既�
    │     (ack / snooze / resolve / approve は --reason (approve は --note) と --by を finding_actions に残す。ADR 0068)
    ├─ arata ack <finding-id>         → acked。再報告しない。報告には出ず、arata review の未対応一覧に残る (重大度が上がれば changed で再報告)。
    │     週次の「黙らせているもの」に出る (ADR 0068 の 3 節)
+   │     (ack / snooze / resolve の --dry-run は、同じ検査をしてストアを書かない。S3 にも送らない。ADR 0068 の 8 節)
    │     → 片付けの表 (checks.TriageRows。正は playbook の「片付け」) が許さなければ止める (ACK_REFUSED。approve / snooze / resolve を案内)。
    │       表は high・critical と、同じ Key で重大度の上がる余地の無い行で ack を許さない。review --format json の triage.allowed に許す操作。--force --reason でだけ通し、記録に forced (守りを越えたときだけ真。--force には --reason が要る。ADR 0068)
    ├─ arata snooze <finding-id> --until 2026-11-01   → 期日まで沈黙、期日に再報告
