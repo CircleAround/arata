@@ -92,3 +92,4 @@
 | [0066](0066-volume-spike-flash.md) | 量の急変を、時間帯ごとの平常帯と比べて速報する (`access_denied_spike`・`sign_in_failure_spike`。LLM を通さない短い通知) | 採用 |
 | [0067](0067-waf-query-regroup.md) | WAF の集計クエリを、行の多い種類ごとに組み替える (本数は 4 本のまま。BLOCK 側とカウントの一致の合計を上限から守る) | 採用 |
 | [0068](0068-triage-guard.md) | 片付けの守り: 理由と操作した人をストアに残し、high 以上の ack を止め (`--force` は理由が必須)、黙らせているものを週次に出し、許す操作を review に載せる | 提案 |
+| [0069](0069-ip-list.md) | 怪しい IP の一覧をストアに持ち、チェックをまたいで使う (判定に使う期間と保持の期間を分ける。最初の使い道は count_rule_status の suspect) | 採用 |
