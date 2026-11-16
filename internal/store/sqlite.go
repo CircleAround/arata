@@ -21,7 +21,7 @@ import (
 //go:embed schema.sql
 var schemaSQL string
 
-const schemaVersion = 7
+const schemaVersion = 8
 
 // Dir は dir:// バックエンド。<dir>/audit.sqlite と <dir>/raw/ を持つ。
 type Dir struct {
@@ -658,7 +658,7 @@ func (s *Dir) Finding(ctx context.Context, id string) (*Finding, error) {
 	return &fs[0], nil
 }
 
-func (s *Dir) SetFindingStatus(ctx context.Context, id, status string, snoozeUntil, at time.Time) error {
+func (s *Dir) SetFindingStatus(ctx context.Context, id, status string, snoozeUntil, at time.Time, act Action) error {
 	if status != FindingSnoozed {
 		snoozeUntil = time.Time{}
 	}
@@ -686,7 +686,61 @@ func (s *Dir) SetFindingStatus(ctx context.Context, id, status string, snoozeUnt
 			return err
 		}
 	}
+	if act.Name != "" {
+		forced := 0
+		if act.Forced {
+			forced = 1
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO finding_actions(finding_id, "check", key, action, "by", reason, forced, severity, status_before, snooze_until, at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+			f.ID, f.Check, f.Key, act.Name, act.By, act.Reason, forced, f.Severity, f.Status, nullableTime(snoozeUntil), fmtTime(at)); err != nil {
+			return wrap(err)
+		}
+	}
 	return wrap(tx.Commit())
+}
+
+const findingActionCols = `seq, finding_id, "check", key, action, "by", reason, forced, severity, status_before, snooze_until, at`
+
+// FindingActions は 1 つの finding の操作の記録を古い順に返す。
+func (s *Dir) FindingActions(ctx context.Context, findingID string) ([]FindingAction, error) {
+	return s.queryFindingActions(ctx, `SELECT `+findingActionCols+` FROM finding_actions WHERE finding_id = ? ORDER BY seq`, findingID)
+}
+
+// LastFindingActions は finding ごとの最後の操作を返す (記録の無い finding は含まない)。
+func (s *Dir) LastFindingActions(ctx context.Context) (map[string]FindingAction, error) {
+	as, err := s.queryFindingActions(ctx, `SELECT `+findingActionCols+` FROM finding_actions WHERE seq IN (SELECT MAX(seq) FROM finding_actions GROUP BY finding_id)`)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]FindingAction, len(as))
+	for _, a := range as {
+		out[a.FindingID] = a
+	}
+	return out, nil
+}
+
+func (s *Dir) queryFindingActions(ctx context.Context, q string, args ...any) ([]FindingAction, error) {
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, wrap(err)
+	}
+	defer rows.Close()
+	var out []FindingAction
+	for rows.Next() {
+		var a FindingAction
+		var forced int
+		var until sql.NullString
+		var at string
+		if err := rows.Scan(&a.Seq, &a.FindingID, &a.Check, &a.Key, &a.Action, &a.By, &a.Reason, &forced, &a.Severity, &a.StatusBefore, &until, &at); err != nil {
+			return nil, wrap(err)
+		}
+		a.Forced, a.At = forced != 0, parseTime(at)
+		if until.Valid {
+			a.SnoozeUntil = parseTime(until.String)
+		}
+		out = append(out, a)
+	}
+	return out, wrap(rows.Err())
 }
 
 // --- snapshot ---

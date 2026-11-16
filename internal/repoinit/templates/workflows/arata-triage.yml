@@ -28,7 +28,7 @@ on:
         type: string
         required: true
       reason:
-        description: 理由 (1 行。この実行の Summary に残る。ARN・アカウント ID などは書かない)
+        description: 理由 (1 行。ストアとこの実行の Summary に残り、review と報告に出る。ARN・アカウント ID などは書かない)
         type: string
         required: true
       until:
@@ -97,6 +97,8 @@ jobs:
           if [[ "$REASON" == *$'\n'* || "$REASON" == *$'\r'* || ${#REASON} -gt 300 ]]; then
             fail "reason は 1 行、300 文字まで"
           fi
+          # 操作した人は arata の --by の形 (英数字と . _ -)。bot (名前に [bot]) からの実行は受け付けない
+          [[ "$GITHUB_ACTOR" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || fail "実行した人 ($GITHUB_ACTOR) が arata の --by の形ではない (人が画面から実行する)"
 
       - id: checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -147,7 +149,7 @@ jobs:
           mask-aws-account-id: true
 
       # ログの方針は監査と同じ: 出力は実行環境の一時ファイルに書き、Actions には INFO 以外の level / code / source だけを出す。
-      # 失敗の見分け: CONFIG_INVALID = ID が無い・既に resolved・期日が過去 / STORE_CONFLICT = 同時に書かれた (もう一度実行する)。
+      # 失敗の見分け: CONFIG_INVALID = ID が無い・既に resolved・期日が過去・理由に使えない文字 / STORE_CONFLICT = 同時に書かれた (もう一度実行する)。
       - id: triage
         name: arata ack / snooze / resolve
         timeout-minutes: 10
@@ -157,14 +159,16 @@ jobs:
           if [ "$ACTION" = snooze ]; then
             args+=(--until "$UNTIL")
           fi
+          # 理由と操作した人はストアに残る (ADR 0068)。理由の形 (見えない文字など) は arata も確かめる
+          args+=(--reason "$REASON" --by "$GITHUB_ACTOR")
           status=0
           arata "${args[@]}" "$FINDING_ID" >"$log" 2>&1 || status=$?
           jq -Rc 'fromjson? | objects | select(.level != "INFO") | {level, code, source}' "$log" || true
           echo "arata exit=$status"
           exit "$status"
 
-      # 誰が・何を・なぜ、をこの実行の Summary に残す。arata の ack / snooze / resolve は理由と操作した人をストアに記録しないので、
-      # 記録は Actions の実行履歴が持つ。reason は利用者が書いた文字列なので、コードの囲みに入れて Markdown として解釈させない。
+      # 誰が・何を・なぜ、をこの実行の Summary にも残す (ストアにも残り、arata review と報告に出る。ADR 0068)。
+      # reason は利用者が書いた文字列なので、コードの囲みに入れて Markdown として解釈させない。
       - id: summary
         name: 記録を Summary に残す
         if: always() && steps.validate.outcome == 'success'

@@ -21,7 +21,7 @@ var ErrNoDatabase = errors.New("store: audit.sqlite does not exist; use --from-s
 
 // RebuildOptions は Rebuild の指定。
 type RebuildOptions struct {
-	// FromScratch は既存の SQLite を読まずに作る (壊れていても可)。raw に無いもの (runs・findings・finding_events・meta・主体の状態) は空から。
+	// FromScratch は既存の SQLite を読まずに作る (壊れていても可)。raw に無いもの (runs・findings・finding_events・finding_actions・meta・主体の状態) は空から。
 	FromScratch bool
 	// Baseline は FromScratch のとき全主体を baseline (init と同じ扱い。new_principal の対象外) にする。既定は unknown。
 	Baseline bool
@@ -53,6 +53,8 @@ var carriedTables = []struct{ name, cols string }{
 	{"runs", `id, profile, window_from, window_to, started_at, finished_at, status, stats`},
 	{"findings", `id, "check", key, severity, summary, first_seen, last_seen, last_changed, status, reported_at, snooze_until, fingerprint, data, suppressed_severity`},
 	{"finding_events", `seq, finding_id, "check", key, class, severity, summary, at, run_id, profile, data`},
+	// 人の片付けの記録 (ADR 0068)
+	{"finding_actions", `seq, finding_id, "check", key, action, "by", reason, forced, severity, status_before, snooze_until, at`},
 	{"meta", `key, value`},
 	// 部分の行は raw に書かない作業用の行 (ADR 0065)
 	{"metric_parts", `source, query, hour, date, rows`},
@@ -63,7 +65,7 @@ const maxLineWarnings = 20
 // Rebuild は <dir>/raw の JSONL から audit.sqlite を作り直す (ADR 0033)。
 //
 // 決定: raw 由来のテーブル (events・principals・principal_ips・metrics・snapshot_items) は、記録したときと同じ規則で入れ直す。
-// raw に無いもの (runs・findings・finding_events・meta・principals.status) は、既定では既存の SQLite から引き継ぐ (移行を通してから読む)。
+// raw に無いもの (runs・findings・finding_events・finding_actions・meta・principals.status) は、既定では既存の SQLite から引き継ぐ (移行を通してから読む)。
 // 一時ファイルに作ってから入れ替えるので、途中で失敗しても元は変わらない。元のファイルは audit.sqlite.bak に 1 世代残す。
 func Rebuild(ctx context.Context, dir string, o RebuildOptions) (*RebuildResult, error) {
 	if o.Baseline && !o.FromScratch {

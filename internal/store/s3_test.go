@@ -556,3 +556,34 @@ func TestS3RawWithoutDatabase(t *testing.T) {
 		t.Fatalf("the database was lost")
 	}
 }
+
+// 片付けの記録 (finding_actions。ADR 0068) は SQLite に入るので、S3 のストアでも確定で残り、次の Open に引き継がれる。
+func TestS3KeepsFindingActions(t *testing.T) {
+	ctx := context.Background()
+	_, api := storetest.NewFakeS3(t, bucket)
+	s, err := store.OpenS3(ctx, api, loc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	f := store.Finding{ID: "f1", Check: "posture", Key: "k", Severity: "low", FirstSeen: day1, LastSeen: day1, LastChanged: day1, Status: store.FindingOpen}
+	if err := s.UpsertFinding(ctx, f); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetFindingStatus(ctx, "f1", store.FindingAcked, time.Time{}, day1, store.Action{Name: store.ActionAck, By: "alice", Reason: "known"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	s, err = store.OpenS3(ctx, api, loc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	last, err := s.LastFindingActions(ctx)
+	if err != nil || last["f1"].By != "alice" || last["f1"].Reason != "known" {
+		t.Fatalf("%+v %v", last, err)
+	}
+}

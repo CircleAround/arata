@@ -89,6 +89,11 @@ func TestReviewAndApprove(t *testing.T) {
 		!strings.Contains(c.stdout.String(), "他の 1 件も resolved") || !strings.Contains(c.stdout.String(), uar.ID+" unknown_assume_role") {
 		t.Fatalf("approve stdout (same principal's other finding must be resolved too): %s", c.stdout)
 	}
+	// approve の --note / --by は片付けの記録にも残る (ADR 0068)
+	if code := c.run("review", "-c", c.cfg, "--format", "json", "--status", "resolved"); code != 0 ||
+		!strings.Contains(c.stdout.String(), `"action": "approve"`) || !strings.Contains(c.stdout.String(), `"by": "tester"`) || !strings.Contains(c.stdout.String(), `"reason": "外注: 調査用"`) {
+		t.Fatalf("approve must be recorded: exit %d\n%s", code, c.stdout)
+	}
 	// 外部アカウントは account: で承認する
 	if code := c.run("approve", ext.ID, "--config", c.cfg, "--note", "SaaS の監視連携", "--by", "tester"); code != 0 {
 		t.Fatalf("approve exit %d: %s", code, c.stderr)
@@ -315,4 +320,74 @@ func TestTriageWorkflowArguments(t *testing.T) {
 	if code := c.run("ack", "-c", c.cfg, "0123456789ab"); code != 2 || strings.Join(c.codes(), ",") != "CONFIG_INVALID" {
 		t.Fatalf("unknown id: exit %d %v", code, c.codes())
 	}
+}
+
+// ack / snooze / resolve の理由と操作した人はストアに残り、review の json と table に最後の操作として出る (ADR 0068 の 1 節)。
+func TestTriageRecordsReasonAndBy(t *testing.T) {
+	c := newCLI(t)
+	items := seedFindings(t, c)
+	root := items["root_usage|arn:aws:iam::"+acct+":root|198.51.100.8"]
+	np := items["new_principal|arn:aws:iam::"+acct+":user/mallory"]
+	ext := items["new_principal|arn:aws:iam::"+saas+":root"]
+
+	if code := c.run("ack", "-c", c.cfg, "--reason", "setup work by the team", "--by", "alice", root.ID); code != 0 {
+		t.Fatalf("ack exit %d: %s%s", code, c.stdout, c.stderr)
+	}
+	if code := c.run("snooze", "-c", c.cfg, "--until", "2026-11-01", "--by", "bob", np.ID); code != 0 {
+		t.Fatalf("snooze exit %d: %s%s", code, c.stdout, c.stderr)
+	}
+	// --by を省けば OS のユーザー名 (approve と同じ)。ここでは空でないことだけを見る
+	if code := c.run("ack", "-c", c.cfg, ext.ID); code != 0 {
+		t.Fatalf("ack exit %d: %s%s", code, c.stdout, c.stderr)
+	}
+	var items2 []struct {
+		ID         string
+		LastAction *struct {
+			Action, By, Reason, At, Severity string
+			Forced                           bool
+		} `json:"last_action"`
+	}
+	if code := c.run("review", "-c", c.cfg, "--format", "json", "--status", "acked,snoozed"); code != 0 {
+		t.Fatalf("review exit %d: %s", code, c.stderr)
+	}
+	schematest.Conforms(t, engine.ReviewSchema, c.stdout.Bytes(), &[]engine.ReviewItem{})
+	if err := json.Unmarshal(c.stdout.Bytes(), &items2); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]struct{ action, by, reason, at, sev string }{}
+	for _, it := range items2 {
+		if it.LastAction == nil {
+			t.Fatalf("%s has no last_action: %s", it.ID, c.stdout)
+		}
+		got[it.ID] = struct{ action, by, reason, at, sev string }{it.LastAction.Action, it.LastAction.By, it.LastAction.Reason, it.LastAction.At, it.LastAction.Severity}
+	}
+	if g := got[root.ID]; g.action != "ack" || g.by != "alice" || g.reason != "setup work by the team" || g.sev != root.Severity || g.at == "" {
+		t.Fatalf("ack: %+v", g)
+	}
+	if g := got[np.ID]; g.action != "snooze" || g.by != "bob" || g.reason != "" {
+		t.Fatalf("snooze: %+v", g)
+	}
+	if g := got[ext.ID]; g.action != "ack" || g.by == "" {
+		t.Fatalf("default --by: %+v", g)
+	}
+	if code := c.run("review", "-c", c.cfg, "--status", "acked"); code != 0 || !strings.Contains(c.stdout.String(), "LAST_ACTION") || !strings.Contains(c.stdout.String(), "ack alice ") {
+		t.Fatalf("table exit %d:\n%s", code, c.stdout)
+	}
+
+	// 形の誤りは CONFIG_INVALID で止め、ストアを変えない
+	for _, args := range [][]string{
+		{"--by", "alice@example.com"}, // メールアドレスは受け付けない
+		{"--by", "Alice Example"},     // 空白 (氏名) も
+		{"--reason", "line1\nline2"},  // 1 行だけ
+		{"--reason", strings.Repeat("あ", 301)},
+		{"--reason", "zero\u200bwidth"}, // 書式の文字 (Cf)
+	} {
+		if code := c.run(append([]string{"resolve", "-c", c.cfg}, append(args, ext.ID)...)...); code != 2 || strings.Join(c.codes(), ",") != "CONFIG_INVALID" {
+			t.Fatalf("%q: exit %d %v", args, code, c.codes())
+		}
+	}
+	if s := review(t, c, "--status", "acked")["new_principal|arn:aws:iam::"+saas+":root"]; s.Status != "acked" {
+		t.Fatalf("a rejected resolve must not change the finding: %+v", s)
+	}
+	c.assertCodesInVocabulary()
 }

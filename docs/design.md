@@ -817,6 +817,7 @@ SQLite ファイルは数十 MB 程度に収まる想定 (集計のみ保存す�
 | `posture` | check, resource, value, first_seen, last_changed | 姿勢チェックの現在値。決定: 作らず `snapshot_items` にまとめた (ADR 0015) |
 | `snapshot_items` | kind, source, key, data, collected_at | 決定: アカウント単位の状態 (認証情報レポート・GuardDuty・Access Analyzer・姿勢・WAF の WebACL の設定) の最新のスナップショット。収集が成功したときだけ (kind, source) 単位で丸ごと置き換える (ADR 0015)。決定 (ADR 0033): 置き換えたら raw に `snapshot_replaced` の行 (置き換えた収集の時刻と件数) を書く (0 件の置き換えと失敗した収集を rebuild が見分ける) |
 | `finding_events` | finding_id, check, key, class, severity, summary, at, run_id, profile, data | 決定: finding の状態遷移 (new / changed / recurred / resolved) の履歴。run の差分判定、人の resolve / approve、allowlist の編集による解消で追記する。期間レポートの元 (ADR 0016) |
+| `finding_actions` | finding_id, check, key, action (ack/snooze/resolve/approve), by, reason, forced, severity, status_before, snooze_until, at | 決定 (ADR 0068。schema 8): 人の片付けの操作の記録。1 回の操作を 1 行で追記し、書き換えない。状態の変更 (findings) と同じトランザクションで書く。`severity` と `status_before` は操作したときの値。最後の操作は finding ごとの最大の seq で引き、`arata review` に `last_action` として出す。`by` は `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$` (メールアドレス・氏名を受け付けない)、`reason` は 1 行・300 文字まで・制御文字と書式の文字を受け付けない。finding_events (観測による状態遷移。期間レポートが数える) には入れない。raw には無く、rebuild は既存の SQLite から引き継ぐ。schema 8 より前の操作には記録が無い。approve の `--expected-denied` (finding を resolved にしない) と、approve に伴って一緒に解消した他の finding は記録しない (allowlist.yaml の項目と `resolved_reason` が記録) |
 | `meta` | key, value | 決定: `history_since` (schema 4 以降の最初の run の開始時刻。これより前の状態遷移は残っていない) |
 
 ### 5-3. 保持期間 (自動削除)
@@ -1050,6 +1051,7 @@ oidc_subjects:                   # OIDC でのロールの引き受けの、既�
    ├─ arata approve <finding-id> --destination --note "..." [--destination-role glob] [--expires 2027-03-31]
    │     → unknown_assume_role の外向き・MFA ありの finding の行き先のアカウントを assume_destinations に追記 (主体は承認しない)、finding は resolved (ADR 0047)
    │     → 同じ行き先への外向き・MFA ありの他の finding (ack 済みを含む) も resolved
+   │     (ack / snooze / resolve / approve は --reason (approve は --note) と --by を finding_actions に残す。ADR 0068)
    ├─ arata ack <finding-id>         → acked。再報告しないが週次の未対応一覧には残る (重大度が上がれば changed で再報告)
    ├─ arata snooze <finding-id> --until 2026-11-01   → 期日まで沈黙、期日に再報告
    ├─ arata resolve <finding-id>     → resolved。再び観測されたら new
