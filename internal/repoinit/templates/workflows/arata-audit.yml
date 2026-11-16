@@ -60,6 +60,9 @@ jobs:
       # 試しの実行はストアに書かないので group を分ける (同じ group だと、待っている定時の実行を取り消し得る)。
       group: arata-audit-${{ matrix.account }}${{ inputs.dry_run && '-dry-run' || '' }}
       cancel-in-progress: false
+      # 待てる数を 1 つ (既定の queue: single) にすると、後から入った実行 (片付けなど) が、待っていた定時の監査を取り消す。
+      # 取り消された監査は aratam の step も走らないので、「実行されていない」の知らせも届かない。最大 100 件を、待ち始めた順に待たせる (ADR 0068 の 7 節)
+      queue: max
     permissions:
       id-token: write   # OIDC で実行用ロールを引き受ける
       contents: read    # 設定ファイルの checkout

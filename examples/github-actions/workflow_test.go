@@ -48,6 +48,7 @@ type step struct {
 type concurrency struct {
 	Group            string `yaml:"group"`
 	CancelInProgress *bool  `yaml:"cancel-in-progress"`
+	Queue            string `yaml:"queue"`
 }
 
 type workflow struct {
@@ -185,6 +186,10 @@ func testConcurrencyAndPermissions(t *testing.T, w *workflow, text string) {
 	}
 	if c.Group == "" || c.CancelInProgress == nil || *c.CancelInProgress {
 		t.Errorf("concurrency must queue, not cancel: %+v", c)
+	}
+	// 既定 (queue: single) では、後から入った実行 (片付けなど) が待っていた定時の監査を取り消す (ADR 0068 の 7 節)
+	if c.Queue != "max" {
+		t.Errorf("concurrency must keep every pending run (queue: max): %+v", c)
 	}
 	if len(w.Permissions) != 0 {
 		t.Errorf("workflow-level permissions must be empty (grant them per job): %v", w.Permissions)

@@ -46,8 +46,10 @@ jobs:
             --store-bucket example-arata-store --region ap-northeast-1 --alert-channel none \
             --channel prod=C0123456789,staging=C0123456781 --urgent-channel prod=C0123456780,staging=same \
             --schedule --arata-version v0.15.0 --out "$RUNNER_TEMP/no-alert"
+      # 決定 (ADR 0068 の 7 節): concurrency の queue (GitHub の文書にある設定) を、この版の actionlint は知らない。その 1 件だけを無視する。
+      # queue を知る版が 7 日の待機を過ぎたら、版を上げてこの -ignore を外す
       - name: actionlint
-        run: go run "${ACTIONLINT/@//cmd/actionlint@}" .github/workflows/*.yml examples/audit-repo/.github/workflows/*.yml "$RUNNER_TEMP"/no-alert/.github/workflows/*.yml
+        run: go run "${ACTIONLINT/@//cmd/actionlint@}" -ignore 'unexpected key "queue" for "concurrency" section' .github/workflows/*.yml examples/audit-repo/.github/workflows/*.yml "$RUNNER_TEMP"/no-alert/.github/workflows/*.yml
       # ロックファイルが古い・壊れている・上流と合わないときに落ちる。無いときは読み飛ばす
       - name: workflow lockfile
         env:
