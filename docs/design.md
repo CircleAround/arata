@@ -674,7 +674,7 @@ From = min(now - window, 前回の window_to) として、cron の遅延・欠�
 
 ```yaml
 profiles:
-  hourly: { window: 1h,  checks: [root_usage, unknown_assume_role, secret_access_unknown, guardduty_high] }
+  hourly: { window: 1h,  checks: [root_usage, unknown_assume_role, oidc_assume_role] }
   daily:  { window: 24h, checks: [default-daily] }            # Cadence=daily のチェック全部
   weekly: { window: 7d,  checks: [default-weekly] }
 ```
@@ -1062,11 +1062,13 @@ oidc_subjects:                   # OIDC でのロールの引き受けの、既�
    │     → unknown_assume_role の外向き・MFA ありの finding の行き先のアカウントを assume_destinations に追記 (主体は承認しない)、finding は resolved (ADR 0047)
    │     → 同じ行き先への外向き・MFA ありの他の finding (ack 済みを含む) も resolved
    │     (ack / snooze / resolve / approve は --reason (approve は --note) と --by を finding_actions に残す。ADR 0068)
-   ├─ arata ack <finding-id>         → acked。再報告しないが週次の未対応一覧には残る (重大度が上がれば changed で再報告)
+   ├─ arata ack <finding-id>         → acked。再報告しない。報告には出ず、arata review の未対応一覧に残る (重大度が上がれば changed で再報告)。
+   │     週次の「黙らせているもの」に出る (ADR 0068 の 3 節)
    │     → 重大度が high・critical なら止める (ACK_REFUSED。approve / snooze / resolve を案内)。--force --reason でだけ通し、記録に forced (守りを越えたときだけ真。--force には --reason が要る。ADR 0068)
    ├─ arata snooze <finding-id> --until 2026-11-01   → 期日まで沈黙、期日に再報告
    ├─ arata resolve <finding-id>     → resolved。再び観測されたら new
-   └─ 放置                              → still_open。週次の未対応一覧に残り続ける
+   └─ 放置                              → その run で同じ内容で再び観測されれば still_open として報告に出る (event 型は観測の無い窓では出ない)。
+                                           未対応の全部は arata review (ADR 0068 の追記)
 
 allowlist.yaml を人が直接編集して承認 ──> 次の evaluate の冒頭で該当 finding を resolved (reason: allowlisted。行き先を足したときは known_destination、OIDC の入り口を足したときは known_oidc_subject)
 expires 到来 ──> その主体の次回観測は new (expired) として再報告
@@ -1120,7 +1122,7 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 | guardduty_findings | hourly (High) / daily (他)。決定: Step 3 は weekly のみ (state) | guardduty | finding ID 初出、count 増加 | severity 準拠 |
 | iam_changes | daily | trail_event | CreateAccessKey / CreateUser / CreateRole / Attach*Policy / Put*Policy / UpdateAssumeRolePolicy / CreateLoginProfile | medium (既知デプロイ主体なら info。決定: 既知デプロイ主体 = allowlist の principals で `tags: [deploy]` を持つもの)。決定 (ADR 0056): CreateAccessKey と、信頼ポリシー (UpdateAssumeRolePolicy / CreateRole) に外の主体がある・読めない変更は既知デプロイ主体でも medium、信頼ポリシーが誰でも (`*`) を許す変更は誰でも high |
 | access_denied | daily | trail_event | 拒否された API 呼び出しの主体ごとの種類 (幅) と件数 (量) が平常帯超え。権限の列挙の兆候。決定: ADR 0021 | 幅は medium (種類が多ければ high)、量は medium |
-| console_login | daily | trail_event | 失敗が閾値超え、MFA 無し成功 | medium / high |
+| console_login (未実装。ADR 0005 の例にもあるが、チェックは無い。ログインの失敗は login_bruteforce) | daily | trail_event | 失敗が閾値超え、MFA 無し成功 | medium / high |
 | new_principal | daily | principal_seen | allowlist にも principals にも無い主体。決定: principals.status が unknown / expired の主体を毎回観測する (承認されるまで still_open として残る)。root は root_usage が扱うので対象外 | medium |
 | principal_new_source (決定: 当初の new_source_ip を置き換え。国の判定はしない) | daily | trail_event, principal_seen (+ 主体の活動の日次集計) | 既知の主体の初めての送信元 (/24・/48)・書き込みのリージョン。決定: ADR 0027 | low / medium / high |
 | unused_region_activity (決定: 当初の foreign_region を置き換え) | daily | unused_region_event (`cloudtrail-unused-regions`) | ふだん使わないリージョン (有効なリージョン − cloudtrail-lookup の regions) での書き込み。決定: ADR 0032 | critical / high / medium |

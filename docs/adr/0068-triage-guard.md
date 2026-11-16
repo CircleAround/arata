@@ -156,3 +156,79 @@ ack / snooze 中でも重大度が上がれば changed として再報告する 
   - 正当な high の ack は `--force` と理由が要り、一手間増える
   - プロファイルの設定が 1 つ増える (`silenced`)。既存の設定には自動で入らない
   - 量が増えた ack の出直し (5 節) が入るまでは、force で ack した high の後の本物は、重大度が上がらない限り報告されない。3 節の一覧に毎週出ることで補う
+
+## 追記 (2026-11-17): 1〜5 の後にも残る穴
+
+1・2 節を実装した後の main (909c1b4) を読み直して、次の穴が見つかった。6〜9 節を足し、5 節にも 1 つ足す。
+実装の順は 3 → 4 (6 節を含む) → 7 → 8 とする (7 は小さいので、3 と並べて先に出してもよい)。9 節は 3 節に含める。
+
+### 6. ack を止める条件を「その Key で重大度の上がる余地が無い」に広げる
+
+- 事実: ack / snooze 中に出直すのは、観測の重大度が黙らせたときより重くなったときだけ (ADR 0022)。
+  同じチェック・同じ Key で重大度が上がらないなら、**medium・low でも ack した時点で最後**になる。
+  例: root_usage、unknown_assume_role、iam_changes の多く、new_principal、login_bruteforce、credential_hygiene、posture、log_hygiene
+- 決定: 4 節の表を「チェック × 重大度 → **上がる余地** (その Key のまま、より重い重大度で観測されうるか)・許す操作」にする。
+  **ack を許すのは、上がる余地がある行だけ**にする。high・critical の行は今までどおり ack を許さない (2 節)
+- 許さない ack は、2 節と同じく `ACK_REFUSED` で止め、`--force` と `--reason` でだけ通す (守りを越える道は 1 つにする)。
+  止める判定は 2 節と同じ 1 か所 (engine の SetStatus) で、4 節の表を引く
+- 段の順: 4 節の PR で表を入れるときに、2 節の判定 (high 以上) を表を引く判定に置き換える。表のテストは次を確かめる:
+  - high・critical の行に ack が無い
+  - 上がる余地の無い行に ack が無い
+  - 上がる余地は、チェックの実装 (Key ごとの重大度の決め方) と合う。チェックごとに、同じ Key でより重い重大度が出る観測をテストで作れるかで確かめる
+- 「終わった出来事」の片付けは、event 型なら resolve を勧める (同じ Key で再び起きたら new として報告される。ack と違って最後にならない)。
+  onboarding と playbook の「終わった出来事は ack」は、4 節の PR で表に合わせて直す
+- 引き受けるコスト: 多くのチェックで ack に `--force` と理由が要る。正当な ack は、理由が残る代わりに一手間増える
+
+### 7. 片付けで、待っていた定時の監査を取り消さない
+
+- 事実: 片付けのワークフローは、定時の監査と同じ concurrency の group (`cancel-in-progress: false`) で動く。
+  GitHub Actions の既定 (`queue: single`) では、1 つの group で待てるのは 1 つだけで、新しく入ったものが待っていたものを取り消して置き換わる
+  (GitHub の文書「Control the concurrency of workflows and jobs」で確かめた)。
+  片付けを流すと、待っていた定時の監査 (月曜の weekly など) が取り消されることがある。取り消された監査は aratam の step も走らないので、
+  「実行されていない」の知らせも届かない
+- 決定: 監査と片付けの group に **`queue: max`** を書く (同じ group に最大 100 件が待て、待ち始めた順に動く。`cancel-in-progress: false` と組める)。
+  同じストアへの書き込みは今までどおり順番になり、待っていたものは取り消されない
+  - 試しの実行 (`-dry-run` の付いた group) も同じにする (試しの実行どうしの取り消しも避ける)
+  - 雛形 (`internal/repoinit/templates`) と `examples/audit-repo` (作り直し)、`examples/github-actions` のテストで `queue: max` を固定する
+  - `queue` は GitHub の文書にある設定だが、CI の検査 (actionlint・zizmor・`tools/actionsgate`) が受け付けるかと、実際のリポジトリで
+    待ちが積まれることは、実装の PR で確かめる (後者は開発リードがリリースの前に確かめる)
+- 却下した案:
+  - **片付けの group を分け、ストアの取り合いは arata の排他で守る**: S3 のストアの排他は条件付き書き込み (ADR 0034) だけで、
+    監査の途中で片付けが確定すると、監査の確定が `STORE_CONFLICT` で失敗し、その回の監査の結果が失われる。片付けより監査のほうが失うものが大きい
+  - **片付けは待たずに失敗させ、案内を出す**: 監査が走っているか・待っているかを知るには Actions の API (`actions: read`) を引く別のジョブが要り、
+    確かめた後に監査が入ってくる隙も残る。権限と手順が増える割に、取り消しを止めきれない
+
+### 8. 片付けの Summary に指摘の中身を出し、試し (dry-run) を足す
+
+- Summary に、ID だけでなく、指摘の check・重大度・状態 (操作の前)・初出・要約・Key を出す (ID の取り違えに気づけるように)。
+  値は `arata review --format json` の該当する finding から取る (機械が読む出力。ADR 0054)
+  - Key と要約には ARN (アカウント ID) が入る。Summary はリポジトリの Actions を読める人に見えるので、**12 桁の数字は伏せる** (`************`)。
+    ログには今までどおり出さない (Summary だけ)
+- `arata ack` / `snooze` / `resolve` に `--dry-run` を足す。形の検査・finding の有無・2 節と 6 節の守りまで本番と同じに行い、
+  何をどう変えるかを出して、ストアを書かない (`Commit` しない)。止められるなら本番と同じ code と終了コード (`ACK_REFUSED`・2) で終わる
+- ワークフローに入力 `dry_run` (boolean、既定 false) を足し、真なら `--dry-run` を付ける。Summary に「試し (ストアは変えていない)」と出す
+
+### 9. 期日を過ぎた snooze を見えるようにする (3 節に含める)
+
+- 事実: event 型の finding は、観測されなくても resolved にならない (ADR 0005)。snooze の期日を過ぎても再び観測されなければ snoozed のまま残り、
+  `arata review` の既定 (open・acked) にも報告にも出ない。event 型の ack は、出直さない限り永久に残る
+- 決定: 3 節の「黙らせているもの」に `snooze_expired` (期日を過ぎても snoozed のままのもの) を足し、件数の 1 行にも出す。状態は自動では変えない (2 節と同じ理由)
+
+### 5 節への追記
+
+- still_open の finding の data は、最初に報告したときのまま更新されず、Slack には件数しか出ない。量が大きく増えたら、5 節の「量で出直す」と同じ仕組みで出し直す
+
+### 文書とコードの食い違いの直し
+
+この追記の PR で直す。採用済みの ADR 0005 は書き換えない。0005 の例のうち `secret_access_unknown`・`console_login`・`posture_*` は実装に無い
+(`secret_access` と `posture` に置き換わった。`console_login` は実装していない)。設計書の該当箇所に注記する。
+
+- 設計書 6-2 の「ack は週次の未対応一覧に残る」: 報告には出ず、`arata review` の未対応一覧に残る (週次の「黙らせているもの」には 3 節から出る)
+- 設計書 6-2 の still_open: still_open は「その run で同じ内容で再び観測されたもの」。event 型は観測の無い窓では出ず、未対応の全部は `arata review`
+- onboarding の「snooze は観測されなくなれば解消」: 解消になるのは state 型だけ。event 型は snoozed のまま残る (9 節)
+- 設計書の設定例とチェックの表にある、実装に無いチェックの名前
+
+### この ADR の外 (ロードマップに書く)
+
+- allowlist_stale (承認した主体の長い不在) と、承認した主体の振る舞いの変化
+- Actions の雛形に hourly の定時が無い (root_usage の critical でも最大で約 1 日遅れる)。ADR 0064 の `collect --incremental` と合わせて別に扱う
