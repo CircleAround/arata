@@ -41,4 +41,5 @@
 
 公開の事例で、このチェックが当たる段階 (一覧と読み方は `arata help ai threats`)。指摘がその攻撃だと断定する材料ではない。
 
+- `arata help ai threats artex-2026-10`: エージェントが Web のディレクトリを 500 回以上試して開けるものを探す段階 (決まった探索パスへの 403 / 404 だけ)
 - `arata help ai threats env-extortion-2024-08`: 公開された `.env` を大量に探す段階 (当たった取得は数えない)
