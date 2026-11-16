@@ -87,6 +87,14 @@ func TestS3StoreCommands(t *testing.T) {
 		t.Fatalf("a failed command must not write: %+v", f.Requests("PUT"))
 	}
 
+	// 試し (--dry-run) は S3 に何も送らない (ADR 0068 の 8 節)
+	if code := c.run("resolve", "--config", c.cfg, "--dry-run", id); code != 0 {
+		t.Fatalf("resolve --dry-run: exit %d\n%s", code, c.stderr)
+	}
+	if len(f.Requests("PUT")) != 0 {
+		t.Fatalf("a dry run must not write: %+v", f.Requests("PUT"))
+	}
+
 	// ack は SQLite を書き、次の実行に残る
 	if code := c.run("ack", "--config", c.cfg, "--force", "--reason", "known", id); code != 0 {
 		t.Fatalf("ack: exit %d\n%s", code, c.stderr)

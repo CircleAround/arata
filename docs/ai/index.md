@@ -42,7 +42,7 @@ LLM の役割は「危険の判定を代行する」ことではなく「人が�
 | `arata report --month 2026-10` / `--from D --to D` | ストアだけから期間レポート (収集しない) | よい |
 | `arata review [--format json]` | 未対応 (open / acked) の一覧と approve の対象 | よい |
 | `arata approve <id> --note ... [--expires] [--tag] [--commit]` | allowlist に追記し finding を解消 (`--destination` は主体ではなく、外向きの引き受けの行き先のアカウントを既知にする) | **しない** (人に提案する) |
-| `arata ack / snooze --until / resolve <id> [--reason <理由>] [--by <人>]` | finding の状態を変える (理由と操作した人はストアに残る) | 人の指示があれば |
+| `arata ack / snooze --until / resolve <id> [--reason <理由>] [--by <人>] [--dry-run]` | finding の状態を変える (理由と操作した人はストアに残る。`--dry-run` は検査だけでストアを書かない) | 人の指示があれば (`--dry-run` はよい) |
 | `arata repo check … [--github] [--format json]` | 監査を回すリポジトリ (`arata repo init` の一式) が揃っているか。`--github` で environment と秘密の名前も読む (GET だけ。値は読まない)。足りない秘密の登録のコマンドを出す | よい (読むだけ)。出たコマンド (`gh secret set`) は人が打つ |
 | `arata help ai onboarding` | 導入の流れ (init の後、最初の run の指摘を通知の前に片付ける手順。ack / snooze / resolve の使い分け。チェックやソースを後から足すときの順番、設定の値の決め方) | よい (読み取りのみ) |
 | `arata help ai logs` | 記録の集め方 (どの記録があればどのチェックが動くか、ログの出し方、doctor の読み方) | よい (読み取りのみ) |

@@ -148,18 +148,37 @@ func newStatusCmd(d *Deps, g *globalFlags, use, status, short string) *subcmd.Co
 				}
 				u = t
 			}
-			e, _, err := openEngine(ctx, d, g)
+			var e *engine.Engine
+			var err error
+			if o.DryRun {
+				// 試しはストアを書かない (Commit しない)。S3 でも何も送らない
+				e, err = openEngineForRead(ctx, d, g)
+			} else {
+				e, _, err = openEngine(ctx, d, g)
+			}
 			if err != nil {
 				return err
 			}
 			defer e.Close()
-			f, err := e.SetStatus(ctx, args[0], status, u, o)
+			c, err := e.ChangeStatus(ctx, args[0], status, u, o)
 			var refused *engine.AckRefusedError
 			if errors.As(err, &refused) {
 				fmt.Fprint(d.Stdout, refused.Guidance())
 			}
 			if err != nil {
 				return err
+			}
+			f := c.Finding
+			if o.DryRun {
+				msg := fmt.Sprintf("試し: finding %s (%s、重大度 %s、%s) を %s から %s にします (ストアは変えていません)。", f.ID, f.Check, f.Severity, f.Summary, c.Before, f.Status)
+				if status == store.FindingSnoozed {
+					msg += fmt.Sprintf(" 期日 %s (UTC)。", f.SnoozeUntil.UTC().Format(record.DateLayout))
+				}
+				if c.Forced {
+					msg += " 片付けの表が許さない ack を force で通します (記録に force が残ります)。"
+				}
+				fmt.Fprintln(d.Stdout, msg)
+				return nil
 			}
 			if err := e.Commit(ctx); err != nil {
 				return err
@@ -178,8 +197,9 @@ func newStatusCmd(d *Deps, g *globalFlags, use, status, short string) *subcmd.Co
 	}
 	cmd.StringVar(&o.Reason, "reason", "", "理由 (1 行、300 文字まで。ストアに残り、review と報告に出る。ARN・アカウント ID などは書かない)")
 	if status == store.FindingAcked {
-		cmd.BoolVar(&o.Force, "force", false, "重大度が high・critical の finding も ack する (--reason が必須。記録に force が残る。ADR 0068)")
+		cmd.BoolVar(&o.Force, "force", false, "片付けの表が ack を許さない finding (high・critical など) も ack する (--reason が必須。記録に force が残る。ADR 0068)")
 	}
+	cmd.BoolVar(&o.DryRun, "dry-run", false, "試し: 検査 (形・finding の有無・片付けの表・期日) だけ行い、何をどう変えるかを出す。ストアは書かない (ADR 0068)")
 	cmd.StringVar(&o.By, "by", "", "操作した人 (英数字と . _ - のハンドル。省略時は OS のユーザー名。メールアドレスや氏名は書けない)")
 	return cmd
 }

@@ -40,6 +40,11 @@ on:
         type: boolean
         default: false
         required: false
+      dry_run:
+        description: '試し。検査 (ID・期日・片付けの表) だけ行い、何をどう変えるかを Summary に出す。ストアは変えない'
+        type: boolean
+        default: false
+        required: false
 
 permissions: {}
 
@@ -78,6 +83,7 @@ jobs:
       REASON: ${{ inputs.reason }}
       UNTIL: ${{ inputs.until }}
       FORCE: ${{ inputs.force }}
+      DRY_RUN: ${{ inputs.dry_run }}
     steps:
       # 入力の形は認証より先に確かめる。API からの実行は画面の選択肢を通らないので、choice の値も確かめる。
       # finding の ID は arata が振る 12 桁の 16 進。形を決めておけば、引数がフラグとして読まれることも無い。
@@ -109,6 +115,12 @@ jobs:
             false | "") ;;
             *)
               fail "force は true / false"
+              ;;
+          esac
+          case "$DRY_RUN" in
+            true | false | "") ;;
+            *)
+              fail "dry_run は true / false"
               ;;
           esac
           [[ "$REASON" =~ [^[:space:]] ]] || fail "reason が空"
@@ -167,6 +179,24 @@ jobs:
           mask-aws-account-id: true
 
       # ログの方針は監査と同じ: 出力は実行環境の一時ファイルに書き、Actions には INFO 以外の level / code / source だけを出す。
+      # 指摘の中身を、操作の前にストアから引いて Summary に出す (ID の取り違えに気づけるように。ADR 0068 の 8 節)。
+      # 引くのは機械が読む出力 (review --format json)。中身はログに出さず、実行環境の一時ファイルにだけ置く (ログの方針は監査と同じ)。
+      # 引けなくても片付けは止めない (Summary に「引けなかった」と出る)。
+      - id: finding
+        name: 指摘の中身を引く
+        timeout-minutes: 10
+        run: |
+          status=0
+          arata review -c "$ARATA_CONFIG_DIR/arata.yaml" --format json --status open,acked,snoozed,resolved \
+            >"$RUNNER_TEMP/review.json" 2>"$RUNNER_TEMP/review.log" || status=$?
+          jq -Rc 'fromjson? | objects | select(.level != "INFO") | {level, code, source}' "$RUNNER_TEMP/review.log" || true
+          : >"$RUNNER_TEMP/finding.json"
+          if [ "$status" -eq 0 ]; then
+            jq -c --arg id "$FINDING_ID" 'first(.[] | select(.id == $id) | {check, key, severity, status, first_seen, summary}) // empty' \
+              "$RUNNER_TEMP/review.json" >"$RUNNER_TEMP/finding.json" || : >"$RUNNER_TEMP/finding.json"
+          fi
+          echo "arata review exit=$status"
+
       # 片付けの表 (playbook の「片付け」) が許さない ack は arata が止める (ACK_REFUSED。high・critical と、重大度の上がる余地の無いもの。ADR 0068)。止める規則はここに書かない (arata の 1 か所)。
       # 止められたら、ログと Summary に案内を出す (refused の出力を Summary の step が読む)。
       # 失敗の見分け: ACK_REFUSED = 表が許さない ack / CONFIG_INVALID = ID が無い・既に resolved・期日が過去・理由に使えない文字 / STORE_CONFLICT = 同時に書かれた (もう一度実行する)。
@@ -181,6 +211,9 @@ jobs:
           fi
           if [ "$FORCE" = true ]; then
             args+=(--force)
+          fi
+          if [ "$DRY_RUN" = true ]; then
+            args+=(--dry-run)
           fi
           # 理由と操作した人はストアに残る (ADR 0068)。理由の形 (見えない文字など) は arata も確かめる
           args+=(--reason "$REASON" --by "$GITHUB_ACTOR")
@@ -216,6 +249,7 @@ jobs:
               echo "| until | \`$UNTIL\` (UTC) |"
             fi
             echo "| force | \`${FORCE:-false}\` |"
+            echo "| dry_run | \`${DRY_RUN:-false}\` |"
             echo "| by | \`$GITHUB_ACTOR\` |"
             echo "| result | \`$RESULT\` |"
             echo
@@ -224,6 +258,21 @@ jobs:
             echo '```text'
             printf '%s\n' "$REASON" | tr '`' "'"
             echo '```'
+            echo
+            if [ "$DRY_RUN" = true ]; then
+              echo "**試し (dry_run)**: 検査だけで、ストアは変えていない。よければ dry_run を外して実行し直す"
+              echo
+            fi
+            # 指摘の中身 (ログ由来の値)。12 桁の数字 (アカウント ID) は伏せ、改行とバッククォートを除いてコードの中に入れる
+            if [ -s "$RUNNER_TEMP/finding.json" ]; then
+              echo "指摘 (操作の前):"
+              echo
+              jq -r 'def safe: tostring | gsub("[0-9]{12}"; "************") | gsub("[\r\n]"; " ") | gsub("`"; "'"'"'");
+                "- check: `\(.check | safe)`", "- severity: `\(.severity | safe)`", "- status: `\(.status | safe)`",
+                "- first_seen: `\(.first_seen | safe)`", "- summary: `\(.summary | safe)`", "- key: `\(.key | safe)`"' "$RUNNER_TEMP/finding.json"
+            else
+              echo "指摘: ストアから引けなかった (ID の取り違え、または読み取りの失敗。ログの code を見る)"
+            fi
             if [ "$REFUSED" = true ]; then
               echo
               echo "**ack は止められました (ACK_REFUSED)**。この finding は ack できません (high・critical か、同じ指摘のまま重大度が上がる余地が無い)。ack すると、後で本物が起きても二度と報告されません。"

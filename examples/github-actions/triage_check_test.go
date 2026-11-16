@@ -163,6 +163,10 @@ func TestTriageTriggerAndInputs(t *testing.T) {
 	if f, ok := in["force"]; !ok || f.Type != "boolean" || f.Required || f.Default != false {
 		t.Errorf("force must be an optional boolean defaulting to false: %+v", f)
 	}
+	// 試し (ADR 0068 の 8 節): ストアを変えずに、何をどう変えるかと守りの結果だけを見る
+	if f, ok := in["dry_run"]; !ok || f.Type != "boolean" || f.Required || f.Default != false {
+		t.Errorf("dry_run must be an optional boolean defaulting to false: %+v", f)
+	}
 	j := w.Jobs["triage"]
 	// 定時の監査 (書き込む実行) と同じ group (アカウントごと) で、順番に動かす。試しの実行の group は別 (ストアに書かない。dryrun_test.go)
 	want := strings.Replace(strings.Replace(multi.Jobs["audit"].Concurrency.Group, dryRunGroupSuffix, "", 1), "matrix.account", "inputs.account", 1)
@@ -173,7 +177,7 @@ func TestTriageTriggerAndInputs(t *testing.T) {
 		t.Errorf("permissions must be id-token: write and contents: read only: %v", p)
 	}
 	for k, v := range map[string]string{"ACCOUNT": "${{ inputs.account }}", "ARATA_CONFIG_DIR": "aws/${{ inputs.account }}", "ACTION": "${{ inputs.action }}",
-		"FINDING_ID": "${{ inputs.finding_id }}", "REASON": "${{ inputs.reason }}", "UNTIL": "${{ inputs.until }}", "FORCE": "${{ inputs.force }}"} {
+		"FINDING_ID": "${{ inputs.finding_id }}", "REASON": "${{ inputs.reason }}", "UNTIL": "${{ inputs.until }}", "FORCE": "${{ inputs.force }}", "DRY_RUN": "${{ inputs.dry_run }}"} {
 		if j.Env[k] != v {
 			t.Errorf("job env %s = %q, want %q", k, j.Env[k], v)
 		}
@@ -187,7 +191,7 @@ func TestTriageTriggerAndInputs(t *testing.T) {
 		order[s.ID] = i
 	}
 	// 入力は認証より先に確かめる
-	if !(order["validate"] < order["aws"] && order["install"] < order["aws"] && order["aws"] < order["triage"] && order["triage"] < order["summary"]) {
+	if !(order["validate"] < order["aws"] && order["install"] < order["aws"] && order["aws"] < order["finding"] && order["finding"] < order["triage"] && order["triage"] < order["summary"]) {
 		t.Errorf("step order: %v", order)
 	}
 	if s := stepByID(t, w, "triage"); s.ContinueOnErr != nil || s.TimeoutMinutes == 0 {
@@ -199,7 +203,7 @@ func TestTriageTriggerAndInputs(t *testing.T) {
 }
 
 func triageEnv(kv ...string) []string {
-	env := map[string]string{"ACCOUNT": "prod", "ARATA_CONFIG_DIR": "aws/prod", "ACTION": "ack", "FINDING_ID": "0123456789ab", "REASON": "既知の作業", "UNTIL": "", "FORCE": "false"}
+	env := map[string]string{"ACCOUNT": "prod", "ARATA_CONFIG_DIR": "aws/prod", "ACTION": "ack", "FINDING_ID": "0123456789ab", "REASON": "既知の作業", "UNTIL": "", "FORCE": "false", "DRY_RUN": "false"}
 	for i := 0; i+1 < len(kv); i += 2 {
 		env[kv[i]] = kv[i+1]
 	}
@@ -224,6 +228,9 @@ func TestTriageValidatesInputs(t *testing.T) {
 		{"FORCE", "true"},
 		// 画面から実行しない (API) と、boolean の入力は空で届くことがある
 		{"FORCE", ""},
+		{"DRY_RUN", "true"},
+		{"DRY_RUN", ""},
+		{"DRY_RUN", "true", "ACTION", "snooze", "UNTIL", "2027-03-31"},
 	}
 	for _, kv := range ok {
 		t.Run("ok/"+strings.Join(kv, " "), func(t *testing.T) {
@@ -262,6 +269,7 @@ func TestTriageValidatesInputs(t *testing.T) {
 		"force on snooze":  {"ACTION", "snooze", "UNTIL", "2027-03-31", "FORCE", "true"},
 		"force on resolve": {"ACTION", "resolve", "FORCE", "true"},
 		"force not bool":   {"FORCE", "yes"},
+		"dry_run not bool": {"DRY_RUN", "1"},
 		"bot actor":        {"GITHUB_ACTOR", "github-actions[bot]"},
 		"empty actor":      {"GITHUB_ACTOR", ""},
 	}
@@ -287,6 +295,7 @@ func TestTriageRunsArataWithExpectedArguments(t *testing.T) {
 		"resolve": {[]string{"ACTION", "resolve", "ACCOUNT", "staging", "ARATA_CONFIG_DIR", "aws/staging"}, "resolve\n-c\naws/staging/arata.yaml\n--reason\n既知の作業\n--by\nalice\n0123456789ab\n"},
 		"snooze":  {[]string{"ACTION", "snooze", "UNTIL", "2027-03-31"}, "snooze\n-c\naws/prod/arata.yaml\n--until\n2027-03-31\n--reason\n既知の作業\n--by\nalice\n0123456789ab\n"},
 		// 理由はそのまま 1 つの引数として渡す (シェルに解釈させない)。形の検査は arata が行う (ADR 0068)
+		"ack dry run":    {[]string{"DRY_RUN", "true"}, "ack\n-c\naws/prod/arata.yaml\n--dry-run\n--reason\n既知の作業\n--by\nalice\n0123456789ab\n"},
 		"ack force":      {[]string{"FORCE", "true"}, "ack\n-c\naws/prod/arata.yaml\n--force\n--reason\n既知の作業\n--by\nalice\n0123456789ab\n"},
 		"hostile reason": {[]string{"REASON", "$(touch pwned) `id` --force"}, "ack\n-c\naws/prod/arata.yaml\n--reason\n$(touch pwned) `id` --force\n--by\nalice\n0123456789ab\n"},
 	} {
@@ -349,6 +358,65 @@ exit 2
 	}
 }
 
+// 指摘の中身 (check・重大度・状態・初出・要約・Key) を、操作の前にストアから引いて Summary に出す (ID の取り違えに気づけるように。ADR 0068 の 8 節)。
+// 引くのは機械が読む出力 (review --format json)。ログには出さない。引けなくても片付けは止めない。
+func TestTriageShowsTheFinding(t *testing.T) {
+	w, _ := load(t, triageFile)
+	step := stepByID(t, w, "finding")
+	review := `printf '%s\n' "$@" >"$RUNNER_TEMP/review-args"
+echo '{"level":"INFO","msg":"opened","source":"store"}' >&2
+cat <<'JSON'
+[{"id":"0123456789ab","check":"secret_access","key":"arn:aws:iam::123456789012:role/app","severity":"high","status":"open","summary":"秘匿値の一括読み出し: arn:aws:iam::123456789012:role/app が 13 個","first_seen":"2026-10-20T01:00:00Z","last_seen":"2026-10-20T01:00:00Z","data":{"secrets":["prod/db"]},"triage":{"allowed":["snooze","resolve"]}},
+ {"id":"ffffffffffff","check":"posture","key":"root_mfa","severity":"high","status":"open","summary":"x","first_seen":"2026-10-20T01:00:00Z","last_seen":"2026-10-20T01:00:00Z","data":{}}]
+JSON
+`
+	out, code, tmp := runStep(t, step.Run, fakeBin(t, "arata", review), triageEnv()...)
+	if code != 0 {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if strings.Contains(out, "123456789012") || strings.Contains(out, "秘匿値") {
+		t.Errorf("the finding must not reach the log:\n%s", out)
+	}
+	args, _ := os.ReadFile(filepath.Join(tmp, "review-args"))
+	if string(args) != "review\n-c\naws/prod/arata.yaml\n--format\njson\n--status\nopen,acked,snoozed,resolved\n" {
+		t.Errorf("review args:\n%s", args)
+	}
+	b, err := os.ReadFile(filepath.Join(tmp, "finding.json"))
+	if err != nil || !strings.Contains(string(b), `"check":"secret_access"`) || strings.Contains(string(b), "posture") || strings.Contains(string(b), "prod/db") {
+		t.Fatalf("finding.json: %v %s", err, b)
+	}
+	// review が失敗しても片付けは止めない (Summary に「引けなかった」と出る)
+	out, code, tmp = runStep(t, step.Run, fakeBin(t, "arata", leakyLog+"exit 2\n"), triageEnv()...)
+	if code != 0 || strings.Contains(out, "123456789012") {
+		t.Errorf("a failed lookup must not stop the triage nor leak: exit %d\n%s", code, out)
+	}
+	if b, _ := os.ReadFile(filepath.Join(tmp, "finding.json")); len(strings.TrimSpace(string(b))) != 0 {
+		t.Errorf("no finding on failure: %q", b)
+	}
+
+	// Summary: 12 桁の数字 (アカウント ID) は伏せ、値はコードの中に入れる
+	s := stepByID(t, w, "summary")
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "finding.json"), []byte(`{"check":"secret_access","key":"arn:aws:iam::123456789012:role/app|x","severity":"high","status":"open","first_seen":"2026-10-20T01:00:00Z","summary":"a `+"`"+`b\nc 123456789012"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, _, tmp = runStep(t, s.Run, t.TempDir(), append(triageEnv("DRY_RUN", "true"), "RESULT=success", "RUNNER_TEMP="+dir)...)
+	sum, _ := os.ReadFile(filepath.Join(tmp, "summary"))
+	for _, want := range []string{"`secret_access`", "`high`", "`open`", "`2026-10-20T01:00:00Z`", "arn:aws:iam::************:role/app|x", "試し", "ストアは変えていない"} {
+		if !strings.Contains(string(sum), want) {
+			t.Errorf("summary lacks %q:\n%s", want, sum)
+		}
+	}
+	if regexp.MustCompile(`[0-9]{12}`).Match(sum) || strings.Contains(string(sum), "a `b") {
+		t.Errorf("summary must mask 12 digits and keep values inside code:\n%s", sum)
+	}
+	// 引けなかったとき
+	_, _, tmp = runStep(t, s.Run, t.TempDir(), append(triageEnv(), "RESULT=success", "RUNNER_TEMP="+t.TempDir())...)
+	if sum, _ := os.ReadFile(filepath.Join(tmp, "summary")); !strings.Contains(string(sum), "引けなかった") || strings.Contains(string(sum), "試し") {
+		t.Errorf("summary without the finding:\n%s", sum)
+	}
+}
+
 // ログの方針は監査と同じ (msg / error を出さず、終了コードは保つ)。
 func TestTriageLogsOnlyCodesAndKeepsExitCode(t *testing.T) {
 	w, _ := load(t, triageFile)
@@ -394,7 +462,7 @@ func TestTriageSummaryRecordsActorAndReason(t *testing.T) {
 		}
 	}
 	// reason はコードの囲みの中だけ。囲みを閉じる ``` を reason から作れない
-	if strings.Count(sum, "```") != 2 || !strings.HasSuffix(sum, "```\n") {
+	if strings.Count(sum, "```") != 2 || !strings.Contains(sum[strings.Index(sum, "```"):strings.LastIndex(sum, "```")], "検証の作業") {
 		t.Errorf("the reason must stay inside one code fence:\n%s", sum)
 	}
 	// until は snooze のときだけ

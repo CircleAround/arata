@@ -498,3 +498,42 @@ func TestReviewTriage(t *testing.T) {
 		t.Fatalf("not in review: %v", want)
 	}
 }
+
+// ack / snooze / resolve の --dry-run は、本番と同じ検査 (形・finding の有無・片付けの表) を行い、何をどう変えるかを出して、ストアを書かない (ADR 0068 の 8 節)。
+func TestTriageDryRun(t *testing.T) {
+	c := newCLI(t)
+	items := seedFindings(t, c)
+	root := items["root_usage|arn:aws:iam::"+acct+":root|198.51.100.8"]
+	np := items["new_principal|arn:aws:iam::"+acct+":user/mallory"]
+
+	if code := c.run("resolve", "-c", c.cfg, "--dry-run", "--reason", "checked", root.ID); code != 0 {
+		t.Fatalf("resolve --dry-run: exit %d %s%s", code, c.stdout, c.stderr)
+	}
+	for _, w := range []string{"試し", root.ID, "root_usage", "critical", "open", "resolved", "ストアは変えていません"} {
+		if !strings.Contains(c.stdout.String(), w) {
+			t.Errorf("dry-run output lacks %q:\n%s", w, c.stdout)
+		}
+	}
+	if code := c.run("snooze", "-c", c.cfg, "--dry-run", "--until", "2026-11-01", np.ID); code != 0 || !strings.Contains(c.stdout.String(), "2026-11-01") {
+		t.Fatalf("snooze --dry-run: exit %d %s", code, c.stdout)
+	}
+	// 守りも本番と同じに効く
+	if code := c.run("ack", "-c", c.cfg, "--dry-run", np.ID); code != 2 || strings.Join(c.codes(), ",") != "ACK_REFUSED" {
+		t.Fatalf("ack --dry-run must be refused like the real one: exit %d %v", code, c.codes())
+	}
+	if code := c.run("ack", "-c", c.cfg, "--dry-run", "--force", "--reason", "kept", np.ID); code != 0 || !strings.Contains(c.stdout.String(), "force") {
+		t.Fatalf("ack --dry-run --force: exit %d %s", code, c.stdout)
+	}
+	if code := c.run("snooze", "-c", c.cfg, "--dry-run", "--until", "2026-10-01", np.ID); code != 2 {
+		t.Fatalf("snooze --dry-run in the past: exit %d", code)
+	}
+	// 何も変わっていない (状態も、片付けの記録も)
+	got := review(t, c)
+	if got["root_usage|arn:aws:iam::"+acct+":root|198.51.100.8"].Status != "open" || got["new_principal|arn:aws:iam::"+acct+":user/mallory"].Status != "open" {
+		t.Fatalf("dry-run must not change the store: %+v", got)
+	}
+	if code := c.run("review", "-c", c.cfg, "--format", "json"); code != 0 || strings.Contains(c.stdout.String(), `"last_action"`) {
+		t.Fatalf("dry-run must not record an action:\n%s", c.stdout)
+	}
+	c.assertCodesInVocabulary()
+}
