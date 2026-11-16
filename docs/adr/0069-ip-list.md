@@ -31,8 +31,23 @@
 | `waf_block` | wafv2 | 2' (`waf_blocks`。ADR 0067) の行。日ごとの IP の件数 | BLOCK が `min_count` (1) 件以上。**suspect の「BLOCK された IP」と同じものを除く**: レートベースのルール・既定の action・sign-in のパス (`login_bruteforce.paths`) での BLOCK、`trusted_cidrs` (設計書 2 章の決定) |
 | `probe` | http_access | `probe_hits` (key = ip) | 日に `min_count` (3) 件以上 |
 | `probe` | wafv2 | 2' の許可された探索の行 | 日に `min_count` (3) 件以上 (WAF をすり抜けた探索) |
-| `sign_in_failure` | http_access | `sign_in_failures` (key = ip) | 日に `min_count` (20) 件以上 (login_bruteforce の閾値とは別に持つ。片方を変えても、もう片方は変わらない) |
+| `sign_in_failure` | http_access | `sign_in_failures` (key = ip) | その IP の 1 日の失敗が `min_count` (20) 件以上、**かつ** その IP 自身の平常帯 (直近 `baseline_days` 日の中央値 × `factor`。login_bruteforce と同じ形) を超えた。下の決定 |
+| `sign_in_spray` (後の段) | http_access (auth の行のあるソース) | 時ごとの部品の (IP, 利用者の ID) | 1 日に失敗した異なる利用者の ID が `min_distinct_users` 件以上。下の決定 |
 
+- 決定 (`sign_in_failure`): **閾値を超えた IP だけを載せる**。打ち間違い (1 日に数回) は載らない。
+  - 閾値 `ip_list.reasons.sign_in_failure.min_count` の既定は、login_bruteforce の `min_count` の既定と同じ 20。値は別に持つ (一覧は判定の材料で、login_bruteforce の通知の閾値を変えても一覧が変わらないように)。
+    雛形が書き出し、`--diff` で見える
+  - 件数だけでなく**その IP 自身の平常帯を超えたこと**も条件にする (平常帯の設定 `baseline_days`・`factor`・`min_baseline_days` も `ip_list.reasons.sign_in_failure` に持ち、既定は login_bruteforce と同じ 14・3・7)。
+    大学・会社の回線のように、正規の利用者が毎日たくさん失敗する共有の IP は、平常帯が高いので載らない。悪い 1 人が急に増やした日だけ載る。
+    過去の日が `min_baseline_days` に足りない IP は件数だけで判定する (login_bruteforce と同じ)
+- 決定 (`sign_in_spray`。**後の段**): 利用者の ID の行 (auth の行。ADR 0052) があるソースでは、1 日に失敗した異なる利用者の ID が `min_distinct_users` 件以上の IP も載せる
+  (1 つの IP から多数のアカウントを試す、パスワードスプレーの形。1 つのアカウントあたりの失敗は少なく、件数の閾値をくぐる)。
+  今は IP ごとの件数しか持っていないので、時ごとの部品に (IP, ID) を持つ仕組み (source_multi_user と同じ。ADR 0051 の段 1) ができてから入れる。
+  理由を `sign_in_failure` と分けるのは、suspect などの使い道の側で選べるようにするため。既定の値はその段で、実データを見て決める
+- 決定 (「連続」の扱い): **時刻の並びの「続けて失敗した」は見ない**。arata は Logs Insights の集計 (日ごと、`collect: hourly` では時ごとの部品) だけを持ち帰り、
+  ログの行を持ち帰らない (設計書 2 章「取得するのは日次集計だけ」、ADR 0031・0065)。「続けて」を見るには、IP ごとの失敗の時刻の並びを持ち帰る (行の量と IP・時刻の保存が増える) か、
+  Insights の中で並びを数える (窓関数が無く書けない) ことになる。「1 日に min_count 件以上、かつ平常帯超え」は、続けて失敗した IP を含む (続けて 20 回失敗すれば 1 日に 20 件以上になる)。
+  逆に、1 日に散らばった 20 件も載るが、打ち間違いの数回とは区別できる。時間幅で数える要るときは、endpoint_abuse (ADR 0030) と同じく時間幅の集計を足す形にする (候補)
 - 決定: **endpoint_abuse は最初の版では載せない**。endpoint_abuse の集計は IP の原文を保存しない形にした (ADR 0030。時間幅ごとの件数・異なり IP の数・UA のハッシュだけ)。
   載せるには時間幅ごとの IP を返して保存することになり、この ADR の範囲を超える。候補として 5 節に残す
 - 決定: 載せない IP: allowlist の `source_ips` の内、`checks.waf_review.trusted_cidrs` の内 (wafv2 の理由だけ)。載せるときに除き、**使うときにも除く**
@@ -48,7 +63,7 @@ ip_list:
   reasons:
     waf_block:       { min_count: 1 }
     probe:           { min_count: 3 }
-    sign_in_failure: { min_count: 20 }
+    sign_in_failure: { min_count: 20, baseline_days: 14, factor: 3, min_baseline_days: 7 }   # login_bruteforce と同じ値。別に持つ
 retention:
   ip_list: 30d        # 保持の期間 (M)。最後に見てから M を過ぎたら、記録ごと消す。N ≦ M
 ```
@@ -124,8 +139,11 @@ fields httpRequest.clientIp as ip, ...
   waf_review は suspect を **`waf_rule_count_match_suspect` (ADR 0067 の (i)) + `waf_rule_count_match_listed`** として読む。
   3 つは重ならない: (i) の探索パスの分は探索パスだけ、BLOCK の分は BLOCK のリクエストだけ、listed は探索パスでない許可されたリクエストだけ。
   metric を分けるのは、(i) の値が時ごとに作り直され (途中の値)、listed は日が揃ってから 1 回作る (下) ので、置き換えの単位が違うため。evidence にも内訳を出す
-- 決定 (どの IP か): 使う日の終わりの時点でアクティブな IP (last_seen がその日を含めて直近 N 日の中)。理由は `checks.waf_review.suspect_ip_list.reasons` で選ぶ
-  (既定の案 `[waf_block, probe]`。`sign_in_failure` は共有の IP に当たりやすく、正規の利用者の打ち間違いでも載るので既定に入れない)。
+- 決定 (どの IP か): 使う日の終わりの時点でアクティブな IP (last_seen がその日を含めて直近 N 日の中)。理由は `checks.waf_review.suspect_ip_list.reasons` で選ぶ。
+  既定は **`[waf_block, probe, sign_in_failure]`**。`sign_in_failure` を入れてよい理由: 1 節の条件 (1 日 20 件以上かつその IP の平常帯超え) なら、打ち間違いも、ふだんから失敗の多い共有の IP も載らない。
+  残るのは「急に多く失敗した IP」で、その IP の許可されたリクエストが COUNT のルールに一致するのは、怪しい通信として数えてよい
+  (クレデンシャルスタッフィングの送信元が、ログイン以外の画面も叩いている)。残る誤り: 共有の IP で悪い 1 人が急に増やした日、その IP の正規の利用者の一致も N 日のあいだ数える
+  (suspect を多めに見せる側)。N を 7d に留めることと、並べ方 (下) で理由の数が多い IP を先にすることで抑える。後の段の `sign_in_spray` は、実データを見るまで既定に入れない
   `suspect_ip_list:` が無ければ問い合わせない (suspect は (i) のまま)。雛形が書き出し、`--diff` で見える
 - 決定 (いつ流すか): **UTC の日が揃った (確定した) 後に、その日について 1 回**。daily の run が、wafv2 のソースの「listed を作り終えた日」の位置
   (ADR 0064 の位置に、このための key を 1 つ足す) から、確定した日までを 1 日ずつ流す。時ごとに流さない理由:
@@ -176,7 +194,8 @@ fields httpRequest.clientIp as ip, ...
 - 守り:
   - N を短く (7d) し、休止に戻す (3 節)
   - `waf_block` の理由から、正規の利用者も当たり得る BLOCK (レートベース・既定の action・sign-in のパス) を除く (1 節。今の suspect と同じ)
-  - suspect に使う理由を選ぶ (`sign_in_failure` は既定で使わない。4 節)
+  - `sign_in_failure` は件数の閾値とその IP の平常帯の両方を超えたときだけ載せる (1 節)。共有の IP は平常帯が高く、載りにくい
+  - suspect に使う理由を選べる (4 節)
   - 既知の共有の送信元 (自社・利用者の会社) は allowlist の `source_ips` に書けば、載らないし使われない (1 節)。新しい仕組み (一覧の除外の表) は足さない
   - 5 節の使い道でも、一覧に載っただけでは重さを上げない
 - 残る限界: 携帯の回線のように、利用者が知らない共有の IP は除けない。count_rule_status は観測 (observation) で、提案にも finding にもしない (設計書 7 章) ので、
@@ -231,6 +250,7 @@ fields httpRequest.clientIp as ip, ...
 - 組に分けたとき: 一覧を小さな文の上限で分けて流した結果の和が、1 本で流した結果と同じこと
 - 上位 K 個: 並べ方 (理由の数・件数・last_seen・文字列) が決まった順になること、K が `max_ips` と文の上限の小さい方になること、`listed_block_share` の分子と分母、
   `min_block_share` の境目で `listed_coverage: low` になること、K を全部の数以上にすると `listed_is_lower_bound: false`・割合 1 になること
+- `sign_in_failure`: 19 件は載らない・20 件で平常帯以下なら載らない・平常帯の日数が足りないときは件数だけ、の境目
 - 一覧の規則: 作り直しで二重に数えない (同じ日を 2 回作っても行が同じ)・N と M の境目・休止の後の戻り (first_seen が残り、active_since が変わる)・M を過ぎたら IP の全部の行が消える・
   `source_ips` と `trusted_cidrs` が載らず使われない・読めない IP を捨てる
 - ファズ: 問い合わせの文の組み立て (4 節の規則)
@@ -267,6 +287,16 @@ fields httpRequest.clientIp as ip, ...
 4. 読み方: K = 1,000 の割合が 0.5 以上なら、`max_ips: 1000`・`min_block_share: 0.5` の案のままにする。0.5 を大きく下回るなら、`max_ips` を上げたときの本数 (費用) と割合を並べて、
    既定を決め直す (ADR を直してから実装する)。余裕があれば、範囲を 7 日にして同じことを測る (N = 7d の一覧の並べ方に近い。読み取りは約 7 倍)
 
+結果 (2026-11-17 に測定。大きな利用者の wafv2 の 2026-11-14 の 1 日。BLOCK 95,683 件に対する割合。1 のクエリは 9,710 IP を返した):
+
+| K | 250 | 500 | 1,000 | 2,000 | 5,000 |
+|---|---|---|---|---|---|
+| 上位 K 個の IP が占める BLOCK の割合 | 82% | 84% | 87% | 89% | 95% |
+
+- 偏りが大きい。**K = 1,000 (2 本) で BLOCK の 87% を覆う**ので、既定は案のまま (`max_ips: 1000`・`max_queries: 2`・`min_block_share: 0.5`) にする
+- 1 本 (IPv4 で約 550 IP) でも約 84% を覆う。費用を半分にしたい利用者は `max_ips: 500`・`max_queries: 1` にできる (playbook に書く)
+- 7 日の範囲 (N = 7d の並べ方) では測っていない。一覧ができてから、run の stats の `listed_block_share` で見る
+
 ## 手間の見積もり
 
 - 表・移行・prune・rebuild の引き継ぎ・設定 (`ip_list`・`retention.ip_list`・N ≦ M の検査・雛形と `--diff`): 1.5 日
@@ -277,7 +307,7 @@ fields httpRequest.clientIp as ip, ...
 
 ## 未確認の点
 
-- 大きな利用者で、上位 K 個が BLOCK の何割を占めるか (下の「上位の割合を実データで測る手順」で測る)。`max_ips`・`min_block_share` の既定は、その結果で決め直す
+- 上位 K 個が BLOCK の何割を占めるかは、1 日の範囲でだけ測った (K = 1,000 で 87%)。7 日の範囲と、ほかの利用者での偏りは未確認
 - N = 7d でアクティブな IP の数 (1 日の異なる IP 約 10,400 の何倍になるか)。一覧ができてから run の stats で見る
 - 1 本の問い合わせ (1 日分、`in` の要素が数百) の実行時間。GitHub Actions の実行時間 (有料の前提) に効く
 - `in [...]` の要素の数に、文の長さのほかの上限があるか (公式文書には書かれていない。sandbox で数百の要素の文を流して確かめる)
