@@ -41,6 +41,7 @@ CI は `.github/workflows/fuzz.yml` が週 1 回と手動 (`workflow_dispatch`�
 | | `FuzzRetryAfter` `FuzzParseScopes` | `Retry-After`、`X-OAuth-Scopes` | 待ち時間は 0 以上 24 時間以下の秒。scope は決まった字だけ・100 個まで・重複なし |
 | | `FuzzPostMessageResponse` | 状態コード・本文・`Retry-After` (偽の API) | 成功は 2xx で `ok: true` のときだけ。エラーの文は 1 行で、トークンも本文も含まない。呼び出しは 3 回まで |
 | `internal/collect/cwlogs` | `FuzzNormalizePath` `FuzzMaskSample` `FuzzHistPercentiles` | パス、ログの行、レートの度数 (Insights の結果) | クエリ・フラグメントとメールアドレスの形が残らない。冪等。サンプル行は伏せてから切り、制御文字を残さない。分位数は p50 ≤ p99 ≤ max で、どれも度数の値 |
+| `internal/checks` (waf_review) | `FuzzLabelMatches` | WAF の設定のラベル・ルール名・LabelMatchStatement の鍵 | 前の名前空間を省いた鍵は、マネージドのグループのラベルにも WebACL の外のラベルにも一致しない (ADR 0070) |
 | | `FuzzQueryLiterals` | 設定の glob・接頭辞・正規表現 | Insights の `/.../` と `"..."` を抜け出さない。Go の regexp でも同じ意味 |
 | | `FuzzParseValues` | Insights の結果の値 | 時刻・日・件数 (有限で負でない)・IP の範囲 |
 | | `FuzzCollectHTTPRows` `FuzzCollectWAFRows` `FuzzMismatchSamples` | Insights の結果の行 (偽の API) | 収集の全体がパニックしない。record を JSON にできる。メールアドレスと User-Agent の原文が残らない |

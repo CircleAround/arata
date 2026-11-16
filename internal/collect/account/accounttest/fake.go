@@ -420,6 +420,10 @@ type WAF struct {
 	// ResourceTypeErrs は資源の種類 → ListResourcesForWebACL のエラー。本物は種類ごとに資源のサービス側の権限も要る
 	// (COGNITO_USER_POOL は cognito-idp:ListResourcesForWebACL。読み取りロールに無いので AccessDeniedException になる。sandbox で確認)。
 	ResourceTypeErrs map[waftypes.ResourceType]error
+	// LabelNamespaces はマネージドのルールグループ ("<vendor>/<name>") → ラベルの名前空間 (DescribeManagedRuleGroup の LabelNamespace)。
+	// 無いグループは WAFNonexistentItemException。DescribeErr があればどのグループもそのエラー
+	LabelNamespaces map[string]string
+	DescribeErr     error
 }
 
 // DeniedCognito は読み取りロールで COGNITO_USER_POOL を問い合わせたときの本物のエラー (サービス側の権限が無い)。
@@ -465,6 +469,20 @@ func (f wafFake) GetWebACL(_ context.Context, in *wafv2.GetWebACLInput, _ ...fun
 		}
 	}
 	return nil, APIError{Code: "WAFNonexistentItemException"}
+}
+
+func (f wafFake) DescribeManagedRuleGroup(_ context.Context, in *wafv2.DescribeManagedRuleGroupInput, _ ...func(*wafv2.Options)) (*wafv2.DescribeManagedRuleGroupOutput, error) {
+	if err := f.call(account.ActionDescribeManagedRuleGroup); err != nil {
+		return nil, err
+	}
+	if f.WAF.DescribeErr != nil {
+		return nil, f.WAF.DescribeErr
+	}
+	ns, ok := f.WAF.LabelNamespaces[aws.ToString(in.VendorName)+"/"+aws.ToString(in.Name)]
+	if !ok {
+		return nil, APIError{Code: "WAFNonexistentItemException"}
+	}
+	return &wafv2.DescribeManagedRuleGroupOutput{LabelNamespace: aws.String(ns)}, nil
 }
 
 func (f wafFake) GetLoggingConfiguration(_ context.Context, in *wafv2.GetLoggingConfigurationInput, _ ...func(*wafv2.Options)) (*wafv2.GetLoggingConfigurationOutput, error) {

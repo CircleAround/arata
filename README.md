@@ -364,7 +364,7 @@ arata resolve <finding-id>
 | `guardduty` | `guardduty:ListDetectors`, `guardduty:ListFindings`, `guardduty:GetFindings` |
 | `access-analyzer` | `access-analyzer:ListAnalyzers`, `access-analyzer:ListFindings` |
 | `posture` | `cloudtrail:DescribeTrails`, `cloudtrail:GetTrailStatus`, `guardduty:ListDetectors`, `guardduty:GetDetector`, `iam:GetAccountSummary`, `iam:GetAccountPasswordPolicy`, `s3:GetAccountPublicAccessBlock`, `elasticloadbalancing:DescribeLoadBalancers`, `wafv2:GetWebACLForResource` |
-| `waf-config` | `wafv2:ListWebACLs`, `wafv2:GetWebACL`, `wafv2:GetLoggingConfiguration`, `wafv2:ListResourcesForWebACL` (REGIONAL は `regions`、CLOUDFRONT は us-east-1) |
+| `waf-config` | `wafv2:ListWebACLs`, `wafv2:GetWebACL`, `wafv2:GetLoggingConfiguration`, `wafv2:ListResourcesForWebACL`, `wafv2:DescribeManagedRuleGroup` (REGIONAL は `regions`、CLOUDFRONT は us-east-1。最後のはマネージドのグループのラベルの名前空間を読み、目印のルールを見分ける。ADR 0070) |
 
 daily のソースのうち、追加の権限が要るもの:
 

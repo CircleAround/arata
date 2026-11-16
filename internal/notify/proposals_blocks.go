@@ -64,6 +64,31 @@ func evNum(p schema.Proposal, key string) string {
 	return ""
 }
 
+// evList は evidence の文字列の並び (report.json から読むと []any、arata の型では []string) を、code の書式で maxListItems 個までつなぐ。
+// 値は WAF の設定から来る名前 (信用できない) なので code() でエスケープする。
+func evList(p schema.Proposal, key string) string {
+	var items []string
+	switch v := p.Evidence[key].(type) {
+	case []string:
+		items = v
+	case []any:
+		for _, x := range v {
+			if s, ok := x.(string); ok {
+				items = append(items, s)
+			}
+		}
+	}
+	var out []string
+	for i, s := range items {
+		if i == maxListItems {
+			out = append(out, fmt.Sprintf("ほか %d", len(items)-maxListItems))
+			break
+		}
+		out = append(out, code(s))
+	}
+	return strings.Join(out, "・")
+}
+
 func ruleName(p schema.Proposal) string {
 	if p.RuleInGroup != "" {
 		return p.RuleInGroup
@@ -299,7 +324,7 @@ func observationShortLines(obs, status []schema.Proposal) []string {
 		}
 	}
 	if len(status) > 0 && shown < maxObservationLines {
-		lines = append(lines, "*COUNT のルール* (提案ではない。BLOCK への切り替えは人が計画して決める)")
+		lines = append(lines, "*COUNT のルール* (提案ではない。BLOCK への切り替えは人が計画して決める。目印のルールは BLOCK の候補ではない)")
 		var none []string
 		for _, p := range status {
 			if evNum(p, "matches") == "0" {
@@ -308,6 +333,13 @@ func observationShortLines(obs, status []schema.Proposal) []string {
 				continue
 			}
 			if shown == maxObservationLines {
+				continue
+			}
+			if p.About == aboutLabelRule {
+				// 目印のルール (ADR 0070): ラベル・件数・使っているルール。BLOCK にするかの材料ではないので「怪しい」は出さない
+				lines = append(lines, "• 目印 "+joinNonEmptyWith(" ", code(ruleName(p))+withUnit(evNum(p, "matches"), " %s 件"),
+					withUnit(evList(p, "labels"), "ラベル %s"), withUnit(evList(p, "consumers"), "→ 使っている %s")))
+				shown++
 				continue
 			}
 			ratio := ""

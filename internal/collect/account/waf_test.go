@@ -10,6 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	waftypes "github.com/aws/aws-sdk-go-v2/service/wafv2/types"
 
+	"github.com/CircleAround/arata/internal/codes"
 	"github.com/CircleAround/arata/internal/collect"
 	"github.com/CircleAround/arata/internal/collect/account"
 	"github.com/CircleAround/arata/internal/collect/account/accounttest"
@@ -212,3 +213,58 @@ func TestWAFConfigListResourcesItselfDenied(t *testing.T) {
 		t.Fatalf("probe ng: %v", ng)
 	}
 }
+
+// 決定 (ADR 0070): ルールが付けるラベル (RuleLabels)・使うラベル (入れ子の LabelMatchStatement を含む)・マネージドのグループのラベルの名前空間を残す。
+// 名前空間を読めなくても (DescribeManagedRuleGroup の拒否) ソースを失敗にせず、label_namespace_unknown と WAF_LABELS_UNKNOWN を残す。
+func TestWAFConfigLabels(t *testing.T) {
+	label := func(scope waftypes.LabelMatchScope, key string) waftypes.Statement {
+		return waftypes.Statement{LabelMatchStatement: &waftypes.LabelMatchStatement{Scope: scope, Key: aws.String(key)}}
+	}
+	rules := []waftypes.Rule{
+		{Name: aws.String("bot"), Priority: 1, OverrideAction: &waftypes.OverrideAction{None: &waftypes.NoneAction{}},
+			Statement: &waftypes.Statement{ManagedRuleGroupStatement: &waftypes.ManagedRuleGroupStatement{VendorName: aws.String("AWS"), Name: aws.String("AWSManagedRulesBotControlRuleSet")}}},
+		{Name: aws.String("tag-api"), Priority: 2, Action: &waftypes.RuleAction{Count: &waftypes.CountAction{}},
+			RuleLabels: []waftypes.Label{{Name: aws.String("api:internal")}, {Name: aws.String("api:all")}},
+			Statement:  &waftypes.Statement{ByteMatchStatement: &waftypes.ByteMatchStatement{}}},
+		{Name: aws.String("block-libs"), Priority: 3, Action: &waftypes.RuleAction{Block: &waftypes.BlockAction{}},
+			Statement: &waftypes.Statement{AndStatement: &waftypes.AndStatement{Statements: []waftypes.Statement{
+				label(waftypes.LabelMatchScopeLabel, "awswaf:managed:aws:bot-control:bot:category:http_library"),
+				{NotStatement: &waftypes.NotStatement{Statement: ptr(label(waftypes.LabelMatchScopeNamespace, "api:"))}},
+			}}}},
+	}
+	acl := accounttest.WebACL(waftypes.ScopeRegional, "ap-northeast-1", "prod-waf", rules...)
+	for _, denied := range []bool{false, true} {
+		w := &accounttest.WAF{WebACLs: map[string][]waftypes.WebACL{"REGIONAL|ap-northeast-1": {acl}},
+			LabelNamespaces: map[string]string{"AWS/AWSManagedRulesBotControlRuleSet": "awswaf:managed:aws:bot-control:"}}
+		if denied {
+			w.DescribeErr = accounttest.APIError{Code: "AccessDeniedException"}
+		}
+		f := &accounttest.Fake{WAF: w}
+		var logs bytes.Buffer
+		c := account.NewWAFConfig("waf_config", account.Clients{}, f.Clients("ap-northeast-1"))
+		c.Logger = slog.New(slog.NewJSONHandler(&logs, nil))
+		s, err := collectWith(t, c)
+		if err != nil {
+			t.Fatalf("denied=%v: %v", denied, err)
+		}
+		m := s.byKey()
+		if p := m["acl|REGIONAL|ap-northeast-1|prod-waf"].String("label_prefix"); p != "awswaf:123456789012:webacl:prod-waf:" {
+			t.Fatalf("label_prefix = %q", p)
+		}
+		if tg := m["rule|REGIONAL|ap-northeast-1|prod-waf|tag-api"]; tg.String("labels") != "api:all,api:internal" {
+			t.Fatalf("tag-api: %+v", tg.Data)
+		}
+		if bl := m["rule|REGIONAL|ap-northeast-1|prod-waf|block-libs"]; bl.String("label_matches") != "LABEL:awswaf:managed:aws:bot-control:bot:category:http_library,NAMESPACE:api:" {
+			t.Fatalf("block-libs: %+v", bl.Data)
+		}
+		bot := m["rule|REGIONAL|ap-northeast-1|prod-waf|bot"]
+		if !denied && (bot.String("label_namespace") != "awswaf:managed:aws:bot-control:" || bot.Bool("label_namespace_unknown")) {
+			t.Fatalf("bot: %+v", bot.Data)
+		}
+		if denied && (!bot.Bool("label_namespace_unknown") || !strings.Contains(logs.String(), codes.WAFLabelsUnknown)) {
+			t.Fatalf("denied: %+v %s", bot.Data, logs.String())
+		}
+	}
+}
+
+func ptr[T any](v T) *T { return &v }
