@@ -59,11 +59,13 @@ jobs:
     # ほかのブランチのジョブには秘密が渡らない。OIDC の sub は repo:…:environment:audit になる (runner.yaml の GitHubEnvironment=audit と組)。
     environment: audit
     # 定時の監査 (arata-audit.yml) と同じ group にして、同じストアへは順番に書く。
-    # 監査が走っていれば終わるまで待つ。走っている run は中断しない。
+    # 監査が走っていれば終わるまで待つ。走っている run は中断しない。待っている run も取り消さない (queue: max)。
     # 止めきれなくても、後から終わったほうが STORE_CONFLICT で失敗するだけで、ストアは壊れない (ADR 0034)。
     concurrency:
       group: arata-audit-${{ inputs.account }}
       cancel-in-progress: false
+      # 監査と同じく、待っているものを取り消さずに順に待つ (既定の queue: single だと、待っていた定時の監査を取り消す。ADR 0068 の 7 節)
+      queue: max
     permissions:
       id-token: write   # OIDC で実行用ロールを引き受ける
       contents: read    # 設定ファイルの checkout

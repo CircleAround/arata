@@ -166,7 +166,7 @@ func TestTriageTriggerAndInputs(t *testing.T) {
 	j := w.Jobs["triage"]
 	// 定時の監査 (書き込む実行) と同じ group (アカウントごと) で、順番に動かす。試しの実行の group は別 (ストアに書かない。dryrun_test.go)
 	want := strings.Replace(strings.Replace(multi.Jobs["audit"].Concurrency.Group, dryRunGroupSuffix, "", 1), "matrix.account", "inputs.account", 1)
-	if c := j.Concurrency; c.Group != want || !strings.Contains(want, "inputs.account") || c.CancelInProgress == nil || *c.CancelInProgress {
+	if c := j.Concurrency; c.Group != want || !strings.Contains(want, "inputs.account") || c.CancelInProgress == nil || *c.CancelInProgress || c.Queue != "max" {
 		t.Errorf("concurrency must be the group of the audit (%q) and must queue: %+v", want, c)
 	}
 	if p := j.Permissions; len(p) != 2 || p["id-token"] != "write" || p["contents"] != "read" {

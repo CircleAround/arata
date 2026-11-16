@@ -7,7 +7,7 @@
 | 検査 | 場所 | 落ちる条件 |
 |---|---|---|
 | Actions の固定・版の一致・7 日待機 | `tools/actionsgate` (`supply-chain.yml`。固定は `go test` でも) | SHA でない `uses`、版のコメントが無い・SHA と違う、公開から 7 日未満 |
-| ワークフローの構文 | actionlint | 構文、式、シェルの誤り |
+| ワークフローの構文 | actionlint | 構文、式、シェルの誤り。concurrency の `queue` (ADR 0068 の 7 節) は今の版が知らないので、その 1 件だけを `-ignore` で無視する (知る版が出て 7 日の待機を過ぎたら外す) |
 | ワークフローのセキュリティ | zizmor (`.github/zizmor.yml`) | 式の注入、危険なトリガー、過大な権限、資格情報の残留、キャッシュ汚染、偽装コミット、既知の脆弱な action |
 | ロックファイル | `gh actions-lock --verify` | `actions.lock` があるときに、古い・上流と合わない |
 | Go の依存の固定と待機 | `go mod verify`、`tools/agegate` | go.sum との不一致、公開から 7 日未満 |
