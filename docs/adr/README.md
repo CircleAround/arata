@@ -94,3 +94,4 @@
 | [0068](0068-triage-guard.md) | 片付けの守り: 理由と操作した人をストアに残し、high 以上の ack を止め (`--force` は理由が必須)、黙らせているものを週次に出し、許す操作を review に載せる | 提案 |
 | [0069](0069-ip-list.md) | 怪しい IP の一覧をストアに持ち、チェックをまたいで使う (判定に使う期間と保持の期間を分ける。最初の使い道は count_rule_status の suspect) | 採用 |
 | [0070](0070-waf-label-rules.md) | 目印 (ラベル) を付けるための COUNT のルールを、BLOCK にするかの材料から分けて出す | 採用 |
+| [0071](0071-user-authz-probe.md) | ログインした利用者の、パスや ID の総当たり (認可の抜け漏れの探り) を、利用者ごとの時の部品で見る (`user_denied`・`user_id_enumeration`・`user_path_breadth`) | 提案 |
