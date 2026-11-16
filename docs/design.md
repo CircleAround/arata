@@ -112,7 +112,7 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
   完了待ちが 15 分を超えた (StopQuery する) / ソースの `max_scan_gb` (1 回の収集でのスキャン量。既定 0 = 無制限) を超えた (実行中なら StopQuery、以後のクエリは流さない)。
   集計クエリは窓に重なる UTC 日の 0 時から引くので (3 章)、1 回のスキャンは最大で窓 + 24h 分になる。`max_scan_gb` はこれを見込んで決める。
 - 決定 (クエリをまとめる。ADR 0031): Insights は 1 本ごとに範囲のログ全体を読むので、同じソースの集計を細かい group by の数本にまとめ、振り分けを Go で行う。
-  http_access は 2 本 (解釈率 + `probe_paths`、`sign_in_failures` + `probe_hits`) + endpoint_abuse があれば全画面で 1 本、wafv2 は 4 本 (2 章の下の決定)。
+  http_access は 2 本 (解釈率 + `probe_paths`、`sign_in_failures` + `probe_hits`) + endpoint_abuse があれば全画面で 1 本、wafv2 は 4 本 (`trusted_cidrs` があれば 5 本。2 章の下の決定、ADR 0067)。
   値は前の版と同じ (同じログから同じ metrics。`cwlogstest.Sim` とゴールデン `testdata/equiv_*.golden` で固定)。行数の上限 (10000) に当たったら
   その範囲を半分に分けて引き直し (1h まで。スキャン量は範囲に比例するので、増えるのは引き直した分だけ)、それでも当たればまとめた集計から作る metric を全部 `truncated` に残す
 - 決定 (問い合わせ範囲とロググループの寿命): Logs Insights は、問い合わせの**終わり**がロググループの作成時刻より前、または保持期間 (今 − `retentionInDays`) より古いと
@@ -171,7 +171,7 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
 | `waf_rule_action` | `<WebACL>\|<終了ルール>\|<action>` | 件数。既存の `waf_block` (ルール別) はここから作る。解釈率のクエリと 1 本 (ADR 0031) |
 | `waf_block_path` / `_ips` | `<WebACL>\|<ルール>[/<グループの中のルール>]\|<method>\|<正規化パス>` | BLOCK の件数 / 異なり IP 数。探索パスは除く。日ごとに上位 `top_paths` (既定 50) |
 | `waf_allow_probe` / `_ips` | `<WebACL>\|<正規化パス>` | 探索パス (probe_paths) への ALLOW の件数 / 異なり IP 数。上位 `top_paths` |
-| `waf_rule_count_match` / `_suspect` | `<WebACL>\|<ルール>` (グループの中は `<ruleGroupId>/<ルール>`) | カウントモードの一致の件数 / そのうち探索パスか、その日「BLOCK された IP」(下の決定) からの件数 |
+| `waf_rule_count_match` / `_suspect` | `<WebACL>\|<ルール>` (グループの中は `<ruleGroupId>/<ルール>`) | カウントモードの一致の件数 / そのうち探索パスへの一致と、BLOCK されたリクエストでもカウントのルールが一致した件数 (下の決定。ADR 0067) |
 | `waf_ip_rate_p50` / `_p99` / `_max` | `<WebACL>\|<パスの群>` | 1 IP あたり 5 分間の件数の分布。群は `rate_path_groups` の接頭辞 (最長一致)、どれにも当たらなければ `*` |
 | `waf_position_limit` | `<WebACL>\|<配列の名前>` | 配列の位置の上限を超えた (数え漏れの可能性がある) リクエストの数 |
 | `waf_challenge_issued` / `_issued_ips` / `_solved_ips` | `<WebACL>\|<challenge\|captcha>\|<ルール>[/<グループの中のルール>]\|<method>\|<正規化パス>` | Challenge / CAPTCHA を出した件数 / 出した異なり IP / そのうち解いた異なり IP (ADR 0028)。日ごとに上位 `top_paths` |
@@ -188,7 +188,10 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
   null でない**最後の**位置のものを採る。前にある COUNT のグループは一致すると `terminatingRule` が null でなくなるが、止めたグループより後ろのグループは評価されないので、最後の 1 つが止めたグループになる。
   番兵 (9 番目のグループ) が埋まっているときは判断できないので、中のルール名を付けずグループ単位にする (安全側)。`parse @message` の正規表現で最初の `terminatingRule` を取る案は、
   前にある COUNT のグループのものを取り違える (実ログで確認) のでやめた
-- 決定 (カウントの一致の suspect の「BLOCK された IP」): 専用のクエリ (保存しない) で、レートベースのルール (`terminatingRuleType` が RATE_BASED)・既定の action (`Default_Action`)・
+- 決定 (ADR 0067。上の「BLOCK された IP」を置き換える): suspect は「探索パスへの一致」と「BLOCK されたリクエストでもカウントのルールが一致した件数」の和。
+  「同じ日に別のリクエストで BLOCK された IP からの、許可されたリクエストへの一致」は数えない (ip の軸が要り、行数の上限に当たるため。オーナーの判断、2026-11-16)。
+  BLOCK の側で除くもの (レートベースのルール・既定の action・sign-in のパス・正規の送信元) と、その理由は次の決定のまま
+- 決定 (カウントの一致の suspect の「BLOCK された IP」。ADR 0067 の前): 専用のクエリ (保存しない) で、レートベースのルール (`terminatingRuleType` が RATE_BASED)・既定の action (`Default_Action`)・
   sign-in のパス (`login_bruteforce.paths`) での BLOCK を除いた BLOCK の IP を日ごとに取る。正規の利用者も一時的にレート制限に当たり得て (決済などリクエストが多いのが仕様の画面がある)、
   それを「悪い IP」とみなすと、正規の利用者に当たっている COUNT ルールを「怪しい通信ばかり」と見せてしまう (危ない方向に間違える)。sandbox で、/login のレート制限で止まった 1 IP のせいで
   COUNT の一致が 100% suspect になって判明した。count_rule_status の evidence に `suspect_blocked_ip_excludes` (除いた BLOCK) を残す
@@ -198,6 +201,12 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
   `top_paths` / `rate_path_groups` / `trusted_cidrs` は集計条件なので overrides では変えられない
 - 決定 (`strip_path_prefix`): API Gateway の REST API では `httpRequest.uri` の前にステージ名が付く (`/prod/login`。sandbox で確認。ALB・CloudFront では付かない)。
   wafv2 ソースの `strip_path_prefix` (`/` で始まり `/` で終わらない) を、探索パス・パスの群の判定では必須の接頭辞として正規表現の前に付け、正規化の前に外す (`/prod` は `/prod/x` と `/prod` だけを外し、`/products` は外さない)。集計条件
+- 決定 (ADR 0067。下の ADR 0031 の分け方を置き換える): 行の多い種類 (CAPTCHA・カウントの一致の ip) を BLOCK と同じクエリに置かない。
+  1' 全行 (解釈率・`waf_rule_action`・`waf_block` と、`trusted_cidrs` が無ければカウントの一致の合計と探索パスへの一致)、2' BLOCK と許可された探索 (path × ip と
+  カウントのルールの位置)、3' Challenge / CAPTCHA (出した・受理)、レート。BLOCK 側は CAPTCHA の多い時でも上限に当たらず、上限に当たっても truncated になるのはそのクエリの metric だけ。
+  **実装での決定**: `trusted_cidrs` があると、全行のクエリでは正規の送信元を除けない (確かめ済みの Insights の機能では行の印にできない) ので、カウントの一致の合計は ip の軸を
+  持たない別の 1 本にする (5 本)。`trusted_cidrs` が無ければ 4 本 (今と同じ)。2 つの形が同じ値を出すことをシミュレーターで固定 (`TestWAFMergedCountEquivalence`)。
+  クエリの名前 (部分の行の名前) は `waf_lines`・`waf_blocks`・`waf_challenges`・`waf_rule_count_match` にした (前の版の部分の行と混ざらない。上がった日は日の頭から読む)
 - 費用 (ADR 0031): wafv2 ソースのクエリは 4 本 (解釈率 + `waf_rule_action`、止めた・出した系、カウントの一致、レート (日数分。合わせて範囲 1 本分))。前の版は 10 本。
   止めた・出した系は filter を `action = "BLOCK" or ((CHALLENGE / CAPTCHA or 許可された探索 or トークンの受理) and 正規の送信元でない)` にし、group by を各集計の軸の和集合にして、
   `waf_block_ip`・`waf_block_path`・`waf_allow_probe`・「BLOCK された IP」・Challenge の出した / 受理を Go で振り分ける (trusted_cidrs・探索パス・sign-in のパス・レートベース / 既定の action の除外も Go)。
@@ -1311,7 +1320,7 @@ arata は LLM を使わず候補だけを作り、aratam の LLM は候補を文
 
 - 決定: COUNT → BLOCK の切り替えは提案しない (当初の `count_to_block` は廃止)。切り替えは運用で計画して行う作業 (COUNT で入れるときに期間を決めて様子を見る) で、
   アプリの事情も絡むので、ログの数字だけで勧めると正規の利用者を止める危険がある。代わりに COUNT のルールの状況を計画の材料として毎回載せ、Summary は事実だけを書く
-  (例「COUNT の X: 直近 7 日で 6 件一致、うち怪しい通信 100%、一致した日 1 / 7 日」)。怪しい通信 = 探索パスか、レート制限・既定の action・sign-in のパス以外で BLOCK された IP からの一致。
+  (例「COUNT の X: 直近 7 日で 6 件一致、うち怪しい通信 100%、一致した日 1 / 7 日」)。怪しい通信 = 探索パスへの一致か、レート制限・既定の action・sign-in のパス以外で BLOCK されたリクエストでの一致 (ADR 0067)。
   COUNT のルールは一致 0 でも count_rule_status に載るので、`unused_rule` の対象から外す (重ならないように)。閾値 `count_days` / `count_ratio` / `count_min_matches` は設定から外した
   (書いたままの設定は `config init --diff` で unknown_key と出る。Load は未知のキーで止まるので消す)
 - 決定: 「迷ったら提案しない」。設定と突き合わせられない (WebACL が waf-config に無い・同じ名前の WebACL が複数ある・ルールが設定に無い)、scope-down を解釈できない、

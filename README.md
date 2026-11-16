@@ -453,7 +453,7 @@ Logs Insights の集計クエリで日次集計 (IP 別の sign-in 失敗数な�
   (WAF のレートの p50・p99 だけは、Insights の近似の pct から正確な分位数に変わる)。request_lines と text の形式には使えない。
   クエリは 1 時間ずつ流し、行数の上限に当たっても割り直さない (割り直すと同じ範囲を読み直すため。当たった時は件数の多い組だけを残して下限にする)。
   位置の無い 1 回目は日の頭から読むので、大きなロググループでは `max_collect` (例 12h) を書くと、古い側からその分ずつ集める
-- WAF のログ (wafv2) は大きく、集計クエリも多い (範囲 4 本分)。範囲は実行時刻で決まり、daily を UTC 0 時過ぎ (doctor が時刻を案内する) に回すと半分ほどになる。`arata doctor` の `cost` の行に 1 日・30 日の概算と `max_scan_gb` の推奨値が出るので、必ず `max_scan_gb` を設定する
+- WAF のログ (wafv2) は大きく、集計クエリも多い (範囲 4 本分。`trusted_cidrs` があれば 5 本分。ADR 0067)。範囲は実行時刻で決まり、daily を UTC 0 時過ぎ (doctor が時刻を案内する) に回すと半分ほどになる。`arata doctor` の `cost` の行に 1 日・30 日の概算と `max_scan_gb` の推奨値が出るので、必ず `max_scan_gb` を設定する
   (1 日のスキャン量は直近 24h の集計で実測するので、doctor 1 回で 1 日分の読み取りの費用がかかる。`--no-measure-scan` で推定に切り替えられるが少なく出る)
 - 1 つの WebACL を本番と staging の資源が共有しているなら、wafv2 のソースの `resources` (ログの `httpSourceId`。glob 可) で本番だけを集計する。
   doctor が WebACL の資源と突き合わせる。絞ってもスキャン量 (費用) は減らない

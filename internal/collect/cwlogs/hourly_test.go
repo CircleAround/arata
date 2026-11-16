@@ -295,7 +295,7 @@ func TestHourlyQueriesEachHourOnce(t *testing.T) {
 	for _, in := range f.Started {
 		q := aws.ToString(in.QueryString)
 		name := "other"
-		for _, n := range []string{"as lines_total", "as waf_actions", "as waf_rule_count_match", "as k by acl"} {
+		for _, n := range []string{"as lines_total", `filter action = "BLOCK" or`, `action in ["CHALLENGE", "CAPTCHA"] or`, "as waf_rule_count_match", "as k by acl"} {
 			if strings.Contains(q, n) {
 				name = n
 			}
@@ -331,7 +331,7 @@ func TestHourlyQueriesEachHourOnce(t *testing.T) {
 			t.Fatal(err)
 		}
 		// rows_by_action: 上限を埋めた行の action ごとの数 (ここでは全部 BLOCK)
-		if m["query"] != wafActions || m["hour"] == nil || !strings.Contains(m["metrics"].(string), MetricWAFBlockIP) ||
+		if m["query"] != wafBlocks || m["hour"] == nil || !strings.Contains(m["metrics"].(string), MetricWAFBlockIP) ||
 			m["rows_by_action"].(map[string]any)["BLOCK"].(float64) != float64(MaxRows) {
 			t.Fatalf("warn line: %s", l)
 		}

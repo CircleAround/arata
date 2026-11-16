@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -267,9 +268,13 @@ func runWAFEquiv(t *testing.T, register func(f *cwlogstest.Fake, sim *cwlogstest
 // registerWAF は collector が流すクエリに Sim の応答を登録する (クエリの形ごとに filter を対応させる)。
 func registerWAF(f *cwlogstest.Fake, sim *cwlogstest.Sim, p wafPreds) {
 	f.On("as lines_total", sim.Response(nil))
-	// action = "BLOCK" or ((CHALLENGE / CAPTCHA or 許可された探索 or トークンの受理) and 正規の送信元でない)
-	f.On("as waf_actions", sim.Response(func(r map[string]string) bool {
-		return p.block(r) || ((r["action"] == "CHALLENGE" || r["action"] == "CAPTCHA" || (r["action"] == "ALLOW" && p.probe(r)) || p.solvedCond(r)) && p.trusted(r))
+	// 2' (ADR 0067): action = "BLOCK" or (許可された探索 and 正規の送信元でない)
+	f.On(`filter action = "BLOCK" or`, sim.Response(func(r map[string]string) bool {
+		return p.block(r) || (r["action"] == "ALLOW" && p.probe(r) && p.trusted(r))
+	}))
+	// 3': (CHALLENGE / CAPTCHA or トークンの受理) and 正規の送信元でない
+	f.On(`action in ["CHALLENGE", "CAPTCHA"] or`, sim.Response(func(r map[string]string) bool {
+		return (r["action"] == "CHALLENGE" || r["action"] == "CAPTCHA" || p.solvedCond(r)) && p.trusted(r)
 	}))
 	f.On("as waf_rule_count_match", sim.Response(p.countMatch))
 }
@@ -419,4 +424,39 @@ func TestHTTPEquivalence(t *testing.T) {
 		t.Fatalf("truncated: %v", tr)
 	}
 	checkGolden(t, "equiv_http.golden", dumpMetrics(sink, c.FormatStats()))
+}
+
+// 決定 (ADR 0067): trusted_cidrs が無いとき、カウントの一致を全行のクエリに入れた形 (4 本) は、別の 1 本にした形 (5 本) と同じ値を出す。
+func TestWAFMergedCountEquivalence(t *testing.T) {
+	checks := wafEquivChecks()
+	checks.WAFReview.TrustedCIDRs = nil
+	run := func(separate bool) (map[string]float64, int) {
+		separateCountQuery = separate
+		defer func() { separateCountQuery = false }()
+		sim := &cwlogstest.Sim{Events: wafEvents()}
+		f := &cwlogstest.Fake{}
+		registerWAF(f, sim, wafPreds{c: checks})
+		f.On("as waf_ip_rate_p50", wafRateResp())
+		c, err := New(wafSource(), checks, f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.Sleep = func(context.Context, time.Duration) error { return nil }
+		sink := &sinkRecorder{}
+		if err := c.Collect(context.Background(), collect.Window{From: now.Add(-24 * time.Hour), To: now}, sink); err != nil {
+			t.Fatal(err)
+		}
+		return sink.metrics(), c.QueryCount()
+	}
+	merged, nm := run(false)
+	separate, ns := run(true)
+	if nm != 4 || ns != 5 {
+		t.Fatalf("query counts: merged %d, separate %d", nm, ns)
+	}
+	if !reflect.DeepEqual(merged, separate) {
+		t.Fatalf("merged and separate counts differ:\n merged   %v\n separate %v", merged, separate)
+	}
+	if merged["2026-10-21|waf_rule_count_match|prod-waf|AWS-AWSManagedRulesKnownBadInputsRuleSet"] == 0 {
+		t.Fatalf("test data should have count matches: %v", merged)
+	}
 }

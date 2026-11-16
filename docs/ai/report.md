@@ -117,7 +117,7 @@ arata が決まった規則で作った、WAF の設定を変える候補。find
   `below_threshold` (閾値未満)、`undetermined` (設定と突き合わせられない・scope-down を解釈できないなど、判断できない)、`excluded_by_config` (除外設定に一致。決済のパスなど)、
   `excluded_by_rule` (決まった除外に一致。レートベースのルール・IP 評判のグループ・sign-in のパス)、`position_limit` (ログの配列の位置の上限を超え、数え漏れの可能性)
 - **COUNT のルールの状況** (`kind: observation`、`about: count_rule_status`、`reason: informational`): COUNT で動いているルールごとに毎回 1 件。提案ではなく、COUNT → BLOCK を計画するときの材料。
-  `matches` (一致件数)、`suspect_ratio` (怪しい通信の割合 = 探索パスか、レート制限・既定の action・sign-in のパス以外で BLOCK された IP からの一致)、`matching_days` / `days` (一致した日数 / 集計の日数)
+  `matches` (一致件数)、`suspect_ratio` (怪しい通信の割合 = 探索パスへの一致か、レート制限・既定の action・sign-in のパス以外で BLOCK されたリクエストでの一致)、`matching_days` / `days` (一致した日数 / 集計の日数)
 - **Challenge / CAPTCHA の状況** (`kind: observation`、`about: challenge_impact`、`reason: informational`): 出した数の多いルールごとに毎回 1 件。`issued` (出した件数)、
   `solve_ratio` (解かれた割合 = 解いた IP / 出した IP。日ごとの値を期間で足した比)、`issued_non_get` (GET 以外。構造上解けない)、`paths` (主なパスと割合)。
   割合が低いのは「ボットを止めている」とも「解けない通信が止まっている」とも読めるので、解釈せず数字だけを書く

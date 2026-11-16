@@ -15,7 +15,7 @@
 2026-10-20|waf_rule_action|prod-waf|block-admin|BLOCK = 7
 2026-10-20|waf_rule_action|stg-waf|AWS-AWSManagedRulesCommonRuleSet|BLOCK = 5
 2026-10-20|waf_rule_action||| = 5
-2026-10-20|waf_rule_count_match_suspect|prod-waf|count-geo = 2
+2026-10-20|waf_rule_count_match_suspect|prod-waf|count-geo = 0
 2026-10-20|waf_rule_count_match|prod-waf|count-geo = 2
 2026-10-21|lines_matched| = 1083
 2026-10-21|lines_total| = 1088
@@ -71,12 +71,12 @@
 2026-10-21|waf_rule_action|prod-waf|rate-login|BLOCK = 40
 2026-10-21|waf_rule_action|stg-waf|AWS-AWSManagedRulesCommonRuleSet|BLOCK = 5
 2026-10-21|waf_rule_action||| = 5
-2026-10-21|waf_rule_count_match_suspect|prod-waf|AWS#AWSManagedRulesCommonRuleSet/SizeRestrictions_BODY = 4
-2026-10-21|waf_rule_count_match_suspect|prod-waf|AWS-AWSManagedRulesKnownBadInputsRuleSet = 8
-2026-10-21|waf_rule_count_match_suspect|prod-waf|c0 = 1
-2026-10-21|waf_rule_count_match_suspect|prod-waf|captcha-x = 1
-2026-10-21|waf_rule_count_match_suspect|prod-waf|challenge-search = 4
-2026-10-21|waf_rule_count_match_suspect|prod-waf|count-geo = 4
+2026-10-21|waf_rule_count_match_suspect|prod-waf|AWS#AWSManagedRulesCommonRuleSet/SizeRestrictions_BODY = 0
+2026-10-21|waf_rule_count_match_suspect|prod-waf|AWS-AWSManagedRulesKnownBadInputsRuleSet = 6
+2026-10-21|waf_rule_count_match_suspect|prod-waf|c0 = 0
+2026-10-21|waf_rule_count_match_suspect|prod-waf|captcha-x = 0
+2026-10-21|waf_rule_count_match_suspect|prod-waf|challenge-search = 0
+2026-10-21|waf_rule_count_match_suspect|prod-waf|count-geo = 0
 2026-10-21|waf_rule_count_match_suspect|prod-waf|count-login = 0
 2026-10-21|waf_rule_count_match|prod-waf|AWS#AWSManagedRulesCommonRuleSet/SizeRestrictions_BODY = 4
 2026-10-21|waf_rule_count_match|prod-waf|AWS-AWSManagedRulesKnownBadInputsRuleSet = 8
