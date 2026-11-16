@@ -132,13 +132,25 @@ fields httpRequest.clientIp as ip, ...
   - その日の後の時に初めて BLOCK された IP は、前の時の問い合わせの一覧にまだ無い。日が揃ってからなら、その日の全部の IP を使える
   - 読む量は、時ごとに流しても日に 1 回でも同じ (1 日分)
   - 失敗した日は位置を進めず、次の run で流し直す (ADR 0038 と同じ)
-- 決定 (文の長さの上限を超えるとき): 一覧の IP を、文が 10,000 文字に収まる組 (要素の部分に約 8,000 文字。IPv4 は 1 つ最大 18 文字で約 440、IPv6 は最大 42 文字で約 190) に分け、
-  組ごとに 1 本流す。**組ごとに範囲の全部を読む** (料金がその分増える) ので、本数の上限 `suspect_ip_list.max_queries` (既定の案 2) を持つ。
-  上限を超える IP は、直近 N 日の件数の多い順に残し、残りは数えない。そのときは listed が下限になるので、count_rule_status の evidence に
-  `listed_ips_total`・`listed_ips_queried`・`listed_is_lower_bound: true` を残す (数えた割合を隠さない)
-- 決定 (費用): **絞っても範囲の全部を読むので、費用は下がらない。1 本 × 1 日分が増える**。1 日 4.5 GB の wafv2 なら、1 日あたり約 4.5 GB
-  (東京 0.0076 USD/GB で 1 日約 0.034 USD、30 日で約 1.0 USD)。組が 2 本なら倍。ADR 0067 の (ii) (ip の軸を持つ 5 本目) と同じ読み取りの増え方だが、
-  (ii) と違って行数の上限に当たらない (行は一覧の IP の数で決まる)。doctor の cost の行に、この 1 本を足して見積もる
+- 決定 (**上位 K 個に絞る**): 一覧の全部は渡さない。実データ (大きな利用者の wafv2、1 日): BLOCK 95,683 件・異なる IP 約 10,400 (近似)。1 本に入るのは IPv4 で約 550 IP
+  (`"203.0.113.10",` の形で 1 つ 16〜18 文字) なので、全部を渡すと 1 日約 19 本・約 70 GB (1 日約 0.5 USD) になる。N = 7d ではアクティブな IP はさらに増える。そこで:
+  - 渡す IP を、次の順で並べた上位 K 個にする: (1) 載った理由の数の多い順 (`waf_block` と `probe` の両方に載った IP を先に) (2) 直近 N 日の `waf_block` の件数の多い順
+    (3) 直近 N 日の全部の理由の件数の多い順 (4) last_seen の新しい順 (5) IP の文字列の順 (同じ一覧から、毎回同じ K 個を選ぶため)
+  - K = min(`suspect_ip_list.max_ips`, `max_queries` 本の文に収まる数)。既定の案は `max_ips: 1000`・`max_queries: 2` (IPv4 なら 2 本で約 1,100 まで入るので、K は 1,000)。
+    文は 10,000 文字に収まる組 (要素の部分に約 8,000 文字。IPv6 は 1 つ最大 42 文字で約 190) に分け、組ごとに 1 本流す。**組ごとに範囲の全部を読む**
+  - 上位に絞った listed は下限になる。下限の意味を読めるように、**渡した IP が占める BLOCK の件数の割合**を出す:
+    `listed_block_share` = (渡した K 個の IP の、直近 N 日の `waf_block` の件数の和) / (アクティブな全部の IP の、同じ件数の和)。
+    count_rule_status の evidence に `listed_ips_total`・`listed_ips_queried`・`listed_block_share`・`listed_is_lower_bound` を残し、
+    Summary の事実の文にも「上位 1,000 IP (BLOCK の 80%) で数えた下限」の形で添える (数えた範囲を隠さない)
+  - 決定 (上位の偏りが小さいとき): `listed_block_share` が `suspect_ip_list.min_block_share` (既定の案 0.5) より低い日は、listed を作るが、evidence に `listed_coverage: low` を付け、
+    Summary で「上位の IP に偏っておらず、下限の意味が弱い」と明記する。listed を捨てて (i) だけに戻すことはしない (下限は suspect を少なめに見せる側に間違えるだけで、
+    COUNT のルールを「怪しい通信ばかり」と見せる危ない側には間違えない。設計書 2 章の決定の向き)。低い日が続けば、playbook (`waf_review`) で `max_ips` を上げるか (費用が増える)、
+    フィールドインデックス (下の「検討した選択肢」) を案内する。`max_ips` と `min_block_share` は雛形が書き出し、`--diff` で見える
+  - 割合の分母が `waf_block` だけなのは、listed で数えたいのが「BLOCK された送信元からの、許可されたリクエスト」だから。`probe` だけに載った IP (BLOCK 0 件) は
+    (1) の順で拾われる分だけが入る。`probe` の件数の割合も evidence に `listed_probe_share` として出す
+- 決定 (費用): **絞っても範囲の全部を読むので、費用は下がらない。1 本 × 1 日分が増える**。実データでは 1 日分 1 本が 3.75 GB
+  (東京 0.0076 USD/GB で 1 日約 0.029 USD、30 日で約 0.85 USD)。`max_queries: 2` なら倍 (30 日で約 1.7 USD)。ADR 0067 の (ii) (ip の軸を持つ 5 本目) と同じ読み取りの増え方だが、
+  (ii) と違って行数の上限に当たらない (行は渡した IP の数で決まる)。doctor の cost の行に、この本数を足して見積もる
 - 決定 (weekly の run の直近 1 日分だけに流す案): 採らない。weekly は wafv2 を引かない (設計書 7 章の waf_review の決定。保存済みの日次集計だけを読む)。
   1 日分では、count_rule_status の直近 7 日の割合と期間が揃わない (6 日分の listed が 0 になる)。費用の差は 30 日で約 0.9 USD
 - 決定 (問い合わせの文の組み立て): IP は 1 節で正規化した値を、組み立ての直前にもう一度 `netip.ParseAddr` で読み直し、`String()` の値だけを `"` で囲んで入れる。
@@ -174,7 +186,7 @@ fields httpRequest.clientIp as ip, ...
 
 - 決定: **一覧そのもの (IP の原文) は、report.json にも通知 (aratam・LLM) にも出さない**。出すのは件数だけ:
   - run の stats: 理由ごとの、その日に載った IP の数とアクティブな IP の数、読めずに捨てた値の数
-  - count_rule_status の evidence: `listed_matches`・`listed_ips_total`・`listed_ips_queried`・`listed_is_lower_bound`
+  - count_rule_status の evidence: `listed_matches`・`listed_ips_total`・`listed_ips_queried`・`listed_block_share`・`listed_probe_share`・`listed_is_lower_bound`・`listed_coverage`
 - 理由: 一覧は判定の材料で、人が 1 つずつ見るものではない。IP の原文を LLM に渡す量を増やさない (ADR 0037)
 - 今もある IP の扱いとの関係: login_bruteforce などの finding の key と、ip を key に持つ metric (`sign_in_failures`・`waf_block_ip` など) は、すでに IP の原文を持ち、
   raw は 365 日・metrics は 400 日残る (設計書 5-3)。**この ADR の M は、一覧の表だけの保持の期間で、それらを短くしない**。IP を key に持つ metric の保持を短くするかは、別に決める (候補)
@@ -206,34 +218,67 @@ fields httpRequest.clientIp as ip, ...
 
 ## 結果
 
-- 良い点: count_rule_status の suspect が、ADR 0067 の前に数えていた「BLOCK された IP の、許可されたリクエストでの一致」を、行数の上限に当たらずに数えられる。日をまたいで (N 日) 数えられる
+- 良い点: count_rule_status の suspect が、ADR 0067 の前に数えていた「BLOCK された IP の、許可されたリクエストでの一致」を、行数の上限に当たらずに (上位 K 個の IP について) 数えられる。日をまたいで (N 日) 数えられる
 - 良い点: ソースをまたいで突き合わせる鍵が、保持の期間を決めた 1 つの表になる (5 節)
-- 引き受けるコスト: wafv2 の読み取りが 1 日 1 本 × 1 日分 (組の数だけ) 増える。一覧が大きい日は listed が下限になる
+- 引き受けるコスト: wafv2 の読み取りが 1 日 1〜2 本 × 1 日分増える。listed は上位 K 個の IP で数えた下限で、その割合 (`listed_block_share`) を一緒に出す
 - 引き受けるコスト: IP の原文を持つ表が 1 つ増える (M = 30 日)。rebuild は引き継ぎで、raw からは作れない
 
 ## 確かめ方
 
 - シミュレーター (`cwlogstest.Sim`): `filter ... in [...]` を Sim に足し (今の Sim はこの形を解釈しない)、本物の Insights と同じ「完全な文字列の一致」にする
-- 値の突き合わせ (ゴールデン): `ip_list.active: 1d`・理由 `[waf_block]`・一覧が 1 本に収まるとき、**(i) + listed が、ADR 0067 の前の suspect (その日 BLOCK された IP からの一致) と同じ値**になること。
+- 値の突き合わせ (ゴールデン): `ip_list.active: 1d`・理由 `[waf_block]`・一覧の全部を渡すとき (`max_ips` と文の上限が一覧の数以上)、**(i) + listed が、ADR 0067 の前の suspect (その日 BLOCK された IP からの一致) と同じ値**になること。
   ADR 0067 の前のゴールデン (`equiv_waf.golden` の #119 の前の版) と突き合わせる。`active: 7d` では、前日に載った IP の分だけ増えることを別のテストで固定する
-- 組に分けたとき: 一覧を小さな文の上限で分けて流した結果の和が、1 本で流した結果と同じこと。`max_queries` を超えたら `listed_is_lower_bound` になること
+- 組に分けたとき: 一覧を小さな文の上限で分けて流した結果の和が、1 本で流した結果と同じこと
+- 上位 K 個: 並べ方 (理由の数・件数・last_seen・文字列) が決まった順になること、K が `max_ips` と文の上限の小さい方になること、`listed_block_share` の分子と分母、
+  `min_block_share` の境目で `listed_coverage: low` になること、K を全部の数以上にすると `listed_is_lower_bound: false`・割合 1 になること
 - 一覧の規則: 作り直しで二重に数えない (同じ日を 2 回作っても行が同じ)・N と M の境目・休止の後の戻り (first_seen が残り、active_since が変わる)・M を過ぎたら IP の全部の行が消える・
   `source_ips` と `trusted_cidrs` が載らず使われない・読めない IP を捨てる
 - ファズ: 問い合わせの文の組み立て (4 節の規則)
-- 実データ (開発リードが PR の後に): 大きな利用者の wafv2 で、確定した 1 日について listed を流し、(i) + listed の suspect の割合が、ADR 0067 の前の 5.4% に近い値に戻るか
-  (`active: 1d` で比べ、その後 `7d` の値を見る)。あわせて、その日にアクティブな IP の数 (組が何本になるか) と、1 本の読み取り量・時間を見る
+- 実データ (開発リードが PR の後に): 大きな利用者の wafv2 で、確定した 1 日について listed を流し、(i) + listed の suspect の割合が、ADR 0067 の前の 5.4% にどこまで戻るか
+  (`active: 1d` で比べ、その後 `7d` の値を見る)。上位 K 個に絞るので、戻り方は `listed_block_share` と一緒に読む。あわせて、アクティブな IP の数と、1 本の読み取り量・時間を見る
+
+### 上位の割合を実データで測る手順 (実装の前に。開発リード)
+
+`max_ips` と `min_block_share` の既定を決めるため、確定した 1 日について、BLOCK の件数の上位 K 個の IP が占める割合を測る。
+除外は `waf_block` の理由と同じ (レートベース・既定の action・sign-in のパス)。値は架空 (ロググループ `aws-waf-logs-prod-example`、sign-in のパス `/login`)。
+1 本で 1 日分を読む (この利用者で約 3.75 GB、約 0.03 USD)。2 本流すので約 0.06 USD。
+
+1. IP ごとの BLOCK の件数の上位 (結果は 1 回に 10,000 行まで):
+
+   ```
+   filter action = "BLOCK" and terminatingRuleType != "RATE_BASED" and terminatingRuleId != "Default_Action"
+     and httpRequest.uri != "/login"
+   | stats count(*) as n by httpRequest.clientIp as ip
+   | sort n desc
+   | limit 10000
+   ```
+
+2. 同じ filter で、全体の件数と異なる IP の数: `| stats count(*) as total, count_distinct(httpRequest.clientIp) as ips`
+   (1 の行が 10,000 に届かなければ、1 の n の和が total と同じになるので、2 は省ける)
+
+3. 1 の結果を JSON で受け取り (`aws logs get-query-results --query-id <id> --output json`)、K = 250・500・1,000・2,000・5,000 で、上位 K 個の n の和 / total を出す:
+
+   ```bash
+   aws logs get-query-results --query-id "$Q1" --output json \
+     | jq --argjson total "$TOTAL" '[.results[] | (.[] | select(.field == "n") | .value | tonumber)]
+         | [250, 500, 1000, 2000, 5000] as $ks | [$ks[] as $k | {k: $k, share: ((.[:$k] | add) / $total)}]'
+   ```
+
+4. 読み方: K = 1,000 の割合が 0.5 以上なら、`max_ips: 1000`・`min_block_share: 0.5` の案のままにする。0.5 を大きく下回るなら、`max_ips` を上げたときの本数 (費用) と割合を並べて、
+   既定を決め直す (ADR を直してから実装する)。余裕があれば、範囲を 7 日にして同じことを測る (N = 7d の一覧の並べ方に近い。読み取りは約 7 倍)
 
 ## 手間の見積もり
 
 - 表・移行・prune・rebuild の引き継ぎ・設定 (`ip_list`・`retention.ip_list`・N ≦ M の検査・雛形と `--diff`): 1.5 日
 - 日の値を作るときに一覧を作る (2' の行・`probe_hits`・`sign_in_failures` から。除外の規則): 1 日
-- listed の問い合わせ (組み立て・組に分ける・位置・metric・waf_review の読み方と evidence・playbook): 2 日
+- listed の問い合わせ (上位 K 個の選び方と割合・組み立て・組に分ける・位置・metric・waf_review の読み方と evidence・playbook): 2.5 日
 - Sim の `in`・ゴールデンの突き合わせ・ファズ: 1 日
-- 合計 約 5.5 日
+- 合計 約 6 日
 
 ## 未確認の点
 
-- 大きな利用者で、1 日にアクティブになる IP の数 (`waf_block` + `probe`)。数千なら 1〜2 本に収まらず、listed が下限になる。実データで数えてから `max_queries` の既定を決める
+- 大きな利用者で、上位 K 個が BLOCK の何割を占めるか (下の「上位の割合を実データで測る手順」で測る)。`max_ips`・`min_block_share` の既定は、その結果で決め直す
+- N = 7d でアクティブな IP の数 (1 日の異なる IP 約 10,400 の何倍になるか)。一覧ができてから run の stats で見る
 - 1 本の問い合わせ (1 日分、`in` の要素が数百) の実行時間。GitHub Actions の実行時間 (有料の前提) に効く
 - `in [...]` の要素の数に、文の長さのほかの上限があるか (公式文書には書かれていない。sandbox で数百の要素の文を流して確かめる)
 - WAF のログの `httpRequest.clientIp` の IPv6 の書き方が、`netip.Addr.String()` の正規の形 (省略形・小文字) と同じか。違えば `in` の完全な一致で外れるので、
