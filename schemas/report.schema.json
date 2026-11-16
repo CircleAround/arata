@@ -57,6 +57,9 @@
     },
     "dry_run": {
       "type": "boolean"
+    },
+    "silenced": {
+      "$ref": "#/$defs/Silenced"
     }
   },
   "required": [
@@ -74,6 +77,29 @@
     "coverage"
   ],
   "$defs": {
+    "AllowlistExpiry": {
+      "type": "object",
+      "properties": {
+        "section": {
+          "type": "string"
+        },
+        "subject": {
+          "type": "string"
+        },
+        "expires": {
+          "type": "string"
+        },
+        "expired": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "section",
+        "subject",
+        "expires",
+        "expired"
+      ]
+    },
     "AuthCoverage": {
       "type": "object",
       "properties": {
@@ -444,6 +470,177 @@
         "starts",
         "request_id_reused",
         "starts_untagged"
+      ]
+    },
+    "Silenced": {
+      "type": "object",
+      "properties": {
+        "summary": {
+          "$ref": "#/$defs/SilencedSummary"
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SilencedFinding"
+          }
+        },
+        "snooze_expiring": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SilencedFinding"
+          }
+        },
+        "snooze_expired": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SilencedFinding"
+          }
+        },
+        "allowlist_expiring": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AllowlistExpiry"
+          }
+        }
+      },
+      "required": [
+        "summary",
+        "findings",
+        "snooze_expiring",
+        "snooze_expired",
+        "allowlist_expiring"
+      ]
+    },
+    "SilencedAction": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "ack",
+            "snooze",
+            "resolve",
+            "approve"
+          ]
+        },
+        "by": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "forced": {
+          "type": "boolean"
+        },
+        "at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "by",
+        "reason",
+        "forced",
+        "at"
+      ]
+    },
+    "SilencedFinding": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "check": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "critical",
+            "high",
+            "medium",
+            "low",
+            "info"
+          ]
+        },
+        "suppressed_severity": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "acked",
+            "snoozed"
+          ]
+        },
+        "silenced_at": {
+          "type": "string"
+        },
+        "snooze_until": {
+          "type": "string"
+        },
+        "last_action": {
+          "$ref": "#/$defs/SilencedAction"
+        }
+      },
+      "required": [
+        "id",
+        "check",
+        "key",
+        "severity",
+        "suppressed_severity",
+        "summary",
+        "status",
+        "silenced_at"
+      ]
+    },
+    "SilencedSummary": {
+      "type": "object",
+      "properties": {
+        "acked": {
+          "type": "integer"
+        },
+        "acked_high": {
+          "type": "integer"
+        },
+        "forced": {
+          "type": "integer"
+        },
+        "snoozed": {
+          "type": "integer"
+        },
+        "snoozed_high": {
+          "type": "integer"
+        },
+        "snooze_expiring": {
+          "type": "integer"
+        },
+        "snooze_expired": {
+          "type": "integer"
+        },
+        "allowlist_expiring": {
+          "type": "integer"
+        },
+        "allowlist_expired": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "acked",
+        "acked_high",
+        "forced",
+        "snoozed",
+        "snoozed_high",
+        "snooze_expiring",
+        "snooze_expired",
+        "allowlist_expiring",
+        "allowlist_expired"
       ]
     },
     "SkippedCheck": {

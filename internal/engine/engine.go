@@ -1295,6 +1295,10 @@ func (e *Engine) RunWithOptions(ctx context.Context, profileName string, o RunOp
 		return nil, err
 	}
 	rep := e.buildReport(profileName, runID, w, now, cr, ev)
+	if err := e.addSilenced(ctx, profileName, rep, now); err != nil {
+		_ = e.st.FinishRun(ctx, runID, "failed", map[string]any{"error": err.Error()})
+		return nil, err
+	}
 	rep.Coverage.Notes = append(rep.Coverage.Notes, limitedNotes(cr)...)
 	if dry != nil {
 		rep.DryRun = true
@@ -1372,6 +1376,9 @@ func (e *Engine) EvaluateWith(ctx context.Context, profileName string, prepare f
 		return nil, err
 	}
 	rep := e.buildReport(profileName, runID, w, now, cr, ev)
+	if err := e.addSilenced(ctx, profileName, rep, now); err != nil {
+		return nil, err
+	}
 	if prepare != nil {
 		if err := prepare(rep); err != nil {
 			return nil, err
@@ -1519,6 +1526,19 @@ func (e *Engine) buildReport(profileName, runID string, w collect.Window, now ti
 	// 決定 (ADR 0055): チェックが判定しなかった記録 (以前の版で集めた記録など) は、黙って捨てずに coverage.notes に出す
 	rep.Coverage.Notes = append(rep.Coverage.Notes, ev.CoverageNotes...)
 	return rep
+}
+
+// addSilenced は、プロファイルに silenced: true を書いたときだけ「黙らせているもの」の節を足す (ADR 0068。暗黙の既定を持たない)。
+func (e *Engine) addSilenced(ctx context.Context, profileName string, rep *report.Report, now time.Time) error {
+	if !e.cfg.Profiles[profileName].Silenced {
+		return nil
+	}
+	s, err := e.silencedSection(ctx, now)
+	if err != nil {
+		return err
+	}
+	rep.Silenced = s
+	return nil
 }
 
 func (e *Engine) markReported(ctx context.Context, rep *report.Report, now time.Time) error {

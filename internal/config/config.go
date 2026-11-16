@@ -133,6 +133,9 @@ type Profile struct {
 	MaxCatchup    time.Duration `yaml:"-"`
 	MaxCatchupRaw string        `yaml:"max_catchup"`
 	Checks        []string      `yaml:"checks"`
+	// Silenced は報告に「黙らせているもの」の節 (ack・snooze 中の finding、期日の近い snooze、期限の近い allowlist の項目) を出す (ADR 0068)。
+	// 暗黙の既定は持たない (ADR 0014)。雛形では weekly に書く。
+	Silenced bool `yaml:"silenced"`
 	// Overrides はこのプロファイルでだけ変える判定パラメータ (書かなければ全体の checks: の値)。
 	// 決定: 集計条件 (CollectionParams) は書けない (params.go)。
 	Overrides Checks `yaml:"overrides"`

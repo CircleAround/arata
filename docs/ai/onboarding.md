@@ -114,7 +114,7 @@ CloudTrail は記録まで最大 15 分ほど遅れるので、最初の run に
 - aratam の設定と疎通 (`aratam doctor` / `aratam test-notify`) は先に済ませてよい。**止めておくのは最初の run の結果の送信だけ**。
   通知の文面を見たければ `aratam notify --in /tmp/arata-first/daily --dry-run` (送らない)
 - allowlist.yaml の変更は git に commit する (approve の `--commit` か、人が行う)。PR で直す運用は `arata help ai approve`
-- ack / snooze にしたものは `arata review` (`--status snoozed` で snooze 中も) でいつでも見直せる。誰が・なぜ・いつ黙らせたかは `LAST_ACTION` の欄と `--format json` の `last_action`
+- ack / snooze にしたものは `arata review` (`--status snoozed` で snooze 中も) でいつでも見直せる。誰が・なぜ・いつ黙らせたかは `LAST_ACTION` の欄と `--format json` の `last_action`。週次の報告 (`silenced: true`) の「黙らせているもの」にも出る
 - 定時の通知を始めた後に、設定や allowlist.yaml を直した結果を定時の前に確かめたいときは、試しの実行を使う:
   `arata run --profile daily --dry-run --window 1h --out /tmp/arata-try`。ストアに何も書かないので、指摘は報告済みにならず、窓も進まない
   (次の定時の実行は、試さなかったときと同じ通知を出す)。`--window` で見る期間を短くすると、CloudTrail の読み取りの時間と Logs Insights の費用が減る。

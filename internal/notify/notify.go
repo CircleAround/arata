@@ -172,6 +172,12 @@ func Run(ctx context.Context, o Options) Result {
 		warnings = append(warnings, w)
 	}
 
+	// 決定 (ADR 0068 の 3 節): 黙らせているものの件数は規則の 1 行 (警告の行) で出す。high 以上の ack があれば on_quiet: silent でも送る
+	silencedHigh := false
+	if line, high := silencedLine(in.Run); line != "" {
+		warnings = append(warnings, line)
+		silencedHigh = high
+	}
 	d := Decide(in, o.Rules)
 	exit := ExitOK
 	// 決定 (ADR 0024): WAF の改善提案 (proposals) は 2 通目として常に通常用に送る。on_quiet: silent でも提案は送る (週 1 回の改善提案のまとめ)
@@ -180,7 +186,7 @@ func Run(ctx context.Context, o Options) Result {
 	blocks := o.Format == FormatBlocks
 	var msg Message
 	switch {
-	case d.Quiet && o.Rules.OnQuiet == "silent":
+	case d.Quiet && o.Rules.OnQuiet == "silent" && !silencedHigh:
 		if !hasProposals {
 			mark(o, log, key)
 			return Result{Exit: ExitOK, Route: d.Route}

@@ -137,14 +137,19 @@ type Profile struct {
 	Comment string
 	// Cadences はこのプロファイルに入れるチェックの周期。
 	Cadences []checks.Cadence
+	// Silenced は「黙らせているもの」の節を出すか (ADR 0068)。
+	Silenced bool
 }
+
+// silencedComment は silenced の説明 (雛形と差分で同じ文)。
+const silencedComment = "報告に「黙らせているもの」(ack・snooze 中の finding、7 日以内に期日の snooze、30 日以内に期限の allowlist の項目) の節を出す。aratam の通知にも件数の 1 行が出る (ADR 0068)"
 
 // Profiles は雛形のプロファイル。決定: daily には hourly のチェックも入れる (hourly を回さず daily だけ運用しても拾えるように。
 // 両方回しても hourly で報告済みの事象は daily の already_reported に回り、二重には鳴らない)。
 var Profiles = []Profile{
 	{Name: "hourly", Window: "1h", Comment: "発生そのものが異常な事象の早期検知。Logs Insights を使うチェックは入れない (費用)", Cadences: []checks.Cadence{checks.Hourly}},
 	{Name: "daily", Window: "24h", Comment: "前兆・試行の発見と平常帯との比較。hourly を回さない運用でも拾えるよう hourly のチェックも入れる", Cadences: []checks.Cadence{checks.Hourly, checks.Daily}},
-	{Name: "weekly", Window: "7d", Comment: "設定不備・衛生状態の差分", Cadences: []checks.Cadence{checks.Weekly}},
+	{Name: "weekly", Window: "7d", Comment: "設定不備・衛生状態の差分", Cadences: []checks.Cadence{checks.Weekly}, Silenced: true},
 }
 
 // ProfileChecks は雛形のプロファイルに入るチェック (周期の順、周期内は登録順)。
@@ -337,6 +342,9 @@ func GenerateWith(reg *checks.Registry, o Options) []byte {
 		cm("  "+p.Name+":", p.Comment)
 		w("    window: %s\n", p.Window)
 		cm("    # max_catchup: "+dur(config.DefaultMaxCatchup), "cron が遅れた時に前回の窓の終わりから追いつく上限")
+		if p.Silenced {
+			cm("    silenced: true", silencedComment)
+		}
 		w("    checks:\n")
 		for _, n := range names {
 			w("      - %-*s  # %s\n", width, n, Descriptions[n])

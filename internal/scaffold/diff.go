@@ -41,7 +41,8 @@ type DiffItem struct {
 // rawConfig は差分を取るために緩く読む設定 (未知のキーがあっても読める)。
 type rawConfig struct {
 	Profiles map[string]struct {
-		Checks []string `yaml:"checks"`
+		Checks   []string `yaml:"checks"`
+		Silenced *bool    `yaml:"silenced"`
 	} `yaml:"profiles"`
 	Checks       map[string]map[string]any `yaml:"checks"`
 	AuditAccount yaml.Node                 `yaml:"audit_account"`
@@ -90,6 +91,13 @@ func Diff(current []byte, reg *checks.Registry) ([]DiffItem, error) {
 	for _, p := range Profiles {
 		if _, ok := cur.Profiles[p.Name]; !ok && len(ProfileChecks(reg, p)) > 0 {
 			out = append(out, DiffItem{Kind: DiffMissingProfile, Path: "profiles." + p.Name, Template: strings.Join(ProfileChecks(reg, p), ", "), Detail: p.Comment})
+		}
+	}
+	// 決定 (ADR 0068): 雛形が silenced: true を書くプロファイルで、設定に silenced が無ければ足し方を出す (書いた値は比べない)
+	for _, p := range Profiles {
+		if cp, ok := cur.Profiles[p.Name]; ok && p.Silenced && cp.Silenced == nil {
+			out = append(out, DiffItem{Kind: DiffMissingKey, Path: "profiles." + p.Name + ".silenced", Template: "true",
+				Detail: "雛形は silenced: true を書く。" + silencedComment + "。出したくなければ silenced: false を書く"})
 		}
 	}
 	for _, p := range config.DefaultChecks().Params() {

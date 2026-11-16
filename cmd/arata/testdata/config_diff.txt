@@ -1,3 +1,4 @@
-この版の雛形との差分: 2 件
+この版の雛形との差分: 3 件
+  [missing_key] profiles.weekly.silenced (雛形では true) — 雛形は silenced: true を書く。報告に「黙らせているもの」(ack・snooze 中の finding、7 日以内に期日の snooze、30 日以内に期限の allowlist の項目) の節を出す。aratam の通知にも件数の 1 行が出る (ADR 0068)。出したくなければ silenced: false を書く
   [param_changed] checks.probe_paths.min_count: 設定 3 / 雛形 10 — この版の既定値と違う
   [unknown_key] profiles.hourly.max_catchupp — arata が知らないキー (綴りの誤りか、この版で無くなったキー。設定の読み込みは失敗する)

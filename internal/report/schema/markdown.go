@@ -36,6 +36,7 @@ func (r *Report) Markdown() string {
 		section(&b, "情報", r.Info, "")
 	}
 	proposals(&b, r.Proposals)
+	silencedMarkdown(&b, r.Silenced)
 	b.WriteString("## カバレッジ\n\n")
 	for _, n := range r.Coverage.Notes {
 		fmt.Fprintf(&b, "- **注意**: %s\n", inline(n))
