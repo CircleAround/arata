@@ -27,6 +27,7 @@
 | 事例 | 公開日 | 内容 | 見えるチェック | 本文 |
 |---|---|---|---|---|
 | wfx-loot-2026-11 | 2026-11-12 | 乗っ取った GitHub アカウントから CI の秘密を盗むスクリプトを push する ("wfx-loot") | access_analyzer, iam_changes, new_principal, oidc_assume_role, principal_new_source, unknown_assume_role | `arata help ai threats wfx-loot-2026-11` |
+| artex-2026-10 | 2026-10-31 | LLM のエージェントが、盗んだ資格情報で攻撃の後の段を自動で進める (ARTEX とその同類) | access_denied, principal_new_source, probe_paths | `arata help ai threats artex-2026-10` |
 | ghostaction-2026-10 | 2026-10-07 | 乗っ取った GitHub アカウントに「Security Audit」のワークフローを足し、secrets と履歴の認証情報を送る (GhostAction) | access_denied, credential_hygiene, principal_new_source, unused_region_activity | `arata help ai threats ghostaction-2026-10` |
 | env-extortion-2024-08 | 2024-08-15 | 公開された .env から得たアクセスキーで、管理者のロールを作り、S3 のデータを消して身代金を求める | access_denied, iam_changes, new_principal, principal_new_source, probe_paths, unused_region_activity | `arata help ai threats env-extortion-2024-08` |
 | lucr-3-2023-09 | 2023-09-20 | ID プロバイダの乗っ取りから AWS に入り、秘匿値を集め、IAM に居座り、検知を止める (LUCR-3 / Scattered Spider) | defense_evasion, iam_changes, new_principal, principal_new_source, secret_access | `arata help ai threats lucr-3-2023-09` |
@@ -35,6 +36,7 @@
 本文のファイル (GitHub で読むとき):
 
 - [wfx-loot-2026-11](ai/threats/wfx-loot-2026-11.md)
+- [artex-2026-10](ai/threats/artex-2026-10.md)
 - [ghostaction-2026-10](ai/threats/ghostaction-2026-10.md)
 - [env-extortion-2024-08](ai/threats/env-extortion-2024-08.md)
 - [lucr-3-2023-09](ai/threats/lucr-3-2023-09.md)
@@ -47,7 +49,7 @@
 | チェック | 事例 |
 |---|---|
 | access_analyzer | wfx-loot-2026-11 |
-| access_denied | ghostaction-2026-10, env-extortion-2024-08, scarleteel-2023-02 |
+| access_denied | artex-2026-10, ghostaction-2026-10, env-extortion-2024-08, scarleteel-2023-02 |
 | ai_path_usage | 対応する公開の事例はまだ無い |
 | cost_anomaly | 対応する公開の事例はまだ無い |
 | credential_hygiene | ghostaction-2026-10 |
@@ -60,8 +62,8 @@
 | new_principal | wfx-loot-2026-11, env-extortion-2024-08, lucr-3-2023-09 |
 | oidc_assume_role | wfx-loot-2026-11 |
 | posture | 対応する公開の事例はまだ無い |
-| principal_new_source | wfx-loot-2026-11, ghostaction-2026-10, env-extortion-2024-08, lucr-3-2023-09, scarleteel-2023-02 |
-| probe_paths | env-extortion-2024-08 |
+| principal_new_source | wfx-loot-2026-11, artex-2026-10, ghostaction-2026-10, env-extortion-2024-08, lucr-3-2023-09, scarleteel-2023-02 |
+| probe_paths | artex-2026-10, env-extortion-2024-08 |
 | public_exposure | 対応する公開の事例はまだ無い |
 | root_usage | 対応する公開の事例はまだ無い |
 | secret_access | lucr-3-2023-09 |
