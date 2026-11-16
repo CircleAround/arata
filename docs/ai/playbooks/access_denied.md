@@ -52,6 +52,7 @@ allowlist で承認済みの主体でも出る (承認は「居ること」を�
 
 公開の事例で、このチェックが当たる段階 (一覧と読み方は `arata help ai threats`)。指摘がその攻撃だと断定する材料ではない。
 
+- `arata help ai threats artex-2026-10`: エージェントが盗んだ IAM ユーザーの権限を `DryRun` で試す段階 (拒否された分だけ)
 - `arata help ai threats ghostaction-2026-10`: 盗んだアクセスキーで権限を列挙する段階 (出典には無い想定)
 - `arata help ai threats env-extortion-2024-08`: EC2 での採掘の準備が拒否された段階
 - `arata help ai threats scarleteel-2023-02`: 永続化の試行と、別アカウントへの移動が拒否された段階

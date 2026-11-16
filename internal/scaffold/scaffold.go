@@ -365,6 +365,25 @@ func GenerateWith(reg *checks.Registry, o Options) []byte {
 		cm(fmt.Sprintf("    %s: %s", p.Key, flow(p.Value)), paramComments[p.Check+"."+p.Key])
 	}
 
+	// 怪しい IP の一覧 (ADR 0069)。消せば一覧を作らない
+	w("\n# 怪しい IP の一覧 (ADR 0069)。日の値から決まった規則で作り、ストアに持つ (報告・通知には IP を出さない)。消せば作らない。\n")
+	w("# 書いた理由だけで載せる。allowlist の source_ips の IP は載せない。下の値はこの版の既定値。\n")
+	w("ip_list:\n")
+	cm("  active: "+config.DefaultIPListActive, "判定に使う期間 N。最後に見てから N を過ぎた IP は使わない (休止)。retention.ip_list 以下")
+	w("  reasons:\n")
+	iw, ip, is := config.DefaultIPListWAFBlock, config.DefaultIPListProbe, config.DefaultIPListSignIn
+	w("    waf_block:\n")
+	cm(fmt.Sprintf("      min_count: %g", iw.MinCount), "wafv2 の BLOCK の日の件数 (レートベース・既定の action・sign-in のパス・trusted_cidrs は除く)")
+	w("    probe:\n")
+	cm(fmt.Sprintf("      min_count: %g", ip.MinCount), "探索 (http_access の probe_hits と wafv2 の許可された探索) の日の件数")
+	w("    sign_in_failure:\n")
+	cm(fmt.Sprintf("      min_count: %g", is.MinCount), "日の失敗の件数。かつ、その IP の平常帯 (下の 3 つ) を超えたとき")
+	w("      baseline_days: %d\n", is.BaselineDays)
+	w("      factor: %g\n", is.Factor)
+	cm(fmt.Sprintf("      min_baseline_days: %d", is.MinBaselineDays), "過去の日がこれより少なければ件数だけで判定する")
+	cm(fmt.Sprintf("      min_count_window: %g", is.MinCountWindow), "直近 N 日の合計 (ゆっくりした総当たり。仮の値で、実データで見直す)")
+	cm(fmt.Sprintf("      min_days: %d", is.MinDays), "直近 N 日のうち失敗のあった日の数")
+
 	r := config.DefaultRetention
 	w("\n# 保持期間 (prune は後続の版)。\nretention:\n")
 	cm("  raw_jsonl: "+r.RawJSONLRaw, "原本")
@@ -372,6 +391,7 @@ func GenerateWith(reg *checks.Registry, o Options) []byte {
 	cm("  metrics: "+r.MetricsRaw, "前年同月比較のため 13 か月")
 	cm("  findings: "+r.FindingsRaw, "resolved から")
 	w("  runs: %s\n", r.RunsRaw)
+	cm("  ip_list: "+r.IPListRaw, "怪しい IP の一覧の保持の期間 M。M より前の日の行は書くときに消す")
 	return []byte(b.String())
 }
 

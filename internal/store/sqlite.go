@@ -21,7 +21,7 @@ import (
 //go:embed schema.sql
 var schemaSQL string
 
-const schemaVersion = 8
+const schemaVersion = 9
 
 // Dir は dir:// バックエンド。<dir>/audit.sqlite と <dir>/raw/ を持つ。
 type Dir struct {
@@ -913,4 +913,56 @@ func wrap(err error) error {
 		return nil
 	}
 	return fmt.Errorf("store: %w", err)
+}
+
+// ReplaceIPListDay は (source, date) の一覧の行を rows で丸ごと置き換える (ADR 0069。作り直しで二重に数えない)。
+// keepFrom (YYYY-MM-DD) が空でなければ、それより前の日の行を全部のソースについて消す (保持の期間)。
+func (s *Dir) ReplaceIPListDay(ctx context.Context, source, date string, rows []IPListRow, keepFrom string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return wrap(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM ip_list_days WHERE date = ? AND source = ?`, date, source); err != nil {
+		return wrap(err)
+	}
+	for _, r := range rows {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO ip_list_days(date, source, reason, ip, count) VALUES (?,?,?,?,?)
+			ON CONFLICT(date, source, reason, ip) DO UPDATE SET count=excluded.count`, date, source, r.Reason, r.IP, r.Count); err != nil {
+			return wrap(err)
+		}
+	}
+	if keepFrom != "" {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM ip_list_days WHERE date < ?`, keepFrom); err != nil {
+			return wrap(err)
+		}
+	}
+	return wrap(tx.Commit())
+}
+
+// IPListDays は date が [from, to] の一覧の行を (date, source, reason, ip) の順に返す。空の from / to は条件にしない。
+func (s *Dir) IPListDays(ctx context.Context, from, to string) ([]IPListRow, error) {
+	q, args := `SELECT date, source, reason, ip, count FROM ip_list_days WHERE 1=1`, []any{}
+	if from != "" {
+		q += ` AND date >= ?`
+		args = append(args, from)
+	}
+	if to != "" {
+		q += ` AND date <= ?`
+		args = append(args, to)
+	}
+	res, err := s.db.QueryContext(ctx, q+` ORDER BY date, source, reason, ip`, args...) // #nosec G202 -- 結合するのは定数だけ。値はすべて束縛する
+	if err != nil {
+		return nil, wrap(err)
+	}
+	defer res.Close()
+	var out []IPListRow
+	for res.Next() {
+		var r IPListRow
+		if err := res.Scan(&r.Date, &r.Source, &r.Reason, &r.IP, &r.Count); err != nil {
+			return nil, wrap(err)
+		}
+		out = append(out, r)
+	}
+	return out, wrap(res.Err())
 }

@@ -67,6 +67,7 @@ CI は `.github/workflows/fuzz.yml` が週 1 回と手動 (`workflow_dispatch`�
 | `internal/engine` | `FuzzBuildRoleParams` | 設定の `log_group` の並び | 出す `AllowedLogGroupNames` は読み取り専用ロールの AllowedPattern に合い (空・`*` にならない)、4,096 バイト以内。カンマで分けると重複を除いた設定の順に戻る。受け付けない名前があれば値を出さない (ADR 0062) |
 | `internal/engine` | `FuzzValidateTriageInput` | 片付けの `--by` と `--reason` (ワークフローの入力・実行した人を含む) | 受け付けた `--by` は空でなく 64 バイト以内の ASCII で、`@`・空白・改行を含まない。受け付けた `--reason` は正しい UTF-8・300 文字以内で、制御文字 (Cc)・書式の文字 (Cf)・行と段落の区切りを含まない (ADR 0068) |
 | `internal/report/schema` | `FuzzSilencedReasonStaysInCode` | 「黙らせているもの」の節に出す片付けの理由 | report.md で理由は 1 つのコードの中に収まり (バッククォートで閉じさせない)、改行で行を増やさない (ADR 0068) |
+| `internal/iplist` | `FuzzBuild` | 日の値の key (ログ由来の IP。怪しい IP の一覧。ADR 0069) | 一覧の行の IP はすべて正規の形 (`netip.Addr.String()` で読み直した値と同じ) で、既知の送信元を含まない。理由は 3 つのどれか、件数は正、日とソースは渡したもの (後で Logs Insights の問い合わせの文に入れる値) |
 | `internal/config` | `FuzzParseDuration` `FuzzParseStore` `FuzzLoad` | 設定の値、arata.yaml | 受け入れた値は書いたとおりの意味。source の id と profile 名にパスの区切りが無い |
 | | `FuzzRequestValidate` | 設定の `request:` (`request_lines`。LLM が書く) | 受け付けた設定は、鍵のキャプチャが `request_id` だけ、行のキャプチャが決まった名前だけで、どれも RE2 で読め、ip と path が同じ行にあり、同じ項目を 2 つの行が取り出さず、`set` は 100〜599 の status だけ |
 | | `FuzzRequestUserValidate` | 設定の `request.user_id`・`request.auth` の正規表現 (ADR 0052) | 受け付けた正規表現は RE2 で読め、決まった名前のキャプチャだけを持ち (必須のものがある。by は 2 つとも)、どの入力に対しても一致が入力の終わりで終わる (行の途中の同じ並びを読まない) |

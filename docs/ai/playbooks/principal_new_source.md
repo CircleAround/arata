@@ -59,6 +59,7 @@
 公開の事例で、このチェックが当たる段階 (一覧と読み方は `arata help ai threats`)。指摘がその攻撃だと断定する材料ではない。
 
 - `arata help ai threats wfx-loot-2026-11`: 作られたアクセスキーが、後で攻撃者の環境から使われる段階 (出典には無い想定)
+- `arata help ai threats artex-2026-10`: 盗んだ資格情報を与えられたエージェントが、AWS で動き始める段階
 - `arata help ai threats ghostaction-2026-10`: 盗んだアクセスキーが攻撃者の環境から使われる段階 (出典には無い想定)
 - `arata help ai threats env-extortion-2024-08`: 漏れたキーが Tor・VPN から使われ、新しいリージョンに Lambda 関数を作った段階
 - `arata help ai threats scarleteel-2023-02`: 盗んだロールの認証情報と、Lambda で見つけた IAM ユーザーのキーが外から使われた段階

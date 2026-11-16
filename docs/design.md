@@ -174,6 +174,7 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
 | `waf_rule_count_match` / `_suspect` | `<WebACL>\|<ルール>` (グループの中は `<ruleGroupId>/<ルール>`) | カウントモードの一致の件数 / そのうち探索パスへの一致と、BLOCK されたリクエストでもカウントのルールが一致した件数 (下の決定。ADR 0067) |
 | `waf_ip_rate_p50` / `_p99` / `_max` | `<WebACL>\|<パスの群>` | 1 IP あたり 5 分間の件数の分布。群は `rate_path_groups` の接頭辞 (最長一致)、どれにも当たらなければ `*` |
 | `waf_position_limit` | `<WebACL>\|<配列の名前>` | 配列の位置の上限を超えた (数え漏れの可能性がある) リクエストの数 |
+| `waf_block_ip_suspect` / `waf_allow_probe_ip` | `<ip>` | 怪しい IP の一覧の元 (ADR 0069)。BLOCK の件数のうち suspect の「BLOCK された IP」と同じものを除いたもの (レートベース・既定の action・sign-in のパス・`trusted_cidrs`。探索パスの BLOCK は数える) / 許可された探索の件数 (`trusted_cidrs` を除く)。`ip_list:` を書いたときだけ出す |
 | `waf_challenge_issued` / `_issued_ips` / `_solved_ips` | `<WebACL>\|<challenge\|captcha>\|<ルール>[/<グループの中のルール>]\|<method>\|<正規化パス>` | Challenge / CAPTCHA を出した件数 / 出した異なり IP / そのうち解いた異なり IP (ADR 0028)。日ごとに上位 `top_paths` |
 
 - 決定: ヘッダー・クエリ文字列・Cookie・User-Agent・本文は引かない。WebACL 名は `webaclId` の ARN から `parse` で取る
@@ -674,7 +675,7 @@ From = min(now - window, 前回の window_to) として、cron の遅延・欠�
 
 ```yaml
 profiles:
-  hourly: { window: 1h,  checks: [root_usage, unknown_assume_role, secret_access_unknown, guardduty_high] }
+  hourly: { window: 1h,  checks: [root_usage, unknown_assume_role, oidc_assume_role] }
   daily:  { window: 24h, checks: [default-daily] }            # Cadence=daily のチェック全部
   weekly: { window: 7d,  checks: [default-weekly] }
 ```
@@ -823,6 +824,7 @@ SQLite ファイルは数十 MB 程度に収まる想定 (集計のみ保存す�
 | `metrics` | date, source, metric, key, value | 日次集計 (`sign_in_failures` by ip、`admin_404` by ip、`waf_block` by rule)。平常帯の計算元。決定: 集計元のレコード種類 `from` 列を追加。主キーは (date, source, metric, key) で、後から来た値で**置き換える** (3 章の決定により後の値ほど完全)。raw JSONL には追記されるので rebuild は行順に適用すれば同じ結果になる (ソースが主キーに入るので、ソースの中の日付順・行順で足りる。5-4)。日は UTC。決定 (ADR 0027): cloudtrail collector も主体の活動の日次集計を出す: `principal_source` (key `<主体 ARN>\|<送信元の /24・/48>`)、`principal_source_writes` (同じ key の成功した書き込み)、`principal_write_region` (key `<主体 ARN>\|<リージョン>` の成功した書き込み)。対象は IAM ユーザーとロール (のセッション)、送信元は IP のときだけ。cloudtrail は日の頭から引き直さないので、置き換えの規則のため値は「その日を最後に引いた run が見た件数」(下限) になる。判定は「その日に有ったか」と下限値にだけ使う。期間レポートの推移表には出さない。Yields に metric は足さない (http_access / waf_action のチェックの skip 判定を変えないため)。行数の見積もり: 1 日あたり (主体数 × その日の送信元の数) × 2 + (主体数 × 書き込みのリージョン数)。主体 50・送信元 2 なら 1 日 250 行、400 日で 10 万行 (数十 MB 未満)。Lambda などサービスが引き受けるロールは送信元が多く、数十のロールが 1 日数十の /24 を使う環境では年 100 万行に近づく。多ければ prune を入れるときに `principal_*` の保持を baseline_days の数倍 (例 90 日) に短くする (判定は 30 日しか見ない)。決定 (ADR 0030): cloudwatch-logs の http_access のソースは endpoint_abuse の画面ごとに `endpoint_abuse_count` / `endpoint_abuse_ips` (key `<画面>\|<HH:MM>`。時間幅の始まり、UTC)、`endpoint_abuse_ua_ips` (key `<画面>\|<HH:MM>\|<UA のハッシュ>`。その幅で最も多くの IP にまたがった UA 1 つ、2 IP 以上のときだけ)、`endpoint_abuse_follow` (key `<from>><to>\|<HH:MM>`。1 以上のときだけ) を出す。IP と UA の原文は保存しない。行数の見積もり: 1 日あたり最大で画面数 × 144 (10 分幅) × 3 + 連鎖数 × 144。画面 3・連鎖 1 で 1 日最大 1,440 行、400 日で 58 万行 (実際は来訪のある幅だけなのでずっと少ない) |
 | `metrics_hourly` | hour, date, source, metric, key, value | 決定 (ADR 0064。schema 6): 時ごとの集計 (今は主体の活動の `principal_source`・`principal_source_writes`・`principal_write_region`)。同じ (hour, source, metric, key) は置き換える。`Metrics` は日の値を時の和として返し、時ごとの行がある (日, source, metric) では `metrics` の日の行 (前の版が書いた下限の値) を使わない。raw には `hour` の付いた metric の行として残り、rebuild は同じ規則で入れ直す |
 | `metric_parts` | source, query, hour, date, rows | 決定 (ADR 0065。schema 7): 時の単位で読む cloudwatch-logs のソース (`collect: hourly`) の、Logs Insights のクエリが返した行 (部分の行) を (source, query, hour) ごとに丸ごと置き換えて残す。日の値 (`metrics`) はその日の全部の時の行から作る。raw には書かない作業用の行で、rebuild は既存の SQLite から引き継ぐ。確定した日から 3 日より古いものは書くときに消す |
+| `ip_list_days` | date, source, reason, ip, count | 決定 (ADR 0069。schema 9): 怪しい IP の一覧。収集が成功した cloudwatch-logs のソースについて、読んだ日の一覧を日の値 (`waf_block_ip_suspect`・`waf_allow_probe_ip`・`probe_hits`・`sign_in_failures`) から作り直し、(date, source) ごとに丸ごと置き換える (日の値の作り直しで二重に数えない)。IP は `netip` で読み直した正規の形だけ。allowlist の `source_ips` の IP は載せない。first_seen・last_seen・件数は読むときに組み立てる。raw には書かず、rebuild は既存の SQLite から引き継ぐ。決定: 保持の期間 (`retention.ip_list`) より前の日の行は、書くときに全部のソースについて消す (prune がまだ無いので `metric_parts` と同じく書くときに消す)。run の stats の `ip_list` に理由ごとの載った (日, ソース, IP) の数・読めなかった値の数・既知の送信元の数・sign_in_failure の日 / 窓の載り方の数を残す |
 | `findings` | id, check, key, severity, first_seen, last_seen, last_changed, status (open/resolved/acked/snoozed), reported_at, fingerprint, data, suppressed_severity | 差分判定の中核。決定: `fingerprint` 列を追加 (4-2)。決定: `suppressed_severity` (ack / snooze したときの重大度。open / resolved では空) を追加 (schema 5、ADR 0022)。移行では既存の acked / snoozed の行に今の severity を入れる |
 | `posture` | check, resource, value, first_seen, last_changed | 姿勢チェックの現在値。決定: 作らず `snapshot_items` にまとめた (ADR 0015) |
 | `snapshot_items` | kind, source, key, data, collected_at | 決定: アカウント単位の状態 (認証情報レポート・GuardDuty・Access Analyzer・姿勢・WAF の WebACL の設定) の最新のスナップショット。収集が成功したときだけ (kind, source) 単位で丸ごと置き換える (ADR 0015)。決定 (ADR 0033): 置き換えたら raw に `snapshot_replaced` の行 (置き換えた収集の時刻と件数) を書く (0 件の置き換えと失敗した収集を rebuild が見分ける) |
@@ -839,6 +841,7 @@ retention:
   metrics:   400d      # 前年同月比較のため 13 か月
   findings:  resolved から 180d
   runs:      400d
+  ip_list:   30d       # 怪しい IP の一覧 (ADR 0069)。書くときに消す。ip_list.active 以上
 ```
 
 `prune` は `run` の最後に自動で走り、`arata prune --dry-run` で対象を確認できる。
@@ -1062,11 +1065,13 @@ oidc_subjects:                   # OIDC でのロールの引き受けの、既�
    │     → unknown_assume_role の外向き・MFA ありの finding の行き先のアカウントを assume_destinations に追記 (主体は承認しない)、finding は resolved (ADR 0047)
    │     → 同じ行き先への外向き・MFA ありの他の finding (ack 済みを含む) も resolved
    │     (ack / snooze / resolve / approve は --reason (approve は --note) と --by を finding_actions に残す。ADR 0068)
-   ├─ arata ack <finding-id>         → acked。再報告しないが週次の未対応一覧には残る (重大度が上がれば changed で再報告)
+   ├─ arata ack <finding-id>         → acked。再報告しない。報告には出ず、arata review の未対応一覧に残る (重大度が上がれば changed で再報告)。
+   │     週次の「黙らせているもの」に出る (ADR 0068 の 3 節)
    │     → 重大度が high・critical なら止める (ACK_REFUSED。approve / snooze / resolve を案内)。--force --reason でだけ通し、記録に forced (守りを越えたときだけ真。--force には --reason が要る。ADR 0068)
    ├─ arata snooze <finding-id> --until 2026-11-01   → 期日まで沈黙、期日に再報告
    ├─ arata resolve <finding-id>     → resolved。再び観測されたら new
-   └─ 放置                              → still_open。週次の未対応一覧に残り続ける
+   └─ 放置                              → その run で同じ内容で再び観測されれば still_open として報告に出る (event 型は観測の無い窓では出ない)。
+                                           未対応の全部は arata review (ADR 0068 の追記)
 
 allowlist.yaml を人が直接編集して承認 ──> 次の evaluate の冒頭で該当 finding を resolved (reason: allowlisted。行き先を足したときは known_destination、OIDC の入り口を足したときは known_oidc_subject)
 expires 到来 ──> その主体の次回観測は new (expired) として再報告
@@ -1120,7 +1125,7 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 | guardduty_findings | hourly (High) / daily (他)。決定: Step 3 は weekly のみ (state) | guardduty | finding ID 初出、count 増加 | severity 準拠 |
 | iam_changes | daily | trail_event | CreateAccessKey / CreateUser / CreateRole / Attach*Policy / Put*Policy / UpdateAssumeRolePolicy / CreateLoginProfile | medium (既知デプロイ主体なら info。決定: 既知デプロイ主体 = allowlist の principals で `tags: [deploy]` を持つもの)。決定 (ADR 0056): CreateAccessKey と、信頼ポリシー (UpdateAssumeRolePolicy / CreateRole) に外の主体がある・読めない変更は既知デプロイ主体でも medium、信頼ポリシーが誰でも (`*`) を許す変更は誰でも high |
 | access_denied | daily | trail_event | 拒否された API 呼び出しの主体ごとの種類 (幅) と件数 (量) が平常帯超え。権限の列挙の兆候。決定: ADR 0021 | 幅は medium (種類が多ければ high)、量は medium |
-| console_login | daily | trail_event | 失敗が閾値超え、MFA 無し成功 | medium / high |
+| console_login (未実装。ADR 0005 の例にもあるが、チェックは無い。ログインの失敗は login_bruteforce) | daily | trail_event | 失敗が閾値超え、MFA 無し成功 | medium / high |
 | new_principal | daily | principal_seen | allowlist にも principals にも無い主体。決定: principals.status が unknown / expired の主体を毎回観測する (承認されるまで still_open として残る)。root は root_usage が扱うので対象外 | medium |
 | principal_new_source (決定: 当初の new_source_ip を置き換え。国の判定はしない) | daily | trail_event, principal_seen (+ 主体の活動の日次集計) | 既知の主体の初めての送信元 (/24・/48)・書き込みのリージョン。決定: ADR 0027 | low / medium / high |
 | unused_region_activity (決定: 当初の foreign_region を置き換え) | daily | unused_region_event (`cloudtrail-unused-regions`) | ふだん使わないリージョン (有効なリージョン − cloudtrail-lookup の regions) での書き込み。決定: ADR 0032 | critical / high / medium |

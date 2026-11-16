@@ -58,6 +58,8 @@ var carriedTables = []struct{ name, cols string }{
 	{"meta", `key, value`},
 	// 部分の行は raw に書かない作業用の行 (ADR 0065)
 	{"metric_parts", `source, query, hour, date, rows`},
+	// 怪しい IP の一覧は raw に書かない (raw の保持は一覧の保持の期間より長い。ADR 0069)
+	{"ip_list_days", `date, source, reason, ip, count`},
 }
 
 const maxLineWarnings = 20

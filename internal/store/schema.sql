@@ -156,6 +156,18 @@ CREATE TABLE IF NOT EXISTS finding_actions (
 );
 CREATE INDEX IF NOT EXISTS finding_actions_finding ON finding_actions(finding_id, seq);
 
+-- 怪しい IP の一覧 (schema 9。ADR 0069)。日の値 (metrics) を作るときに決まった規則で作る派生の表。(date, source) ごとに丸ごと置き換える。
+-- first_seen・last_seen・件数は読むときに組み立てる。raw には書かない (rebuild は既存の SQLite から引き継ぐ)。保持の期間 (retention.ip_list) より前の日は書くときに消す。
+CREATE TABLE IF NOT EXISTS ip_list_days (
+  date   TEXT NOT NULL,
+  source TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  ip     TEXT NOT NULL,
+  count  REAL NOT NULL DEFAULT 0,
+  PRIMARY KEY (date, source, reason, ip)
+);
+CREATE INDEX IF NOT EXISTS ip_list_days_ip ON ip_list_days(ip, date);
+
 CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL

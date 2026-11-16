@@ -71,6 +71,10 @@ func buildHistory(t *testing.T, st *Dir) {
 	t.Helper()
 	ctx := context.Background()
 	c1, c2, c3 := ts, ts.Add(time.Hour), ts.Add(2*time.Hour)
+	// 怪しい IP の一覧は raw に書かないので、rebuild は既存の SQLite から引き継ぐ (ADR 0069)
+	if err := st.ReplaceIPListDay(ctx, "nginx", "2026-10-21", []IPListRow{{Reason: "probe", IP: "198.51.100.7", Count: 3}}, ""); err != nil {
+		t.Fatal(err)
+	}
 
 	// run 1 (init 相当。主体は baseline)
 	if err := st.BeginRun(ctx, Run{ID: "r1", Profile: "init", WindowFrom: c1.Add(-24 * time.Hour), WindowTo: c1, StartedAt: c1, Status: "running"}); err != nil {
@@ -249,7 +253,7 @@ func TestRebuildFromScratch(t *testing.T) {
 	got := dump(t, dir)
 	diffTables(t, before, got, "events", "principal_ips", "metrics", "snapshot_items")
 	// raw に無いものは空から。主体は既定で unknown (一度全部報告される)
-	for _, tb := range []string{"runs", "findings", "finding_events", "meta"} {
+	for _, tb := range []string{"runs", "findings", "finding_events", "meta", "ip_list_days"} {
 		if len(got[tb]) != 0 {
 			t.Errorf("%s must be empty: %v", tb, got[tb])
 		}

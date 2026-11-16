@@ -74,6 +74,8 @@ type Collector struct {
 	selected map[record.Kind]bool
 	// Parts は時の単位で読むソース (collect: hourly) の部分の行の置き場所 (engine がストアを渡す。ADR 0065)。nil なら日の頭から読み直す。
 	Parts PartStore
+	// IPList は怪しい IP の一覧 (ADR 0069) の元の日の値 (waf_block_ip_suspect・waf_allow_probe_ip) を出すか (engine が ip_list: を見て決める)。
+	IPList bool
 	// PartRetentionDays は部分の行を残す日数 (0 なら DefaultPartRetentionDays)。
 	PartRetentionDays int
 	// coveredTo は時の単位で読んだ終わり (CoveredTo)。limited は max_collect で止めたか (Limited)。

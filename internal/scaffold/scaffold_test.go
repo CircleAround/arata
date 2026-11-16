@@ -101,7 +101,7 @@ func TestGenerateMatchesDefaults(t *testing.T) {
 		t.Fatalf("template checks differ from DefaultChecks:\n got %+v\nwant %+v", got, want)
 	}
 	r := config.DefaultRetention
-	if doc.Retention["raw_jsonl"] != r.RawJSONLRaw || doc.Retention["runs"] != r.RunsRaw || len(doc.Retention) != 5 {
+	if doc.Retention["raw_jsonl"] != r.RawJSONLRaw || doc.Retention["runs"] != r.RunsRaw || len(doc.Retention) != 6 || doc.Retention["ip_list"] != r.IPListRaw {
 		t.Fatalf("retention: %v", doc.Retention)
 	}
 }
@@ -180,6 +180,7 @@ checks:
 		"missing_profile profiles.weekly |credential_hygiene, guardduty_findings, posture, access_analyzer, waf_review, log_hygiene",
 		"param_changed checks.login_bruteforce.min_count 30|20",
 		"missing_key audit_account |\"<12 桁のアカウント ID>\" か none",
+		"missing_key ip_list |active: 7d, reasons: waf_block / probe / sign_in_failure",
 		"unknown_key profiles.daily.overide |",
 		"unknown_key checks.probe_paths.bogus |",
 	}
