@@ -48,11 +48,23 @@
 1. **閉じる** (意図しない公開): SG のルールを消す (`aws ec2 revoke-security-group-ingress`)、バケットポリシー / ACL を戻す・Public Access Block を有効に戻す、
    `PubliclyAccessible` を false に戻す、スナップショット / AMI の共有を外す、Lambda の権限を消す (`aws lambda remove-permission`)
 2. **封じ込め** (侵害の疑い): 操作した主体の認証情報を止める。公開されていた中身 (秘匿値・鍵) を入れ替える
-3. **承認**: allowlist の承認では重大度は下がらない (公開は毎回見る)。意図した公開なら ack
+3. **承認**: allowlist の承認では重大度は下がらない (公開は毎回見る)。意図した公開なら resolve (下の「片付け」)
 4. **expected_denied**: 対象外 (成功した操作だけを見ている)
-5. **ack / snooze**: 意図した公開と確かめた変更は ack (同じ資源を別の形で開けば別の Key で再報告される)
+5. **片付け**: 片付けは下の「片付け」の節。意図した公開と確かめた変更は resolve
 6. **設定の修正**: アカウント単位の Public Access Block を有効にする、SG の変更を IaC に寄せる、SSH の代わりに Session Manager を使う。
    機微なポートの一覧が合わなければ `checks.public_exposure.sensitive_ports` を見直す
+
+## 片付け
+
+| 重大度 | 上がる余地 | 許す操作 |
+|---|---|---|
+| high・medium・low | なし | snooze・resolve |
+
+上がる余地は、同じ Key のまま、より重い重大度で観測されうるか。ack を許すのは余地のある行だけ (ack 中に出直すのは重大度が上がったときだけ)。このチェックは event 型 (観測されなくても解消にならない)。
+
+- resolve: 意図した公開と確かめた変更。同じ資源を別の形で開けば別の Key で報告される
+- snooze: 閉じる予定の日まで
+- 表で許さない ack は arata が止める (`ACK_REFUSED`)。終わった出来事だと確かめたうえでどうしても ack するなら、人が `--force --reason "<理由>"` を付ける (記録に force が残り、週次の報告に出る)。LLM は `--force` を提案しない
 
 ## やってはいけないこと
 

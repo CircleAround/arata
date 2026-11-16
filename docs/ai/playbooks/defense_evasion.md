@@ -44,11 +44,23 @@ CloudTrail・GuardDuty・Access Analyzer・CloudWatch Logs・VPC フローログ
 1. **元に戻す** (今も止まっているなら最優先): `aws cloudtrail start-logging --name <証跡>`、証跡の設定を戻す、GuardDuty を有効に戻す・ARCHIVE のフィルタを消す、
    アーカイブルールを消す、ロググループの保持期間を戻す、Config のレコーダーを `start-configuration-recorder` で再開する、WAF のログ設定を戻す
 2. **封じ込め** (侵害の疑い): 操作した主体の認証情報を止める (アクセスキーの無効化、ロールの `Revoke sessions`)。止めていた間の操作を調べる
-3. **承認**: 正規のデプロイ主体なら `arata approve <id> --tag deploy --note "<理由>"` を人に提案する (重大度が 1 段下がるが、報告は続く)
+3. **承認**: 正規のデプロイ主体なら、allowlist.yaml の principals にその主体を `tags: [deploy]` で人が書く (PR で。重大度が 1 段下がるが、報告は続く)。`arata approve` はこのチェックの finding を受け付けない
 4. **expected_denied**: 対象外 (成功した操作だけを見ている)
-5. **ack / snooze**: 作業として確認できた 1 回の変更は ack (重大度が上がれば再報告される)
+5. **片付け**: 片付けは下の「片付け」の節。ack はできない (同じ Key のまま重大度が上がらないので、ack すると最後になる)
 6. **設定の修正**: 監査の設定を変える権限を IaC のパイプラインに寄せる。SCP で `cloudtrail:StopLogging`・`guardduty:DeleteDetector` などを拒否する。
    保持期間の下限が合わなければ `checks.defense_evasion.min_log_retention_days` を見直す。証跡の宛先が別のバケットなら `trail_buckets` に書く
+
+## 片付け
+
+| 重大度 | 上がる余地 | 許す操作 |
+|---|---|---|
+| critical・high・medium | なし | snooze・resolve |
+
+上がる余地は、同じ Key のまま、より重い重大度で観測されうるか。ack を許すのは余地のある行だけ (ack 中に出直すのは重大度が上がったときだけ)。このチェックは event 型 (観測されなくても解消にならない)。
+
+- resolve: 作業として確かめた 1 回の変更で、守りを元に戻した (または意図した設定だと確かめた) なら resolve。同じ操作がまた起きれば新規として報告される
+- snooze: 作業が続く間だけ、作業の終わりの日まで
+- 表で許さない ack は arata が止める (`ACK_REFUSED`)。終わった出来事だと確かめたうえでどうしても ack するなら、人が `--force --reason "<理由>"` を付ける (記録に force が残り、週次の報告に出る)。LLM は `--force` を提案しない
 
 ## やってはいけないこと
 

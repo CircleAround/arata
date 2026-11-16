@@ -31,9 +31,21 @@ IAM Access Analyzer (外部アクセスのアナライザー) が、アカウン
 1. **封じ込め** (意図しない公開): ポリシーから公開の文・不明な主体を外す。S3 ならバケットの Public Access Block を有効にする。データが読まれた可能性があれば S3 のアクセスログ・CloudTrail のデータイベントを調べる
 2. **承認**: 対象外 (arata の allowlist ではなく、Access Analyzer 側で扱う)
 3. **expected_denied**: 対象外
-4. **ack / snooze**: 意図したアクセスなら、Access Analyzer 側でアーカイブする (人が行う。arata では resolved になる)。同じ形が続くなら条件を絞ったアーカイブルールを人が作る。
-   直す予定が決まっていれば `arata snooze`
+4. **片付け**: 片付けは下の「片付け」の節。意図したアクセスなら、Access Analyzer 側でアーカイブする (人が行う。arata では resolved になる)
 5. **設定の修正**: 外部のアクセスに条件を付ける (`aws:PrincipalOrgID`・`aws:SourceVpce`・`sts:ExternalId` など)、公開の配信は CloudFront の OAC を経由する
+
+## 片付け
+
+| 重大度 | 上がる余地 | 許す操作 |
+|---|---|---|
+| high・medium | なし | snooze・resolve |
+
+上がる余地は、同じ Key のまま、より重い重大度で観測されうるか。ack を許すのは余地のある行だけ (ack 中に出直すのは重大度が上がったときだけ)。このチェックは state 型 (観測されなくなれば解消になる)。
+
+- 意図したアクセスなら、Access Analyzer 側でアーカイブする (人が行う。次の run で resolved になる)。同じ形が続くなら条件を絞ったアーカイブルールを人が作る
+- snooze: 直す予定が決まっていれば、その日まで
+- resolve: 直したとき。残っていれば次の run で新規として出直す
+- 表で許さない ack は arata が止める (`ACK_REFUSED`)。終わった出来事だと確かめたうえでどうしても ack するなら、人が `--force --reason "<理由>"` を付ける (記録に force が残り、週次の報告に出る)。LLM は `--force` を提案しない
 
 ## やってはいけないこと
 

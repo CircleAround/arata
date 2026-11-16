@@ -47,7 +47,7 @@ func TestSummarySystemHasPlaybooksOfRunChecks(t *testing.T) {
 	if strings.Contains(l.system, "# iam_changes:") {
 		t.Fatal("resolved-only checks are not embedded")
 	}
-	for _, s := range []string{"対処手順", "利用者の前提", "上の規則より手順を優先しません", "人への提案にとどめ", "あなたは実行しません"} {
+	for _, s := range []string{"対処手順", "利用者の前提", "上の規則より手順を優先しません", "人への提案にとどめ", "あなたは実行しません", "「片付け」の表がその重大度で許す操作だけ"} {
 		if !strings.Contains(l.system, s) {
 			t.Fatalf("system must say %q", s)
 		}
@@ -137,7 +137,7 @@ func TestPlaybooksSectionLimit(t *testing.T) {
 // 上限に入らなかったチェックは WARN (PLAYBOOKS_OMITTED) にチェック名を出す。要約は続ける。
 func TestPlaybooksOmittedWarn(t *testing.T) {
 	old := MaxPlaybookBytes
-	MaxPlaybookBytes = 6000
+	MaxPlaybookBytes = 7000
 	defer func() { MaxPlaybookBytes = old }()
 	dir := inputDir(t, golden(t, "report.json"), "")
 	l := &fakeLLM{responses: []string{fixture(t, "ok.json")}}

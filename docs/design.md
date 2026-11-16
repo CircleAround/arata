@@ -286,7 +286,7 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
 | `RUN_MISSED` | 前回実行から profile の周期の 2 倍以上空いた (起動側の障害) |
 | `COLLECT_FAILED` | 決定: 上記に分類できない収集エラー (ネットワーク断など) |
 | `CONFIG_INVALID` | 決定: 設定ファイルの読み込み・検証エラー (終了コード 2) |
-| `ACK_REFUSED` | 決定 (ADR 0068): 重大度が high・critical の finding の `arata ack` を止めた (終了コード 2。ストアは変えない)。標準出力に approve / snooze / resolve の使いどころと playbook の場所を出す。`--force --reason` でだけ通す |
+| `ACK_REFUSED` | 決定 (ADR 0068): 片付けの表 (playbook の「片付け」。high・critical と、同じ Key で重大度の上がる余地の無い行) が許さない `arata ack` を止めた (終了コード 2。ストアは変えない)。標準出力に approve / snooze / resolve の使いどころと playbook の場所を出す。`--force --reason` でだけ通す |
 | `ROLE_POLICY_LARGE` | 決定 (ADR 0062): `arata config role-params` の一覧で、読み取り専用ロールのインラインポリシーが IAM の上限 (10,240 文字。空白は数えない) の 9 割を超える見込み。値は出す (警告。Deny の分は設定から分からないので見積もりに入れない) |
 | `REPORT_NOT_FOUND` | 決定: `arata report` で出す報告が無い (そのプロファイルの run がまだ無い。終了コード 2) |
 | `SOURCE_CATCHUP` / `SOURCE_CATCHUP_TRUNCATED` / `SOURCE_COLLECT_LIMITED` | 決定 (ADR 0038): 前に失敗したソースを取れていた位置から引き直している (警告) / 遅れが `max_catchup` を超え、古い分を取りこぼした (警告) / 決定 (ADR 0064): 1 回の収集が `max_collect` に当たり、そこまで集めて止めた (警告。run は partial。続きは次の回) |
@@ -1067,7 +1067,8 @@ oidc_subjects:                   # OIDC でのロールの引き受けの、既�
    │     (ack / snooze / resolve / approve は --reason (approve は --note) と --by を finding_actions に残す。ADR 0068)
    ├─ arata ack <finding-id>         → acked。再報告しない。報告には出ず、arata review の未対応一覧に残る (重大度が上がれば changed で再報告)。
    │     週次の「黙らせているもの」に出る (ADR 0068 の 3 節)
-   │     → 重大度が high・critical なら止める (ACK_REFUSED。approve / snooze / resolve を案内)。--force --reason でだけ通し、記録に forced (守りを越えたときだけ真。--force には --reason が要る。ADR 0068)
+   │     → 片付けの表 (checks.TriageRows。正は playbook の「片付け」) が許さなければ止める (ACK_REFUSED。approve / snooze / resolve を案内)。
+   │       表は high・critical と、同じ Key で重大度の上がる余地の無い行で ack を許さない。review --format json の triage.allowed に許す操作。--force --reason でだけ通し、記録に forced (守りを越えたときだけ真。--force には --reason が要る。ADR 0068)
    ├─ arata snooze <finding-id> --until 2026-11-01   → 期日まで沈黙、期日に再報告
    ├─ arata resolve <finding-id>     → resolved。再び観測されたら new
    └─ 放置                              → その run で同じ内容で再び観測されれば still_open として報告に出る (event 型は観測の無い窓では出ない)。
@@ -1097,6 +1098,12 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
   アカウントは finding の data (ログ由来) の `role_arn` から取り、12 桁のロールの ARN として読めて `role_account` と一致するときだけ書く。
   `--destination-role <glob>` (複数可) でロールに絞る (finding のロールに一致するものを求める)。`--account` / `--arn-pattern` / `--tag` / `--expected-denied` とは一緒に使えない。
   重なる項目が既にあれば拒否する。`review --format json` は、使える finding に `approve_destination` (行き先のアカウント ID) を出す。
+- 決定 (ADR 0068 の 4 節・6 節): `review --format json` の各 finding に `triage` (`allowed` = 許す操作、`escalates` = 同じ Key で重大度が上がりうるか、
+  `doc` = `arata help ai playbook <check>`、`section` = `片付け`) を出す。`allowed` は片付けの表 (`checks.TriageRows`) の行から、その finding で approve できなければ approve を除いたもの。
+  表の正は各 playbook の「片付け」の節の表 (| 重大度 | 上がる余地 | 許す操作 |) で、`internal/checks` のテストが行の順まで突き合わせる。
+  表の決まり (テスト): ack を許すのは上がる余地のある行だけ、high・critical は ack を許さない、approve は `arata approve` が受け付けるチェックだけ、snooze・resolve は常に許す。
+  上がる余地ありの行は、同じ Key で軽い観測と重い観測を作るテストで確かめる。一部の Key だけ上がるチェック (iam_changes の信頼ポリシー) は「なし」に倒す。
+  表に無い組 (この版が知らない重大度) は ack を許さない
 - 決定 (ADR 0047): 行き先による一括解消も、同じ 2 か所 (approve の直後と evaluate の冒頭) でする。open / acked / snoozed の unknown_assume_role のうち、
   外向き・行き先が期限内で既知・finding の `mfa` が true のものを resolved にし、`resolved_reason: known_destination` と `allowlist_subject` を残す。
   ack 済みの finding も同じ (MFA が無い・不明のものは残る)。行き先を消す・期限が切れると、次の引き受けは new として報告される。

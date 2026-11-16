@@ -60,6 +60,8 @@ type ReviewItem struct {
 	// ApproveDestination は、`approve --destination` で行き先として既知にできる finding (unknown_assume_role の外向き・MFA あり) の、
 	// 行き先のアカウント ID (ADR 0047)。それ以外は空。
 	ApproveDestination string `json:"approve_destination,omitempty"`
+	// Triage は許す操作と根拠の文書 (ADR 0068 の 4 節)。AI が片付けの案を出すときは、ここに無い操作を提案しない。
+	Triage TriageInfo `json:"triage"`
 	// LastAction は最後の人の片付けの操作 (ADR 0068)。記録が無ければ省く (acked / snoozed で無いのは、ストアの schema 8 より前の操作)。
 	LastAction *LastAction `json:"last_action,omitempty"`
 }
@@ -139,6 +141,7 @@ func (e *Engine) Review(ctx context.Context, statuses []string) ([]ReviewItem, e
 		if a, ok := last[f.ID]; ok {
 			it.LastAction = lastActionOf(a)
 		}
+		it.Triage = triageOf(f)
 		if t, err := ApproveTargetOf(f); err == nil {
 			it.Approve = t
 		}
@@ -188,7 +191,7 @@ func subjectPrincipal(f store.Finding) (string, record.PrincipalKind, error) {
 		}
 	case "oidc_assume_role":
 		return "", "", fmt.Errorf("%w: approve does not write oidc_subjects; add the entry point (provider, role, repo and refs / environments) to oidc_subjects in allowlist.yaml by hand "+
-			"(see `arata help ai playbook oidc_assume_role`), or use ack / snooze", errNotApprovable)
+			"(see `arata help ai playbook oidc_assume_role`), or use snooze / resolve", errNotApprovable)
 	default:
 		return "", "", fmt.Errorf("%w: %s findings are not about a principal; use ack, snooze or resolve", errNotApprovable, f.Check)
 	}
@@ -616,7 +619,7 @@ func (e *Engine) SetStatus(ctx context.Context, id, status string, until time.Ti
 		if o.Force && strings.TrimSpace(o.Reason) == "" {
 			return nil, e.ackRefused(f, true)
 		}
-		if ackGuarded(f.Severity) {
+		if ackGuarded(*f) {
 			if !o.Force {
 				return nil, e.ackRefused(f, false)
 			}

@@ -98,6 +98,10 @@ func TestExpectedDeniedAndEscalation(t *testing.T) {
 	if code := c.run("ack", ad.ID, "--config", c.cfg); code != 0 {
 		t.Fatalf("ack exit %d: %s", code, c.stderr)
 	}
+	// access_denied の medium は同じ主体のまま high に上がりうるので、ack は止めない (片付けの表。force ではない。ADR 0068)
+	if s := review(t, c, "--status", "acked"); len(s) != 1 {
+		t.Fatalf("acked: %+v", s)
+	}
 	c.now = c.now.Add(24 * time.Hour)
 	deny("iam:ListUsers", "iam:ListRoles", "s3:ListBuckets", "kms:ListKeys", "ec2:DescribeVpcs", "sts:GetSessionToken")
 	if r := runDaily(); r.Summary.Changed != 0 || r.Summary.New != 0 {

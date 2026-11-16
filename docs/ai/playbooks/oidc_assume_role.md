@@ -69,9 +69,25 @@ OIDC のトークンでのロールの引き受け (`AssumeRoleWithWebIdentity`)
        refs: ["refs/heads/main"]                        # refs (glob 可)・environments (完全一致)・pull_request: true のどれか 1 つ以上
        note: 本番のデプロイ                               # 必須。hours: ["18:00-19:00"] (UTC)・source_ips: [CIDR]・expires は任意
    ```
-3. **ack / snooze**: 既知リストに書けないもの (`sub_form: unparsed`)、正規と確かめた 1 回の回数の外れは ack。期間の決まった作業は snooze
+3. **片付け**: 片付けは下の「片付け」の節。既知リストに書けないもの (`sub_form: unparsed`) で正規と確かめた 1 回は resolve、期間の決まった作業は snooze
 4. **設定の修正**: 信頼ポリシーの sub の条件をブランチ / environment まで絞る。environment に承認を付ける。ロールの権限を最小にする。
    ロールを `principals` に `dynamic_source: true` で承認する (principal_new_source の送信元の指摘を減らす。入り口は既知にならない)
+
+## 片付け
+
+| 重大度 | 上がる余地 | 許す操作 |
+|---|---|---|
+| high・medium | なし | snooze・resolve |
+| low | あり | ack・snooze・resolve |
+| info | なし | snooze・resolve |
+
+上がる余地は、同じ Key のまま、より重い重大度で観測されうるか。ack を許すのは余地のある行だけ (ack 中に出直すのは重大度が上がったときだけ)。このチェックは event 型 (観測されなくても解消にならない)。
+
+- 入り口を既知にするのは allowlist.yaml の `oidc_subjects` を人が直す PR (approve は書かない)。マージの後に resolve
+- ack: low (拒否だけの引き受け、回数の小さな外れ) だけ。同じ Key で成功すれば・回数が大きく外れれば重大度が上がって出直す
+- snooze: 期間の決まった作業
+- resolve: 既知リストに書けないもの (`sub_form: unparsed`) で正規と確かめた 1 回。また起きれば新規として報告される
+- 表で許さない ack は arata が止める (`ACK_REFUSED`)。終わった出来事だと確かめたうえでどうしても ack するなら、人が `--force --reason "<理由>"` を付ける (記録に force が残り、週次の報告に出る)。LLM は `--force` を提案しない
 
 ## やってはいけないこと
 

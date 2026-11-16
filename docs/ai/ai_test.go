@@ -231,8 +231,8 @@ func TestOnboarding(t *testing.T) {
 	if !strings.Contains(sec["流れ"], "通知") {
 		t.Errorf("流れ must say that the first runs are not notified")
 	}
-	// 片付け方: 4 つの手段と、承認は人がすること
-	for _, want := range []string{"arata approve", "arata ack", "arata snooze", "--until", "allowlist.yaml", "人が"} {
+	// 片付け方: 手段と、承認は人がすること。終わった出来事は resolve、ack は片付けの表が許す重大度だけ (ADR 0068 の 6 節)
+	for _, want := range []string{"arata approve", "arata resolve", "arata snooze", "--until", "allowlist.yaml", "人が", "「片付け」の表"} {
 		if !strings.Contains(sec["1 件ずつ片付ける"], want) {
 			t.Errorf("1 件ずつ片付ける lacks %q", want)
 		}
@@ -243,8 +243,8 @@ func TestOnboarding(t *testing.T) {
 			t.Errorf("ack・snooze・resolve の使い分け lacks %q", want)
 		}
 	}
-	// 選び方: 直すつもりなら snooze、ack は正規の動きか終わった出来事だけ。報告が来なくなると困るものを ack にしない
-	for _, want := range []string{"直すつもりなら snooze", "正規の動き", "終わった出来事", "二度と報告されない", "報告が来なくなると困るものを ack にしない", "重大度"} {
+	// 選び方: 直すつもりなら snooze、終わった出来事は resolve、ack は上がる余地のある行だけ。報告が来なくなると困るものを ack にしない
+	for _, want := range []string{"直すつもりなら snooze", "終わった出来事は resolve", "上がる余地", "二度と報告されない", "報告が来なくなると困るものを ack にしない", "重大度", "triage.allowed"} {
 		if !strings.Contains(sec["ack・snooze・resolve の使い分け"], want) {
 			t.Errorf("ack・snooze・resolve の使い分け lacks %q", want)
 		}

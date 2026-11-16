@@ -30,7 +30,7 @@ func TestWeeklySilencedSection(t *testing.T) {
 	extNP := items["new_principal|arn:aws:iam::"+saas+":root"]
 	for _, args := range [][]string{
 		{"ack", "--force", "--reason", "setup work", "--by", "alice", root.ID},
-		{"ack", "--reason", "asked mallory@example.com directly", "--by", "bob", np.ID},
+		{"ack", "--force", "--reason", "asked mallory@example.com directly", "--by", "bob", np.ID},
 		{"snooze", "--until", "2026-10-25", "--by", "alice", uar.ID},   // 7 日以内に期日
 		{"snooze", "--until", "2026-11-20", "--by", "alice", ext.ID},   // 期日は遠い
 		{"snooze", "--until", "2026-10-23", "--by", "alice", extNP.ID}, // 期日を過ぎる (下で時計を進める)
@@ -76,7 +76,7 @@ func TestWeeklySilencedSection(t *testing.T) {
 	if s == nil {
 		t.Fatalf("weekly must have the silenced section:\n%s", c.stdout)
 	}
-	want := schema.SilencedSummary{Acked: 2, AckedHigh: 1, Forced: 1, Snoozed: 3, SnoozedHigh: 2, SnoozeExpiring: 1, SnoozeExpired: 1, AllowlistExpiring: 1, AllowlistExpired: 1}
+	want := schema.SilencedSummary{Acked: 2, AckedHigh: 1, Forced: 2, Snoozed: 3, SnoozedHigh: 2, SnoozeExpiring: 1, SnoozeExpired: 1, AllowlistExpiring: 1, AllowlistExpired: 1}
 	if s.Summary != want {
 		t.Fatalf("summary: %+v\nwant %+v", s.Summary, want)
 	}

@@ -255,7 +255,7 @@ terraform -chdir=github plan
   既にあるアカウントのチャンネルは、聞かれません
 - 書き直した結果は PR にして、差分を確かめてからマージします
 - **ワークフローは、上げた版の arata と同じ版の生成物に入れ替えます** (`--force` で書き直したものをそのまま使う)。古い版のワークフローには、新しい版の入力 (片付けの `force` など) がありません。
-  arata の版だけを上げると、例えば high 以上の ack は止まるのに、Actions から `force` で通す入力が無くなります
+  arata の版だけを上げると、例えば表が許さない ack (high 以上など) は止まるのに、Actions から `force` で通す入力が無くなります
 - **`aws/<アカウント>/arata.yaml` は書き直されません**。新しい版で雛形が足した設定は、`arata config init --diff -c aws/<アカウント>/arata.yaml` に `missing_key` として出るので、手で足します。
   例: weekly の `silenced: true` (週次の報告と通知に「黙らせているもの」を出す。ADR 0068)
 - アカウントを足したら、1 の `AuditRoleArns`、4 の `ARATA_AUDIT_ROLE_ARNS` (同じ `gh secret set` で入れ直します)、足したアカウントの読み取り専用ロールと `arata init`、bot の招待も要ります

@@ -134,7 +134,7 @@ var All = []Code{
 	{StoreLocked, arataOnly, "同じストアを別のプロセスが使っている"},
 	{StoreCorrupt, arataOnly, "SQLite を開けない・S3 のストアに raw があるのに SQLite が無い"},
 	{StoreConflict, arataOnly, "s3:// のストアを別の実行が先に書いた (何も上書きしていない)"},
-	{AckRefused, arataOnly, "重大度が high・critical の finding の ack を止めた (approve / snooze / resolve を使う。ADR 0068)"},
+	{AckRefused, arataOnly, "片付けの表が許さない ack を止めた (high・critical と、同じ Key で重大度の上がる余地の無い行。approve / snooze / resolve を使う。ADR 0068)"},
 	{StoreUnavailable, arataOnly, "s3:// のストアに問い合わせられない (権限・通信)"},
 	{Interrupted, arataOnly, "SIGINT / SIGTERM で止まった"},
 	{RunMissed, arataOnly, "前回の実行から周期の 2 倍以上空いた"},

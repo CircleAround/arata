@@ -748,7 +748,7 @@ name: prod                                # 通知に出す名前。アカウン
    | `finding_id` | 通知の ID |
    | `reason` | 理由 (必須、1 行、300 文字まで)。ストアに残り、`arata review` と報告に出ます。ARN やアカウント ID は書かないでください (リポジトリを読める人に見えます) |
    | `until` | `snooze` の期日 (`YYYY-MM-DD`。その日の 0 時 UTC まで)。`snooze` のときだけ |
-   | `force` | `ack` のときだけ。重大度が high・critical の finding も ack する (既定は false。下の「high 以上は ack できない」) |
+   | `force` | `ack` のときだけ。片付けの表が ack を許さない finding も ack する (既定は false。下の「ack できないもの」) |
 
 3. 誰が (実行した人の GitHub のハンドル)・どの finding を・どうしたか・理由が、ストアと実行の Summary に残ります
 
@@ -764,10 +764,10 @@ name: prod                                # 通知に出す名前。アカウン
   group には `queue: max` を書いてあるので、待っている実行は取り消されず、待ち始めた順に動きます (最大 100 件。ADR 0068 の 7 節)。
   既定 (`queue: single`) では待てるのが 1 つだけで、片付けを流すと待っていた定時の監査が取り消され、aratam の知らせも届きませんでした。
   この版より前の生成物を使っているなら、`arata repo init --force` で書き直します
-- **high 以上は ack できない**: 重大度が high・critical の finding の ack は、arata が止めます (`ACK_REFUSED`。ADR 0068)。ack すると、重大度が上がる余地が無く、後で本物が起きても二度と報告されないためです。
+- **ack できないもの**: 重大度が high・critical の finding と、同じ指摘のまま重大度の上がる余地の無いもの (root_usage・new_principal・posture など。`arata help ai playbook <check>` の「片付け」の表) の ack は、arata が止めます (`ACK_REFUSED`。ADR 0068)。ack すると、重大度が上がる余地が無く、後で本物が起きても二度と報告されないためです。
   止められると、ログと Summary に案内が出ます。正規の主体なら allowlist.yaml を PR で直す、期日を決めて見直すなら `snooze`、直したなら `resolve` を選びます (`arata help ai playbook <check>` の「片付け」)。
   終わった出来事だと確かめたうえでどうしても ack するときだけ、`force` を付けて実行し直します。理由と実行した人が force として残り、週次の報告に出ます
-- **失敗の見分け**: ログの方針は監査と同じで、出るのは `code` と終了コードだけです。`ACK_REFUSED` は high 以上の ack (上)、`CONFIG_INVALID` は ID が無い・既に resolved・期日が過去・理由に使えない文字 (改行・見えない文字) がある、`STORE_CONFLICT` は同時に書かれた (もう一度実行します)
+- **失敗の見分け**: ログの方針は監査と同じで、出るのは `code` と終了コードだけです。`ACK_REFUSED` は表が許さない ack (上)、`CONFIG_INVALID` は ID が無い・既に resolved・期日が過去・理由に使えない文字 (改行・見えない文字) がある、`STORE_CONFLICT` は同時に書かれた (もう一度実行します)
 - ack / snooze 中でも、重大度が上がれば再報告されます (ADR 0022)
 
 ### approve は PR で allowlist.yaml を直す
