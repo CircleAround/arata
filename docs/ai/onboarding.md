@@ -79,6 +79,9 @@ finding の ID は `arata review` と report に出る。手段は 4 つで、�
 | `snooze --until YYYY-MM-DD` | 期日まで沈黙する。期日以降に再び観測されたら新規として再報告する。直って観測されなくなれば解消になる | 直すつもりのもの。期日は直す予定の日 |
 | `resolve` | 解消にする。再び観測されたら新規として報告する | 対処が終わり、もう観測されないはずのもの |
 
+どれも `--reason "<理由 1 行>"` と `--by <操作した人のハンドル>` (省略時は OS のユーザー名) を付けると、ストアに残り、`arata review` の最後の操作 (`last_action`) に出る。
+理由には ARN・アカウント ID・メールアドレスを書かない。LLM が案を出すときも、理由の文案を添える
+
 ack と snooze の選び方:
 
 - **直すつもりなら snooze**。例: 証跡のログファイルの検証が無効、90 日使っていないアクセスキー。期日までに直せば解消になり、直っていなければ期日以降にまた報告される (忘れない)
@@ -108,7 +111,7 @@ CloudTrail は記録まで最大 15 分ほど遅れるので、最初の run に
 - aratam の設定と疎通 (`aratam doctor` / `aratam test-notify`) は先に済ませてよい。**止めておくのは最初の run の結果の送信だけ**。
   通知の文面を見たければ `aratam notify --in /tmp/arata-first/daily --dry-run` (送らない)
 - allowlist.yaml の変更は git に commit する (approve の `--commit` か、人が行う)。PR で直す運用は `arata help ai approve`
-- ack / snooze にしたものは `arata review` (`--status snoozed` で snooze 中も) でいつでも見直せる
+- ack / snooze にしたものは `arata review` (`--status snoozed` で snooze 中も) でいつでも見直せる。誰が・なぜ・いつ黙らせたかは `LAST_ACTION` の欄と `--format json` の `last_action`
 - 定時の通知を始めた後に、設定や allowlist.yaml を直した結果を定時の前に確かめたいときは、試しの実行を使う:
   `arata run --profile daily --dry-run --window 1h --out /tmp/arata-try`。ストアに何も書かないので、指摘は報告済みにならず、窓も進まない
   (次の定時の実行は、試さなかったときと同じ通知を出す)。`--window` で見る期間を短くすると、CloudTrail の読み取りの時間と Logs Insights の費用が減る。

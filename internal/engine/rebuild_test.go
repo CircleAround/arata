@@ -76,7 +76,7 @@ func TestRebuildMatchesRuns(t *testing.T) {
 	if len(r.Report.Findings.New) == 0 {
 		t.Fatalf("scenario: the second daily run must have new findings")
 	}
-	if _, err := e.SetStatus(ctx, r.Report.Findings.New[0].ID, store.FindingAcked, time.Time{}); err != nil {
+	if _, err := e.SetStatus(ctx, r.Report.Findings.New[0].ID, store.FindingAcked, time.Time{}, StatusOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	e.Close()

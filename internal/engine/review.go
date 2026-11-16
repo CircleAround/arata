@@ -60,6 +60,33 @@ type ReviewItem struct {
 	// ApproveDestination は、`approve --destination` で行き先として既知にできる finding (unknown_assume_role の外向き・MFA あり) の、
 	// 行き先のアカウント ID (ADR 0047)。それ以外は空。
 	ApproveDestination string `json:"approve_destination,omitempty"`
+	// LastAction は最後の人の片付けの操作 (ADR 0068)。記録が無ければ省く (acked / snoozed で無いのは、ストアの schema 8 より前の操作)。
+	LastAction *LastAction `json:"last_action,omitempty"`
+}
+
+// LastAction は片付けの操作 1 件 (finding_actions の最後の行)。
+type LastAction struct {
+	Action string `json:"action" jsonschema:"enum=ack|snooze|resolve|approve"`
+	// By は操作した人 (ハンドル。メールアドレスや氏名は受け付けていない)。
+	By string `json:"by"`
+	// Reason は利用者が書いた理由 (空なら無し)。信用できない入力として扱う。
+	Reason string `json:"reason"`
+	// Forced は --force で守りを越えた操作。
+	Forced bool `json:"forced"`
+	// Severity は操作したときの重大度。
+	Severity string `json:"severity" jsonschema:"enum=critical|high|medium|low|info"`
+	// At は操作した時刻 (RFC3339、UTC)。
+	At string `json:"at"`
+	// SnoozeUntil は snooze の期日 (RFC3339、UTC)。
+	SnoozeUntil string `json:"snooze_until,omitempty"`
+}
+
+func lastActionOf(a store.FindingAction) *LastAction {
+	out := &LastAction{Action: a.Action, By: a.By, Reason: a.Reason, Forced: a.Forced, Severity: a.Severity, At: a.At.UTC().Format(time.RFC3339)}
+	if !a.SnoozeUntil.IsZero() {
+		out.SnoozeUntil = a.SnoozeUntil.UTC().Format(time.RFC3339)
+	}
+	return out
 }
 
 // DefaultReviewStatuses は review の既定 (未対応の一覧)。
@@ -91,6 +118,10 @@ func (e *Engine) Review(ctx context.Context, statuses []string) ([]ReviewItem, e
 		}
 		return fs[i].ID < fs[j].ID
 	})
+	last, err := e.st.LastFindingActions(ctx)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]ReviewItem, 0, len(fs))
 	for _, f := range fs {
 		it := ReviewItem{ID: f.ID, Check: f.Check, Key: f.Key, Severity: f.Severity, Status: f.Status, Summary: f.Summary,
@@ -104,6 +135,9 @@ func (e *Engine) Review(ctx context.Context, statuses []string) ([]ReviewItem, e
 		}
 		if it.Data == nil {
 			it.Data = map[string]any{}
+		}
+		if a, ok := last[f.ID]; ok {
+			it.LastAction = lastActionOf(a)
 		}
 		if t, err := ApproveTargetOf(f); err == nil {
 			it.Approve = t
@@ -357,6 +391,10 @@ func (e *Engine) Approve(ctx context.Context, id string, o ApproveOptions) (*App
 	if strings.TrimSpace(o.Note) == "" {
 		return nil, e.configErr(errors.New("--note is required (why this principal is legitimate)"))
 	}
+	// --note と承認者は片付けの記録にも残すので、ack などの --reason / --by と同じ形に絞る (ADR 0068)
+	if _, err := e.triageAction(store.ActionApprove, e.approvedBy(o), o.Note); err != nil {
+		return nil, err
+	}
 	if o.Destination || len(o.DestinationRoles) > 0 {
 		return e.approveDestination(ctx, f, o)
 	}
@@ -416,7 +454,7 @@ func (e *Engine) Approve(ctx context.Context, id string, o ApproveOptions) (*App
 	if len(o.ExpectedDenied) > 0 {
 		// 決定: access_denied は resolved にしない。次の run で想定済みの拒否を除いて数え直し、閾値を下回れば報告されなくなる
 		res.KeptOpen = true
-	} else if err := e.st.SetFindingStatus(ctx, f.ID, store.FindingResolved, time.Time{}, now); err != nil {
+	} else if err := e.st.SetFindingStatus(ctx, f.ID, store.FindingResolved, time.Time{}, now, store.Action{Name: store.ActionApprove, By: entry.ApprovedBy, Reason: o.Note}); err != nil {
 		return nil, err
 	}
 	msg := fmt.Sprintf("allowlist: approve %s\n\nfinding: %s (%s)\nnote: %s\napproved_by: %s\n", entry.Subject(), f.ID, f.Check, o.Note, entry.ApprovedBy)
@@ -530,7 +568,7 @@ func (e *Engine) approveDestination(ctx context.Context, f *store.Finding, o App
 		return nil, e.configErr(err)
 	}
 	res := &ApproveResult{Finding: *f, Destination: &d, Added: added}
-	if err := e.st.SetFindingStatus(ctx, f.ID, store.FindingResolved, time.Time{}, now); err != nil {
+	if err := e.st.SetFindingStatus(ctx, f.ID, store.FindingResolved, time.Time{}, now, store.Action{Name: store.ActionApprove, By: d.ApprovedBy, Reason: o.Note}); err != nil {
 		return nil, err
 	}
 	msg := fmt.Sprintf("allowlist: known assume destination %s\n\nfinding: %s (%s)\nnote: %s\napproved_by: %s\n", d.Subject(), f.ID, f.Check, o.Note, d.ApprovedBy)
@@ -553,7 +591,20 @@ func checkPatternTarget(pattern, arn, account string) error {
 }
 
 // SetStatus は ack / snooze / resolve。snooze は until (その日の 0 時 UTC まで沈黙し、以後の再観測で new として再報告) が必要。
-func (e *Engine) SetStatus(ctx context.Context, id, status string, until time.Time) (*store.Finding, error) {
+// StatusOptions は ack / snooze / resolve の記録 (ADR 0068 の 1 節)。By が空なら OS のユーザー名 (approve と同じ)。
+type StatusOptions struct {
+	By     string
+	Reason string
+}
+
+// statusActions は状態 → 片付けの記録の操作の名前。
+var statusActions = map[string]string{store.FindingAcked: store.ActionAck, store.FindingSnoozed: store.ActionSnooze, store.FindingResolved: store.ActionResolve}
+
+func (e *Engine) SetStatus(ctx context.Context, id, status string, until time.Time, o StatusOptions) (*store.Finding, error) {
+	act, err := e.triageAction(statusActions[status], o.By, o.Reason)
+	if err != nil {
+		return nil, err
+	}
 	f, err := e.findingForUpdate(ctx, id)
 	if err != nil {
 		return nil, err
@@ -562,7 +613,7 @@ func (e *Engine) SetStatus(ctx context.Context, id, status string, until time.Ti
 	if status == store.FindingSnoozed && !until.After(now) {
 		return nil, e.configErr(fmt.Errorf("--until must be in the future"))
 	}
-	if err := e.st.SetFindingStatus(ctx, f.ID, status, until, now); err != nil {
+	if err := e.st.SetFindingStatus(ctx, f.ID, status, until, now, act); err != nil {
 		return nil, err
 	}
 	f.Status, f.LastChanged = status, now
@@ -571,6 +622,20 @@ func (e *Engine) SetStatus(ctx context.Context, id, status string, until time.Ti
 	}
 	e.log.Info("finding status changed", "finding", f.ID, "check", f.Check, "status", status)
 	return f, nil
+}
+
+// triageAction は片付けの記録を作る。by が空なら OS のユーザー名。形の誤りは CONFIG_INVALID (ストアを開いた後でも何も書かない)。
+func (e *Engine) triageAction(name, by, reason string) (store.Action, error) {
+	if by == "" {
+		by = e.deps.User()
+	}
+	if err := ValidateBy(by); err != nil {
+		return store.Action{}, e.configErr(err)
+	}
+	if err := ValidateReason(reason); err != nil {
+		return store.Action{}, e.configErr(err)
+	}
+	return store.Action{Name: name, By: by, Reason: reason}, nil
 }
 
 func (e *Engine) findingForUpdate(ctx context.Context, id string) (*store.Finding, error) {

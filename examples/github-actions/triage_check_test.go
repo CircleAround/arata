@@ -251,6 +251,9 @@ func TestTriageValidatesInputs(t *testing.T) {
 		"account path":         {"ACCOUNT", "../prod"},
 		"account upper":        {"ACCOUNT", "Prod"},
 		"empty account":        {"ACCOUNT", ""},
+		// 操作した人は arata の --by の形 (ADR 0068)。bot からの実行は受け付けない
+		"bot actor":   {"GITHUB_ACTOR", "github-actions[bot]"},
+		"empty actor": {"GITHUB_ACTOR", ""},
 	}
 	for name, kv := range bad {
 		t.Run("bad/"+name, func(t *testing.T) {
@@ -270,9 +273,11 @@ func TestTriageRunsArataWithExpectedArguments(t *testing.T) {
 		kv   []string
 		want string
 	}{
-		"ack":     {nil, "ack\n-c\naws/prod/arata.yaml\n0123456789ab\n"},
-		"resolve": {[]string{"ACTION", "resolve", "ACCOUNT", "staging", "ARATA_CONFIG_DIR", "aws/staging"}, "resolve\n-c\naws/staging/arata.yaml\n0123456789ab\n"},
-		"snooze":  {[]string{"ACTION", "snooze", "UNTIL", "2027-03-31"}, "snooze\n-c\naws/prod/arata.yaml\n--until\n2027-03-31\n0123456789ab\n"},
+		"ack":     {nil, "ack\n-c\naws/prod/arata.yaml\n--reason\n既知の作業\n--by\nalice\n0123456789ab\n"},
+		"resolve": {[]string{"ACTION", "resolve", "ACCOUNT", "staging", "ARATA_CONFIG_DIR", "aws/staging"}, "resolve\n-c\naws/staging/arata.yaml\n--reason\n既知の作業\n--by\nalice\n0123456789ab\n"},
+		"snooze":  {[]string{"ACTION", "snooze", "UNTIL", "2027-03-31"}, "snooze\n-c\naws/prod/arata.yaml\n--until\n2027-03-31\n--reason\n既知の作業\n--by\nalice\n0123456789ab\n"},
+		// 理由はそのまま 1 つの引数として渡す (シェルに解釈させない)。形の検査は arata が行う (ADR 0068)
+		"hostile reason": {[]string{"REASON", "$(touch pwned) `id` --force"}, "ack\n-c\naws/prod/arata.yaml\n--reason\n$(touch pwned) `id` --force\n--by\nalice\n0123456789ab\n"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			out, code, tmp := runStep(t, script, bin, triageEnv(tc.kv...)...)
@@ -285,10 +290,6 @@ func TestTriageRunsArataWithExpectedArguments(t *testing.T) {
 			}
 			if string(b) != tc.want {
 				t.Errorf("args:\n%s\nwant:\n%s", b, tc.want)
-			}
-			// 理由と操作した人は arata に渡さない (ack / snooze / resolve にそのフラグは無い)。記録は Summary
-			if strings.Contains(string(b), "既知の作業") || strings.Contains(string(b), "alice") {
-				t.Errorf("reason and actor are not arata flags: %s", b)
 			}
 		})
 	}
@@ -316,7 +317,7 @@ func TestTriageLogsOnlyCodesAndKeepsExitCode(t *testing.T) {
 	}
 }
 
-// 誰が・何を・なぜ、は Summary に残す (ストアには残らない)。
+// 誰が・何を・なぜ、は Summary にも残す (ストアにも残る。ADR 0068)。
 func TestTriageSummaryRecordsActorAndReason(t *testing.T) {
 	w, _ := load(t, triageFile)
 	s := stepByID(t, w, "summary")

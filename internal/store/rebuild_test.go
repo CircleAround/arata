@@ -131,7 +131,7 @@ func buildHistory(t *testing.T, st *Dir) {
 	if err := st.AddFindingEvents(ctx, []FindingEvent{{FindingID: "f1", Check: f.Check, Key: f.Key, Class: "new", Severity: "medium", At: c2, RunID: "r2", Profile: "daily"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SetFindingStatus(ctx, "f1", FindingSnoozed, c3.Add(24*time.Hour), c3); err != nil {
+	if err := st.SetFindingStatus(ctx, "f1", FindingSnoozed, c3.Add(24*time.Hour), c3, Action{Name: ActionSnooze, By: "alice", Reason: "until the baseline"}); err != nil {
 		t.Fatal(err)
 	}
 }

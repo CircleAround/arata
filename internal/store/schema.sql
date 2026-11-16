@@ -138,6 +138,24 @@ CREATE TABLE IF NOT EXISTS finding_events (
 );
 CREATE INDEX IF NOT EXISTS finding_events_at ON finding_events(at);
 
+-- 人の片付けの操作 (ack / snooze / resolve / approve) の記録 (schema 8。ADR 0068)。1 回の操作を 1 行で追記し、書き換えない。
+-- 最後の操作は finding ごとの最大の seq。severity と status_before は操作したときの値。schema 8 より前の操作は残っていない。
+CREATE TABLE IF NOT EXISTS finding_actions (
+  seq           INTEGER PRIMARY KEY AUTOINCREMENT,
+  finding_id    TEXT NOT NULL,
+  "check"       TEXT NOT NULL,
+  key           TEXT NOT NULL,
+  action        TEXT NOT NULL,
+  "by"          TEXT NOT NULL DEFAULT '',
+  reason        TEXT NOT NULL DEFAULT '',
+  forced        INTEGER NOT NULL DEFAULT 0,
+  severity      TEXT NOT NULL,
+  status_before TEXT NOT NULL,
+  snooze_until  TEXT,
+  at            TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS finding_actions_finding ON finding_actions(finding_id, seq);
+
 CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL

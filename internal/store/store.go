@@ -79,6 +79,38 @@ type Finding struct {
 	SuppressedSeverity string
 }
 
+// 人の片付けの操作の名前 (finding_actions の action。ADR 0068)。
+const (
+	ActionAck     = "ack"
+	ActionSnooze  = "snooze"
+	ActionResolve = "resolve"
+	ActionApprove = "approve"
+)
+
+// Action は SetFindingStatus に渡す、人の操作の記録。Name が空なら記録しない。
+type Action struct {
+	Name   string // ack / snooze / resolve / approve
+	By     string // 操作した人 (形は呼び出し側が確かめる)
+	Reason string
+	Forced bool // --force で守りを越えた (ADR 0068 の 2 節)
+}
+
+// FindingAction は finding_actions の 1 行。Severity と StatusBefore は操作したときの値。
+type FindingAction struct {
+	Seq          int64
+	FindingID    string
+	Check        string
+	Key          string
+	Action       string
+	By           string
+	Reason       string
+	Forced       bool
+	Severity     string
+	StatusBefore string
+	SnoozeUntil  time.Time // snooze のときの期日
+	At           time.Time
+}
+
 // FindingEvent は finding の状態遷移 1 件 (finding_events)。Severity / Summary / Data はその時点の値。
 type FindingEvent struct {
 	FindingID string
@@ -142,6 +174,10 @@ type Query interface {
 	FindingEvents(ctx context.Context, from, to time.Time) ([]FindingEvent, error)
 	// Runs は started_at が [from, to) の run を時刻順に返す (init を含む)。
 	Runs(ctx context.Context, from, to time.Time) ([]Run, error)
+	// FindingActions は 1 つの finding の人の操作の記録を古い順に返す (ADR 0068)。
+	FindingActions(ctx context.Context, findingID string) ([]FindingAction, error)
+	// LastFindingActions は finding ごとの最後の人の操作 (finding の ID → 記録)。記録の無い finding は含まない。
+	LastFindingActions(ctx context.Context) (map[string]FindingAction, error)
 	// HistorySince は状態遷移の履歴を記録し始めた時刻 (schema 4 以降の最初の run の開始時刻)。まだ run が無ければゼロ。
 	HistorySince(ctx context.Context) (time.Time, error)
 }
@@ -170,7 +206,8 @@ type Store interface {
 	// SetFindingStatus は人の判断 (approve / ack / snooze / resolve) で状態を変える。snoozeUntil は snoozed のときだけ使う。
 	// acked / snoozed にしたときはその時点の重大度を suppressed_severity に記録し、それ以外では空にする。
 	// resolved にしたときは finding_events にも resolved を記録する (run_id 空)。
-	SetFindingStatus(ctx context.Context, id, status string, snoozeUntil, at time.Time) error
+	// act.Name が空でなければ、同じトランザクションで finding_actions に操作を 1 行追記する (ADR 0068)。
+	SetFindingStatus(ctx context.Context, id, status string, snoozeUntil, at time.Time, act Action) error
 	MarkReported(ctx context.Context, ids []string, at time.Time) error
 	// ReplaceSnapshot は (kind, source) のスナップショットを items で丸ごと置き換える (空なら空にする)。
 	// 置き換えたら raw に印 (record.SnapshotReplaced) を追記する (rebuild 用。ADR 0033)。項目そのものの raw への追記は呼び出し側 (AppendRaw)。

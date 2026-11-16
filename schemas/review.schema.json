@@ -28,6 +28,53 @@
         "label"
       ]
     },
+    "LastAction": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "ack",
+            "snooze",
+            "resolve",
+            "approve"
+          ]
+        },
+        "by": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "forced": {
+          "type": "boolean"
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "critical",
+            "high",
+            "medium",
+            "low",
+            "info"
+          ]
+        },
+        "at": {
+          "type": "string"
+        },
+        "snooze_until": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "by",
+        "reason",
+        "forced",
+        "severity",
+        "at"
+      ]
+    },
     "ReviewItem": {
       "type": "object",
       "properties": {
@@ -73,6 +120,9 @@
         },
         "approve_destination": {
           "type": "string"
+        },
+        "last_action": {
+          "$ref": "#/$defs/LastAction"
         }
       },
       "required": [

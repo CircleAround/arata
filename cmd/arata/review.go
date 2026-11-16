@@ -45,13 +45,13 @@ func newReviewCmd(d *Deps, g *globalFlags) *subcmd.Command {
 					return nil
 				}
 				tw := tabwriter.NewWriter(d.Stdout, 0, 0, 2, ' ', 0)
-				fmt.Fprintln(tw, "ID\tSEVERITY\tSTATUS\tCHECK\tFIRST_SEEN\tAPPROVE\tSUMMARY")
+				fmt.Fprintln(tw, "ID\tSEVERITY\tSTATUS\tCHECK\tFIRST_SEEN\tAPPROVE\tLAST_ACTION\tSUMMARY")
 				for _, it := range items {
 					approve := "-"
 					if it.Approve != nil {
 						approve = it.Approve.Subject()
 					}
-					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", it.ID, it.Severity, it.Status, it.Check, it.FirstSeen, approve, it.Summary)
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", it.ID, it.Severity, it.Status, it.Check, it.FirstSeen, approve, lastActionCell(it), it.Summary)
 				}
 				return tw.Flush()
 			}
@@ -132,6 +132,7 @@ LLM は approve を実行せず、人に提案するだけにすること (arata
 
 func newStatusCmd(d *Deps, g *globalFlags, use, status, short string) *subcmd.Command {
 	var until string
+	var o engine.StatusOptions
 	cmd := &subcmd.Command{
 		Use:   use + " <finding-id>",
 		Short: short,
@@ -151,7 +152,7 @@ func newStatusCmd(d *Deps, g *globalFlags, use, status, short string) *subcmd.Co
 				return err
 			}
 			defer e.Close()
-			f, err := e.SetStatus(ctx, args[0], status, u)
+			f, err := e.SetStatus(ctx, args[0], status, u, o)
 			if err != nil {
 				return err
 			}
@@ -170,7 +171,26 @@ func newStatusCmd(d *Deps, g *globalFlags, use, status, short string) *subcmd.Co
 		cmd.StringVar(&until, "until", "", "期日 (YYYY-MM-DD、その日の 0 時 UTC まで沈黙)")
 		cmd.MarkFlagRequired("until")
 	}
+	cmd.StringVar(&o.Reason, "reason", "", "理由 (1 行、300 文字まで。ストアに残り、review と報告に出る。ARN・アカウント ID などは書かない)")
+	cmd.StringVar(&o.By, "by", "", "操作した人 (英数字と . _ - のハンドル。省略時は OS のユーザー名。メールアドレスや氏名は書けない)")
 	return cmd
+}
+
+// lastActionCell は表の LAST_ACTION の欄 (`ack alice 2026-11-17`)。理由は json と報告に出す (表の幅を崩さない)。
+// acked / snoozed なのに記録が無いのは、ストアの schema 8 より前の操作。
+func lastActionCell(it engine.ReviewItem) string {
+	a := it.LastAction
+	if a == nil {
+		if it.Status == store.FindingAcked || it.Status == store.FindingSnoozed {
+			return "(記録なし)"
+		}
+		return "-"
+	}
+	cell := a.Action + " " + a.By + " " + a.At[:min(len(a.At), len(record.DateLayout))]
+	if a.Forced {
+		cell += " (force)"
+	}
+	return cell
 }
 
 func formatErr(format, want string) error {

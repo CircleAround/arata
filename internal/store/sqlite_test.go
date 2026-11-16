@@ -302,20 +302,20 @@ func TestFindingStatus(t *testing.T) {
 		t.Fatalf("missing: %v %v", got, err)
 	}
 	until := ts.Add(72 * time.Hour)
-	if err := st.SetFindingStatus(ctx, "f1", FindingSnoozed, until, ts.Add(time.Hour)); err != nil {
+	if err := st.SetFindingStatus(ctx, "f1", FindingSnoozed, until, ts.Add(time.Hour), Action{}); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := st.Finding(ctx, "f1")
 	if got.Status != FindingSnoozed || !got.SnoozeUntil.Equal(until) || !got.LastChanged.Equal(ts.Add(time.Hour)) {
 		t.Fatalf("%+v", got)
 	}
-	if err := st.SetFindingStatus(ctx, "f1", FindingAcked, until, ts); err != nil {
+	if err := st.SetFindingStatus(ctx, "f1", FindingAcked, until, ts, Action{}); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := st.Finding(ctx, "f1"); got.Status != FindingAcked || !got.SnoozeUntil.IsZero() {
 		t.Fatalf("snooze_until must be cleared: %+v", got)
 	}
-	if err := st.SetFindingStatus(ctx, "nope", FindingAcked, time.Time{}, ts); err == nil {
+	if err := st.SetFindingStatus(ctx, "nope", FindingAcked, time.Time{}, ts, Action{}); err == nil {
 		t.Fatal("unknown id must fail")
 	}
 }
@@ -496,17 +496,17 @@ func TestFindingEventsAndHistory(t *testing.T) {
 	if err := st.UpsertFinding(ctx, Finding{ID: "f2", Check: "root_usage", Key: "k", Severity: "critical", FirstSeen: ts, LastSeen: ts, LastChanged: ts, Status: FindingOpen}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SetFindingStatus(ctx, "f2", FindingAcked, time.Time{}, ts.Add(3*time.Hour)); err != nil {
+	if err := st.SetFindingStatus(ctx, "f2", FindingAcked, time.Time{}, ts.Add(3*time.Hour), Action{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SetFindingStatus(ctx, "f2", FindingResolved, time.Time{}, ts.Add(4*time.Hour)); err != nil {
+	if err := st.SetFindingStatus(ctx, "f2", FindingResolved, time.Time{}, ts.Add(4*time.Hour), Action{}); err != nil {
 		t.Fatal(err)
 	}
 	got, _ = st.FindingEvents(ctx, ts.Add(3*time.Hour), ts.Add(5*time.Hour))
 	if len(got) != 1 || got[0].FindingID != "f2" || got[0].Class != "resolved" || got[0].RunID != "" || got[0].Severity != "critical" {
 		t.Fatalf("manual resolve: %+v", got)
 	}
-	if err := st.SetFindingStatus(ctx, "nope", FindingResolved, time.Time{}, ts); err == nil {
+	if err := st.SetFindingStatus(ctx, "nope", FindingResolved, time.Time{}, ts, Action{}); err == nil {
 		t.Fatal("unknown finding must fail")
 	}
 }
@@ -519,7 +519,7 @@ func TestSuppressedSeverity(t *testing.T) {
 	if err := st.UpsertFinding(ctx, f); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SetFindingStatus(ctx, "f1", FindingAcked, time.Time{}, ts); err != nil {
+	if err := st.SetFindingStatus(ctx, "f1", FindingAcked, time.Time{}, ts, Action{}); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := st.Finding(ctx, "f1")
@@ -535,13 +535,13 @@ func TestSuppressedSeverity(t *testing.T) {
 		t.Fatalf("upsert: %+v", got)
 	}
 	// snooze し直すとその時点の重大度
-	if err := st.SetFindingStatus(ctx, "f1", FindingSnoozed, ts.Add(72*time.Hour), ts); err != nil {
+	if err := st.SetFindingStatus(ctx, "f1", FindingSnoozed, ts.Add(72*time.Hour), ts, Action{}); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := st.Finding(ctx, "f1"); got.SuppressedSeverity != "low" {
 		t.Fatalf("snooze: %+v", got)
 	}
-	if err := st.SetFindingStatus(ctx, "f1", FindingResolved, time.Time{}, ts); err != nil {
+	if err := st.SetFindingStatus(ctx, "f1", FindingResolved, time.Time{}, ts, Action{}); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := st.Finding(ctx, "f1"); got.SuppressedSeverity != "" {

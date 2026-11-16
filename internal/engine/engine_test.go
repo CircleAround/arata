@@ -731,7 +731,7 @@ func TestRunRescansIngestDelay(t *testing.T) {
 		t.Fatalf("first run must report root usage: %+v", r1.Report.Findings.New)
 	}
 	// 人が確認して resolve した
-	if _, err := e.SetStatus(ctx, rootID, store.FindingResolved, time.Time{}); err != nil {
+	if _, err := e.SetStatus(ctx, rootID, store.FindingResolved, time.Time{}, StatusOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	e.Close()
