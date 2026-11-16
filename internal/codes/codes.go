@@ -47,6 +47,7 @@ const (
 	UserIDMissing               = "USER_ID_MISSING"
 	UserIDInvalid               = "USER_ID_INVALID"
 	WAFResourcesUnknown         = "WAF_RESOURCES_UNKNOWN"
+	WAFLabelsUnknown            = "WAF_LABELS_UNKNOWN"
 	MatchRateHistoryUnavailable = "MATCH_RATE_HISTORY_UNAVAILABLE"
 	InitIncomplete              = "INIT_INCOMPLETE"
 	AllowlistMissing            = "ALLOWLIST_MISSING"
@@ -150,6 +151,7 @@ var All = []Code{
 	{UserIDMissing, arataOnly, "ユーザー ID の付いたリクエストが無く、ユーザー ID の要るチェックを skip した (警告)"},
 	{UserIDInvalid, arataOnly, "形に合わないユーザー ID・ログインの結果を捨てた (警告)"},
 	{WAFResourcesUnknown, arataOnly, "WebACL に付いた資源の一覧を取れず、不明として扱った (警告)"},
+	{WAFLabelsUnknown, arataOnly, "マネージドのルールグループのラベルの名前空間を読めず、その中の COUNT のルールが目印のルールかを見分けられない (警告)"},
 	{MatchRateHistoryUnavailable, arataOnly, "直近の解釈率を読めず、急落 (FORMAT_DRIFT) の判定をしていない (警告)"},
 	{InitIncomplete, arataOnly, "init が途中で止まった・前の init が終わっていない (警告)"},
 	{AllowlistMissing, arataOnly, "allowlist のファイルが無く、空として扱った (警告)"},

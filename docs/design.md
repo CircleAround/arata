@@ -292,7 +292,7 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
 | `TRAIL_FILE_INVALID` | 決定 (ADR 0063): `cloudtrail-s3` で trail の S3 のファイルを読めず (gzip・JSON の誤り、大きさの上限)、飛ばした (警告。`key` にオブジェクトのキー)。他のファイルは読み続ける |
 | `AGGREGATE_TRUNCATED` / `REQUESTS_UNTAGGED` | 決定 (ADR 0054): 集計が行の上限で切れ、件数が下限になった (警告) / request id の無い最初の行を数えていない (警告) |
 | `USER_ID_MISSING` / `USER_ID_INVALID` | 決定 (ADR 0054): ユーザー ID の付いたリクエストが無く、要るチェックを skip した (警告) / 形に合わないユーザー ID・ログインの結果を捨てた (警告) |
-| `WAF_RESOURCES_UNKNOWN` | 決定 (ADR 0054): WebACL に付いた資源の一覧を取れず、不明として扱った (警告) |
+| `WAF_RESOURCES_UNKNOWN` / `WAF_LABELS_UNKNOWN` | 決定 (ADR 0054): WebACL に付いた資源の一覧を取れず、不明として扱った (警告) / 決定 (ADR 0070): マネージドのルールグループのラベルの名前空間を読めず (`wafv2:DescribeManagedRuleGroup`)、その中の COUNT のルールが目印のルールかを見分けられない (警告。今までどおり BLOCK にするかの材料として出す) |
 | `MATCH_RATE_HISTORY_UNAVAILABLE` | 決定 (ADR 0054): 直近の解釈率を読めず、急落 (`FORMAT_DRIFT`) の判定をしていない (警告)。続くと「見ていない」状態が隠れるので、INFO にしない |
 | `INIT_INCOMPLETE` / `ALLOWLIST_MISSING` | 決定 (ADR 0054): init が途中で止まった・前の init が終わっていない (警告) / allowlist のファイルが無く、空として扱った (警告) |
 | `REBUILD_WARNING` / `REBUILT_FROM_SCRATCH` | 決定 (ADR 0054): rebuild の警告 (読み飛ばした行など) / raw だけから作り直した。次の run で未解決の指摘がすべて new として再報告される (影響が別なので code を分ける。警告) |
@@ -1317,6 +1317,7 @@ arata は LLM を使わず候補だけを作り、aratam の LLM は候補を文
 | `observation` (提案なし) | none | 下の「不審な事実は必ず伝える」。`about` (関わる候補) と `reason` (提案しなかった理由) を持つ |
 | `observation` / about `challenge_impact` (Challenge / CAPTCHA の状況。ADR 0028) | none | 毎回、出した数の多い `challenge_top_rules` (10) 個のルール (`reason: informational`)。出した数・解かれた割合・GET 以外の件数・主なパス。事実だけを書く |
 | `observation` / about `count_rule_status` (COUNT のルールの状況) | none | COUNT で動いているルール (グループ全体の COUNT、グループの中の COUNT の上書きを含む) ごとに毎回 1 件 (`reason: informational`)。直近 `days` 日の一致件数・怪しい通信の割合・一致した日数。一致 0 も載せる |
+| `observation` / about `label_rule` (目印のルール。ADR 0070) | none | COUNT のルールのうち、付けるラベルを後ろのルールの LabelMatchStatement が使っているもの。`count_rule_status` の代わりに 1 件 (`reason: informational`)。ラベル (`labels`)・件数・使っているルール (`consumers`)。決定: 見分け方は ADR 0070 (WebACL のラベルは名前空間の規則で照合、マネージドのグループはラベルの名前空間の下をルール名と突き合わせる)。見分けられなかったものは `count_rule_status` のまま `label_rule: undetermined` |
 
 - 決定: COUNT → BLOCK の切り替えは提案しない (当初の `count_to_block` は廃止)。切り替えは運用で計画して行う作業 (COUNT で入れるときに期間を決めて様子を見る) で、
   アプリの事情も絡むので、ログの数字だけで勧めると正規の利用者を止める危険がある。代わりに COUNT のルールの状況を計画の材料として毎回載せ、Summary は事実だけを書く

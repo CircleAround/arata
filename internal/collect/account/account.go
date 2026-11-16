@@ -48,6 +48,8 @@ const (
 	ActionGetWebACL                = "wafv2:GetWebACL"
 	ActionGetLoggingConfiguration  = "wafv2:GetLoggingConfiguration"
 	ActionListResourcesForWebACL   = "wafv2:ListResourcesForWebACL"
+	// ActionDescribeManagedRuleGroup はマネージドのルールグループのラベルの名前空間を読む (目印のルールを見分ける。ADR 0070)。
+	ActionDescribeManagedRuleGroup = "wafv2:DescribeManagedRuleGroup"
 	ActionDescribeLoadBalancers    = "elasticloadbalancing:DescribeLoadBalancers"
 	ActionGetWebACLForResource     = "wafv2:GetWebACLForResource"
 	ActionListRegions              = "account:ListRegions"
@@ -63,7 +65,7 @@ var RequiredActions = map[string][]string{
 	KindAccessAnalyzer:   {ActionListAnalyzers, ActionListAAFindings},
 	KindPosture: {ActionDescribeTrails, ActionGetTrailStatus, ActionListDetectors, ActionGetDetector, ActionGetAccountSummary, ActionGetPasswordPolicy, ActionGetPublicAccessBlock,
 		ActionDescribeLoadBalancers, ActionGetWebACLForResource},
-	KindWAFConfig: {ActionListWebACLs, ActionGetWebACL, ActionGetLoggingConfiguration, ActionListResourcesForWebACL},
+	KindWAFConfig: {ActionListWebACLs, ActionGetWebACL, ActionGetLoggingConfiguration, ActionListResourcesForWebACL, ActionDescribeManagedRuleGroup},
 	// cloudtrail-unused-regions の collector は internal/collect/cloudtrail にあるが、action はここにまとめる (doctor と読み取りロールの突き合わせ)
 	KindUnusedRegions: {ActionListRegions, ActionLookupEvents},
 	KindCostAnomaly:   {ActionGetAnomalyMonitors, ActionGetAnomalies},
@@ -125,6 +127,7 @@ type WAFV2API interface {
 	GetLoggingConfiguration(ctx context.Context, in *wafv2.GetLoggingConfigurationInput, optFns ...func(*wafv2.Options)) (*wafv2.GetLoggingConfigurationOutput, error)
 	ListResourcesForWebACL(ctx context.Context, in *wafv2.ListResourcesForWebACLInput, optFns ...func(*wafv2.Options)) (*wafv2.ListResourcesForWebACLOutput, error)
 	GetWebACLForResource(ctx context.Context, in *wafv2.GetWebACLForResourceInput, optFns ...func(*wafv2.Options)) (*wafv2.GetWebACLForResourceOutput, error)
+	DescribeManagedRuleGroup(ctx context.Context, in *wafv2.DescribeManagedRuleGroupInput, optFns ...func(*wafv2.Options)) (*wafv2.DescribeManagedRuleGroupOutput, error)
 }
 
 // ELBV2API は Elastic Load Balancing v2 のうち使う部分 (ALB の一覧だけ。posture の alb_waf。ADR 0048)。

@@ -278,6 +278,8 @@ Resources:
                   - wafv2:GetWebACL
                   - wafv2:GetLoggingConfiguration
                   - wafv2:ListResourcesForWebACL
+                  # マネージドのルールグループのラベルの名前空間 (目印のルールを見分ける。ADR 0070)。グループの定義を読むだけ
+                  - wafv2:DescribeManagedRuleGroup
                 Resource: '*'
               # cloudtrail-unused-regions (有効なリージョンの一覧。各リージョンの LookupEvents は上の CloudTrailLookup)
               - Sid: UnusedRegions
