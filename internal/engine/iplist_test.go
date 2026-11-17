@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	cwl "github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
+
 	"github.com/CircleAround/arata/internal/collect/cwlogs"
 	"github.com/CircleAround/arata/internal/collect/cwlogs/cwlogstest"
 	"github.com/CircleAround/arata/internal/store"
@@ -100,7 +102,8 @@ func TestRunListed(t *testing.T) {
 		}
 		h.now = h.now.Add(time.Hour)
 	}
-	// 窓 [10-20 09:00, 10-21 09:00) で確定した日は 10-20 まで。10-19 は一覧が空なので問い合わせない。2 回目の run は流し直さない
+	// 窓 [10-20 09:00, 10-21 09:00) を 10-20 の 0 時から読み、確定した日は 10-20。10-19 はこの run で読んでいないので流さない (印も書かない)。
+	// 2 回目の run は流し直さない
 	qs := listedQueries()
 	if len(qs) != 1 || !strings.HasPrefix(qs[0], "2026-10-20 ") || !strings.Contains(qs[0], `filter ip in ["198.51.100.7"]`) {
 		t.Fatalf("listed queries: %v", qs)
@@ -113,8 +116,6 @@ func TestRunListed(t *testing.T) {
 		}
 	}
 	want := map[string]float64{
-		"2026-10-19|waf_listed_ips_total|":                          0,
-		"2026-10-19|waf_listed_ips_queried|":                        0,
 		"2026-10-20|waf_rule_count_match_listed|prod-waf|count-geo": 3,
 		"2026-10-20|waf_listed_ips_total|":                          1,
 		"2026-10-20|waf_listed_ips_queried|":                        1,
@@ -147,5 +148,48 @@ func TestCollectListedWholeWindow(t *testing.T) {
 	// 窓 [10-16 09:00, 10-21 09:00) を 10-16 の 0 時から読み、確定した 10-16〜10-20 を流す。一覧は N (7 日) の中のアクティブな IP
 	if strings.Join(got, ",") != "2026-10-16=1,2026-10-17=1,2026-10-18=1,2026-10-19=1,2026-10-20=1" {
 		t.Fatalf("listed days: %v", got)
+	}
+}
+
+// 時の単位で読むソースを、部分の行を残す日数 (3 日) より長い範囲で 1 回に集めても、前の日の値と一覧が作られ、
+// 部分の行が 24 時間分そろった日に listed を流す (実データで 8 日を 1 回で集めて、前の日の値が空になり、空の一覧の印が書かれた)。
+func TestCollectListedHourlyLongWindow(t *testing.T) {
+	h := newHarnessWith(t, strings.Replace(wafSources, "    format: wafv2\n", "    format: wafv2\n    collect: hourly\n    max_collect: 200h\n", 1), listedConfig)
+	hourRows := func(in *cwl.StartQueryInput, kv ...string) []map[string]string {
+		at := time.Unix(*in.StartTime, 0).UTC()
+		return []map[string]string{cwlogstest.Rows(append([]string{"day", at.Format("2006-01-02 15:00:00.000")}, kv...)...)}
+	}
+	h.logs.On("as lines_total", cwlogstest.Response{RowsFor: func(in *cwl.StartQueryInput) []map[string]string {
+		return hourRows(in, "acl", "prod-waf", "rule", "Default_Action", "action", "ALLOW", "lines_total", "10", "lines_matched", "10")
+	}})
+	h.logs.On("as waf_actions", cwlogstest.Response{RowsFor: func(in *cwl.StartQueryInput) []map[string]string {
+		if time.Unix(*in.StartTime, 0).UTC().Hour() != 3 || !strings.Contains(*in.QueryString, `action = "BLOCK" or`) {
+			return nil
+		}
+		return hourRows(in, "acl", "prod-waf", "action", "BLOCK", "rule", "block-admin", "terminatingRuleType", "REGULAR", "path", "/admin", "method", "GET",
+			"ip", "198.51.100.7", "waf_actions", "5")
+	}})
+	h.logs.On("as waf_listed", cwlogstest.Response{})
+	e := h.open(t)
+	ctx := context.Background()
+	if _, err := e.CollectOnly(ctx, 6*24*time.Hour, []string{"waf"}); err != nil {
+		t.Fatal(err)
+	}
+	rows, _ := e.Store().IPListDays(ctx, "", "")
+	var days []string
+	for _, r := range rows {
+		days = append(days, r.Date)
+	}
+	// 窓 [10-15 09:00, 10-21 09:00) を 10-15 の 0 時から読む。どの日も 03 時に BLOCK がある
+	if strings.Join(days, ",") != "2026-10-15,2026-10-16,2026-10-17,2026-10-18,2026-10-19,2026-10-20,2026-10-21" {
+		t.Fatalf("ip_list days: %v (the first days must not lose their parts)", days)
+	}
+	ms, _ := e.Store().Metrics(ctx, store.MetricFilter{Metric: cwlogs.MetricWAFListedIPsTotal})
+	var marked []string
+	for _, m := range ms {
+		marked = append(marked, fmt.Sprintf("%s=%g", m.Date, m.Value))
+	}
+	if strings.Join(marked, ",") != "2026-10-15=1,2026-10-16=1,2026-10-17=1,2026-10-18=1,2026-10-19=1,2026-10-20=1" {
+		t.Fatalf("listed days: %v", marked)
 	}
 }

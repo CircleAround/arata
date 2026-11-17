@@ -677,7 +677,7 @@ func (e *Engine) Collect(ctx context.Context, w collect.Window, o CollectOptions
 				if o.ListedWholeWindow {
 					from = sw.Start()
 				}
-				err = e.updateListed(ctx, src, lc, from, until, o.RunID)
+				err = e.updateListed(ctx, src, lc, from, sw.Start(), until, o.RunID)
 			}
 		}
 		if err != nil {

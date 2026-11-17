@@ -102,11 +102,15 @@ const listedLookbackDays = 2
 // updateListed は wafv2 のソースについて、確定した UTC の日ごとに 1 回、一覧の上位 K 個の IP に絞った問い合わせを流し、
 // count_rule_status の listed と、数えた範囲を日の値に残す (ADR 0069 の 4 節)。until はそのソースが読み終えた時刻。
 // from がゼロなら直近の確定した listedLookbackDays 日、ゼロでなければ from の日から確定した日までの全部 (collect --window で過去を足すとき)。
+// read はこの収集で読み始めた時刻。
+//
+// 決定 (実データで直した): 流す (印を書く) のは、その日の日の値がそろった日だけ。時の単位で読むソースは部分の行が 24 時間分ある日、
+// 日の頭から読み直すソースはこの収集でその日の 0 時から読んだ日。読んでいない日に空の一覧で印を書くと、後でその日を集めても listed が流れない。
 //
 // 決定: 流した日の印は waf_listed_ips_total (日の値。raw にも残るので rebuild の後も流し直さない)。一覧が空の日も印だけ残し、問い合わせない。
 // 決定: 問い合わせの失敗はソースの失敗にしない (失敗したソースは全部を引き直すので、listed 1 本のために読み取りを増やさない)。
 // LISTED_QUERY_FAILED の WARN を出し、印を残さず、次の run で流し直す。
-func (e *Engine) updateListed(ctx context.Context, src config.Source, c *cwlogs.Collector, from, until time.Time, runID string) error {
+func (e *Engine) updateListed(ctx context.Context, src config.Source, c *cwlogs.Collector, from, read, until time.Time, runID string) error {
 	l := e.cfg.IPList
 	if l == nil || l.CountSuspect == nil || src.Format != config.FormatWAFv2 {
 		return nil
@@ -128,6 +132,17 @@ func (e *Engine) updateListed(ctx context.Context, src config.Source, c *cwlogs.
 			return err
 		}
 		if len(done) > 0 {
+			continue
+		}
+		if src.CollectHourly() {
+			ok, err := c.HourlyDayComplete(ctx, d)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				continue
+			}
+		} else if d.Before(dayStart(read)) {
 			continue
 		}
 		rows, err := e.st.IPListDays(ctx, d.AddDate(0, 0, -(l.ActiveDays()-1)).Format(record.DateLayout), date)

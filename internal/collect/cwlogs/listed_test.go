@@ -10,6 +10,7 @@ import (
 
 	"github.com/CircleAround/arata/internal/collect"
 	"github.com/CircleAround/arata/internal/collect/cwlogs/cwlogstest"
+	"github.com/CircleAround/arata/internal/config"
 )
 
 // 一覧の IP に絞った問い合わせ (ADR 0069 の 4 節): 文は 10,000 文字まで。渡した順に詰め、収まらなければ次の組へ。
@@ -20,13 +21,13 @@ func TestListedQueries(t *testing.T) {
 	for i := 0; i < 1200; i++ {
 		ips = append(ips, fmt.Sprintf("10.0.%d.%d", i/250, i%250))
 	}
-	qs, used := ListedQueries(p, wafChecks(), ips, 2)
-	if len(qs) != 2 || used < 900 || used >= 1200 {
+	qs, used := ListedQueries(p, wafChecks(), ips, 2, ListedQueryLen)
+	if len(qs) != 2 || used < 800 || used >= 1200 {
 		t.Fatalf("queries %d, used %d", len(qs), used)
 	}
 	n := 0
 	for _, q := range qs {
-		if len(q) > MaxQueryLen {
+		if len(q) > ListedQueryLen {
 			t.Errorf("query is %d chars", len(q))
 		}
 		n += strings.Count(q, `"10.0.`)
@@ -39,14 +40,14 @@ func TestListedQueries(t *testing.T) {
 		t.Errorf("first query: %s", qs[0][:200])
 	}
 	// 1 本に収まれば 1 本
-	if qs, used := ListedQueries(p, wafChecks(), ips[:10], 2); len(qs) != 1 || used != 10 {
+	if qs, used := ListedQueries(p, wafChecks(), ips[:10], 2, ListedQueryLen); len(qs) != 1 || used != 10 {
 		t.Errorf("small list: %d queries, used %d", len(qs), used)
 	}
-	if qs, used := ListedQueries(p, wafChecks(), nil, 2); len(qs) != 0 || used != 0 {
+	if qs, used := ListedQueries(p, wafChecks(), nil, 2, ListedQueryLen); len(qs) != 0 || used != 0 {
 		t.Errorf("empty list: %d queries, used %d", len(qs), used)
 	}
 	// 読めない値は入れない
-	qs, used = ListedQueries(p, wafChecks(), []string{`1"] | filter 1=1 | ["`, "2001:DB8::1"}, 2)
+	qs, used = ListedQueries(p, wafChecks(), []string{`1"] | filter 1=1 | ["`, "2001:DB8::1"}, 2, ListedQueryLen)
 	if used != 1 || !strings.Contains(qs[0], `in ["2001:db8::1"]`) || strings.Contains(qs[0], "1=1") {
 		t.Errorf("used %d: %s", used, qs)
 	}
@@ -148,10 +149,10 @@ func FuzzListedQueries(f *testing.F) {
 		for i := 0; i < n%600; i++ {
 			ips = append(ips, a, fmt.Sprintf("2001:db8::%x", i))
 		}
-		qs, used := ListedQueries(p, wafChecks(), ips, 2)
+		qs, used := ListedQueries(p, wafChecks(), ips, 2, ListedQueryLen)
 		elems := 0
 		for _, q := range qs {
-			if len(q) > MaxQueryLen || !strings.HasPrefix(q, head) || !strings.HasSuffix(q, tail) {
+			if len(q) > ListedQueryLen || !strings.HasPrefix(q, head) || !strings.HasSuffix(q, tail) {
 				t.Fatalf("query shape (%d chars): %q", len(q), q)
 			}
 			for _, lit := range strings.Split(strings.TrimSuffix(strings.TrimPrefix(q, head), tail), ", ") {
@@ -168,4 +169,64 @@ func FuzzListedQueries(f *testing.F) {
 			t.Fatalf("elements %d, used %d, queries %d", elems, used, len(qs))
 		}
 	})
+}
+
+// listed を流してよい日 (ADR 0069 の 4 節。実データで直した): 時の単位で読むソースでは、その日の部分の行が 24 時間分そろった日だけ。
+// そろっていない日 (読んでいない・部分の行が消えた) に「流した日の印」を書くと、後でその日を集めても listed が流れない。
+func TestHourlyDayComplete(t *testing.T) {
+	src := wafSource()
+	src.Collect = config.CollectHourlyMode
+	c, _ := New(src, wafChecks(), &cwlogstest.Fake{})
+	parts := &memParts{}
+	c.Parts = parts
+	d := time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC)
+	for h := 0; h < 23; h++ {
+		_ = parts.PutParts(context.Background(), "waf", wafLines, d.Add(time.Duration(h)*time.Hour), nil, 0)
+	}
+	if ok, err := c.HourlyDayComplete(context.Background(), d); ok || err != nil {
+		t.Fatalf("23 hours: %v %v", ok, err)
+	}
+	_ = parts.PutParts(context.Background(), "waf", wafLines, d.Add(23*time.Hour), nil, 0)
+	if ok, err := c.HourlyDayComplete(context.Background(), d); !ok || err != nil {
+		t.Fatalf("24 hours: %v %v", ok, err)
+	}
+	if ok, _ := c.HourlyDayComplete(context.Background(), d.AddDate(0, 0, -1)); ok {
+		t.Fatal("a day with no parts is not complete")
+	}
+}
+
+// 文の長さ (実データで直した): 10,000 文字より短い文 (9,988〜9,993 バイト) が「10,000 以下であること」で断られることがあった。
+// 上限まで詰めず ListedQueryLen (9,000) に収め、長さ・形の理由 (QUERY_INVALID) で断られたら、ListedRetryLen (8,000) に短くして 1 度だけ流し直す。
+func TestCollectListedRetriesShorter(t *testing.T) {
+	var ips []string
+	for i := 0; i < 1200; i++ {
+		ips = append(ips, fmt.Sprintf("10.0.%d.%d", i/250, i%250))
+	}
+	d := time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)
+	for name, times := range map[string]int{"once": 1, "twice": 2} {
+		t.Run(name, func(t *testing.T) {
+			f := &cwlogstest.Fake{}
+			f.On("as waf_listed", cwlogstest.Response{StartErr: cwlogstest.APIError{Code: "InvalidParameterException", Message: "Query string must be less than or equal to 10000"}, StartErrTimes: times})
+			c, _ := New(wafSource(), wafChecks(), f)
+			c.Sleep = func(context.Context, time.Duration) error { return nil }
+			_, used, err := c.CollectListed(context.Background(), d, ips, 2)
+			if times == 2 {
+				if err == nil {
+					t.Fatal("must fail after one retry")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			qs := f.Queries()
+			// 偽の API は断った StartQuery を Started に残さない。流し直した 2 本だけが残る
+			if len(qs) != 2 || len(qs[0]) > ListedRetryLen || len(qs[1]) > ListedRetryLen {
+				t.Fatalf("queries: %d", len(qs))
+			}
+			if _, want := ListedQueries(c.prof, c.checks, ips, 2, ListedRetryLen); used != want {
+				t.Errorf("used %d, want %d (the shorter queries)", used, want)
+			}
+		})
+	}
 }

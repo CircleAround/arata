@@ -26,7 +26,7 @@ type memParts struct {
 	m map[string]map[time.Time][]map[string]string
 }
 
-func (p *memParts) PutParts(_ context.Context, source, query string, hour time.Time, rows []map[string]string, _ int) error {
+func (p *memParts) PutParts(_ context.Context, source, query string, hour time.Time, rows []map[string]string, retentionDays int) error {
 	if p.m == nil {
 		p.m = map[string]map[time.Time][]map[string]string{}
 	}
@@ -34,7 +34,22 @@ func (p *memParts) PutParts(_ context.Context, source, query string, hour time.T
 	if p.m[k] == nil {
 		p.m[k] = map[time.Time][]map[string]string{}
 	}
-	p.m[k][hour.UTC().Truncate(time.Hour)] = append([]map[string]string{}, rows...)
+	h := hour.UTC().Truncate(time.Hour)
+	p.m[k][h] = append([]map[string]string{}, rows...)
+	// ストアと同じく、書いた時の日から retentionDays 日より前の、そのソースの部分の行を消す
+	if retentionDays > 0 {
+		cut := DayStart(h).AddDate(0, 0, -retentionDays)
+		for kk, hours := range p.m {
+			if !strings.HasPrefix(kk, source+"|") {
+				continue
+			}
+			for x := range hours {
+				if x.Before(cut) {
+					delete(hours, x)
+				}
+			}
+		}
+	}
 	return nil
 }
 
@@ -363,5 +378,38 @@ func TestHourlyMaxCollect(t *testing.T) {
 	}
 	if !c.CoveredTo().Equal(now.Add(-time.Hour)) || c.Limited() { // 04:00 〜 08:00 (09:00 − 5m を切り捨て)
 		t.Fatalf("covered to %v (limited %v), want 08:00", c.CoveredTo(), c.Limited())
+	}
+}
+
+// 1 回の収集で、部分の行を残す日数 (PartRetentionDays) より長い範囲を読んでも、読んでいる範囲の部分の行は消さない。
+// 消すと、日の値を組み立てるときに前の日の部分の行が無く、その日の値が空になる (実データで 8 日を 1 回で集めて起きた)。
+func TestHourlyLongCollectKeepsParts(t *testing.T) {
+	sim := &cwlogstest.Sim{Events: wafEvents()}
+	f := &cwlogstest.Fake{}
+	registerWAF(f, sim, wafPreds{c: wafEquivChecks()})
+	f.On("as k by acl, grp, n", sim.Response(nil))
+	src := wafSource()
+	src.Collect, src.IngestDelay = config.CollectHourlyMode, 5*time.Minute
+	c, err := New(src, wafEquivChecks(), f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Sleep = func(context.Context, time.Duration) error { return nil }
+	c.Parts = &memParts{}
+	c.PartRetentionDays = 1
+	later := now.Add(48 * time.Hour) // 10-23 まで 1 回で読む (部分の行を残す日数 1 日より長い)
+	c.Now = func() time.Time { return later.Add(5 * time.Minute) }
+	got, _ := runHourly(t, c, now.Add(-72*time.Hour), []time.Time{later.Add(5 * time.Minute)})
+	rate := []string{MetricWAFIPRateP50, MetricWAFIPRateP99, MetricWAFIPRateMax}
+	for k := range got {
+		if skipMetric(k, rate) || got[k] == 0 && !strings.HasPrefix(k, "2026-10-20|") && !strings.HasPrefix(k, "2026-10-21|") {
+			delete(got, k)
+		}
+	}
+	want := goldenMetrics(t, "equiv_waf.golden", rate...)
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s = %v, want %v (the parts of the first days must survive a long collect)", k, got[k], v)
+		}
 	}
 }

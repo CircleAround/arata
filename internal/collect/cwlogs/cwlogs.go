@@ -78,6 +78,8 @@ type Collector struct {
 	IPList bool
 	// PartRetentionDays は部分の行を残す日数 (0 なら DefaultPartRetentionDays)。
 	PartRetentionDays int
+	// readFrom は時の単位で読む収集の、読んでいる範囲の始まりの日 (部分の行をその日より前だけ消す)。
+	readFrom time.Time
 	// coveredTo は時の単位で読んだ終わり (CoveredTo)。limited は max_collect で止めたか (Limited)。
 	coveredTo time.Time
 	limited   bool
