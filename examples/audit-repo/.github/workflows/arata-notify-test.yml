@@ -78,8 +78,19 @@ jobs:
         run: |
           dir="$RUNNER_TEMP/arata-bin"
           mkdir -p "$dir"
-          gh release download "$ARATA_VERSION" -R CircleAround/arata -D "$dir" \
-            -p arata-linux-amd64 -p aratam-linux-amd64 -p SHA256SUMS
+          # Release の取得は、一時的な失敗 (公開した直後の release not found など) があるので、5・10・15 秒の間を空けて 4 回まで試す。
+          # 照合 (SHA256SUMS) は取得の後に 1 回だけ行うので、再試行で弱めない。途中まで落ちたファイルは --clobber で上書きする
+          for attempt in 1 2 3 4; do
+            if gh release download "$ARATA_VERSION" -R CircleAround/arata -D "$dir" --clobber \
+              -p arata-linux-amd64 -p aratam-linux-amd64 -p SHA256SUMS; then
+              break
+            fi
+            if [ "$attempt" = 4 ]; then
+              echo "::error::arata の Release ($ARATA_VERSION) を 4 回とも取得できませんでした"
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
           cd "$dir"
           for name in arata aratam; do
             grep " ${name}-linux-amd64\$" SHA256SUMS | sha256sum --check --strict --quiet -
