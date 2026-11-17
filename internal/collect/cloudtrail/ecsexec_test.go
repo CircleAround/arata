@@ -97,7 +97,7 @@ func TestNormalizeECSExecVariants(t *testing.T) {
 		{
 			// コマンドは制御文字・書式の文字を除いて 1 行にし、256 文字で切る
 			name: "long command",
-			body: `{"eventSource":"ecs.amazonaws.com","eventName":"ExecuteCommand","requestParameters":{"command":"sh -c \"echo\u0007 a\nb​` + strings.Repeat("x", 300) + `\""}}`,
+			body: `{"eventSource":"ecs.amazonaws.com","eventName":"ExecuteCommand","requestParameters":{"command":"sh -c \"echo\u0007 a\nb\u200b` + strings.Repeat("x", 300) + `\""}}`,
 			want: map[string]any{"ecs_command_truncated": true},
 		},
 	}

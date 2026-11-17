@@ -110,7 +110,7 @@ func FuzzServiceName(f *testing.F) {
 //   - 切ったのは、整えた文字が上限を超えたときだけ
 //   - 整えた結果をもう一度整えても変わらない
 func FuzzCleanECSCommand(f *testing.F) {
-	for _, s := range []string{"/bin/sh", "sh -c 'id'\n", "‮​\x00x", strings.Repeat("あ", 300), " \t ", "\xff\xfe", ""} {
+	for _, s := range []string{"/bin/sh", "sh -c 'id'\n", "\u202e\u200b\x00x", strings.Repeat("あ", 300), " \t ", "\xff\xfe", ""} {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, s string) {
