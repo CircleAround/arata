@@ -54,9 +54,11 @@ arata には ExecuteCommand を見るチェックが無い (`ecs.amazonaws.com` 
    - responseElements: `clusterArn`、`containerArn`、`containerName`、`interactive`、`taskArn`、`session` (`sessionId`、`streamUrl` (wss の URL。伏せられていない)、
      `tokenValue` (固定の文字列 `HIDDEN_DUE_TO_SECURITY_REASONS` に伏せられていた))
 9. 同じ ECS Exec のときに、SSM の `StartSession` も記録に残っていた: eventSource は `ssm.amazonaws.com`、`userIdentity.type` は `AssumedRole`、
-   `userIdentity.invokedBy` は `ecs.amazonaws.com` (ECS が代わりに呼ぶ。主体は ECS が引き受けたロール)。
+   `userIdentity.invokedBy` は `ecs.amazonaws.com` (ECS が代わりに呼ぶ)。
    requestParameters は `target` (`ecs:` で始まる)・`documentName`・`parameters` (`cloudWatchLogGroupName`・`command`)、responseElements は `sessionId`・`tokenValue`・`streamUrl`
-   - `StartSession` は既に注目イベントで、全部の記録が principal_seen に数えられる。背景の「タスクロールが new_principal に出た」は、この記録の主体が初めて現れたためと考えられる (推定)
+   - 主体 (`AssumedRole`) がどのロールかは確かめていない
+10. 背景の「タスクロールが new_principal に出た」4 件は、コンテナの中の SSM のエージェントが、タスクロールで呼んだ次の操作だった (StartSession の記録ではない):
+    ssm の `CreateDataChannel`、logs の `DescribeLogGroups`・`DescribeLogStreams`・`CreateLogStream` (セッションの記録用のログストリーム)
 
 拒否された呼び出しの形は実例が無く、推定のまま (6 節)。実装は「無い鍵は不明として扱い、知らない形で落ちない」ように書く。
 

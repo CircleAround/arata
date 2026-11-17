@@ -131,5 +131,6 @@ requestParameters: { target: "ecs:..." (114 文字), documentName: <文字列>, 
 responseElements: { sessionId, tokenValue (30 文字。上の伏せた形と同じ長さ), streamUrl }
 ```
 
-- ECS Exec では、ECS が代わりに StartSession を呼ぶ。主体は ECS が引き受けたロールで、`invokedBy` が `ecs.amazonaws.com`
+- ECS Exec では、ECS が代わりに StartSession を呼ぶ。主体は `AssumedRole` で `invokedBy` が `ecs.amazonaws.com` (どのロールかは確かめていない)
+- 同じとき、コンテナの中の SSM のエージェントがタスクロールで ssm の `CreateDataChannel` と、logs の `DescribeLogGroups`・`DescribeLogStreams`・`CreateLogStream` (セッションの記録用) を呼んでいた
 - target は `ecs:` で始まる
