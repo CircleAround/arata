@@ -557,6 +557,93 @@ func testInstallVerifiesChecksums(t *testing.T, w *workflow, text string) {
 	})
 }
 
+// flakyGH は最初の fails 回だけ release not found で落ち、その後は fakeGH と同じく置く。呼ばれた回数と引数を残す。
+func flakyGH(t *testing.T, fails int, sums string) string {
+	t.Helper()
+	dir := fakeBin(t, "gh", fmt.Sprintf(`n=$(cat "$RUNNER_TEMP/gh-calls" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" >"$RUNNER_TEMP/gh-calls"
+printf '%%s\n' "$*" >>"$RUNNER_TEMP/gh-args"
+if [ "$n" -le %d ]; then echo 'release not found' >&2; exit 1; fi
+while [ $# -gt 0 ]; do [ "$1" = -D ] && dir="$2"; shift; done
+echo fake-arata >"$dir/arata-linux-amd64"
+echo fake-aratam >"$dir/aratam-linux-amd64"
+cat >"$dir/SHA256SUMS" <<'SUMS'
+%sSUMS
+`, fails, sums))
+	// 待ち時間で試験を遅くしない (sleep は偽物にして、渡された秒を残す)
+	if err := os.WriteFile(filepath.Join(dir, "sleep"), []byte("#!/bin/bash\necho \"$1\" >>\"$RUNNER_TEMP/sleeps\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// Release の取得は、一時的な失敗 (release not found など) を短い間隔で数回まで再試行する。照合は再試行の後も同じ。
+func TestInstallRetriesTheDownload(t *testing.T) {
+	// audit・triage・check・notify-test の取得の step は同じ形 (どれも同じ再試行と照合)
+	for _, f := range allFiles {
+		t.Run(f, func(t *testing.T) {
+			w, text := load(t, f)
+			testInstallRetriesTheDownload(t, w, text)
+		})
+	}
+}
+
+func testInstallRetriesTheDownload(t *testing.T, w *workflow, text string) {
+	script := stepByID(t, w, "install").Run
+	good := sumLine("fake-arata", "arata-linux-amd64") + sumLine("fake-aratam", "aratam-linux-amd64")
+	read := func(tmp, name string) string {
+		b, _ := os.ReadFile(filepath.Join(tmp, name))
+		return strings.TrimSpace(string(b))
+	}
+
+	t.Run("recovers", func(t *testing.T) {
+		out, code, tmp := runStep(t, script, flakyGH(t, 2, good))
+		if code != 0 {
+			t.Fatalf("exit %d\n%s", code, out)
+		}
+		if got := read(tmp, "gh-calls"); got != "3" {
+			t.Errorf("gh calls: %s", got)
+		}
+		if _, err := os.Stat(filepath.Join(tmp, "arata-bin", "aratam")); err != nil {
+			t.Errorf("must be installed after the retry: %v", err)
+		}
+		// 途中まで落ちたファイルが残っていても上書きできるように --clobber を付ける
+		if !strings.Contains(read(tmp, "gh-args"), "--clobber") {
+			t.Errorf("gh args must include --clobber:\n%s", read(tmp, "gh-args"))
+		}
+		if read(tmp, "sleeps") == "" {
+			t.Errorf("must wait between attempts")
+		}
+	})
+	t.Run("gives up", func(t *testing.T) {
+		out, code, tmp := runStep(t, script, flakyGH(t, 100, good))
+		if code == 0 {
+			t.Fatalf("must fail when every attempt fails\n%s", out)
+		}
+		if got := read(tmp, "gh-calls"); got != "4" {
+			t.Errorf("gh calls: %s (want 4)", got)
+		}
+		// 待つのは試行の間だけ (最後の失敗の後には待たない)。合わせて 1 分に収める
+		total := 0
+		for _, l := range strings.Fields(read(tmp, "sleeps")) {
+			var n int
+			fmt.Sscan(l, &n)
+			total += n
+		}
+		if len(strings.Fields(read(tmp, "sleeps"))) != 3 || total > 60 {
+			t.Errorf("sleeps: %q", read(tmp, "sleeps"))
+		}
+		if !strings.Contains(out, "::error::") {
+			t.Errorf("must leave an error annotation:\n%s", out)
+		}
+	})
+	t.Run("tampered after retry", func(t *testing.T) {
+		bad := sumLine("evil", "arata-linux-amd64") + sumLine("fake-aratam", "aratam-linux-amd64")
+		if out, code, _ := runStep(t, script, flakyGH(t, 1, bad)); code == 0 {
+			t.Errorf("a wrong checksum must still fail\n%s", out)
+		}
+	})
+}
+
 func TestSaveProposalsOnlyWhenTheFileExists(t *testing.T) {
 	forEachWorkflow(t, testSaveProposalsOnlyWhenTheFileExists)
 }
