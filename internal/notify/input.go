@@ -108,6 +108,10 @@ func ReadInput(dir string, now time.Time, maxAge time.Duration) (*Input, error) 
 		in.Kind = KindPeriod
 		in.Period = &schema.PeriodReport{}
 		err = json.Unmarshal(b, in.Period)
+		if err == nil {
+			// 決定 (ADR 0072): ecs_exec の commands は LLM に渡さない (periodLLMInput)
+			in.JSON = periodLLMInput(b, in.Period)
+		}
 	case "":
 		in.Kind = KindRun
 		in.Run = &schema.Report{}

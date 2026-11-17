@@ -66,6 +66,18 @@ var escalationCases = map[string]map[Severity]func(t *testing.T) (key string, li
 			return "search", light["search"], heavy["search"]
 		},
 	},
+	"ecs_exec": {
+		Medium: func(t *testing.T) (string, Observation, Observation) {
+			light := ecsExecObs(t, "principals:\n  - arn: "+execAlice+"\n", "")                          // 承認済みの主体
+			heavy := ecsExecObs(t, "principals:\n  - arn: "+execAlice+"\n    expires: 2026-10-01\n", "") // 承認の期限が切れた
+			return execKeyAlice, light[execKeyAlice], heavy[execKeyAlice]
+		},
+		Low: func(t *testing.T) (string, Observation, Observation) {
+			light := ecsExecObs(t, "principals:\n  - arn: "+execAlice+"\n", "TargetNotConnectedException") // 全部失敗した試行
+			heavy := ecsExecObs(t, "principals:\n  - arn: "+execAlice+"\n", "")                            // 同じ日に成功
+			return execKeyAlice, light[execKeyAlice], heavy[execKeyAlice]
+		},
+	},
 	"oidc_assume_role": {
 		Low: func(t *testing.T) (string, Observation, Observation) {
 			light := oidcUnknownObs(t, "AccessDenied") // 全部が拒否された引き受け
@@ -179,4 +191,16 @@ func oidcUnknownObs(t *testing.T, code string) map[string]Observation {
 	s := &oidcSeed{t: t, st: st}
 	s.gh(time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC), oidcAdmin, "repo:example-org/example-repo:ref:refs/heads/topic", "203.0.113.5", code)
 	return oidcEval(t, st, collect.Window{From: time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC), To: time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)}, oidcAllowlist)
+}
+
+// ecsExecObs は既知の人 (alice) の ExecuteCommand を 1 件 (code が空でなければ失敗) 置いて評価する。
+func ecsExecObs(t *testing.T, yaml, code string) map[string]Observation {
+	s := execSeed{t: t, st: newStore(t)}
+	s.principal(execAlice, record.PrincipalUser, store.PrincipalUnknown)
+	s.exec("e1", now.Add(-2*time.Hour), execAlice, record.PrincipalUser, code, execData("t1", "/bin/sh", ""))
+	al, err := allowlist.Parse([]byte(yaml))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return execEval(t, s.st, al, execWindow)
 }

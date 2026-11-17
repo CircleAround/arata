@@ -5,6 +5,8 @@ import (
 	"net/netip"
 	"sort"
 	"strings"
+
+	"github.com/CircleAround/arata/internal/record"
 )
 
 // 決定 (ADR 0026): defense_evasion / public_exposure の判定に要る値だけを requestParameters から Data に取り出す。
@@ -561,4 +563,50 @@ func dedupStrings(l []string) []string {
 func itoa(i int) string {
 	b, _ := json.Marshal(i)
 	return string(b)
+}
+
+// ecsExecDetail は ECS Exec (ExecuteCommand) の記録から、ecs_exec が使う値だけを取り出す (ADR 0072)。
+//
+// 決定:
+//   - クラスター・コンテナ・タスクは、応答 (clusterArn・containerName・taskArn) を要求 (cluster・container・task) より優先する。
+//     ARN でも名前でも最後の部分の名前にし、決まった形 (record.ECSName) でなければ残さない (Key と見出しに使うため)
+//   - コマンドは record.CleanECSCommand で 1 行にして上限で切る (切ったら ecs_command_truncated)。interactive は真偽のときだけ
+//   - セッション ID は ECS Exec の形 (record.ECSSessionID) のときだけ。応答の session.tokenValue と session.streamUrl は取り出さない
+//     (接続の認証に使う値。実際の記録では tokenValue は伏せられていたが、伏せられていない前提で扱う)。要求の dryrun も取り出さない
+func ecsExecDetail(r rawEvent, d map[string]any) {
+	if r.EventSource != "ecs.amazonaws.com" || r.EventName != "ExecuteCommand" {
+		return
+	}
+	rq, rs := r.RequestParameters, r.ResponseElements
+	first := func(d map[string]any, k string, vs ...any) {
+		for _, v := range vs {
+			if s, ok := v.(string); ok {
+				if n, ok := record.ECSNameOf(s); ok {
+					d[k] = n
+					return
+				}
+			}
+		}
+	}
+	first(d, "ecs_cluster", rs["clusterArn"], rq["cluster"])
+	first(d, "ecs_container", rs["containerName"], rq["container"])
+	first(d, "ecs_task", rs["taskArn"], rq["task"])
+	if s, ok := rq["command"].(string); ok {
+		if c, cut := record.CleanECSCommand(s); c != "" {
+			d["ecs_command"] = c
+			if cut {
+				d["ecs_command_truncated"] = true
+			}
+		}
+	}
+	if v, ok := rq["interactive"].(bool); ok {
+		d["ecs_interactive"] = v
+	}
+	if sess, ok := rs["session"].(map[string]any); ok {
+		if s, ok := sess["sessionId"].(string); ok {
+			if id, ok := record.ECSSessionID(s); ok {
+				d["ecs_session_id"] = id
+			}
+		}
+	}
 }

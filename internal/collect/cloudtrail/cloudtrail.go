@@ -429,6 +429,7 @@ func normalizeRaw(source string, r rawEvent, id string, t *time.Time) (record.Tr
 		}
 	}
 	oidcDetail(r, e.Data)
+	ecsExecDetail(r, e.Data)
 	return e, true
 }
 
@@ -565,6 +566,8 @@ var notableAPIs = map[string]map[string]bool{
 	"wafv2.amazonaws.com":       {"DeleteLoggingConfiguration": true, "PutLoggingConfiguration": true},
 	"s3.amazonaws.com":          {"DeleteBucketPolicy": true, "PutBucketLifecycle": true, "PutAccountPublicAccessBlock": true, "DeleteAccountPublicAccessBlock": true},
 	"rds.amazonaws.com":         {"ModifyDBCluster": true, "ModifyDBSnapshotAttribute": true, "ModifyDBClusterSnapshotAttribute": true},
+	// 決定 (ADR 0072): 本番のコンテナでシェルを開く操作 (ecs_exec)。失敗した呼び出しも残す (拒否のコードでないもの (TargetNotConnectedException など) も)
+	"ecs.amazonaws.com": {"ExecuteCommand": true},
 }
 
 // DefaultNotable は events テーブルに残す「注目イベント」の判定 (設計書 5-2)。拒否のコードは既定 (config.DefaultDeniedErrorCodes)。

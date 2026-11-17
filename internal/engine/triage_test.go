@@ -84,3 +84,11 @@ func TestApproveChecksMatchApprove(t *testing.T) {
 		}
 	}
 }
+
+// ecs_exec は approve できない。主体を既知にするのは new_principal の approve で、ここでは ack も勧めない (ADR 0072 の 8 節)。
+func TestApproveRejectsECSExec(t *testing.T) {
+	_, err := ApproveTargetOf(store.Finding{Check: "ecs_exec", Data: map[string]any{"principal": "arn:aws:iam::123456789012:user/alice"}})
+	if err == nil || !strings.Contains(err.Error(), "new_principal") || strings.Contains(err.Error(), "ack") {
+		t.Fatalf("err: %v", err)
+	}
+}

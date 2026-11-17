@@ -54,6 +54,7 @@
 | cost_anomaly | 対応する公開の事例はまだ無い |
 | credential_hygiene | ghostaction-2026-10 |
 | defense_evasion | lucr-3-2023-09, scarleteel-2023-02 |
+| ecs_exec | 対応する公開の事例はまだ無い |
 | endpoint_abuse | 対応する公開の事例はまだ無い |
 | guardduty_findings | scarleteel-2023-02 |
 | iam_changes | wfx-loot-2026-11, env-extortion-2024-08, lucr-3-2023-09, scarleteel-2023-02 |

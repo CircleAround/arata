@@ -3,6 +3,7 @@ package record
 import (
 	"strings"
 	"testing"
+	"unicode"
 )
 
 // ファズテスト (ADR 0041)。伏せ字はレポートと通知に個人を特定できる値を出さないための最後の守り (ADR 0037)。
@@ -100,6 +101,53 @@ func FuzzServiceName(f *testing.F) {
 		arn := "arn:aws:iam::123456789012:role/aws-service-role/" + s + "/AWSServiceRoleForExample"
 		if got, ok := ServiceLinkedRole(arn); ok != serviceNameSafe(s, false) || (ok && got != s) {
 			t.Fatalf("ServiceLinkedRole(%q) = %q, %v", arn, got, ok)
+		}
+	})
+}
+
+// FuzzCleanECSCommand: ECS Exec のコマンド (利用者が書ける。ADR 0072) は、どんな入力でも
+//   - 空か、CleanECSCommandOK の形 (1 行、上限以下、制御文字・書式の文字なし、前後に空白なし)
+//   - 切ったのは、整えた文字が上限を超えたときだけ
+//   - 整えた結果をもう一度整えても変わらない
+func FuzzCleanECSCommand(f *testing.F) {
+	for _, s := range []string{"/bin/sh", "sh -c 'id'\n", "‮​\x00x", strings.Repeat("あ", 300), " \t ", "\xff\xfe", ""} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		out, cut := CleanECSCommand(s)
+		if out != "" && !CleanECSCommandOK(out) {
+			t.Fatalf("not clean: %q -> %q", s, out)
+		}
+		if again, cut2 := CleanECSCommand(out); again != out || cut2 {
+			t.Fatalf("not idempotent: %q -> %q -> %q", s, out, again)
+		}
+		kept := 0
+		for _, r := range strings.ToValidUTF8(s, " ") {
+			if !unicode.Is(unicode.Cf, r) {
+				kept++
+			}
+		}
+		if cut != (kept > MaxECSCommandRunes) {
+			t.Fatalf("truncated %v but %d runes kept: %q", cut, kept, s)
+		}
+	})
+}
+
+// FuzzECSNameOf: 名前・ARN から取り出す値は、決まった形 (ECSName) か、取り出さない。区切りの文字 (`|`・`/`) を含まない
+func FuzzECSNameOf(f *testing.F) {
+	for _, s := range []string{"prod-cluster", "arn:aws:ecs:ap-northeast-1:123456789012:cluster/prod-cluster", "arn:aws:ecs:x:1:task/c/0123", "a|b", "arn:aws:iam::1:role/x", "arn:aws:ecs:x:1:cluster/", ""} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		n, ok := ECSNameOf(s)
+		if !ok {
+			if n != "" {
+				t.Fatalf("value on failure: %q", n)
+			}
+			return
+		}
+		if _, valid := ECSName(n); !valid || strings.ContainsAny(n, "|/ \n") {
+			t.Fatalf("bad name %q from %q", n, s)
 		}
 	})
 }

@@ -174,6 +174,27 @@ func section(b *strings.Builder, title string, l []Finding, empty string) {
 				fmt.Fprintf(b, "  - %s: %s (UTC)\n", k, inline(fmt.Sprint(f.Data[k])))
 				continue
 			}
+			if f.Check == "ecs_exec" && k == "commands" {
+				// 決定 (ADR 0072 の 5 節): ECS Exec で始めたコマンドは利用者が打った文字列。1 つずつコードの囲みに入れ、Markdown として解釈させない
+				// 同じ run の中では []string、report.json から読んだものは []any
+				var l []any
+				switch v := f.Data[k].(type) {
+				case []any:
+					l = v
+				case []string:
+					for _, x := range v {
+						l = append(l, x)
+					}
+				}
+				if l != nil {
+					parts := make([]string, 0, len(l))
+					for _, x := range l {
+						parts = append(parts, codeSpan(fmt.Sprint(x)))
+					}
+					fmt.Fprintf(b, "  - %s: %s\n", k, strings.Join(parts, ", "))
+					continue
+				}
+			}
 			fmt.Fprintf(b, "  - %s: %s\n", k, inline(dataText(f.Data[k])))
 		}
 		fmt.Fprintf(b, "  - id: %s (初出 %s)\n", f.ID, f.FirstSeen)

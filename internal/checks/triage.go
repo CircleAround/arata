@@ -7,7 +7,7 @@ import "sort"
 // 正は各 playbook (docs/ai/playbooks/<check>.md) の「片付け」の節の表。ここはその写しで、テストで突き合わせる。
 // 決まり (テストが確かめる):
 //   - ack を許すのは「上がる余地がある」(同じ Key のまま、より重い重大度で観測されうる) 行だけ。ack 中に出直すのは重大度が上がったときだけ
-//     (ADR 0022) なので、上がる余地の無い行の ack は最後になる
+//     (ADR 0022) なので、上がる余地の無い行の ack は最後になる。余地があっても ack を許さない行はある (ecs_exec。ADR 0072 の 8 節)
 //   - high・critical の行は ack を許さない (最も重い側。2 節)
 //   - approve は arata approve が受け付けるチェック (ApproveChecks) だけ
 //   - 余地のあり・なしは、同じ Key で軽い観測と重い観測を作れるか (triage_escalation_test.go)。一部の Key だけ上がるチェック
@@ -48,6 +48,7 @@ func row(escalates bool, allowed []string, sevs ...Severity) TriageRow {
 var triageTable = map[string][]TriageRow{
 	"root_usage":             {row(false, noAck, Critical)},
 	"defense_evasion":        {row(false, noAck, Critical, High, Medium)},
+	"ecs_exec":               {row(false, noAck, High), row(true, noAck, Medium, Low)},
 	"unknown_assume_role":    {row(false, apNoAck, High, Info)},
 	"oidc_assume_role":       {row(false, noAck, High, Medium), row(true, withAck, Low), row(false, noAck, Info)},
 	"secret_access":          {row(false, noAck, High), row(true, withAck, Medium, Low)},

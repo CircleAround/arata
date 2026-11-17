@@ -21,6 +21,7 @@ import (
 // Descriptions はチェックの 1 行説明 (雛形のコメントに出す)。登録済みのチェックは全部ここに書く (テストで保証する)。
 var Descriptions = map[string]string{ // #nosec G101 -- 設定の説明文の表で、秘密の値は含まない
 	"root_usage":             "ルートユーザーの利用 (critical)",
+	"ecs_exec":               "本番のコンテナでシェルを開く操作 (ECS Exec の ExecuteCommand) を、誰が・どこに・何を、で毎回報告する。知らない主体 (high)、既知の主体 (medium)、失敗した試行は 1 段下げる (low / medium)",
 	"unknown_assume_role":    "allowlist に無い呼び出し元の AssumeRole (high)",
 	"oidc_assume_role":       "OIDC でのロールの引き受け (GitHub Actions など) を allowlist の oidc_subjects と比べる。既知のロールに知らない入り口から (high)、知らないロール (medium)、既知の入り口の回数が平常帯超え (low / medium)",
 	"new_principal":          "allowlist にもベースラインにも無い主体 (medium)",

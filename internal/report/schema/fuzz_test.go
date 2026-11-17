@@ -72,7 +72,9 @@ func FuzzMarkdownLogValues(f *testing.F) {
 	run := func(v string) string {
 		r := &Report{Name: "acme", Profile: "daily"}
 		fd := Finding{ID: "f1", Check: "probe_paths", Key: v, Severity: "low", Summary: v, Data: map[string]any{"ip": v, "date": v, "paths": []any{v, v}}}
-		r.Findings.New, r.Findings.StillOpen, r.Info = []Finding{fd}, []Finding{fd}, []Finding{fd}
+		// ECS Exec で始めたコマンド (ADR 0072)。1 つずつコードの囲みに入る
+		ex := Finding{ID: "f2", Check: "ecs_exec", Key: v, Severity: "medium", Summary: v, Data: map[string]any{"commands": []any{v, v}}}
+		r.Findings.New, r.Findings.StillOpen, r.Info = []Finding{fd, ex}, []Finding{fd}, []Finding{fd}
 		r.Proposals = []Proposal{{Kind: "false_positive", Stage: "count_first", Path: v, Summary: v, Evidence: map[string]any{"path_group": v, "paths": []any{v}}},
 			{Kind: "observation", About: "false_positive", Reason: "below_threshold", Summary: v, Evidence: map[string]any{"p": v}}}
 		// 試しの実行の注記 (ADR 0049)。arata が書く文だが、aratam は report.json をファイルから読むので信用しない
@@ -90,6 +92,14 @@ func FuzzMarkdownLogValues(f *testing.F) {
 	f.Fuzz(func(t *testing.T, v string) {
 		if md := run(v); strings.Count(md, "\n") != baseRun || strings.Contains(md, "\r") {
 			t.Fatalf("report.md の行がログの値で変わった (%q):\n%s", v, md)
+		}
+		// commands の行は、コマンドごとのコードの囲み 2 つ (値のバッククォートは ' に置き換わり、囲みを閉じない)
+		md := run(v)
+		i := strings.Index(md, "  - commands: ")
+		line := md[i:]
+		line = line[:strings.IndexByte(line, '\n')]
+		if strings.Count(line, "`") != 4 {
+			t.Fatalf("commands の行のコードの囲みが崩れた (%q): %s", v, line)
 		}
 		if md := period(v); strings.Count(md, "\n") != basePeriod || strings.Contains(md, "\r") {
 			t.Fatalf("期間レポートの report.md の行がログの値で変わった (%q):\n%s", v, md)

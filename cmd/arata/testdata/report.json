@@ -140,6 +140,7 @@
       "access_denied",
       "ai_path_usage",
       "defense_evasion",
+      "ecs_exec",
       "iam_changes",
       "new_principal",
       "oidc_assume_role",
