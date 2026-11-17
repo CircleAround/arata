@@ -50,7 +50,7 @@
 
 | 優先度 | 項目 | 内容 | メモ |
 |---|---|---|---|
-| 高 | ECS Exec (`ecs_exec`。ADR 0072) | 本番のコンテナでシェルを開く `ExecuteCommand` を、主体 × クラスター × コンテナ × 日でまとめて毎回報告する (知らない主体は high、既知は medium、失敗は 1 段下げ)。続いて、ECS Exec を通さない入り方も含めて SSM の `StartSession` を `ssm_session` として別に作る | 提案。ADR のレビューの後に実装。記録の実例 (requestParameters・responseElements の形) は sandbox で 1 回確かめる (資源の足し方は開発リードが決める) |
+| 高 | ECS Exec (`ecs_exec`。ADR 0072) | 本番のコンテナでシェルを開く `ExecuteCommand` を、主体 × クラスター × コンテナ × 日でまとめて毎回報告する (知らない主体は high、既知は medium、失敗は 1 段下げ)。続いて、ECS Exec を通さない入り方も含めて SSM の `StartSession` を `ssm_session` として別に作る | 採用。次は実装。成功の記録の形は実際の記録で確かめた (`docs/cloudtrail-event-names.md`)。`ssm_session` は `invokedBy: ecs.amazonaws.com` の StartSession を除き、人が直接 `ecs:` の target に入ったものを迂回の印にする |
 | 高 | GuardDuty High の hourly 化 | 週次の `guardduty_findings` とは別に、High 以上の新規 finding を hourly で拾う | 週次のスナップショットと二重に鳴らない設計が要る (ADR 0015) |
 | 高 | ConsoleLogin の失敗 | コンソールのサインイン失敗 (errorCode ではなく responseElements に出る) を主体・送信元ごとに数える | root のサインインは root_usage が扱う。access_denied とは別の仕組み |
 | 高 | ALB のアクセスログで `http_access` のチェックを動かす | nginx のログを CloudWatch Logs に送っていない利用者でも、`login_bruteforce`・`probe_paths`・`endpoint_abuse` を動かす。第 1 段: 利用者が ALB のアクセスログを CloudWatch Logs へ配信し (plain・既定の項目・空白区切り)、既存の cloudwatch-logs のソースと `alb_access` で読む。arata の変更は無いか最小。第 2 段 (取り込み料金を避けたい・量が多い利用者向け): S3 の gzip のファイルを直接読み、Go で同じ日次集計を作る | 提案の段階 (設計書 2-3 章、ADR 0046)。採用の前に、実際のログで doctor の解釈率を見て `alb_access` が合うことを確かめ (合わなければ `parse` を直す)、手順を README と `examples/` に書く。json 形式は `request_line` を分ける新しいプロファイルが要るので今は案内しない。Athena は採らない |

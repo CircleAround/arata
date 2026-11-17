@@ -1,7 +1,7 @@
 # 0072. 本番のコンテナでシェルを開く操作 (ECS Exec の `ExecuteCommand`) を、誰が・どこに・何を、で毎回報告する (`ecs_exec`)
 
 - 日付: 2026-11-17
-- 状態: 提案
+- 状態: 採用
 
 ## 背景
 
@@ -43,10 +43,22 @@ arata には ExecuteCommand を見るチェックが無い (`ecs.amazonaws.com` 
    - 「the command itself will be logged in AWS CloudTrail as part of the ECS `ExecuteCommand` API call」
    - 対話のシェルでは、最初の `/bin/bash` だけが CloudTrail に残り、シェルの中で打ったコマンドは残らない
 
-**確かめられなかったこと**: ExecuteCommand の CloudTrail の記録の実例 (requestParameters と responseElements の実際の形) は、上の文書のどこにも無かった。
-`eventSource` が `ecs.amazonaws.com` であること、requestParameters と responseElements の鍵の名前が API の要求・応答の名前と同じであること
-(ほかの ECS の操作の記録の例はそうなっている)、拒否された呼び出しで requestParameters が残るか、`tokenValue` が記録で伏せられているかは、推定である。
-そのため、実装は「無い鍵は不明として扱い、知らない形で落ちない」ように書き、記録の実例での確認を実装の PR の完了の条件にする (決定の 9)。
+**公式文書に無かったこと**: ExecuteCommand の CloudTrail の記録の実例は、上の文書のどこにも無かった。
+
+### 実際の記録で確かめたこと (2026-11-17)
+
+出典: 実際の監査の記録で、2026-11-17 に開発リードが確かめた形。アカウントと値は書かず、鍵と型だけを `docs/cloudtrail-event-names.md` の「記録の形を確かめた操作」に残した。
+
+8. ExecuteCommand (成功、IAM ユーザーから): eventSource は `ecs.amazonaws.com`、`managementEvent: true`、`readOnly: false`
+   - requestParameters: `cluster` (名前。ARN ではなかった)、`container`、`command`、`interactive` (true)、`task` (32 文字の ID)、`dryrun` (false。API リファレンスに無い鍵)
+   - responseElements: `clusterArn`、`containerArn`、`containerName`、`interactive`、`taskArn`、`session` (`sessionId`、`streamUrl` (wss の URL。伏せられていない)、
+     `tokenValue` (固定の文字列 `HIDDEN_DUE_TO_SECURITY_REASONS` に伏せられていた))
+9. 同じ ECS Exec のときに、SSM の `StartSession` も記録に残っていた: eventSource は `ssm.amazonaws.com`、`userIdentity.type` は `AssumedRole`、
+   `userIdentity.invokedBy` は `ecs.amazonaws.com` (ECS が代わりに呼ぶ。主体は ECS が引き受けたロール)。
+   requestParameters は `target` (`ecs:` で始まる)・`documentName`・`parameters` (`cloudWatchLogGroupName`・`command`)、responseElements は `sessionId`・`tokenValue`・`streamUrl`
+   - `StartSession` は既に注目イベントで、全部の記録が principal_seen に数えられる。背景の「タスクロールが new_principal に出た」は、この記録の主体が初めて現れたためと考えられる (推定)
+
+拒否された呼び出しの形は実例が無く、推定のまま (6 節)。実装は「無い鍵は不明として扱い、知らない形で落ちない」ように書く。
 
 ## 決定
 
@@ -67,7 +79,8 @@ arata には ExecuteCommand を見るチェックが無い (`ecs.amazonaws.com` 
 - normalize で Data に取り出すのは次だけ:
   - 要求から `cluster`、`task`、`container`、`command`、`interactive`
   - 応答から `clusterArn`、`taskArn`、`containerName`、`session.sessionId`
-- **`session.tokenValue` と `session.streamUrl` は取り出さない** (接続の認証に使う値。記録で伏せられているかを確かめられていないので、伏せられていない前提で扱う)。
+- **`session.tokenValue` と `session.streamUrl` は取り出さない** (接続の認証に使う値。`tokenValue` は実際の記録で伏せられていた (背景の 8) が、
+  伏せ方は AWS の側の都合で変わりうるので、伏せられていない前提で扱う。`streamUrl` は伏せられていない)。要求の `dryrun` も取り出さない (判定に使わない)
   今の normalize は rawEvent の使う鍵だけを読み、生の記録全体を raw にも SQLite にも残さないので、取り出さなければ残らない
 - `command` は利用者が打った文字列で、攻撃者が書ける (ADR 0037)。取り出すときに、制御文字・書式の文字 (Unicode の Cc・Cf) を除き、
   256 文字 (rune) で切り、切ったことを `command_truncated` で残す。値の解釈 (シェルかどうか) は 5 節の規則で行う
@@ -92,7 +105,7 @@ arata には ExecuteCommand を見るチェックが無い (`ecs.amazonaws.com` 
 ### 4. まとめ方 (集約の Key) と量
 
 - **Key は `<主体の ARN>|<リージョン>/<クラスター名>|<コンテナ名>|<UTC の日付>`**
-  - クラスターは応答の `clusterArn`、無ければ要求の `cluster` から名前を取る (ARN でも名前でも同じ Key になるように)。取れなければ `-`。
+  - クラスターは応答の `clusterArn`、無ければ要求の `cluster` から名前を取る (ARN でも名前でも同じ Key になるように。実際の記録の要求は名前だった)。取れなければ `-`。
     要求に `cluster` が無いのは既定のクラスター (`default`) だが、推測で埋めず `-` にする
   - コンテナは応答の `containerName`、無ければ要求の `container`、どちらも無ければ `-`
   - タスクは Key に入れない (デプロイのたびに変わり、同じ作業が別の finding に割れる)。data に出す
@@ -138,10 +151,12 @@ arata には ExecuteCommand を見るチェックが無い (`ecs.amazonaws.com` 
   - 入る先が違う。StartSession の多くは EC2 のインスタンス (やオンプレミスの管理ノード) で、封じ込めの手順 (インスタンスの隔離・インスタンスプロファイル) が違う。
     1 つのチェックにすると、playbook と片付けの表が「どちらの場合か」で分かれる
   - 記録の形が違う (`target`・`documentName`・`parameters`)。ポートの転送 (`AWS-StartPortForwardingSession` など) はシェルではなく、重さの決め方が別に要る
-  - ECS Exec が内部で Session Manager を使うとき、CloudTrail に StartSession も残るかは文書に無い。同じチェックで両方を数えると、1 回の ECS Exec を 2 回と数えるおそれがある
+  - ECS Exec のときは、ECS が代わりに StartSession を呼び、その記録も残る (背景の 9。`invokedBy: ecs.amazonaws.com`)。同じチェックで両方を数えると、1 回の ECS Exec を 2 回と数える
 - ただし、出典 1 のとおり、**ECS Exec を通さずにコンテナへ StartSession することができ、その場合はセッションが記録されない**。これは ecs_exec が見えない入り方である。
   設計書 7 章の未実装の `ssm_session` を、別の ADR で ecs_exec と同じ形 (誰が・どこに・何を、毎回) で作り、そこで次を扱う:
-  - インスタンス ID (`i-`・`mi-`) でない target (コンテナを指すもの) への StartSession は、ECS Exec の迂回として重く扱う。target の書式は公式文書で確かめてから決める (今回は見つからなかった)
+  - **`userIdentity.invokedBy` が `ecs.amazonaws.com` の StartSession は除く** (ECS Exec の一部で、ecs_exec が ExecuteCommand として数える。二重に数えない)
+  - **人が直接 `ecs:` の target に StartSession したもの (`invokedBy` なし) は、ECS Exec の迂回の印**として重く扱う (ExecuteCommand の記録も、セッションの記録も残らない)。
+    `ecs:` の後ろの書式は公式文書で見つからなかったので、`ecs:` で始まることだけで判定し、中身は解釈しない
   - 本 ADR と同じまとめ方・重大度・コマンドの扱いを、関数として共用する
 - それまでは ecs_exec の playbook で、`ssm:StartSession` をコンテナに対して拒否する IAM の方針 (出典 1) を案内する
 
@@ -161,14 +176,14 @@ playbook `docs/ai/playbooks/ecs_exec.md` の「片付け」の節:
 - resolve: 作業として確かめた日の利用 (誰の・何の作業か)。snooze: 障害の対応などで続けて入る期間を、終わりの日まで
 - `checks.TriageRows` と playbook の表を突き合わせるテスト (ADR 0068 の 4 節) に乗る。`arata approve` が ecs_exec を断ることもテストで固定する
 
-### 9. 記録の実例での確認 (実装の PR の完了の条件)
+### 9. 記録の形とテスト
 
 - テストの記録は、API リファレンスの鍵の名前と、架空の値 (`123456789012`・`prod-cluster`・`app`・`alice`) で作る。鍵が無い記録・型の違う記録・`tokenValue` を含む記録も作る
 - `ExecuteCommand` の記録を解釈する関数にファズテストを足す (ADR 0041)。守る規則: パニックしない、`tokenValue`・`streamUrl` の値が Data のどこにも現れない、
   `command` が 256 文字以下で制御文字・書式の文字を含まない、Key の各部に `|` が入らない (入れば置き換える)
-- 実際の記録の形は、開発用のアカウント (sandbox) で ECS Exec を 1 回行って得た記録で確かめ、形が違えば取り出しを直す。
-  sandbox には今 ECS が無いので、要る資源 (Exec を有効にしたタスク 1 つ) を足すか、手で 1 回作って消すかは、開発リードが決める (deploy は開発リードが行う。ADR 0020)。
-  確かめた形は `docs/cloudtrail-event-names.md` に、出典と一緒に足す
+- 成功の記録の形は、実際の監査の記録で確かめた (背景の 8)。テストの記録はその形 (`dryrun` を含む、`tokenValue` が伏せた文字列) で作り、
+  `tokenValue` が伏せられていない記録でも Data に現れないことを確かめる。sandbox での確認は要らない
+- 拒否された呼び出しの形は実例が無い。鍵の無い記録で落ちず、6 節の `-` になることをテストで固定する。実例を見たら `docs/cloudtrail-event-names.md` に足し、形が違えば取り出しを直す
 
 ### 10. 攻撃の事例との対応 (ADR 0058)
 
@@ -203,5 +218,5 @@ playbook `docs/ai/playbooks/ecs_exec.md` の「片付け」の節:
   - 既知の人が日常的に使う環境では、毎日 medium が出て、片付け (resolve) が毎日要る。これは、本番のシェルを日常の手段にしていることへの指摘として受け入れる
   - 対話のシェルの中のコマンドは見えない。ECS Exec の記録の設定は利用者に任せる
   - ECS Exec を通さない StartSession は、`ssm_session` を作るまで見えない
-  - 記録の実例を sandbox で確かめるまでは、取り出しの形は推定である (9 節)
+  - 拒否された呼び出しの取り出しの形は推定である (9 節)
   - 注目イベントが 1 つ増え、events の行が ExecuteCommand の数だけ増える (少ない)
