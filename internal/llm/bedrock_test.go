@@ -106,3 +106,32 @@ func TestBedrockTimeout(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+// Anthropic などのモデルは、アカウントで最初の呼び出しのときに AWS Marketplace の手続きが行われる。その権限が無い主体の呼び出しは
+// AccessDeniedException で、文に aws-marketplace が入る (利用者の環境で起きた)。doctor と notify の案内のために見分ける。
+func TestMarketplaceAccessDenied(t *testing.T) {
+	deny := func(msg string) error {
+		b := fakeBedrock(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-Amzn-Errortype", "AccessDeniedException")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(w, `{"message":"`+msg+`"}`)
+		})
+		_, err := b.Summarize(context.Background(), "s", []byte("{}"))
+		return err
+	}
+	err := deny("Model access is denied due to IAM user or service role is not authorized to perform the required AWS Marketplace actions (aws-marketplace:ViewSubscriptions, aws-marketplace:Subscribe) to enable access to this model.")
+	if !MarketplaceAccessDenied(err) {
+		t.Fatalf("marketplace: %v", err)
+	}
+	// エラーの文に案内が載る (doctor の ng の行と、notify の LLM_FAILED のログに出る)
+	if !strings.Contains(err.Error(), MarketplaceHint) {
+		t.Fatalf("the error must carry the hint: %v", err)
+	}
+	if err := deny("not authorized to perform bedrock:InvokeModel"); MarketplaceAccessDenied(err) {
+		t.Fatalf("plain access denied must not be the marketplace case: %v", err)
+	}
+	if MarketplaceAccessDenied(nil) {
+		t.Fatal("nil")
+	}
+}

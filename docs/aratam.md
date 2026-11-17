@@ -146,6 +146,16 @@ LLM に求める出力:
 | `none` | LLM を呼ばない | - |
 
 - 共通: `timeout` (既定 120s)。失敗時の再試行は 1 回まで。
+- 決定 (`bedrock` で新しいモデルを使い始めるとき): Anthropic などのサードパーティのモデルは、アカウントで最初に呼び出したときに、呼び出した主体の権限で
+  AWS Marketplace の利用の手続き (サブスクリプション) が行われる。要る action は `aws-marketplace:Subscribe`・`aws-marketplace:Unsubscribe`・`aws-marketplace:ViewSubscriptions`。
+  手続きはアカウント単位で、一度済めば、Marketplace の権限の無い主体 (実行用のロール) でも呼べる。Anthropic の古いモデル (Claude Opus 4.7 より前) は、
+  最初に使う前にユースケースの記入 (First Time Use) も要る (公式文書 https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html)。そこで:
+  - **新しいモデルを使い始めるときは、Marketplace の権限を持つ人が、Bedrock のコンソールのモデルのカタログかプレイグラウンドで、そのモデルを 1 回動かしておく**
+  - **実行用のロール (`deploy/github-actions/runner.yaml` など) には aws-marketplace の権限を足さない** (通知のための主体に、購入の手続きの権限を持たせない)
+  - 手続きが済んでいないと、Converse は 403 (AccessDeniedException) になる。利用者の環境で見た文は「Model access is denied due to IAM user or service role is not authorized
+    to perform the required AWS Marketplace actions (aws-marketplace:...)」(この文言は公式文書には載っていない)。このとき aratam は `LLM_FAILED` で原文を送る
+    (通知は届くが要約されない)。`LLM_FAILED` のログと `aratam doctor` の llm の ng の行には、上の案内が付く (`internal/llm` の `MarketplaceAccessDenied`)。
+    手続きの後も、最大 2 分ほど AccessDeniedException が続くことがある (公式文書)
 - インターフェースは `Summarize(ctx, system, reportJSON) (raw []byte, err error)` の 1 つ。JSON の検証と組み立ては共通部分で行い、プロバイダごとに書かない。
 
 決定 (実装順 2〜3):

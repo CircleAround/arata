@@ -10,6 +10,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
+	"github.com/aws/smithy-go"
 )
 
 // ConverseAPI は bedrockruntime の Converse だけを使う (テストは httptest に向けたクライアントを渡す)。
@@ -56,6 +57,10 @@ func (b *Bedrock) Summarize(ctx context.Context, system string, reportJSON []byt
 		if ctx.Err() != nil {
 			return nil, fmt.Errorf("bedrock: %w", ctx.Err())
 		}
+		if MarketplaceAccessDenied(err) {
+			// doctor の ng の行と notify の LLM_FAILED のログに、そのまま案内が載る
+			return nil, fmt.Errorf("bedrock: %w (%s)", err, MarketplaceHint)
+		}
 		return nil, fmt.Errorf("bedrock: %w", err)
 	}
 	msg, ok := out.Output.(*types.ConverseOutputMemberMessage)
@@ -76,3 +81,20 @@ func (b *Bedrock) Summarize(ctx context.Context, system string, reportJSON []byt
 	}
 	return []byte(sb.String()), nil
 }
+
+// MarketplaceAccessDenied は、Bedrock の呼び出しが AWS Marketplace の手続きの権限の不足で拒否されたか (AccessDeniedException で、文に aws-marketplace が入る)。
+//
+// 決定: サードパーティのモデル (Anthropic など) は、アカウントで最初に呼び出したときに、呼び出した主体の権限で Marketplace の手続きが行われる
+// (aws-marketplace:Subscribe・Unsubscribe・ViewSubscriptions が要る。公式文書 https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html)。
+// 実行用ロールには aws-marketplace の権限を足さない方針なので、doctor と notify はこのエラーを見分けて「権限を持つ人が 1 回動かしておく」を案内する。
+// エラーの文言は公式文書には無く、利用者の環境で見たもの ("... not authorized to perform the required AWS Marketplace actions (aws-marketplace:...)")。
+func MarketplaceAccessDenied(err error) bool {
+	var ae smithy.APIError
+	if !errors.As(err, &ae) || ae.ErrorCode() != "AccessDeniedException" {
+		return false
+	}
+	return strings.Contains(strings.ToLower(ae.ErrorMessage()), "aws-marketplace")
+}
+
+// MarketplaceHint は MarketplaceAccessDenied のときの案内 (人向けの文)。
+const MarketplaceHint = "このモデルは、アカウントで最初に使うときに AWS Marketplace の手続きが要る。Marketplace の権限を持つ人が、Bedrock のコンソールのモデルのカタログかプレイグラウンドで、このモデルを 1 回動かしておく (実行用のロールに aws-marketplace の権限は足さない)"
