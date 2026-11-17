@@ -78,6 +78,13 @@ func (d *doctor) wafCost(ctx context.Context, src config.Source, c *cwlogs.Colle
 			at.Format("15:04"), at.In(jst).Format("15:04"), best.Hours(), gb(best.Hours()), gb(best.Hours())*runs*InsightsUSDPerGB*30)
 		parts = append(parts, part)
 	}
+	// 決定 (ADR 0069 の 4 節): count_suspect の問い合わせは、絞っても 1 本ごとに 1 日分を読む。確定した日ごとに最大 max_queries 本
+	if l := d.cfg.IPList; l != nil && l.CountSuspect != nil && len(parts) > 0 {
+		gb := daily / 1e9 * float64(l.CountSuspect.MaxQueries)
+		perRunMax += gb
+		perDayUSD += gb * InsightsUSDPerGB
+		parts = append(parts, fmt.Sprintf("count_suspect: 1 日に最大 %d 本 × 1 日分 (約 %.2f GB、約 %.2f USD/日)", l.CountSuspect.MaxQueries, gb, gb*InsightsUSDPerGB))
+	}
 	detail := fmt.Sprintf("1 日のログ 約 %.2f GB (%s)", daily/1e9, how)
 	if len(parts) == 0 {
 		detail += "。wafv2 を引くプロファイルが無い"

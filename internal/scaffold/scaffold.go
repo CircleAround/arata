@@ -384,6 +384,12 @@ func GenerateWith(reg *checks.Registry, o Options) []byte {
 	cm(fmt.Sprintf("      min_baseline_days: %d", is.MinBaselineDays), "過去の日がこれより少なければ件数だけで判定する")
 	cm(fmt.Sprintf("      min_count_window: %g", is.MinCountWindow), "直近 N 日の合計 (ゆっくりした総当たり。仮の値で、実データで見直す)")
 	cm(fmt.Sprintf("      min_days: %d", is.MinDays), "直近 N 日のうち失敗のあった日の数")
+	cs := config.DefaultIPListCountSuspect
+	cm("  count_suspect:", "waf_review の count_rule_status の怪しい通信に、一覧の IP からの一致を足す。消せば足さない")
+	cm("    reasons: "+flow(cs.Reasons), "使う理由 (reasons: に書いたものだけ)")
+	cm(fmt.Sprintf("    max_ips: %d", cs.MaxIPs), "渡す IP の上限 (並べた上位から)")
+	cm(fmt.Sprintf("    max_queries: %d", cs.MaxQueries), "1 日に流す本数の上限。1 本ごとに wafv2 の 1 日分を読む (費用が増える)")
+	cm(fmt.Sprintf("    min_block_share: %g", cs.MinBlockShare), "渡した IP が占める BLOCK の割合がこれより低い日は、下限の意味が弱いと報告に書く")
 
 	r := config.DefaultRetention
 	w("\n# 保持期間 (prune は後続の版)。\nretention:\n")

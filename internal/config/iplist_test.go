@@ -85,3 +85,35 @@ func TestIPListKnownKeys(t *testing.T) {
 		t.Errorf("unknown = %v", keys)
 	}
 }
+
+// count_suspect (ADR 0069 の 4 節): 一覧の IP に絞った問い合わせで、count_rule_status の suspect に一覧の IP からの一致を足す。
+// 書かなければ問い合わせない。理由は ip_list.reasons に書いたものだけを選べる。
+func TestIPListCountSuspect(t *testing.T) {
+	c, err := Load(write(t, ipListBase+"ip_list:\n  reasons: { waf_block: {}, probe: {} }\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.IPList.CountSuspect != nil {
+		t.Errorf("count_suspect = %+v, want nil", c.IPList.CountSuspect)
+	}
+	c, err = Load(write(t, ipListBase+"ip_list:\n  reasons: { waf_block: {}, probe: {} }\n  count_suspect: {}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cs := c.IPList.CountSuspect
+	if cs == nil || strings.Join(cs.Reasons, ",") != "waf_block,probe" || cs.MaxIPs != 1000 || cs.MaxQueries != 2 || cs.MinBlockShare != 0.5 {
+		t.Errorf("count_suspect = %+v (reasons default to the written ones)", cs)
+	}
+	for name, tc := range map[string]struct{ body, want string }{
+		"reason not written": {"ip_list:\n  reasons: { waf_block: {} }\n  count_suspect: { reasons: [waf_block, sign_in_failure] }\n", "count_suspect.reasons: sign_in_failure is not in ip_list.reasons"},
+		"unknown reason":     {"ip_list:\n  reasons: { waf_block: {} }\n  count_suspect: { reasons: [endpoint_abuse] }\n", "count_suspect.reasons: endpoint_abuse is not in ip_list.reasons"},
+		"max_queries":        {"ip_list:\n  reasons: { waf_block: {} }\n  count_suspect: { max_queries: 11 }\n", "max_queries"},
+		"share":              {"ip_list:\n  reasons: { waf_block: {} }\n  count_suspect: { min_block_share: 1.5 }\n", "min_block_share"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Load(write(t, ipListBase+tc.body)); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("err = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}

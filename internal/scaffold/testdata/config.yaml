@@ -293,6 +293,11 @@ ip_list:
       min_baseline_days: 7                       # 過去の日がこれより少なければ件数だけで判定する
       min_count_window: 50                       # 直近 N 日の合計 (ゆっくりした総当たり。仮の値で、実データで見直す)
       min_days: 3                                # 直近 N 日のうち失敗のあった日の数
+  count_suspect:                                 # waf_review の count_rule_status の怪しい通信に、一覧の IP からの一致を足す。消せば足さない
+    reasons: [waf_block, probe, sign_in_failure] # 使う理由 (reasons: に書いたものだけ)
+    max_ips: 1000                                # 渡す IP の上限 (並べた上位から)
+    max_queries: 2                               # 1 日に流す本数の上限。1 本ごとに wafv2 の 1 日分を読む (費用が増える)
+    min_block_share: 0.5                         # 渡した IP が占める BLOCK の割合がこれより低い日は、下限の意味が弱いと報告に書く
 
 # 保持期間 (prune は後続の版)。
 retention:

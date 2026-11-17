@@ -68,6 +68,7 @@ func (c *Collector) hourlyRange(ctx context.Context, w collect.Window, first str
 			from = day
 		}
 	}
+	c.readFrom = DayStart(from)
 	// max_collect (ADR 0064): 古い側から決めた時間の分だけ読む (日の頭からの読み直しを含む)
 	if m := c.src.MaxCollect; m > 0 && to.Sub(from) > m {
 		to, c.limited = from.Add(m).Truncate(time.Hour), true
@@ -154,7 +155,15 @@ func (c *Collector) putHours(ctx context.Context, name string, rows []map[string
 		days = DefaultPartRetentionDays
 	}
 	for h := from; h.Before(to); h = h.Add(time.Hour) {
-		if err := c.Parts.PutParts(ctx, c.src.ID, name, h, byHour[h], days); err != nil {
+		// 決定 (実データで直した): 1 回の収集で読んでいる範囲 (その日の頭から) の部分の行は消さない。日の値はその日の全部の時の行から作るので、
+		// 部分の行を残す日数より長い範囲を 1 回で読むと (collect --window 8d・追いつき)、後の時を書くときに前の日の行が消え、その日の値が空になった
+		keep := days
+		if !c.readFrom.IsZero() {
+			if n := int(DayStart(h).Sub(c.readFrom)/(24*time.Hour)) + 1; n > keep {
+				keep = n
+			}
+		}
+		if err := c.Parts.PutParts(ctx, c.src.ID, name, h, byHour[h], keep); err != nil {
 			return err
 		}
 	}

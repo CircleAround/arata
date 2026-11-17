@@ -599,7 +599,15 @@ func (r *reviewer) countRuleStatus(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	ta, sa := aggregate(total), aggregate(suspect)
+	listed, err := r.load(ctx, cwlogs.MetricWAFCountMatchListed, cfg.Days)
+	if err != nil {
+		return err
+	}
+	cov, err := r.listedCoverage(ctx, cfg.Days)
+	if err != nil {
+		return err
+	}
+	ta, sa, la := aggregate(total), aggregate(suspect), aggregate(listed)
 	var notes []schema.Proposal
 	acls := make([]string, 0, len(r.acls))
 	for n := range r.acls {
@@ -626,6 +634,11 @@ func (r *reviewer) countRuleStatus(ctx context.Context) error {
 			if x := sa[acl+"|"+id]; x != nil {
 				s = x.sum
 			}
+			ls := 0.0
+			if x := la[acl+"|"+id]; x != nil {
+				ls = x.sum
+			}
+			s += ls
 			label := cr.rule
 			if cr.inner != "" {
 				label += " の " + cr.inner
@@ -651,6 +664,7 @@ func (r *reviewer) countRuleStatus(ctx context.Context) error {
 				o.Evidence["suspect_ratio"] = ratio
 				o.Summary = fmt.Sprintf("%s: COUNT の %s: 直近 %d 日で %.0f 件一致、うち怪しい通信 %.0f%%、一致した日 %d / %d 日", acl, label, cfg.Days, n, ratio*100, matched, cfg.Days)
 			}
+			cov.annotate(&o, n, ls)
 			if !known {
 				// マネージドのグループのラベルの名前空間を読めなかった・自分のルールグループ (中のラベルを読んでいない)
 				o.Evidence["label_rule"] = "undetermined"
@@ -1019,4 +1033,88 @@ func contains(l []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// listedCover は直近の日に流した listed (一覧の IP に絞った問い合わせ。ADR 0069 の 4 節) の、数えた範囲。days が 0 なら流していない。
+type listedCover struct {
+	days       int
+	minShare   float64 // 渡した IP が占める BLOCK の割合の、最も低い (日, ソース)。-1 なら割合が無い
+	lowerBound bool    // 渡しきれなかった (日, ソース) がある
+	low        bool    // 割合が min_block_share より低い (日, ソース) がある
+}
+
+func (r *reviewer) listedCoverage(ctx context.Context, days int) (listedCover, error) {
+	c := listedCover{minShare: -1}
+	f := store.MetricFilter{From: addDays(r.end, -(days - 1)), To: r.end}
+	get := func(metric string) (map[string]float64, error) {
+		f.Metric = metric
+		ms, err := r.q.Metrics(ctx, f)
+		if err != nil {
+			return nil, err
+		}
+		out := map[string]float64{}
+		for _, m := range ms {
+			out[m.Date+"|"+m.Source] = m.Value
+		}
+		return out, nil
+	}
+	total, err := get(cwlogs.MetricWAFListedIPsTotal)
+	if err != nil {
+		return c, err
+	}
+	queried, err := get(cwlogs.MetricWAFListedIPsQueried)
+	if err != nil {
+		return c, err
+	}
+	share, err := get(cwlogs.MetricWAFListedBlockShare)
+	if err != nil {
+		return c, err
+	}
+	low, err := get(cwlogs.MetricWAFListedCoverageLow)
+	if err != nil {
+		return c, err
+	}
+	for k, n := range total {
+		c.days++
+		if queried[k] < n {
+			c.lowerBound = true
+		}
+		if v, ok := share[k]; ok && (c.minShare < 0 || v < c.minShare) {
+			c.minShare = v
+		}
+		if low[k] > 0 {
+			c.low = true
+		}
+	}
+	return c, nil
+}
+
+// annotate は count_rule_status に、listed を含めたこと (と数えた範囲) を足す。流した日が無ければ何も足さない (今と同じ)。
+func (c listedCover) annotate(o *schema.Proposal, matches, listed float64) {
+	if c.days == 0 {
+		return
+	}
+	o.Evidence["listed_matches"] = listed
+	o.Evidence["listed_days"] = c.days
+	o.Evidence["listed_is_lower_bound"] = c.lowerBound
+	if c.minShare >= 0 {
+		o.Evidence["listed_min_block_share"] = c.minShare
+	}
+	if c.low {
+		o.Evidence["listed_coverage"] = "low"
+	}
+	if matches == 0 || (listed == 0 && !c.lowerBound) {
+		return
+	}
+	o.Summary += fmt.Sprintf("。怪しい通信は一覧の IP からの一致 %.0f 件を含む", listed)
+	if c.lowerBound {
+		o.Summary += " (上位の IP で数えた下限"
+		if c.minShare >= 0 {
+			o.Summary += fmt.Sprintf("。渡した IP が占める BLOCK の割合は最も低い日で %.0f%%", c.minShare*100)
+		}
+		o.Summary += ")"
+	}
+	if c.low {
+		o.Summary += "。上位の IP に偏っていない日があり、下限の意味が弱い"
+	}
 }

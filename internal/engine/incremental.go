@@ -146,7 +146,7 @@ func (e *Engine) CollectIncremental(ctx context.Context) (*CollectResult, error)
 	w := collectWindow(from, now)
 	w.CollectedAt = now
 	cr := e.Collect(ctx, w, CollectOptions{SourceIDs: ids, PrincipalStatus: store.PrincipalUnknown, RunID: runID, Rescan: true, BaseFrom: from,
-		SourceStart: starts, SourceTo: limits})
+		SourceStart: starts, SourceTo: limits, Listed: true})
 	cu := &catchup{covered: covered, coveredFrom: coveredFrom}
 	status := "ok"
 	if cr.partial() {
@@ -160,6 +160,7 @@ func (e *Engine) CollectIncremental(ctx context.Context) (*CollectResult, error)
 	}
 	// 解釈率・ソースごとの読み取り量 (bytes_scanned)・truncated を profile の run と同じ形で残す
 	addFormatStats(stats, cr.Formats)
+	cr.addIPListStats(stats)
 	if err := e.st.FinishRun(ctx, runID, status, stats); err != nil {
 		return nil, err
 	}

@@ -15,7 +15,24 @@ type IPList struct {
 	ActiveRaw string        `yaml:"active"`
 	Active    time.Duration `yaml:"-"`
 	Reasons   IPListReasons `yaml:"reasons"`
+	// CountSuspect は count_rule_status の suspect に、一覧の IP からの一致を足す問い合わせ (ADR 0069 の 4 節)。nil なら問い合わせない。
+	CountSuspect *IPListCountSuspect `yaml:"count_suspect"`
 }
+
+// IPListCountSuspect は一覧の IP に絞った問い合わせの設定。確定した UTC の日ごとに 1 回、上位 K 個 (K = min(max_ips, max_queries 本に収まる数)) の IP で流す。
+// 絞っても Insights は 1 日分を全部読むので、1 本ごとに 1 日分の読み取りが増える。
+type IPListCountSuspect struct {
+	// Reasons は使う理由 (ip_list.reasons に書いたものだけ。書かなければ書いた理由の全部)。
+	Reasons []string `yaml:"reasons"`
+	// MaxIPs は渡す IP の数の上限、MaxQueries は 1 日に流す本数の上限 (1〜10)。
+	MaxIPs     int `yaml:"max_ips"`
+	MaxQueries int `yaml:"max_queries"`
+	// MinBlockShare は、渡した IP が占める BLOCK の件数の割合がこれより低い日に、listed_coverage: low を付ける下限 (0〜1)。
+	MinBlockShare float64 `yaml:"min_block_share"`
+}
+
+// MaxListedQueries は max_queries の上限 (1 本ごとに 1 日分を読むので、費用を桁で増やさない)。
+const MaxListedQueries = 10
 
 // IPListReasons は一覧に載る理由ごとの条件。nil の理由では載せない。
 type IPListReasons struct {
@@ -53,7 +70,24 @@ var (
 	DefaultIPListWAFBlock = IPListCount{MinCount: 1}
 	DefaultIPListProbe    = IPListCount{MinCount: 3}
 	DefaultIPListSignIn   = IPListSignIn{MinCount: 20, BaselineDays: 14, Factor: 3, MinBaselineDays: 7, MinCountWindow: 50, MinDays: 3}
+	// 渡す IP の上限は、実データの 1 日 (BLOCK 約 9.6 万件・約 1 万 IP) で、上位 1,000 IP が BLOCK の 87% を占めた (ADR 0069 の「確かめ方」)
+	DefaultIPListCountSuspect = IPListCountSuspect{Reasons: []string{"waf_block", "probe", "sign_in_failure"}, MaxIPs: 1000, MaxQueries: 2, MinBlockShare: 0.5}
 )
+
+// written は ip_list.reasons に書いた理由 (雛形の順)。
+func (l *IPList) written() []string {
+	var out []string
+	if l.Reasons.WAFBlock != nil {
+		out = append(out, "waf_block")
+	}
+	if l.Reasons.Probe != nil {
+		out = append(out, "probe")
+	}
+	if l.Reasons.SignInFailure != nil {
+		out = append(out, "sign_in_failure")
+	}
+	return out
+}
 
 // ActiveDays は N を日の数で返す。
 func (l *IPList) ActiveDays() int { return int(l.Active / (24 * time.Hour)) }
@@ -76,6 +110,15 @@ func (l *IPList) applyDefaults() {
 		setInt(&r.MinBaselineDays, d.MinBaselineDays)
 		setFloat(&r.MinCountWindow, d.MinCountWindow)
 		setInt(&r.MinDays, d.MinDays)
+	}
+	if cs := l.CountSuspect; cs != nil {
+		d := DefaultIPListCountSuspect
+		if len(cs.Reasons) == 0 {
+			cs.Reasons = l.written()
+		}
+		setInt(&cs.MaxIPs, d.MaxIPs)
+		setInt(&cs.MaxQueries, d.MaxQueries)
+		setFloat(&cs.MinBlockShare, d.MinBlockShare)
 	}
 }
 
@@ -108,6 +151,20 @@ func (l *IPList) validate(retention time.Duration, retentionRaw string) error {
 			return fmt.Errorf("config: ip_list.reasons.sign_in_failure: min_days <= active days (%d)", l.ActiveDays())
 		}
 	}
+	if cs := l.CountSuspect; cs != nil {
+		written := map[string]bool{}
+		for _, r := range l.written() {
+			written[r] = true
+		}
+		for _, r := range cs.Reasons {
+			if !written[r] {
+				return fmt.Errorf("config: ip_list.count_suspect.reasons: %s is not in ip_list.reasons (an IP is listed only for the reasons written there)", r)
+			}
+		}
+		if cs.MaxIPs < 1 || cs.MaxQueries < 1 || cs.MaxQueries > MaxListedQueries || cs.MinBlockShare < 0 || cs.MinBlockShare > 1 {
+			return fmt.Errorf("config: ip_list.count_suspect: max_ips >= 1, 1 <= max_queries <= %d (each query reads the whole day), 0 <= min_block_share <= 1", MaxListedQueries)
+		}
+	}
 	return nil
 }
 
@@ -130,5 +187,9 @@ func DefaultIPListParams() []IPListParam {
 		{"reasons.sign_in_failure.min_baseline_days", s.MinBaselineDays},
 		{"reasons.sign_in_failure.min_count_window", s.MinCountWindow},
 		{"reasons.sign_in_failure.min_days", s.MinDays},
+		{"count_suspect.reasons", DefaultIPListCountSuspect.Reasons},
+		{"count_suspect.max_ips", DefaultIPListCountSuspect.MaxIPs},
+		{"count_suspect.max_queries", DefaultIPListCountSuspect.MaxQueries},
+		{"count_suspect.min_block_share", DefaultIPListCountSuspect.MinBlockShare},
 	}
 }
