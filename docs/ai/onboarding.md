@@ -112,7 +112,7 @@ CloudTrail は記録まで最大 15 分ほど遅れるので、最初の run に
 ## 定時の通知を始める
 
 - 定時の実行 (`arata run --profile <名前> --out DIR` → `aratam notify --in DIR`) をつなぐ。以後は新しく起きたことだけが通知される
-- aratam の設定と疎通 (`aratam doctor` / `aratam test-notify`) は先に済ませてよい。**止めておくのは最初の run の結果の送信だけ**。
+- aratam の設定と疎通 (`aratam doctor` / `aratam test-notify`) は先に済ませてよい。**止めておくのは最初の run の結果の送信だけ**。Bedrock の新しいモデル (Anthropic など) は、Marketplace の権限を持つ人がコンソールかプレイグラウンドで 1 回動かしておく (最初の呼び出しで Marketplace の手続きが要る。実行用のロールに aws-marketplace の権限は足さない。済んでいないと aratam は `LLM_FAILED` で要約せずに原文を送る)
   通知の文面を見たければ `aratam notify --in /tmp/arata-first/daily --dry-run` (送らない)
 - allowlist.yaml の変更は git に commit する (approve の `--commit` か、人が行う)。PR で直す運用は `arata help ai approve`
 - ack / snooze にしたものは `arata review` (`--status snoozed` で snooze 中も) でいつでも見直せる。誰が・なぜ・いつ黙らせたかは `LAST_ACTION` の欄と `--format json` の `last_action`。週次の報告 (`silenced: true`) の「黙らせているもの」にも出る

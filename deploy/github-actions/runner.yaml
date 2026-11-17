@@ -112,7 +112,10 @@ Parameters:
     Description: >-
       (任意) aratam の llm.provider: bedrock で使う推論プロファイルの ARN
       (例 arn:aws:bedrock:ap-northeast-1:123456789012:inference-profile/<推論プロファイル ID>)。
-      空なら Bedrock の権限を足さない (provider: none のとき)
+      空なら Bedrock の権限を足さない (provider: none のとき)。
+      Anthropic などのモデルは、アカウントで最初に使うときに AWS Marketplace の手続きが要る。
+      Marketplace の権限を持つ人が、コンソールかプレイグラウンドでそのモデルを 1 回動かしておく
+      (このロールに aws-marketplace の権限は足さない。docs/aratam.md 3-1)
   RoleName:
     Type: String
     Default: arata-runner
