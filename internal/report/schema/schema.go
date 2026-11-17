@@ -145,6 +145,20 @@ type Finding struct {
 	LastChanged string         `json:"last_changed"`
 	ReportedAt  string         `json:"reported_at,omitempty"`
 	Data        map[string]any `json:"data"`
+	// Triage は許す操作と根拠の文書 (`arata review --format json` の triage と同じ。ADR 0068 の 4 節)。run の report.json だけに載せる
+	// (以前の版の report.json と、期間の報告の open には無い)。片付けの案は、ここに無い操作を提案しない。aratam は LLM に渡さない。
+	Triage *TriageInfo `json:"triage,omitempty"`
+}
+
+// TriageInfo は finding の片付けで許す操作と、根拠の文書 (ADR 0068 の 4 節)。
+type TriageInfo struct {
+	// Allowed は許す操作 (approve・ack・snooze・resolve の順)。片付けの表の行から、この finding で approve できなければ approve を除く。
+	Allowed []string `json:"allowed"`
+	// Escalates は、同じ Key のまま重大度が上がりうるか (false なら ack は最後になるので許さない)。
+	Escalates bool `json:"escalates"`
+	// Doc は根拠の文書を引くコマンド、Section はその節。
+	Doc     string `json:"doc"`
+	Section string `json:"section" jsonschema:"const=片付け"`
 }
 
 // Coverage は「取れていたか」を示す。必ず出す。

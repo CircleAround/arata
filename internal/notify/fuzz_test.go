@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -840,6 +841,75 @@ func FuzzSlackConfig(f *testing.F) {
 		}
 		if bot && (c.Slack.Method() != SlackBot || !env.MatchString(token) || !ch.MatchString(channel) || (urgentChannel != "" && !ch.MatchString(urgentChannel))) {
 			t.Fatalf("accepted bot: %+v", c.Slack)
+		}
+	})
+}
+
+// FuzzLLMInput: LLM に渡す report.json は、どんな入力でも
+//   - 読める JSON なら読める JSON のまま (壊さない)
+//   - silenced と、finding の配列 (findings の各節・already_reported・info) の各要素の triage を持たない
+//   - finding の数と id は変えない (除くのは triage だけ)
+func FuzzLLMInput(f *testing.F) {
+	f.Add([]byte(`{"findings":{"new":[{"id":"a1","check":"root_usage","triage":{"allowed":["snooze"]}}]},"info":[{"id":"b2","triage":null}],"silenced":{"x":1}}`))
+	f.Add([]byte(`{"findings":{"new":null,"still_open":[{"id":"c3","data":{"triage":"keep"}}]},"already_reported":"x"}`))
+	f.Add([]byte(`{"findings":[1,2],"info":[[]],"silenced":null}`))
+	f.Add([]byte(`not json`))
+	f.Fuzz(func(t *testing.T, b []byte) {
+		var r schema.Report
+		if json.Unmarshal(b, &r) != nil {
+			return // ReadInput が先に止める
+		}
+		r.Silenced = &schema.Silenced{} // 除く道を必ず通す
+		out := llmInput(b, &r)
+		if !json.Valid(out) {
+			t.Fatalf("not JSON: %s", out)
+		}
+		var m map[string]json.RawMessage
+		if json.Unmarshal(out, &m) != nil {
+			return // 最上位が object でない入力は元のまま
+		}
+		if _, ok := m["silenced"]; ok {
+			t.Fatalf("silenced left: %s", out)
+		}
+		lists := map[string]json.RawMessage{"already_reported": m["already_reported"], "info": m["info"]}
+		var fs map[string]json.RawMessage
+		if json.Unmarshal(m["findings"], &fs) == nil {
+			for k, v := range fs {
+				lists["findings."+k] = v
+			}
+		}
+		var in map[string]json.RawMessage
+		_ = json.Unmarshal(b, &in)
+		var inFs map[string]json.RawMessage
+		_ = json.Unmarshal(in["findings"], &inFs)
+		for name, v := range lists {
+			var l []map[string]json.RawMessage
+			if json.Unmarshal(v, &l) != nil {
+				continue
+			}
+			for _, e := range l {
+				if _, ok := e["triage"]; ok {
+					t.Fatalf("%s: triage left: %s", name, out)
+				}
+			}
+			src := in[name]
+			if strings.HasPrefix(name, "findings.") {
+				src = inFs[strings.TrimPrefix(name, "findings.")]
+			}
+			var ol []map[string]json.RawMessage
+			if json.Unmarshal(src, &ol) == nil {
+				if len(ol) != len(l) {
+					t.Fatalf("%s: %d findings became %d", name, len(ol), len(l))
+				}
+				for i := range ol {
+					var a, b any // 書き直しで文字のエスケープの形は変わりうるので、値で比べる
+					_ = json.Unmarshal(ol[i]["id"], &a)
+					_ = json.Unmarshal(l[i]["id"], &b)
+					if !reflect.DeepEqual(a, b) {
+						t.Fatalf("%s: id %s became %s", name, ol[i]["id"], l[i]["id"])
+					}
+				}
+			}
 		}
 	})
 }

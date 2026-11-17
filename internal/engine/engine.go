@@ -1535,6 +1535,7 @@ func (e *Engine) buildReport(profileName, runID string, w collect.Window, now ti
 		Profile: profileName, Name: e.cfg.Name, RunID: runID, Window: w, Now: now, DiffFrom: e.diffFrom,
 		Results: ev.Results, CollectErrors: cr.Errors, SourcesOK: cr.SourcesOK, Formats: cr.Formats,
 		ChecksRun: ev.ChecksRun, ChecksSkipped: ev.ChecksSkipped, Proposals: ev.Proposals,
+		Triage: triageOf, // review と同じ許す操作 (ADR 0068 の 4 節)
 	})
 	// 決定 (ADR 0055): チェックが判定しなかった記録 (以前の版で集めた記録など) は、黙って捨てずに coverage.notes に出す
 	rep.Coverage.Notes = append(rep.Coverage.Notes, ev.CoverageNotes...)

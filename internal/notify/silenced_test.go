@@ -108,3 +108,32 @@ func TestSilencedIsNotGivenToLLM(t *testing.T) {
 		}
 	}
 }
+
+// LLM には finding の triage (許す操作) を渡さない。同じ表は playbook の「片付け」の節として system に入っている (MaxPlaybookBytes)。
+// report.json に triage を足しても、LLM の入力の大きさは変えない。triage 以外の項目 (id・check・data) は残す。
+func TestTriageIsNotGivenToLLM(t *testing.T) {
+	r := goldenRun(t)
+	if len(r.Findings.New) == 0 {
+		t.Fatal("the golden must have new findings")
+	}
+	tr := &schema.TriageInfo{Allowed: []string{"snooze", "resolve"}, Doc: "arata help ai playbook root_usage", Section: "片付け"}
+	for _, l := range [][]schema.Finding{r.Findings.New, r.Findings.Changed, r.Findings.Recurred, r.Findings.Resolved, r.Findings.StillOpen, r.AlreadyReported, r.Info} {
+		for i := range l {
+			l[i].Triage = tr
+		}
+	}
+	dir := inputDir(t, marshal(t, r), "")
+	l := &fakeLLM{responses: []string{fixture(t, "ok.json")}}
+	run(t, dir, &fakeSender{}, func(o *Options) { o.Summarizer = l })
+	if l.calls == 0 {
+		t.Fatal("the LLM must be called")
+	}
+	for _, in := range l.inputs {
+		if strings.Contains(string(in), `"triage"`) || strings.Contains(string(in), "arata help ai playbook") {
+			t.Fatalf("the LLM input has triage:\n%s", in)
+		}
+		if !strings.Contains(string(in), r.Findings.New[0].ID) {
+			t.Fatalf("the LLM input must keep the findings:\n%s", in)
+		}
+	}
+}

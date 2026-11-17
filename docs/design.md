@@ -1104,6 +1104,8 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
   表の正は各 playbook の「片付け」の節の表 (| 重大度 | 上がる余地 | 許す操作 |) で、`internal/checks` のテストが行の順まで突き合わせる。
   表の決まり (テスト): ack を許すのは上がる余地のある行だけ、high・critical は ack を許さない、approve は `arata approve` が受け付けるチェックだけ、snooze・resolve は常に許す。
   上がる余地ありの行は、同じ Key で軽い観測と重い観測を作るテストで確かめる。一部の Key だけ上がるチェック (iam_changes の信頼ポリシー) は「なし」に倒す。
+- 決定: run の report.json の各 finding にも、review と同じ `triage` を載せる (項目の追加なので互換。期間の報告の `open` には載せない)。Slack や報告から片付けの案を作る人が review を引かずに済むように。
+  report は engine に依存しないので、`report.Input.Triage` に engine の関数を渡す。aratam は triage を LLM に渡さない (同じ表は playbook の「片付け」の節として system に入る。LLM の入力の大きさは変えない。`docs/aratam.md` 3 章)
   表に無い組 (この版が知らない重大度) は ack を許さない
 - 決定 (ADR 0047): 行き先による一括解消も、同じ 2 か所 (approve の直後と evaluate の冒頭) でする。open / acked / snoozed の unknown_assume_role のうち、
   外向き・行き先が期限内で既知・finding の `mfa` が true のものを resolved にし、`resolved_reason: known_destination` と `allowlist_subject` を残す。

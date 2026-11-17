@@ -249,6 +249,10 @@ LLM に求める出力:
   重大度・分類・振り分け・規則より優先しない。「まず確かめること」は LLM には確かめられないので「人が確かめること」として書く。
   封じ込め・設定の変更・approve / ack / snooze / resolve は**人への提案にとどめ、LLM は実行しない**。提案する操作は、playbook の「片付け」の表がその重大度で許すものだけ
 - system の並び: 出力の契約 → `docs/ai/report.md` → 対処手順 → 利用者の前提。
+- 決定: report.json の各 finding の `triage` (許す操作。arata が片付けの表から作る) は、LLM の入力から除く (`silenced` と同じ場所。`llmInput`)。
+  同じ表は playbook の「片付け」の節として system に入っているので、二重に渡さない。report.json は 1 件あたり 130〜150 バイトほど大きくなるが、
+  LLM の入力の大きさは triage を足す前と同じ (入力のファイルの上限 64 MiB・モデルの入力の上限との関係も変わらない)。
+  playbook が 32 KiB に入らず落ちたチェックでは、LLM は表を見ない。そのときも「→」は人への提案で、片付けの操作を決めるのは人 (と arata の片付けの守り)
 - 振り分け・重大度・finding 欠落の補完・LLM 失敗時の原文送信は、playbook の有無に関わらず規則のまま (2 章)。
 
 ### 3-4. Block Kit (slack.format: blocks)
