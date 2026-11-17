@@ -100,3 +100,37 @@ arata が見る eventName と eventSource を、AWS の公式の文書と照合�
 | support.amazonaws.com | (eventSource のみ) | OK | 記録例あり | https://docs.aws.amazon.com/awssupport/latest/user/logging-using-cloudtrail.html |
 | health.amazonaws.com | (eventSource のみ) | OK | 記録例あり | https://docs.aws.amazon.com/health/latest/ug/logging-using-cloudtrail.html |
 | ce.amazonaws.com | (eventSource のみ) | OK | 記録例あり | https://docs.aws.amazon.com/cost-management/latest/userguide/logging-with-cloudtrail.html |
+
+## 記録の形を確かめた操作
+
+名前だけでなく、requestParameters と responseElements の形まで確かめた操作。値は書かない (鍵と型だけ)。
+
+### ecs.amazonaws.com の ExecuteCommand (ADR 0072)
+
+出典: 実際の監査の記録で、2026-11-17 に開発リードが確かめた形 (成功、IAM ユーザーから)。鍵の名前は API リファレンス
+(https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_ExecuteCommand.html) のとおり。
+
+```
+eventSource: ecs.amazonaws.com / eventName: ExecuteCommand / eventType: AwsApiCall / managementEvent: true / readOnly: false
+requestParameters: { cluster: <名前。ARN ではなかった>, container: <文字列>, command: <文字列>, interactive: true, task: <32 文字の ID>, dryrun: false }
+responseElements: { clusterArn, containerArn, containerName, interactive: true, taskArn,
+                    session: { sessionId, streamUrl: "wss://...", tokenValue: "HIDDEN_DUE_TO_SECURITY_REASONS" } }
+```
+
+- 要求に、API リファレンスに無い `dryrun` がある
+- `tokenValue` は記録で固定の文字列に伏せられている。`streamUrl` は伏せられていない。arata はどちらも取り出さない
+- 拒否された呼び出しの形は実例が無い (推定のまま。無い鍵に耐える)
+
+### ssm.amazonaws.com の StartSession (ECS Exec のとき。ADR 0072 の 7 節)
+
+出典: 上と同じ監査の記録で、同じ ECS Exec のときに残っていたもの (2026-11-17 に開発リードが確かめた形)。
+
+```
+eventSource: ssm.amazonaws.com / eventName: StartSession / userIdentity.type: AssumedRole / userIdentity.invokedBy: ecs.amazonaws.com
+requestParameters: { target: "ecs:..." (114 文字), documentName: <文字列>, parameters: { cloudWatchLogGroupName: [...], command: [...] } }
+responseElements: { sessionId, tokenValue (30 文字。上の伏せた形と同じ長さ), streamUrl }
+```
+
+- ECS Exec では、ECS が代わりに StartSession を呼ぶ。主体は `AssumedRole` で `invokedBy` が `ecs.amazonaws.com` (どのロールかは確かめていない)
+- 同じとき、コンテナの中の SSM のエージェントがタスクロールで ssm の `CreateDataChannel` と、logs の `DescribeLogGroups`・`DescribeLogStreams`・`CreateLogStream` (セッションの記録用) を呼んでいた
+- target は `ecs:` で始まる
