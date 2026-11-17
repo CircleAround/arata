@@ -41,6 +41,15 @@
           ],
           "last_time": "2026-10-22T08:00:00Z",
           "principal": "arn:aws:iam::123456789012:root"
+        },
+        "triage": {
+          "allowed": [
+            "snooze",
+            "resolve"
+          ],
+          "escalates": false,
+          "doc": "arata help ai playbook root_usage",
+          "section": "片付け"
         }
       },
       {
@@ -71,6 +80,16 @@
           "mfa": "unknown",
           "role_account": "123456789012",
           "role_arn": "arn:aws:iam::123456789012:role/Admin"
+        },
+        "triage": {
+          "allowed": [
+            "approve",
+            "snooze",
+            "resolve"
+          ],
+          "escalates": false,
+          "doc": "arata help ai playbook unknown_assume_role",
+          "section": "片付け"
         }
       },
       {
@@ -92,6 +111,16 @@
           ],
           "kind": "user",
           "last_seen": "2026-10-22T07:00:00Z"
+        },
+        "triage": {
+          "allowed": [
+            "approve",
+            "snooze",
+            "resolve"
+          ],
+          "escalates": false,
+          "doc": "arata help ai playbook new_principal",
+          "section": "片付け"
         }
       }
     ],

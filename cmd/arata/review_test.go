@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/CircleAround/arata/internal/collect/cloudtrail/cloudtrailtest"
 	"github.com/CircleAround/arata/internal/engine"
 	"github.com/CircleAround/arata/internal/jsonschema/schematest"
+	"github.com/CircleAround/arata/internal/report/schema"
 )
 
 const saas = "111122223333"
@@ -536,4 +538,53 @@ func TestTriageDryRun(t *testing.T) {
 		t.Fatalf("dry-run must not record an action:\n%s", c.stdout)
 	}
 	c.assertCodesInVocabulary()
+}
+
+// report.json の各 finding にも、review と同じ triage (許す操作と根拠の文書) を載せる。Slack や report から片付けの案を作る人が、
+// review を引かずに表に無い操作を避けられるように。
+func TestReportCarriesTriage(t *testing.T) {
+	c := newCLI(t)
+	if code := c.run("init", "--config", c.cfg, "--window", "1d"); code != 0 {
+		t.Fatalf("init exit %d: %s", code, c.stderr)
+	}
+	c.now = c.now.Add(24 * time.Hour)
+	c.fake.Add(
+		cloudtrailtest.Event("n1", c.now.Add(-2*time.Hour), cloudtrailtest.User(acct, "mallory"), "sts.amazonaws.com", "AssumeRole", "ap-northeast-1", "198.51.100.7", true, map[string]any{"roleArn": "arn:aws:iam::" + acct + ":role/Admin"}),
+		cloudtrailtest.Event("n2", c.now.Add(-1*time.Hour), cloudtrailtest.Root(acct), "signin.amazonaws.com", "ConsoleLogin", "us-east-1", "198.51.100.8", false, nil),
+	)
+	out := t.TempDir()
+	if code := c.run("run", "--config", c.cfg, "--profile", "daily", "--out", out); code != 0 {
+		t.Fatalf("run exit %d: %s", code, c.stderr)
+	}
+	b, err := os.ReadFile(filepath.Join(out, "report.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	schematest.Conforms(t, schema.ReportSchema, b, &schema.Report{})
+	var rep schema.Report
+	if err := json.Unmarshal(b, &rep); err != nil {
+		t.Fatal(err)
+	}
+	if code := c.run("review", "-c", c.cfg, "--format", "json"); code != 0 {
+		t.Fatal(c.stderr.String())
+	}
+	var items []engine.ReviewItem
+	if err := json.Unmarshal(c.stdout.Bytes(), &items); err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]engine.TriageInfo{}
+	for _, it := range items {
+		byID[it.ID] = it.Triage
+	}
+	if len(rep.Findings.New) == 0 {
+		t.Fatalf("want new findings: %s", b)
+	}
+	for _, f := range rep.Findings.New {
+		if f.Triage == nil {
+			t.Fatalf("%s: report.json must carry triage", f.Check)
+		}
+		if want, ok := byID[f.ID]; !ok || !reflect.DeepEqual(*f.Triage, want) {
+			t.Errorf("%s: report %+v, review %+v", f.Check, *f.Triage, want)
+		}
+	}
 }

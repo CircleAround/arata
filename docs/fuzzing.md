@@ -30,6 +30,7 @@ CI は `.github/workflows/fuzz.yml` が週 1 回と手動 (`workflow_dispatch`�
 |---|---|---|---|
 | `internal/notify` | `FuzzParseSummary` | LLM の出力 (text の要約) | 検査を通った文だけが残る。重大度の床・approve の提案の制限。欠落の補完。本文は 3,800 字以内で、緊急の finding の行と LLM の注記が残る。URL・メンション・`<` `>`・目に見えない文字が無い |
 | | `FuzzParseBlockNotes` | LLM の出力 (blocks の要約と「→」) | 「まず対応」の id だけ・1 行・上限以内。Block Kit の上限。「まず対応」の finding が全部載る |
+| | `FuzzLLMInput` | report.json (LLM に渡す前) | 読める JSON は読める JSON のまま。silenced と、finding の配列の各要素の triage が残らない。finding の数と id は変わらない |
 | | `FuzzParseWriteups` | LLM の出力 (WAF の提案の書き起こし) | BLOCK に強める記述・Block の action・コードフェンスが残らない (目に見えない文字を挟んでも)。規則の行が残る。waf-proposals.md の見出しを増やせない |
 | | `FuzzRunWithReport` | report.json | 通知の流れ全体 (provider: none、text と blocks、timezone は UTC と夏時間のあるゾーン) がパニックしない。Slack の上限。`<` `>` のエスケープ |
 | | `FuzzLogValuesStayInert` | ログ由来の値 (summary・key・data・path) | どの書式でも行を増やせない。目に見えない文字と `<` `>` が残らない (run と期間レポート) |

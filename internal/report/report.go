@@ -46,6 +46,8 @@ type Input struct {
 	Proposals     []schema.Proposal
 	// Silenced は「黙らせているもの」の節 (ADR 0068)。nil なら出さない。
 	Silenced *schema.Silenced
+	// Triage は finding の許す操作を返す (engine が片付けの表から作る。report は engine に依存しない)。nil なら triage を載せない。
+	Triage func(store.Finding) schema.TriageInfo
 	// DiffFrom は差分判定の境界 (ゼロなら Window.From)。試しの実行が定時の実行の境界に合わせるのに使う (ADR 0049)。
 	DiffFrom time.Time
 }
@@ -85,6 +87,10 @@ func Build(in Input) *Report {
 	var sevs []checks.Severity
 	for _, res := range in.Results {
 		f := toFinding(res.Finding)
+		if in.Triage != nil {
+			t := in.Triage(res.Finding)
+			f.Triage = &t
+		}
 		switch res.Class {
 		case checks.ClassNew, checks.ClassChanged, checks.ClassRecurred:
 			if f.Severity == string(checks.Info) {

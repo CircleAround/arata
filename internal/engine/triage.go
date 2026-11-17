@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/CircleAround/arata/internal/checks"
+	"github.com/CircleAround/arata/internal/report/schema"
 	"github.com/CircleAround/arata/internal/store"
 )
 
@@ -58,16 +59,9 @@ func ackGuarded(f store.Finding) bool {
 	return !checks.TriageAllows(f.Check, checks.Severity(f.Severity), checks.TriageAck)
 }
 
-// TriageInfo は review の各 finding に載せる、許す操作と根拠の文書 (ADR 0068 の 4 節)。
-type TriageInfo struct {
-	// Allowed は許す操作 (approve・ack・snooze・resolve の順)。片付けの表の行から、この finding で approve できなければ approve を除く。
-	Allowed []string `json:"allowed"`
-	// Escalates は、同じ Key のまま重大度が上がりうるか (false なら ack は最後になるので許さない)。
-	Escalates bool `json:"escalates"`
-	// Doc は根拠の文書を引くコマンド、Section はその節。
-	Doc     string `json:"doc"`
-	Section string `json:"section" jsonschema:"const=片付け"`
-}
+// TriageInfo は review と report.json の各 finding に載せる、許す操作と根拠の文書 (ADR 0068 の 4 節)。
+// 型は report.json と同じもの (schema パッケージ。aratam が SQLite を持ち込まずに読めるように)。
+type TriageInfo = schema.TriageInfo
 
 // triageOf は finding の許す操作。表に無い組 (この版が知らない重大度など) は snooze と resolve だけ。
 func triageOf(f store.Finding) TriageInfo {

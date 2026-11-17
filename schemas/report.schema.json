@@ -256,6 +256,9 @@
         },
         "data": {
           "type": "object"
+        },
+        "triage": {
+          "$ref": "#/$defs/TriageInfo"
         }
       },
       "required": [
@@ -728,6 +731,33 @@
         "still_open",
         "max_severity",
         "collect_errors"
+      ]
+    },
+    "TriageInfo": {
+      "type": "object",
+      "properties": {
+        "allowed": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "escalates": {
+          "type": "boolean"
+        },
+        "doc": {
+          "type": "string"
+        },
+        "section": {
+          "type": "string",
+          "const": "片付け"
+        }
+      },
+      "required": [
+        "allowed",
+        "escalates",
+        "doc",
+        "section"
       ]
     },
     "UserCoverage": {

@@ -23,20 +23,66 @@ func silencedLine(r *schema.Report) (line string, highAck bool) {
 	return line, n.AckedHigh > 0
 }
 
-// withoutSilenced は LLM に渡す report.json から silenced を除く (理由は利用者が書いた文字列。LLM の入力に入れない)。
-// silenced が無ければ元のまま返す。読めなければ元のまま返す (読めない入力は ReadInput が先に止める)。
-func withoutSilenced(b []byte) []byte {
+// llmInput は LLM に渡す report.json を作る。次を除き、ほかは原文のまま:
+//   - silenced (理由は利用者が書いた文字列。LLM の入力に入れない。ADR 0068 の 3 節)
+//   - 各 finding の triage (許す操作)。同じ表は playbook の「片付け」の節として system に入っている。LLM の入力を、triage を足す前の大きさのままにする
+//
+// どちらも無ければ元のまま返す。読めなければ元のまま返す (読めない入力は ReadInput が先に止める)。
+func llmInput(b []byte, r *schema.Report) []byte {
+	if r == nil || (r.Silenced == nil && !hasTriage(r)) {
+		return b
+	}
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(b, &m); err != nil {
 		return b
 	}
-	if _, ok := m["silenced"]; !ok {
-		return b
-	}
 	delete(m, "silenced")
+	for _, k := range []string{"already_reported", "info"} {
+		if v, ok := m[k]; ok {
+			m[k] = withoutTriage(v)
+		}
+	}
+	if v, ok := m["findings"]; ok {
+		var fs map[string]json.RawMessage
+		if err := json.Unmarshal(v, &fs); err == nil {
+			for k, l := range fs {
+				fs[k] = withoutTriage(l)
+			}
+			if nb, err := json.Marshal(fs); err == nil {
+				m["findings"] = nb
+			}
+		}
+	}
 	out, err := json.Marshal(m)
 	if err != nil {
 		return b
+	}
+	return out
+}
+
+func hasTriage(r *schema.Report) bool {
+	for _, l := range [][]schema.Finding{r.Findings.New, r.Findings.Changed, r.Findings.Recurred, r.Findings.Resolved, r.Findings.StillOpen, r.AlreadyReported, r.Info} {
+		for _, f := range l {
+			if f.Triage != nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// withoutTriage は finding の配列から triage を除く (配列として読めなければ元のまま)。
+func withoutTriage(v json.RawMessage) json.RawMessage {
+	var l []map[string]json.RawMessage
+	if err := json.Unmarshal(v, &l); err != nil {
+		return v
+	}
+	for _, f := range l {
+		delete(f, "triage")
+	}
+	out, err := json.Marshal(l)
+	if err != nil {
+		return v
 	}
 	return out
 }

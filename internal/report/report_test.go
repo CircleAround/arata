@@ -155,3 +155,31 @@ func TestAccountOnlyLabelMatchesRecord(t *testing.T) {
 		t.Fatal("IdentityAccountOnly")
 	}
 }
+
+// Input.Triage があれば、レポートのどの節の finding にも triage を載せる。無ければ載せない (omitempty。以前の版の report.json と同じ形)。
+func TestBuildTriage(t *testing.T) {
+	in := sampleInput()
+	in.Triage = func(f store.Finding) schema.TriageInfo {
+		return schema.TriageInfo{Allowed: []string{"snooze", "resolve"}, Doc: "arata help ai playbook " + f.Check, Section: "片付け"}
+	}
+	r := Build(in)
+	n := 0
+	for _, l := range [][]Finding{r.Findings.New, r.Findings.Changed, r.Findings.Recurred, r.Findings.Resolved, r.Findings.StillOpen, r.AlreadyReported, r.Info} {
+		for _, f := range l {
+			n++
+			if f.Triage == nil || f.Triage.Doc != "arata help ai playbook "+f.Check {
+				t.Fatalf("%s: %+v", f.ID, f.Triage)
+			}
+		}
+	}
+	if n == 0 {
+		t.Fatal("no findings")
+	}
+	b, _ := r.JSON()
+	schematest.Conforms(t, schema.ReportSchema, b, &schema.Report{})
+
+	b, _ = Build(sampleInput()).JSON()
+	if strings.Contains(string(b), `"triage"`) {
+		t.Fatalf("without Input.Triage, no triage:\n%s", b)
+	}
+}
