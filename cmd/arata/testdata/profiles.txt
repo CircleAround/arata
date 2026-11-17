@@ -4,6 +4,7 @@ profile daily (window 24h, max_catchup 7d)
   ai_path_usage           daily    event  default-daily
   cost_anomaly            daily    event  default-daily
   defense_evasion         daily    event  default-daily
+  ecs_exec                hourly   event  explicit
   endpoint_abuse          daily    event  default-daily
   iam_changes             daily    event  default-daily
   login_bruteforce        daily    event  default-daily
@@ -80,6 +81,7 @@ profile daily (window 24h, max_catchup 7d)
 
 profile hourly (window 1h, max_catchup 7d)
   CHECK                CADENCE  MODE   VIA
+  ecs_exec             hourly   event  explicit
   oidc_assume_role     hourly   event  explicit
   root_usage           hourly   event  explicit
   unknown_assume_role  hourly   event  explicit

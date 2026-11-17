@@ -253,6 +253,9 @@ LLM に求める出力:
   同じ表は playbook の「片付け」の節として system に入っているので、二重に渡さない。report.json は 1 件あたり 130〜150 バイトほど大きくなるが、
   LLM の入力の大きさは triage を足す前と同じ (入力のファイルの上限 64 MiB・モデルの入力の上限との関係も変わらない)。
   playbook が 32 KiB に入らず落ちたチェックでは、LLM は表を見ない。そのときも「→」は人への提案で、片付けの操作を決めるのは人 (と arata の片付けの守り)
+- 決定 (ADR 0072): ecs_exec の finding の `data.commands` と `commands_more` (ECS Exec で始めたコマンド) は、LLM の入力から除く
+  (run の report.json は `llmInput`、期間レポートの `open` は `periodLLMInput`)。規則の分類 `command_kinds` は残す。
+  コマンドには作業者が打った秘匿値が入りうり、攻撃者も書ける。Slack の主要キー (`keyFields`) にも commands を入れない (分類と件数だけ)。全文は report.md と CloudTrail で読む
 - 振り分け・重大度・finding 欠落の補完・LLM 失敗時の原文送信は、playbook の有無に関わらず規則のまま (2 章)。
 
 ### 3-4. Block Kit (slack.format: blocks)

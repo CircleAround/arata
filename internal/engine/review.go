@@ -192,6 +192,9 @@ func subjectPrincipal(f store.Finding) (string, record.PrincipalKind, error) {
 	case "oidc_assume_role":
 		return "", "", fmt.Errorf("%w: approve does not write oidc_subjects; add the entry point (provider, role, repo and refs / environments) to oidc_subjects in allowlist.yaml by hand "+
 			"(see `arata help ai playbook oidc_assume_role`), or use snooze / resolve", errNotApprovable)
+	case "ecs_exec":
+		// 決定 (ADR 0072 の 8 節): 主体を既知にするのは new_principal の approve (既知でも medium で毎回報告する)。片付けは snooze か resolve
+		return "", "", fmt.Errorf("%w: ecs_exec findings are not about a principal to approve; make the principal known by approving its new_principal finding, and use snooze or resolve here", errNotApprovable)
 	default:
 		return "", "", fmt.Errorf("%w: %s findings are not about a principal; use ack, snooze or resolve", errNotApprovable, f.Check)
 	}

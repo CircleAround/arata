@@ -854,6 +854,7 @@ func FuzzLLMInput(f *testing.F) {
 	f.Add([]byte(`{"findings":{"new":null,"still_open":[{"id":"c3","data":{"triage":"keep"}}]},"already_reported":"x"}`))
 	f.Add([]byte(`{"findings":[1,2],"info":[[]],"silenced":null}`))
 	f.Add([]byte(`not json`))
+	f.Add([]byte(`{"findings":{"new":[{"id":"e1","check":"ecs_exec","data":{"commands":["sh -c x"],"commands_more":2,"command_kinds":["shell_c"]}}]},"info":[{"check":"ecs_exec","data":"x"}]}`))
 	f.Fuzz(func(t *testing.T, b []byte) {
 		var r schema.Report
 		if json.Unmarshal(b, &r) != nil {
@@ -890,6 +891,14 @@ func FuzzLLMInput(f *testing.F) {
 			for _, e := range l {
 				if _, ok := e["triage"]; ok {
 					t.Fatalf("%s: triage left: %s", name, out)
+				}
+				// ecs_exec の data.commands と commands_more は LLM に渡さない (ADR 0072)
+				var check string
+				if json.Unmarshal(e["check"], &check) == nil && check == "ecs_exec" {
+					var data map[string]json.RawMessage
+					if _ = json.Unmarshal(e["data"], &data); data["commands"] != nil || data["commands_more"] != nil {
+						t.Fatalf("%s: ecs_exec commands left: %s", name, out)
+					}
 				}
 			}
 			src := in[name]

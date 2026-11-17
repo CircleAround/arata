@@ -168,6 +168,7 @@ checks:
 	want := []string{
 		"unknown_check profiles.daily.checks secret_access_unknown|",
 		"unused_check root_usage |hourly, daily",
+		"unused_check ecs_exec |hourly, daily",
 		"unused_check unknown_assume_role |hourly, daily",
 		"unused_check oidc_assume_role |hourly, daily",
 		"unused_check credential_hygiene |weekly",
@@ -176,7 +177,7 @@ checks:
 		"unused_check access_analyzer |weekly",
 		"unused_check waf_review |weekly",
 		"unused_check log_hygiene |weekly",
-		"missing_profile profiles.hourly |root_usage, unknown_assume_role, oidc_assume_role",
+		"missing_profile profiles.hourly |root_usage, ecs_exec, unknown_assume_role, oidc_assume_role",
 		"missing_profile profiles.weekly |credential_hygiene, guardduty_findings, posture, access_analyzer, waf_review, log_hygiene",
 		"param_changed checks.login_bruteforce.min_count 30|20",
 		"missing_key audit_account |\"<12 桁のアカウント ID>\" か none",

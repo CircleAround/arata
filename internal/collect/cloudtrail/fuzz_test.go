@@ -51,6 +51,9 @@ func FuzzNormalizeEvent(f *testing.F) {
 		oidcBody(ghProvider, "repo:example-org@1234567/example-repo@7654321:ref:refs/heads/main", "arn:aws:iam::123456789012:role/gha-deploy", ghAgent),
 		oidcBody("cognito-identity.amazonaws.com", "ap-northeast-1:00000000-0000-0000-0000-000000000000", "arn:aws:iam::123456789012:role/app", ""),
 		`{"userIdentity":{"type":"WebIdentityUser","userName":["x"],"identityProvider":{"a":1}},"eventSource":"sts.amazonaws.com","eventName":"AssumeRoleWithWebIdentity","userAgent":"exec-env/GitHubActions md/run_id#1\n<!here>"}`,
+		ecsExecOK,
+		`{"eventSource":"ecs.amazonaws.com","eventName":"ExecuteCommand","requestParameters":{"cluster":"arn:aws:ecs:x:1:cluster/a|b","task":["t"],"container":"","command":"sh\u0000\u202e-c x","interactive":"true"},"responseElements":{"session":{"sessionId":"ecs-execute-command-AB","tokenValue":"not-a-real-token","streamUrl":"wss://example.invalid/s?x=1"},"clusterArn":1}}`,
+		`{"eventSource":"ecs.amazonaws.com","eventName":"ExecuteCommand","requestParameters":{"command":"not-a-real-token"},"responseElements":{"session":"x"}}`,
 		`{"requestParameters":[],"responseElements":"x","additionalEventData":1,"resources":{}}`, `{"userIdentity":null,"resources":[null,{"ARN":1}]}`, `[]`, `null`, ``,
 	} {
 		f.Add(s)
@@ -193,6 +196,51 @@ func FuzzNormalizeEvent(f *testing.F) {
 				}
 			default:
 				t.Fatalf("data.%s が想定外の型 %T", k, v)
+			}
+		}
+		// ECS Exec (ADR 0072): ecs_ の値は ExecuteCommand にだけ付き、決まった形だけ。接続の認証に使う値 (tokenValue・streamUrl) は残さない
+		isExec := e.EventSource == "ecs.amazonaws.com" && e.Name == "ExecuteCommand"
+		for k, v := range e.Data {
+			if !strings.HasPrefix(k, "ecs_") {
+				continue
+			}
+			if !isExec {
+				t.Fatalf("data.%s が ExecuteCommand でない記録にある (%s)", k, e.Name)
+			}
+			s, _ := v.(string)
+			switch k {
+			case "ecs_cluster", "ecs_container", "ecs_task":
+				if _, ok := record.ECSName(s); !ok {
+					t.Fatalf("data.%s が決まった形でない: %q", k, v)
+				}
+			case "ecs_session_id":
+				if _, ok := record.ECSSessionID(s); !ok {
+					t.Fatalf("data.%s が決まった形でない: %q", k, v)
+				}
+			case "ecs_command":
+				if !record.CleanECSCommandOK(s) {
+					t.Fatalf("data.ecs_command が整っていない: %q", v)
+				}
+			case "ecs_command_truncated", "ecs_interactive":
+				if _, ok := v.(bool); !ok || (k == "ecs_command_truncated" && v != true) {
+					t.Fatalf("data.%s: %v", k, v)
+				}
+			default:
+				t.Fatalf("知らない data.%s", k)
+			}
+		}
+		if isExec {
+			sess, _ := r0(body).ResponseElements["session"].(map[string]any)
+			for _, sk := range []string{"tokenValue", "streamUrl"} {
+				secret, _ := sess[sk].(string)
+				if len(secret) < 8 {
+					continue
+				}
+				for k, v := range e.Data {
+					if s, ok := v.(string); ok && strings.Contains(s, secret) && k != "ecs_command" {
+						t.Fatalf("session.%s が data.%s に残った: %q", sk, k, s)
+					}
+				}
 			}
 		}
 		DefaultNotable(e)

@@ -26,10 +26,11 @@ func silencedLine(r *schema.Report) (line string, highAck bool) {
 // llmInput は LLM に渡す report.json を作る。次を除き、ほかは原文のまま:
 //   - silenced (理由は利用者が書いた文字列。LLM の入力に入れない。ADR 0068 の 3 節)
 //   - 各 finding の triage (許す操作)。同じ表は playbook の「片付け」の節として system に入っている。LLM の入力を、triage を足す前の大きさのままにする
+//   - ecs_exec の finding の data.commands と commands_more (作業者が打った秘匿値が入りうる。攻撃者も書ける。ADR 0072 の 5 節)。分類 (command_kinds) は残す
 //
-// どちらも無ければ元のまま返す。読めなければ元のまま返す (読めない入力は ReadInput が先に止める)。
+// どれも無ければ元のまま返す。読めなければ元のまま返す (読めない入力は ReadInput が先に止める)。
 func llmInput(b []byte, r *schema.Report) []byte {
-	if r == nil || (r.Silenced == nil && !hasTriage(r)) {
+	if r == nil || (r.Silenced == nil && !hasTriage(r) && !hasExecCommands(r)) {
 		return b
 	}
 	var m map[string]json.RawMessage
@@ -71,7 +72,53 @@ func hasTriage(r *schema.Report) bool {
 	return false
 }
 
-// withoutTriage は finding の配列から triage を除く (配列として読めなければ元のまま)。
+// execCheck は、LLM に data.commands を渡さないチェック (ADR 0072)。
+const execCheck = "ecs_exec"
+
+// execCommandKeys は ecs_exec の data から LLM の入力に入れないキー。
+var execCommandKeys = []string{"commands", "commands_more"}
+
+func hasExecCommands(r *schema.Report) bool {
+	return execCommandsIn(r.Findings.New, r.Findings.Changed, r.Findings.Recurred, r.Findings.Resolved, r.Findings.StillOpen, r.AlreadyReported, r.Info)
+}
+
+// periodLLMInput は LLM に渡す期間レポートの report.json を作る。open の各 finding から、run と同じ規則で ecs_exec の data.commands を除く
+// (ほかは原文のまま。読めなければ元のまま)。
+func periodLLMInput(b []byte, r *schema.PeriodReport) []byte {
+	if r == nil || !execCommandsIn(r.Open) {
+		return b
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(b, &m); err != nil {
+		return b
+	}
+	if v, ok := m["open"]; ok {
+		m["open"] = withoutTriage(v)
+	}
+	out, err := json.Marshal(m)
+	if err != nil {
+		return b
+	}
+	return out
+}
+
+func execCommandsIn(lists ...[]schema.Finding) bool {
+	for _, l := range lists {
+		for _, f := range l {
+			if f.Check != execCheck {
+				continue
+			}
+			for _, k := range execCommandKeys {
+				if _, ok := f.Data[k]; ok {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// withoutTriage は finding の配列から triage と、ecs_exec の data.commands を除く (配列として読めなければ元のまま)。
 func withoutTriage(v json.RawMessage) json.RawMessage {
 	var l []map[string]json.RawMessage
 	if err := json.Unmarshal(v, &l); err != nil {
@@ -79,6 +126,22 @@ func withoutTriage(v json.RawMessage) json.RawMessage {
 	}
 	for _, f := range l {
 		delete(f, "triage")
+		var check string
+		if json.Unmarshal(f["check"], &check) != nil || check != execCheck {
+			continue
+		}
+		var data map[string]json.RawMessage
+		if json.Unmarshal(f["data"], &data) != nil {
+			// data が object でなければ丸ごと除く (読めない値を LLM に渡さない)
+			delete(f, "data")
+			continue
+		}
+		for _, k := range execCommandKeys {
+			delete(data, k)
+		}
+		if nb, err := json.Marshal(data); err == nil {
+			f["data"] = nb
+		}
 	}
 	out, err := json.Marshal(l)
 	if err != nil {

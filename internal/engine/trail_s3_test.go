@@ -37,7 +37,7 @@ sources:
 profiles:
   daily:
     window: 24h
-    checks: [default-daily, root_usage, unknown_assume_role, oidc_assume_role]
+    checks: [default-daily, root_usage, ecs_exec, unknown_assume_role, oidc_assume_role]
 `, dir, acct)
 	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
 		t.Fatal(err)

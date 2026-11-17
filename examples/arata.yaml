@@ -103,11 +103,11 @@ sources:
 profiles:
   hourly:
     window: 1h
-    checks: [root_usage, unknown_assume_role, oidc_assume_role]
+    checks: [root_usage, ecs_exec, unknown_assume_role, oidc_assume_role]
   daily:
     window: 24h
     # max_catchup: 7d              # cron が遅れた時に前回の窓の終わりから追いつく上限 (既定 7d)
-    checks: [default-daily, root_usage, unknown_assume_role, oidc_assume_role]   # daily だけ運用する場合は hourly のチェックも入れる
+    checks: [default-daily, root_usage, ecs_exec, unknown_assume_role, oidc_assume_role]   # daily だけ運用する場合は hourly のチェックも入れる
   weekly:
     window: 7d
     checks: [credential_hygiene, guardduty_findings, posture, access_analyzer, waf_review, log_hygiene]   # waf_review は waf_config と wafv2 のソースが要る (無ければ skip)

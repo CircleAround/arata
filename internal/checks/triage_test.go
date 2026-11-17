@@ -35,8 +35,10 @@ func TestTriageTableRules(t *testing.T) {
 					t.Errorf("%s %s: high and critical must not allow ack", check, s)
 				}
 			}
-			if r.Escalates != has[TriageAck] {
-				t.Errorf("%s %v: ack is allowed exactly when the severity can rise for the same key (escalates %v, ack %v)", check, r.Severities, r.Escalates, has[TriageAck])
+			// ack を許すのは上がる余地のある行だけ (ADR 0068 の 6 節)。余地があっても ack を許さない行はある
+			// (ecs_exec: ack すると同じ日の次のセッション (changed) が見えなくなる。ADR 0072 の 8 節)
+			if has[TriageAck] && !r.Escalates {
+				t.Errorf("%s %v: ack is allowed only when the severity can rise for the same key (escalates %v, ack %v)", check, r.Severities, r.Escalates, has[TriageAck])
 			}
 			if has[TriageApprove] != ApproveChecks[check] {
 				t.Errorf("%s: approve %v, but arata approve accepts it: %v", check, has[TriageApprove], ApproveChecks[check])

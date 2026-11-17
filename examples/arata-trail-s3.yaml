@@ -34,7 +34,7 @@ sources:
 profiles:
   hourly:
     window: 1h
-    checks: [root_usage, unknown_assume_role, oidc_assume_role]
+    checks: [root_usage, ecs_exec, unknown_assume_role, oidc_assume_role]
   daily:
     window: 24h
-    checks: [default-daily, root_usage, unknown_assume_role, oidc_assume_role]
+    checks: [default-daily, root_usage, ecs_exec, unknown_assume_role, oidc_assume_role]

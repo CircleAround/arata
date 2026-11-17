@@ -13,7 +13,9 @@ import (
 // report.md は data の全キーを列挙するので 1 件が 10 行を超え、Slack では読めないため。全部見たい人向けに末尾へ report.md のパスを添える。
 // 対応表に無いチェックは count と ips だけ。summary の文に既に入っている値は繰り返さない。
 var keyFields = map[string][]string{
-	"root_usage":          {"count", "ips", "event_names", "last_time"},
+	"root_usage": {"count", "ips", "event_names", "last_time"},
+	// 決定 (ADR 0072 の 5 節): commands は出さない (作業者が打った秘匿値が入りうる)。分類と件数だけ
+	"ecs_exec":            {"cluster", "container", "command_kinds", "sessions", "count", "ips", "last_time"},
 	"unknown_assume_role": {"caller", "count", "ips", "last_time"},
 	"oidc_assume_role":    {"provider", "role_arn", "count", "ips", "run_ids", "last_time"},
 	"new_principal":       {"kind", "count", "ips", "external_account"},
