@@ -98,3 +98,4 @@
 | [0072](0072-ecs-exec.md) | 本番のコンテナでシェルを開く操作 (ECS Exec の `ExecuteCommand`) を、誰が・どこに・何を、で毎回報告する (`ecs_exec`) | 採用 |
 | [0073](0073-secret-access-bulk-exempt.md) | 起動のたびに決まった秘匿値をまとめて読むロールは、`secrets_access` の項目に `bulk: exempt` を明示して、その秘匿値だけを一括読み出しの数から外す | 採用 |
 | [0075](0075-request-lines-yields-http-user.md) | request_lines のソースに `yields: http_user` を明示して http_access を出さないようにし、プロファイルの `records` で、要るチェックが無くても引かせる | 採用 |
+| [0076](0076-bulk-exempt-ecs-issued-session.md) | `bulk: exempt` で外すのを、ECS の `AssumeRole` で発行された認証情報が直後に使われた読み取りだけにする | 提案 |
