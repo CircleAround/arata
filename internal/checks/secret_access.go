@@ -29,6 +29,10 @@ import (
 //     平常帯は窓の始まりの日の前日から baseline_days 日の、その主体自身の日ごとの異なり数 (無い日は 0) の中央値。導入直後でも判定する
 //   - allowlist の secrets_access に書いた秘匿値は初出に数えない (一括読み出しの数には数える)
 //   - 主体ごとに 1 件 (重い方の重大度)。allowlist で承認済みでも下げない (承認は「居ること」を認めるもので、何でも読んでよいではない)
+//   - 決定 (ADR 0073): secrets_access の bulk: exempt の項目に一致する秘匿値は、一括読み出しの数から外す (窓と平常帯の両側)。
+//     外すのは、その主体が平常帯の始まりから窓の終わりまでに AWS のサービスに引き受けられたロール (serviceAssumedRoles。principal_new_source と同じ) のときだけ。
+//     そうでなければ外さず、data に bulk_exempt_ignored: not_service_role を残す (人の SSO のロールなどを書き方次第で黙らせない。記録が無ければ鳴る側)。
+//     外した結果、何も報告しない主体は info の行 (Key は BulkExemptKeyPrefix + 主体) に残す (黙って消さない。Fingerprint は固定)
 type SecretAccess struct {
 	Config config.SecretAccess
 }
@@ -45,6 +49,12 @@ const (
 	srcSSM            = "ssm.amazonaws.com"
 	maxSecretsShown   = 20
 )
+
+// BulkExemptKeyPrefix は、bulk: exempt で外した読み取りだけだった主体の info の行の Key の先頭 (後ろに主体の ARN。ADR 0073)。
+const BulkExemptKeyPrefix = "bulk-exempt:"
+
+// bulkExemptIgnoredNotServiceRole は、bulk: exempt の項目に一致したが外さなかった理由 (サービスに引き受けられたロールではない)。
+const bulkExemptIgnoredNotServiceRole = "not_service_role"
 
 var secretReadAPIs = concatAPIs(
 	apisOf(srcSecretsManager, "GetSecretValue", "BatchGetSecretValue"),
@@ -222,12 +232,37 @@ func (c SecretAccess) Evaluate(ctx context.Context, q store.Query, w collect.Win
 		}
 	}
 	firstReads := withData >= b.MinBaselineDays
+	var serviceRoles map[string]bool
+	if al.HasBulkExempt() {
+		if serviceRoles, err = serviceAssumedRoles(ctx, q, histFrom, w.To); err != nil {
+			return nil, err
+		}
+	}
 
 	obs := map[string]Observation{}
 	for arn, p := range byP {
+		// bulk: exempt (ADR 0073): 窓で一致した秘匿値と glob。外すのはサービスに引き受けられたロールのときだけ
+		exemptPats := map[string]bool{}
+		exempted := 0
+		for s := range p.secrets {
+			if pat, ok := al.SecretBulkExempt(arn, secretName(s)); ok {
+				exemptPats[pat] = true
+				exempted++
+			}
+		}
+		applyExempt := serviceRoles[arn]
 		vals := make([]float64, 0, len(bds))
 		for _, bd := range bds {
-			vals = append(vals, float64(len(daily[arn][bd])))
+			n := 0
+			for s := range daily[arn][bd] {
+				if applyExempt {
+					if _, ok := al.SecretBulkExempt(arn, secretName(s)); ok {
+						continue
+					}
+				}
+				n++
+			}
+			vals = append(vals, float64(n))
 		}
 		med := median(vals)
 		thr := med * b.Factor
@@ -235,7 +270,11 @@ func (c SecretAccess) Evaluate(ctx context.Context, q store.Query, w collect.Win
 			thr = float64(b.MinDistinct)
 		}
 		distinct := len(p.secrets)
-		bulk := float64(distinct) > thr
+		counted := distinct
+		if applyExempt {
+			counted -= exempted
+		}
+		bulk := float64(counted) > thr
 		var newSecrets []string
 		matched := 0
 		for s := range p.secrets {
@@ -257,6 +296,22 @@ func (c SecretAccess) Evaluate(ctx context.Context, q store.Query, w collect.Win
 		case len(newSecrets) > 0:
 			sev = Low
 		default:
+			if applyExempt && exempted > 0 {
+				k := BulkExemptKeyPrefix + arn
+				a := p.agg
+				a.extra["bulk_exempt"] = true
+				a.extra["principal"] = arn
+				a.extra["principal_kind"] = string(p.kind)
+				a.extra["bulk_exempted"] = exempted
+				a.extra["bulk_counted"] = counted
+				a.extra["bulk_exempt_patterns"] = sortedKeys(exemptPats)
+				markAccountOnly(a.extra, "principal_identity", arn, p.kind)
+				// 決定: Fingerprint は固定 (読んだ顔ぶれや回数は起動のたびに変わるので、入れると毎回 changed になる)
+				obs[k] = Observation{Check: c.Name(), Key: k, Severity: Info,
+					Summary: fmt.Sprintf("秘匿値の読み取り: %s が、一括読み出しから外すと書いた秘匿値 %d 個を読んだ (allowlist の bulk: exempt。一括読み出しに数えていない)",
+						record.PrincipalLabel(arn, p.kind), exempted),
+					Data: a.data(), Fingerprint: fingerprint(Info, nil, "bulk-exempt")}
+			}
 			continue
 		}
 
@@ -274,6 +329,15 @@ func (c SecretAccess) Evaluate(ctx context.Context, q store.Query, w collect.Win
 		if matched > 0 {
 			a.extra["secrets_access_matched"] = matched
 		}
+		if exempted > 0 {
+			a.extra["bulk_counted"] = counted
+			if applyExempt {
+				a.extra["bulk_exempted"] = exempted
+				a.extra["bulk_exempt_patterns"] = sortedKeys(exemptPats)
+			} else {
+				a.extra["bulk_exempt_ignored"] = bulkExemptIgnoredNotServiceRole
+			}
+		}
 		a.extra["threshold"] = thr
 		a.extra["baseline_median_distinct"] = med
 		a.extra["baseline_days_with_data"] = withData
@@ -286,7 +350,11 @@ func (c SecretAccess) Evaluate(ctx context.Context, q store.Query, w collect.Win
 		label := record.PrincipalLabel(arn, p.kind)
 		var parts []string
 		if bulk {
-			parts = append(parts, fmt.Sprintf("1 日に %d 個の秘匿値を一括で読み出し (閾値 %.0f 個。持ち出しの兆候)", distinct, thr))
+			if applyExempt && exempted > 0 {
+				parts = append(parts, fmt.Sprintf("1 日に %d 個の秘匿値を一括で読み出し (bulk: exempt で外した %d 個を除く。閾値 %.0f 個。持ち出しの兆候)", counted, exempted, thr))
+			} else {
+				parts = append(parts, fmt.Sprintf("1 日に %d 個の秘匿値を一括で読み出し (閾値 %.0f 個。持ち出しの兆候)", distinct, thr))
+			}
 		}
 		if len(newSecrets) > 0 {
 			if firstReader {

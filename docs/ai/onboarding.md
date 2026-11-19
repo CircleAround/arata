@@ -36,7 +36,7 @@ LLM がこの流れを手伝うときも、run と review を読んで材料を�
 
 | 出やすいもの | チェック | 典型的な片付け方 |
 |---|---|---|
-| アプリの起動時に、実行用のロールが秘匿値をまとめて読む (一括読み出し。high) | secret_access | 正規の読み手なら、平常帯がそろう日まで snooze (下の注)。ack しない |
+| アプリの起動時に、実行用のロールが秘匿値をまとめて読む (一括読み出し。high) | secret_access | 起動のたびに決まった組を読むサービスのロールなら `secrets_access` に `bulk: exempt` (下の注)。それ以外の正規の読み手は、平常帯がそろう日まで snooze。ack しない |
 | 導入作業の IAM 変更 (読み取り専用ロールを作る・ポリシーを付ける) | iam_changes | 作業として確認できたら resolve (終わった出来事)。IaC のデプロイ主体なら approve (`--tag deploy`) |
 | 監査の仕組みや社員によるロールの引き受け | unknown_assume_role / new_principal | 説明できる主体は approve。受託先などへのスイッチロールは行き先を `assume_destinations` に |
 | 設定していない守り (証跡・GuardDuty・パスワードポリシー・ALB の WAF など) | posture | 直す日を決めて snooze。意図して外しているものも、理由を残して見直す日まで snooze |
@@ -51,7 +51,8 @@ secret_access の一括読み出しの注: 閾値は `max(min_distinct, その�
 - 正規の読み手だと確かめたら、導入から `baseline_days` が過ぎる日まで `arata snooze <id> --until YYYY-MM-DD`。平常帯がそろえば出なくなる。期日の後も出るなら調べる
 - **ack しない**。high は secret_access の最も重い重大度なので、ack すると本物の持ち出しが後で起きても報告されない (下の「使い分け」)。
   arata も high・critical の ack を止める (`ACK_REFUSED`)
-- allowlist.yaml の `secrets_access` は初出 (low / medium) を止めるだけで、一括読み出しの数には数える。書いても high は消えない。初出を止めたいときだけ書く
+- allowlist.yaml の `secrets_access` は初出 (low / medium) を止めるだけで、一括読み出しの数には数える。`bulk: exempt` を書いた項目の組だけは一括読み出しからも外れる
+  (AWS のサービスに引き受けられるロールだけ。デプロイが数日に 1 回だと中央値は 0 のまま。書き方は `arata help ai playbook secret_access` の「起動時の読み取り」)
 
 チェックごとの確かめ方は `arata help ai playbook <check>`、承認してよいかの基準は `arata help ai approve`。
 
@@ -63,7 +64,7 @@ finding の ID は `arata review` と report に出る。手段は 4 つで、�
    LLM は提案まで。approve できるのは主体の承認になるチェックだけで、`arata review` が対象を示す
 2. **設定で直す**: 主体の承認ではない正常な動作は、allowlist.yaml の該当する節に人が書く
    (`secrets_access` / `source_ips` / `assume_destinations` / `expected_denied`。形式は `arata help ai`)。編集したら `arata config check`。
-   何が止まるかは節ごとに違う (`secrets_access` が止めるのは初出だけ。一括読み出しは止まらない)。既に出た finding が残ったら、下の選び方で snooze か resolve を選ぶ
+   何が止まるかは節ごとに違う (`secrets_access` が止めるのは初出だけ。一括読み出しは `bulk: exempt` の項目の組だけが外れる)。既に出た finding が残ったら、下の選び方で snooze か resolve を選ぶ
 3. **直す予定を決める**: 直すつもりのもの (設定していない守り、使っていないキーなど) は、期日を決めて `arata snooze <id> --until YYYY-MM-DD`
 4. **確認して閉じる**: もう終わった出来事だと確かめたものは `arata resolve <id>`。ack は、そのチェックの playbook の「片付け」の表が許す重大度だけ
 

@@ -267,3 +267,113 @@ func TestSecretAccessLateEvent(t *testing.T) {
 		t.Fatalf("obs: %+v", obs)
 	}
 }
+
+// serviceAssume は AWS のサービス (ECS のタスク) が role を引き受けた記録を at に入れる。
+func (s *secretSeed) serviceAssume(role string, at time.Time) {
+	s.t.Helper()
+	s.n++
+	e := record.TrailEvent{EventID: fmt.Sprintf("a%05d", s.n), Time: at, Source: "trail", Name: "AssumeRole", EventSource: "sts.amazonaws.com",
+		PrincipalARN: "ecs-tasks.amazonaws.com", PrincipalKind: record.PrincipalService, ReadOnly: true, Data: map[string]any{"role_arn": role}}
+	if err := s.st.InsertEvent(context.Background(), e); err != nil {
+		s.t.Fatal(err)
+	}
+}
+
+// startupRead は起動時の読み取り (GetParameters の 1 回) を入れる。names は prefix の後ろに 00.. の番号を付けた n 個。
+func (s *secretSeed) startupRead(arn string, at time.Time, prefix string, from, n int) {
+	s.t.Helper()
+	names := []any{}
+	for i := from; i < from+n; i++ {
+		names = append(names, fmt.Sprintf("%s%02d", prefix, i))
+	}
+	s.read(arn, record.PrincipalAssumedRole, at, "ssm:GetParameters", "", map[string]any{"names": names, "with_decryption": true})
+}
+
+// bulk: exempt (ADR 0073): 起動時に決まった組を読むサービスのロールは、その組を一括読み出しの数から外す。
+// 外した結果、何も報告しない主体は info の行 (bulk-exempt:<主体>) に残す。組の外・サービスのロールでない主体は今どおり数える。
+func TestSecretAccessBulkExempt(t *testing.T) {
+	const (
+		exec    = "arn:aws:iam::123456789012:role/example-app-task-execution"
+		execMix = "arn:aws:iam::123456789012:role/example-mix-task-execution"
+		execAvg = "arn:aws:iam::123456789012:role/example-daily-task-execution"
+		human   = "arn:aws:iam::123456789012:role/example-human-operator"
+		set     = "/example-app/prod/secrets/S"
+	)
+	st := newStore(t)
+	s := &secretSeed{st: st, t: t}
+	coverage(t, st, 14)
+	for _, r := range []string{exec, execMix, execAvg} {
+		s.serviceAssume(r, time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC))
+	}
+	// execAvg は毎日、外す組 15 個とほかの 2 個を読む。平常帯から外す組を除くと中央値は 2 (除かなければ 17 で、閾値 51 に隠れる)
+	for d := 6; d <= 19; d++ {
+		at := time.Date(2026, 10, d, 12, 0, 0, 0, time.UTC)
+		s.startupRead(execAvg, at, set, 0, 15)
+		s.startupRead(execAvg, at, "/example-app/prod/other/O", 0, 2)
+	}
+	in := now.Add(-3 * time.Hour)
+	// exec: 外す組 17 個だけ (7 + 10 の 2 回) → finding は出さず、info の行
+	s.startupRead(exec, in, set, 0, 7)
+	s.startupRead(exec, in, set, 7, 10)
+	// execMix: 外す組 17 個 + 組の外 11 個 → 外した後の 11 が閾値 10 を超えて high
+	s.startupRead(execMix, in, set, 0, 17)
+	s.startupRead(execMix, in, "/example-app/prod/other/O", 0, 11)
+	// execAvg: 外す組 15 個 + 組の外 12 個 (うち 2 個はいつもの) → 12 > max(10, 2 × 3) で high
+	s.startupRead(execAvg, in, set, 0, 15)
+	s.startupRead(execAvg, in, "/example-app/prod/other/O", 0, 12)
+	// human: bulk: exempt を書いたが、サービスに引き受けられたロールではない → 外さず high
+	s.startupRead(human, in, set, 0, 17)
+
+	var b strings.Builder
+	b.WriteString("secrets_access:\n")
+	for _, r := range []string{exec, execMix, execAvg, human} {
+		b.WriteString("  - principal: " + r + "\n    secrets: [\"/example-app/prod/secrets/*\"]\n    bulk: exempt\n    note: 起動時に ECS が読む\n")
+	}
+	al, err := allowlist.Parse([]byte(b.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	obs, err := secretCheck().Evaluate(context.Background(), st, appWindow, al)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := obsByKey(obs)
+	if len(m) != 4 {
+		t.Fatalf("obs: %+v", obs)
+	}
+	if _, ok := m[exec]; ok {
+		t.Fatalf("外した組だけの主体を報告した: %+v", m[exec])
+	}
+	line := m[BulkExemptKeyPrefix+exec]
+	if line.Severity != Info || line.Data["bulk_exempt"] != true || line.Data["bulk_exempted"] != 17 || line.Data["bulk_counted"] != 0 ||
+		fmt.Sprint(line.Data["bulk_exempt_patterns"]) != "[/example-app/prod/secrets/*]" || line.Data["principal"] != exec ||
+		line.Data["count"] != 2 || fmt.Sprint(line.Data["ips"]) != "[198.51.100.1]" || !strings.Contains(line.Summary, "17 個") {
+		t.Fatalf("info の行: %+v", line)
+	}
+	if line.Fingerprint != fingerprint(Info, nil, "bulk-exempt") {
+		t.Fatalf("info の行の Fingerprint は固定: %s", line.Fingerprint)
+	}
+	if o := m[execMix]; o.Severity != High || o.Data["bulk"] != true || o.Data["distinct_secrets"] != 28 || o.Data["bulk_counted"] != 11 ||
+		o.Data["bulk_exempted"] != 17 || fmt.Sprint(o.Data["bulk_exempt_patterns"]) != "[/example-app/prod/secrets/*]" {
+		t.Fatalf("execMix: %+v", o)
+	}
+	if o := m[execAvg]; o.Severity != High || o.Data["baseline_median_distinct"] != 2.0 || o.Data["threshold"] != 10.0 || o.Data["bulk_counted"] != 12 {
+		t.Fatalf("execAvg (平常帯からも外す): %+v", o)
+	}
+	if o := m[human]; o.Severity != High || o.Data["bulk_counted"] != 17 || o.Data["bulk_exempt_ignored"] != "not_service_role" || o.Data["bulk_exempted"] != nil {
+		t.Fatalf("human (サービスのロールでない): %+v", o)
+	}
+
+	// bulk: exempt の無い secrets_access は、今までどおり一括読み出しに数える (既定は変えない)
+	plain, err := allowlist.Parse([]byte("secrets_access:\n  - principal: " + exec + "\n    secrets: [\"/example-app/prod/secrets/*\"]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	obs, err = secretCheck().Evaluate(context.Background(), st, appWindow, plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o := obsByKey(obs)[exec]; o.Severity != High || o.Data["bulk_counted"] != nil || o.Data["bulk_exempt_ignored"] != nil {
+		t.Fatalf("bulk の無い項目: %+v", o)
+	}
+}

@@ -34,6 +34,10 @@ func FuzzParse(f *testing.F) {
 		"oidc_subjects:\n  - provider: token.actions.githubusercontent.com\n    role: arn:aws:iam::123456789012:role/*\n    repo: example-org/*\n    refs: [\"*\"]\n    note: n\n",
 		"oidc_subjects:\n  - provider: token.actions.githubusercontent.com\n    role: arn:aws:iam::123456789012:role/x\n    repo: example-org/example-repo\n    note: n\n",
 		"oidc_subjects:\n  - provider: cognito-identity.amazonaws.com\n    role: arn:aws:iam::123456789012:role/x\n    note: n\n    hours: [\"23:30-00:30\", \"\\xff\"]\n    source_ips: [\"::/0\"]\n",
+		"secrets_access:\n  - principal: arn:aws:iam::123456789012:role/app\n    secrets: [\"/example-app/prod/*\", \"prod/*\"]\n    bulk: exempt\n    note: n\n",
+		"secrets_access:\n  - principal: arn:aws:iam::123456789012:role/app\n    secrets: [\"/example-app/prod/*\", \"x\"]\n    bulk: exempt\n    note: n\n",
+		"secrets_access:\n  - principal: arn:aws:iam::123456789012:user/alice\n    secrets: [\"/a/b/*\"]\n    bulk: exempt\n    note: n\n",
+		"secrets_access: [{principal: x, secrets: [\"*\"], bulk: \"\"}]\n",
 		"oidc_subjects: &o [*o]\n", "principals:\n  - arn: arn:aws:iam::123456789012:role/gha-deploy\n    tags: [deploy]\noidc_subjects: []\n",
 	} {
 		f.Add([]byte(s))
@@ -172,6 +176,43 @@ func FuzzParse(f *testing.F) {
 				if _, st := l.OIDCSubject(a, at); st != StatusUnknown || l.OIDCRoleKnown(a.Role, at) {
 					t.Fatalf("principals の承認が OIDC の入り口を既知にした: %s", a.Role)
 				}
+			}
+		}
+		// bulk: exempt (ADR 0073): 値は空か exempt だけ。exempt の項目は note・ロールの主体・狭い glob を必ず持ち、
+		// 一致する名前は glob の固定の部分 (区切り 2 つ以上) で始まる。書いていない主体の秘匿値は外さない
+		for i := range l.SecretsAccess {
+			e := &l.SecretsAccess[i]
+			if e.Bulk != "" && e.Bulk != BulkExempt {
+				t.Fatalf("secrets_access[%d]: bulk に書けない値を受け入れた: %q", i, e.Bulk)
+			}
+			if e.Bulk != BulkExempt {
+				continue
+			}
+			if strings.TrimSpace(e.Note) == "" || !strings.Contains(e.Principal, ":role/") || !strings.HasPrefix(e.Principal, "arn:") {
+				t.Fatalf("secrets_access[%d]: bulk: exempt の検証が抜けた: %+v", i, e)
+			}
+			for _, g := range e.Secrets {
+				if CheckBulkExemptPattern(g) != nil {
+					t.Fatalf("secrets_access[%d]: 広すぎる glob を受け入れた: %q", i, g)
+				}
+				fixed := g
+				if k := strings.IndexAny(g, "*?"); k >= 0 {
+					fixed = g[:k]
+				}
+				for _, c := range []string{"x", "/x", "/x/y", "x/y/z", "/", ""} {
+					if p, ok := l.SecretBulkExempt(e.Principal, c); ok && p == g && !strings.HasPrefix(c, fixed) {
+						t.Fatalf("secrets_access[%d]: %q が固定の部分の外の %q に当たった", i, g, c)
+					}
+				}
+			}
+		}
+		if _, ok := l.SecretBulkExempt(outsider, "/example-app/prod/secrets/X"); ok {
+			found := false
+			for i := range l.SecretsAccess {
+				found = found || l.SecretsAccess[i].Principal == outsider
+			}
+			if !found {
+				t.Fatal("書いていない主体の秘匿値を一括読み出しの数から外した")
 			}
 		}
 		l.SecretExpected(outsider, "arn:aws:secretsmanager:ap-northeast-1:123456789012:secret:prod/db-AbCdEf")

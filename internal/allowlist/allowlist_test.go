@@ -348,3 +348,84 @@ func TestAccount(t *testing.T) {
 		t.Errorf("after expires: %s", got)
 	}
 }
+
+// bulk: exempt (ADR 0073): 一致する秘匿値を secret_access の一括読み出しの数から外す、明示の opt-in。
+// 外す範囲が広いと持ち出しが見えなくなるので、ロールでない主体・広い glob・ARN の形・note の無い項目は読み込みエラー。
+func TestSecretsAccessBulkExempt(t *testing.T) {
+	const app = "arn:aws:iam::123456789012:role/example-app-task-execution"
+	l := load(t, `
+secrets_access:
+  - principal: `+app+`
+    secrets: ["/example-app/prod/secrets/*", "prod/example-app/db"]
+    bulk: exempt
+    note: タスクの起動のたびに ECS がタスク定義の secrets を読む
+  - principal: `+app+`
+    secrets: ["prod/other/*"]
+`)
+	for _, tc := range []struct {
+		arn, secret, pattern string
+		ok                   bool
+	}{
+		{app, "/example-app/prod/secrets/DB_PASSWORD", "/example-app/prod/secrets/*", true},
+		{app, "prod/example-app/db", "prod/example-app/db", true},
+		{app, "arn:aws:secretsmanager:ap-northeast-1:123456789012:secret:prod/example-app/db", "prod/example-app/db", true},
+		// bulk の無い項目は外さない (初出を止めるだけ)
+		{app, "prod/other/x", "", false},
+		{app, "/example-app/stg/secrets/X", "", false},
+		{"arn:aws:iam::123456789012:role/other", "/example-app/prod/secrets/DB_PASSWORD", "", false},
+	} {
+		p, ok := l.SecretBulkExempt(tc.arn, tc.secret)
+		if ok != tc.ok || p != tc.pattern {
+			t.Errorf("SecretBulkExempt(%s, %s) = %q, %v", tc.arn, tc.secret, p, ok)
+		}
+	}
+	// bulk の有無によらず、secrets_access の項目は初出を止める
+	if !l.SecretExpected(app, "/example-app/prod/secrets/DB_PASSWORD") || !l.SecretExpected(app, "prod/other/x") {
+		t.Fatal("SecretExpected")
+	}
+	if !l.HasBulkExempt() || (&List{}).HasBulkExempt() {
+		t.Fatal("HasBulkExempt")
+	}
+
+	entry := func(principal, secret, bulk, note string) string {
+		s := "secrets_access:\n  - principal: " + principal + "\n    secrets: [\"" + secret + "\"]\n"
+		if bulk != "" {
+			s += "    bulk: " + bulk + "\n"
+		}
+		if note != "" {
+			s += "    note: " + note + "\n"
+		}
+		return s
+	}
+	for _, tc := range []struct{ name, body string }{
+		{"未知の値", entry(app, "/example-app/prod/*", "count_as_one", "n")},
+		{"真偽", entry(app, "/example-app/prod/*", "true", "n")},
+		{"note が無い", entry(app, "/example-app/prod/*", "exempt", "")},
+		{"ロールでない", entry("arn:aws:iam::123456789012:user/alice", "/example-app/prod/*", "exempt", "n")},
+		{"主体が ARN でない", entry("example-app", "/example-app/prod/*", "exempt", "n")},
+		{"*", entry(app, "*", "exempt", "n")},
+		{"/*", entry(app, "/*", "exempt", "n")},
+		{"区切り 1 つ", entry(app, "prod/*", "exempt", "n")},
+		{"区切り 1 つ (先頭の /)", entry(app, "/example-app/*", "exempt", "n")},
+		{"途中で切れた区切り", entry(app, "/example-app/prod*", "exempt", "n")},
+		{"?", entry(app, "/example-app/?/x", "exempt", "n")},
+		{"空の区切り", entry(app, "//example-app/*", "exempt", "n")},
+		{"ARN", entry(app, "arn:aws:secretsmanager:ap-northeast-1:123456789012:secret:prod/example-app/*", "exempt", "n")},
+	} {
+		if _, err := Parse([]byte(tc.body)); err == nil {
+			t.Errorf("%s: 読み込みエラーにならない: %q", tc.name, tc.body)
+		}
+	}
+	for _, body := range []string{
+		entry(app, "/example-app/prod/*", "exempt", "n"),
+		entry(app, "prod/example-app/*", "exempt", "n"),
+		entry(app, "/example-app/prod/secrets/DB_PASSWORD", "exempt", "n"),
+		entry(app, "example-app-db", "exempt", "n"),                     // ワイルドカードの無い名前は 1 つだけに当たる
+		entry("arn:aws:iam::123456789012:user/alice", "prod/*", "", ""), // bulk の無い項目は今までどおり
+		entry(app, "*", "", "note は bulk が無くても書ける"),
+	} {
+		if _, err := Parse([]byte(body)); err != nil {
+			t.Errorf("%q: %v", body, err)
+		}
+	}
+}

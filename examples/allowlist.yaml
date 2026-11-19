@@ -59,7 +59,12 @@ oidc_subjects:
   - provider: oidc.eks.ap-northeast-1.amazonaws.com/id/EXAMPLE0123456789   # GitHub 以外は provider と role だけ (sub は読まない)
     role: arn:aws:iam::123456789012:role/example-app-irsa
     note: クラスタのサービスアカウント
-# 主体 × 秘匿値 (名前・パスの glob)。secret_access が「初めて読む秘匿値」に数えない (一括読み出しには数える。ADR 0027)
+# 主体 × 秘匿値 (名前・パスの glob)。secret_access が「初めて読む秘匿値」に数えない (一括読み出しには数える。ADR 0027。bulk: exempt の項目の組は一括読み出しからも外す。ADR 0073)
 secrets_access:
   - principal: arn:aws:iam::123456789012:role/example-app-task
     secrets: ["prod/app/*", "/example/prod/*"]
+  # 起動のたびに ECS がタスクの実行用のロールで決まった組を読む。サービスに引き受けられたロールのときだけ外れる。note 必須、広い glob は読み込みエラー
+  - principal: arn:aws:iam::123456789012:role/example-app-task-execution
+    secrets: ["/example-app/prod/secrets/*"]
+    bulk: exempt
+    note: タスクの起動のたびに ECS がタスク定義の secrets を読む

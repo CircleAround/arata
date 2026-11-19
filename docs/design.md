@@ -1024,6 +1024,7 @@ oidc_subjects:                   # OIDC でのロールの引き受けの、既�
   中国などのパーティションの `.amazonaws.com.cn` は対象外 (必要になったら足す)。
 - 決定 (ADR 0027): 主体の項目の `dynamic_source: true` は「送信元が毎回変わる主体」(CI のランナーなど)。principal_new_source の low (新しい送信元だけ) を出さない (medium 以上は出す)。
 - 決定 (ADR 0027): `secrets_access` は「主体 (ARN の完全一致) × 読んでよい秘匿値 (名前・パスの glob)」。secret_access は一致する秘匿値を初出に数えない (一括読み出しの数には数える)。シークレットの ARN はシークレット名の部分でも比べる。空の `secrets`・空の要素・`principal` の無い項目は読み込みエラー。
+- 決定 (ADR 0073): `secrets_access` の項目の `bulk: exempt` (明示の opt-in) は、一致する秘匿値を secret_access の一括読み出しの数からも外す (起動のたびに決まった組をまとめて読むロール)。値は `exempt` だけ (書かなければ今までどおり)。`note` は必須、`principal` はロールの ARN (`:role/` を含む)、`secrets` は名前 (`arn:` は不可) で、ワイルドカードがあれば最初のワイルドカードより前に `/` で閉じた空でない区切りが 2 つ以上 (`/a/b/*`・`a/b/*` は可、`*`・`/*`・`a/*`・`/a/b*` は不可)。外れたら読み込みエラー。`approve` は書かない。
 - `tags` の語彙は `deploy` (ADR 0008) と `ai` (決定: Step 3。監査ロール・AI 用の主体。ai_path_usage が利用を毎回 info に出す)。approve は語彙外のタグを拒否する。
 - 決定 (ADR 0022): `expected_denied` は access_denied で数えない「想定済みの拒否」(「サービス:操作」の glob。`*` は任意の文字列、`?` は 1 文字、大文字小文字を区別)。
   主体に一致する期限内の項目すべての `expected_denied` の和で判定する (項目ごとに理由と期限が違ってよいため。タグの判定に使う項目の選び方と、同じ arn の重複の後勝ちは変えない)。
@@ -1265,7 +1266,7 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 | チェック | Mode | Key | Fingerprint | 判定 |
 |---|---|---|---|---|
 | principal_new_source | event | `<主体 ARN>` | 重大度 + 新しい送信元の集合 + 新しいリージョンの集合 | 既知の主体 (allowlist で承認済み、または principals が baseline / approved) の窓の日 (UTC) の送信元・書き込みのリージョンが、窓の始まりの日の前日から `baseline_days` (30) 日に無い |
-| secret_access | event | `<主体 ARN>` | 重大度 + 一括読み出しか + 初めて読む秘匿値の集合 | 窓の成功した秘匿値の読み取り (ssm は復号したもの) の初出と異なり数 |
+| secret_access | event | `<主体 ARN>` (info の行は `bulk-exempt:<主体 ARN>`) | 重大度 + 一括読み出しか + 初めて読む秘匿値の集合 (info の行は固定) | 窓の成功した秘匿値の読み取り (ssm は復号したもの) の初出と異なり数 |
 
 - principal_new_source の重大度: 新しい送信元だけ → low。新しい送信元からの書き込み (窓の日の下限値の和) が `min_writes` (5) 以上、または新しいリージョンでの書き込み → medium。
   新しい送信元 + 同じ窓で access_denied の観測もある → high
@@ -1290,6 +1291,7 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 - 決定: 初出の履歴は日の区切りに依らず窓の直前まで見る。「その名前を読んだことがある」には復号しない読み取りも数え、「秘匿値を読んだことがある」は復号した読み取りか、
   `with_decryption` の無い (以前の版で集めた) ssm の読み取り。導入直後 (CloudTrail を収集し終えた過去日が `min_baseline_days` (7) 未満。数え方は principal_new_source と同じ) は初出を報告しない (一括読み出しは報告する)
 - 決定: allowlist の `secrets_access` に一致する秘匿値は初出に数えない。それを読む主体は「初めての読み手」として重くしない。承認済みの主体でも下げない
+- 決定 (ADR 0073): `bulk: exempt` の項目に一致する秘匿値は、一括読み出しの数から外す (窓の数と平常帯の日ごとの数の両側)。外すのは、その主体が平常帯の始まりから窓の終わりまでに AWS のサービスに引き受けられたロール (principal_new_source の `service_assumed` と同じ判定) のときだけ。そうでなければ外さず、data に `bulk_exempt_ignored: not_service_role` (鳴る側。人の SSO のロールを書き方で黙らせない)。外した分は data の `bulk_exempted` (外した数)・`bulk_counted` (閾値と比べた数)・`bulk_exempt_patterns` に残し、`distinct_secrets` は外す前の数のまま。外した結果、何も報告しない主体は info の行 (Key は `bulk-exempt:<主体 ARN>`、`bulk_exempt: true`、Fingerprint は固定。件数・通知に数えない) に残す。`userAgent` (エージェントの名乗り) は呼ぶ側が書ける値なので判定にも data にも使わない
 - 決定: 保存量 (秘匿値の読み取りとして出した trail_event の数) を run の stats の `secret_read_events` に残す。GetParameter はアプリの起動ごとに呼ばれて多い
 - 2 つとも追加の権限は要らない (`cloudtrail:LookupEvents` だけ)。日次集計と秘匿値の取り出しで既存のチェックの結果が変わらないことをテストで固定する
 

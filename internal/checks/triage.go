@@ -51,7 +51,7 @@ var triageTable = map[string][]TriageRow{
 	"ecs_exec":               {row(false, noAck, High), row(true, noAck, Medium, Low)},
 	"unknown_assume_role":    {row(false, apNoAck, High, Info)},
 	"oidc_assume_role":       {row(false, noAck, High, Medium), row(true, withAck, Low), row(false, noAck, Info)},
-	"secret_access":          {row(false, noAck, High), row(true, withAck, Medium, Low)},
+	"secret_access":          {row(false, noAck, High), row(true, withAck, Medium, Low), row(false, noAck, Info)},
 	"guardduty_findings":     {row(false, noAck, High, Medium, Low)},
 	"iam_changes":            {row(false, apNoAck, High, Medium, Info)},
 	"access_denied":          {row(false, apNoAck, High), row(true, apAck, Medium)},

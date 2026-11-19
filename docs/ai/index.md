@@ -111,8 +111,8 @@ source_ips:
   - cidr: 203.0.113.0/24          # アプリ層チェックの対象外にする IP。principal_new_source でも新しい送信元にしない
     note: 本社
 secrets_access:                   # 主体 × 読んでよい秘匿値 (名前・パスの glob)。secret_access の初出に数えない
-  - principal: arn:aws:iam::123456789012:role/example-app-task
-    secrets: ["prod/app/*"]
+  - { principal: "arn:aws:iam::123456789012:role/example-app-task", secrets: ["prod/app/*"] }
+  - { principal: "arn:aws:iam::123456789012:role/example-app-exec", secrets: ["/example-app/prod/secrets/*"], bulk: exempt, note: 起動時に ECS が読む }   # 一括読み出しの数からも外す (サービスのロールだけ。広い glob はエラー。ADR 0073)
 assume_destinations:              # 外向きの引き受けで、行き先として既知のアカウント。そこへの MFA ありの引き受けは unknown_assume_role が報告しない
   - { account: "111122223333", note: 運用を受託しているアカウント, expires: 2027-03-31 }   # principals の account: とは別 (主体は承認されない)。note 必須。roles: ["ReadOnly"] でロールに絞れる
 oidc_subjects:                    # OIDC でのロールの引き受け (GitHub Actions など) の既知の入り口。oidc_assume_role が比べる。approve は書かない (人が書く。arata help ai playbook oidc_assume_role)

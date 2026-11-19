@@ -139,8 +139,8 @@ access_denied は allowlist で主体を承認しても止まらない (承認�
 
 - principal_new_source: 恒常的な拠点の送信元は `source_ips` に (`cidr` と `note`)。CI のランナーのように送信元が毎回変わる主体は、主体の項目に `dynamic_source: true`
   (low が出なくなる。書き込みが多い・新しいリージョン・拒否も出ているときの medium 以上は出る)。一時的な出張などは snooze (low・medium なら ack も)
-- secret_access: 恒常的な「主体 × 秘匿値」は `secrets_access` に (`principal` と `secrets` の glob。例 `["prod/app-a/*"]`)。初出に数えなくなる (一括読み出しには数える)。
-  広い glob (`*`) は初出を隠すので勧めない。一時的な読み取りは snooze (low・medium なら ack も。high は ack できない)
+- secret_access: 恒常的な「主体 × 秘匿値」は `secrets_access` に (`principal` と `secrets` の glob。例 `["prod/app-a/*"]`)。初出に数えなくなる (一括読み出しには、`bulk: exempt` の項目の組のほかは数える。
+  playbook の「起動時の読み取り」)。広い glob (`*`) は初出を隠すので勧めない。一時的な読み取りは snooze (low・medium なら ack も。high は ack できない)
 
 ## approve ではなく ack / snooze / resolve にするもの
 
