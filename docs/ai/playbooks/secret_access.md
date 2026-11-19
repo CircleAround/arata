@@ -93,16 +93,16 @@ secrets_access:
 | 重大度 | 上がる余地 | 許す操作 |
 |---|---|---|
 | high | なし | snooze・resolve |
+| medium (`bulk-exempt-unmatched:`) | なし | snooze・resolve |
 | medium・low | あり | ack・snooze・resolve |
 | info | なし | snooze・resolve |
 
 上がる余地は、同じ Key のまま、より重い重大度で観測されうるか。ack を許すのは余地のある行だけ (ack 中に出直すのは重大度が上がったときだけ)。このチェックは event 型 (観測されなくても解消にならない)。
 
 - snooze: 正規の読み手なら、導入から `baseline_days` が過ぎる日まで (平常帯がそろえば出なくなる)。移行作業・障害対応などの一時的な読み取りも期日を決めて
-- ack: low・medium (初めて読む秘匿値) だけ。同じ主体が後で一括読み出しをすれば high で出直す
-- medium の `bulk-exempt-unmatched:` は ack の前に「まず確かめること」の 8 で起動の外での利用でないかを確かめる (ack すると同じ理由では出直さない)。窓の不足なら設定を延ばして resolve
-- resolve: 終わった 1 回の読み取り。また起きれば新規として報告される
-- info (`bulk-exempt:` の行) は記録のための行。何もしなくてよい。送信元を確かめて終わりなら resolve
+- ack: low・medium (初めて読む秘匿値) だけ。同じ主体が後で一括読み出しをすれば high で出直す。medium の `bulk-exempt-unmatched:` は ack できない (ADR 0077。ack すると盗まれた
+  認証情報の利用が同じ理由で出直さない)。「まず確かめること」の 8 で確かめ、移行の 1 回・窓の不足 (設定を延ばす) なら resolve
+- resolve: 終わった 1 回の読み取り。また起きれば新規として報告される。info (`bulk-exempt:` の行) は記録のための行で、何もしなくてよい
 - high (一括読み出し) は ack できない。ack すると、後で本物の持ち出しが起きても二度と報告されない
 - 表で許さない ack は arata が止める (`ACK_REFUSED`)。終わった出来事だと確かめたうえでどうしても ack するなら、人が `--force --reason "<理由>"` を付ける (記録に force が残り、週次の報告に出る)。LLM は `--force` を提案しない
 

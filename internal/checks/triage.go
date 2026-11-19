@@ -1,6 +1,9 @@
 package checks
 
-import "sort"
+import (
+	"sort"
+	"strings"
+)
 
 // 片付けの表 (ADR 0068 の 4 節・6 節): チェック × 重大度 → 上がる余地・許す操作。
 //
@@ -12,6 +15,8 @@ import "sort"
 //   - approve は arata approve が受け付けるチェック (ApproveChecks) だけ
 //   - 余地のあり・なしは、同じ Key で軽い観測と重い観測を作れるか (triage_escalation_test.go)。一部の Key だけ上がるチェック
 //     (iam_changes の信頼ポリシーの変更など) は、守りの側に倒して「なし」にする
+//   - 決定 (ADR 0077): 一部の Key だけを守りの側に倒す行は、Key の接頭辞 (KeyPrefix) を持つ。接頭辞の行は上がる余地「なし」だけで、
+//     その接頭辞の Key には接頭辞の行が先に当たる (無ければ接頭辞の無い行)。playbook では「medium (`<接頭辞>`)」と書く
 
 // 片付けの操作の名前 (store.Action* と同じ値)。
 const (
@@ -28,6 +33,8 @@ var ApproveChecks = map[string]bool{"new_principal": true, "unknown_assume_role"
 // TriageRow は片付けの表の 1 行。
 type TriageRow struct {
 	Severities []Severity
+	// KeyPrefix が空でなければ、Key がこの接頭辞で始まる finding だけの行 (ADR 0077)。
+	KeyPrefix string
 	// Escalates は、同じ Key のまま、より重い重大度で観測されうるか。
 	Escalates bool
 	// Allowed は許す操作 (approve・ack・snooze・resolve の順)。
@@ -45,13 +52,18 @@ func row(escalates bool, allowed []string, sevs ...Severity) TriageRow {
 	return TriageRow{Severities: sevs, Escalates: escalates, Allowed: allowed}
 }
 
+// keyRow は Key の接頭辞の行 (上がる余地なし。ADR 0077)。
+func keyRow(prefix string, allowed []string, sevs ...Severity) TriageRow {
+	return TriageRow{Severities: sevs, KeyPrefix: prefix, Allowed: allowed}
+}
+
 var triageTable = map[string][]TriageRow{
 	"root_usage":             {row(false, noAck, Critical)},
 	"defense_evasion":        {row(false, noAck, Critical, High, Medium)},
 	"ecs_exec":               {row(false, noAck, High), row(true, noAck, Medium, Low)},
 	"unknown_assume_role":    {row(false, apNoAck, High, Info)},
 	"oidc_assume_role":       {row(false, noAck, High, Medium), row(true, withAck, Low), row(false, noAck, Info)},
-	"secret_access":          {row(false, noAck, High), row(true, withAck, Medium, Low), row(false, noAck, Info)},
+	"secret_access":          {row(false, noAck, High), keyRow(BulkExemptUnmatchedKeyPrefix, noAck, Medium), row(true, withAck, Medium, Low), row(false, noAck, Info)},
 	"guardduty_findings":     {row(false, noAck, High, Medium, Low)},
 	"iam_changes":            {row(false, apNoAck, High, Medium, Info)},
 	"access_denied":          {row(false, apNoAck, High), row(true, apAck, Medium)},
@@ -85,12 +97,17 @@ func TriageChecks() []string {
 // TriageRows はチェックの表の行 (無ければ nil)。
 func TriageRows(check string) []TriageRow { return triageTable[check] }
 
-// TriageRowOf はチェックと重大度の行。表に無い組なら false (その組の ack は許さない側に倒す)。
-func TriageRowOf(check string, sev Severity) (TriageRow, bool) {
-	for _, r := range triageTable[check] {
-		for _, s := range r.Severities {
-			if s == sev {
-				return r, true
+// TriageRowOf はチェック・Key・重大度の行。Key の接頭辞の行が先に当たる。表に無い組なら false (その組の ack は許さない側に倒す)。
+func TriageRowOf(check, key string, sev Severity) (TriageRow, bool) {
+	for _, prefixed := range []bool{true, false} {
+		for _, r := range triageTable[check] {
+			if (r.KeyPrefix != "") != prefixed || prefixed && !strings.HasPrefix(key, r.KeyPrefix) {
+				continue
+			}
+			for _, s := range r.Severities {
+				if s == sev {
+					return r, true
+				}
 			}
 		}
 	}
@@ -98,8 +115,8 @@ func TriageRowOf(check string, sev Severity) (TriageRow, bool) {
 }
 
 // TriageAllows は表がその操作を許すか。表に無い組は ack だけを許さない (snooze・resolve は止めない。approve の可否は approve が決める)。
-func TriageAllows(check string, sev Severity, action string) bool {
-	r, ok := TriageRowOf(check, sev)
+func TriageAllows(check, key string, sev Severity, action string) bool {
+	r, ok := TriageRowOf(check, key, sev)
 	if !ok {
 		return action != TriageAck
 	}

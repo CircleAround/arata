@@ -56,7 +56,7 @@ func ValidateReason(reason string) error {
 // (ADR 0068 の 2 節・6 節)。表は high・critical と、同じ Key で重大度の上がる余地の無い行で ack を許さない。
 // 上がる余地が無いまま ack すると、ack 中に出直すのは重大度が上がったときだけ (ADR 0022) なので、後で本物が起きても再報告されない。
 func ackGuarded(f store.Finding) bool {
-	return !checks.TriageAllows(f.Check, checks.Severity(f.Severity), checks.TriageAck)
+	return !checks.TriageAllows(f.Check, f.Key, checks.Severity(f.Severity), checks.TriageAck)
 }
 
 // TriageInfo は review と report.json の各 finding に載せる、許す操作と根拠の文書 (ADR 0068 の 4 節)。
@@ -66,7 +66,7 @@ type TriageInfo = schema.TriageInfo
 // triageOf は finding の許す操作。表に無い組 (この版が知らない重大度など) は snooze と resolve だけ。
 func triageOf(f store.Finding) TriageInfo {
 	info := TriageInfo{Doc: "arata help ai playbook " + f.Check, Section: "片付け"}
-	row, ok := checks.TriageRowOf(f.Check, checks.Severity(f.Severity))
+	row, ok := checks.TriageRowOf(f.Check, f.Key, checks.Severity(f.Severity))
 	if !ok {
 		info.Allowed = []string{checks.TriageSnooze, checks.TriageResolve}
 		return info

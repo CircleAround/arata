@@ -1081,7 +1081,7 @@ oidc_subjects:                   # OIDC でのロールの引き受けの、既�
    │     週次の「黙らせているもの」に出る (ADR 0068 の 3 節)
    │     (ack / snooze / resolve の --dry-run は、同じ検査をしてストアを書かない。S3 にも送らない。ADR 0068 の 8 節)
    │     → 片付けの表 (checks.TriageRows。正は playbook の「片付け」) が許さなければ止める (ACK_REFUSED。approve / snooze / resolve を案内)。
-   │       表は high・critical と、同じ Key で重大度の上がる余地の無い行で ack を許さない。review --format json の triage.allowed に許す操作。--force --reason でだけ通し、記録に forced (守りを越えたときだけ真。--force には --reason が要る。ADR 0068)
+   │       表は high・critical と、同じ Key で重大度の上がる余地の無い行で ack を許さない (一部の Key だけの行は Key の接頭辞で引く。ADR 0077)。review --format json の triage.allowed に許す操作。--force --reason でだけ通し、記録に forced (守りを越えたときだけ真。--force には --reason が要る。ADR 0068)
    ├─ arata snooze <finding-id> --until 2026-11-01   → 期日まで沈黙、期日に再報告
    ├─ arata resolve <finding-id>     → resolved。再び観測されたら new
    └─ 放置                              → その run で同じ内容で再び観測されれば still_open として報告に出る (event 型は観測の無い窓では出ない)。
@@ -1300,7 +1300,7 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
   `with_decryption` の無い (以前の版で集めた) ssm の読み取り。導入直後 (CloudTrail を収集し終えた過去日が `min_baseline_days` (7) 未満。数え方は principal_new_source と同じ) は初出を報告しない (一括読み出しは報告する)
 - 決定: allowlist の `secrets_access` に一致する秘匿値は初出に数えない。それを読む主体は「初めての読み手」として重くしない。承認済みの主体でも下げない
 - 決定 (ADR 0073): `bulk: exempt` の項目に一致する秘匿値は、一括読み出しの数から外す (窓の数と平常帯の日ごとの数の両側)。外すのは、その主体が平常帯の始まりから窓の終わりまでに AWS のサービスに引き受けられたロール (principal_new_source の `service_assumed` と同じ判定) のときだけ。そうでなければ外さず、data に `bulk_exempt_ignored: not_service_role` (鳴る側。人の SSO のロールを書き方で黙らせない)。外した分は data の `bulk_exempted` (外した数)・`bulk_counted` (閾値と比べた数)・`bulk_exempt_patterns` に残し、`distinct_secrets` は外す前の数のまま。外した結果、何も報告しない主体は info の行 (Key は `bulk-exempt:<主体 ARN>`、`bulk_exempt: true`、Fingerprint は固定。件数・通知に数えない) に残す。`userAgent` (エージェントの名乗り) は呼ぶ側が書ける値なので判定にも data にも使わない
-- 決定 (ADR 0076): 窓の側で外すのは、読み取りの `data.session_key_hash` と同じ `data.issued_key_hash` を持ち、`role_arn` が主体の、成功した ECS (`ecs-tasks.amazonaws.com`) の `AssumeRole` があり、読み取りの時刻が発行の 5 秒前から `bulk_exempt_within` 後までのものだけ。秘匿値ごとに、窓の読み取りが全部外せるときだけ外す。発行の記録は窓に限らず保存済みのものから引く (窓の始まりの前の発行も組む)。記録が無い・遅れた・窓の外は外さない (鳴る側)。平常帯の側は突き合わせによらず外す (外せない読み取りで閾値を上げない)。外せない読み取りが 1 つでもあれば、閾値を超えなくても medium (Key は `bulk-exempt-unmatched:<主体 ARN>`。data に理由ごとの件数 `bulk_exempt_unmatched` (`no_key` / `no_issuance` / `outside_window`)・`unmatched_secrets`・`bulk_exempt_max_delay_seconds`。Fingerprint は重大度と理由の集合)。一括読み出しの high のときは medium を重ねず、high の data に同じ項目と `bulk_exempt_ignored: session_unmatched` を載せる。info の行は外せない読み取りが無いときだけで、`bulk_exempt_sessions`・`bulk_exempt_max_delay_seconds` を足す
+- 決定 (ADR 0076): 窓の側で外すのは、読み取りの `data.session_key_hash` と同じ `data.issued_key_hash` を持ち、`role_arn` が主体の、成功した ECS (`ecs-tasks.amazonaws.com`) の `AssumeRole` があり、読み取りの時刻が発行の 5 秒前から `bulk_exempt_within` 後までのものだけ。秘匿値ごとに、窓の読み取りが全部外せるときだけ外す。発行の記録は窓に限らず保存済みのものから引く (窓の始まりの前の発行も組む)。記録が無い・遅れた・窓の外は外さない (鳴る側)。平常帯の側は突き合わせによらず外す (外せない読み取りで閾値を上げない)。外せない読み取りが 1 つでもあれば、閾値を超えなくても medium (Key は `bulk-exempt-unmatched:<主体 ARN>`。data に理由ごとの件数 `bulk_exempt_unmatched` (`no_key` / `no_issuance` / `outside_window`)・`unmatched_secrets`・`bulk_exempt_max_delay_seconds`。Fingerprint は重大度と理由の集合)。一括読み出しの high のときは medium を重ねず、high の data に同じ項目と `bulk_exempt_ignored: session_unmatched` を載せる。この medium は ack を止める (ADR 0077。片付けの表の Key の接頭辞の行)。info の行は外せない読み取りが無いときだけで、`bulk_exempt_sessions`・`bulk_exempt_max_delay_seconds` を足す
 - 決定: 保存量 (秘匿値の読み取りとして出した trail_event の数) を run の stats の `secret_read_events` に残す。GetParameter はアプリの起動ごとに呼ばれて多い
 - 2 つとも追加の権限は要らない (`cloudtrail:LookupEvents` だけ)。日次集計と秘匿値の取り出しで既存のチェックの結果が変わらないことをテストで固定する
 
