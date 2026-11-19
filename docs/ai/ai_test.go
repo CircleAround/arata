@@ -255,8 +255,8 @@ func TestOnboarding(t *testing.T) {
 			t.Errorf("ack・snooze・resolve の使い分け lacks %q", want)
 		}
 	}
-	// secret_access の一括読み出し (導入直後は min_distinct だけで判定される): snooze で待つ。ack しない。secrets_access では消えない
-	for _, want := range []string{"min_distinct", "baseline_days", "baseline_median_distinct", "arata snooze", "ack しない", "初出", "書いても high は消えない"} {
+	// secret_access の一括読み出し (導入直後は min_distinct だけで判定される): snooze で待つ。ack しない。secrets_access は初出だけ止め、bulk: exempt の組だけが外れる (ADR 0073)
+	for _, want := range []string{"min_distinct", "baseline_days", "baseline_median_distinct", "arata snooze", "ack しない", "初出", "bulk: exempt", "サービスに引き受けられるロール"} {
 		if !strings.Contains(sec["最初の run で出るもの"], want) {
 			t.Errorf("最初の run で出るもの lacks %q", want)
 		}

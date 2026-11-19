@@ -177,9 +177,14 @@ type SourceIPEntry struct {
 
 // SecretsAccessEntry は secrets_access の 1 件。主体 (ARN の完全一致) が読んでよい秘匿値 (名前・パスの glob)。
 // 決定 (ADR 0027): secret_access は、一致する秘匿値を「初めて読む秘匿値」に数えない (一括読み出しの数には数える)。
+// 決定 (ADR 0073): bulk: exempt の項目に一致する秘匿値は、一括読み出しの数からも外す (明示の opt-in。外すかの最後の判定は secret_access)。
 type SecretsAccessEntry struct {
 	Principal string   `yaml:"principal"`
 	Secrets   []string `yaml:"secrets"`
+	// Bulk は一括読み出しの数の扱い。空 (今までどおり数える) か BulkExempt だけ
+	Bulk string `yaml:"bulk"`
+	// Note は理由。bulk: exempt の項目では必須
+	Note string `yaml:"note"`
 
 	secrets []*regexp.Regexp
 }
@@ -301,6 +306,9 @@ func Parse(b []byte) (*List, error) {
 				return nil, entryErr("secrets_access", i, "secrets[%d]: %w", j, err)
 			}
 			e.secrets = append(e.secrets, re)
+		}
+		if err := checkBulk(e); err != nil {
+			return nil, entryErr("secrets_access", i, "%w", err)
 		}
 	}
 	for i := range l.AssumeDestinations {
@@ -427,6 +435,96 @@ func (l *List) SecretExpected(arn, secret string) bool {
 		}
 	}
 	return false
+}
+
+// BulkExempt は secrets_access の項目の bulk の値で、一致する秘匿値を一括読み出しの数から外す (ADR 0073)。
+const BulkExempt = "exempt"
+
+// checkBulk は secrets_access の項目の bulk を確かめる (ADR 0073 の 1・3 節)。
+//
+// 決定: bulk: exempt は high を黙らせるので、外す範囲が広い項目は警告ではなく読み込みエラーにする (警告は見落とされ、効き目は静かに high を消すこと)。
+// 主体はロール (人の長期のキーで起動時にまとめて読む形は勧めない)、note は必須、secrets は CheckBulkExemptPattern を満たすものだけ。
+func checkBulk(e *SecretsAccessEntry) error {
+	switch e.Bulk {
+	case "":
+		return nil
+	case BulkExempt:
+	default:
+		return fmt.Errorf("bulk must be %q or omitted, got %q", BulkExempt, e.Bulk)
+	}
+	if strings.TrimSpace(e.Note) == "" {
+		return fmt.Errorf("bulk: %s requires note (why these secrets may be read in bulk)", BulkExempt)
+	}
+	if !strings.HasPrefix(e.Principal, "arn:") || !strings.Contains(e.Principal, ":role/") {
+		return fmt.Errorf("bulk: %s is only for roles (principal must be a role ARN): %q", BulkExempt, e.Principal)
+	}
+	for j, g := range e.Secrets {
+		if err := CheckBulkExemptPattern(g); err != nil {
+			return fmt.Errorf("secrets[%d]: %w", j, err)
+		}
+	}
+	return nil
+}
+
+// CheckBulkExemptPattern は bulk: exempt の項目の secrets に書ける glob か (ADR 0073 の 3 節)。
+// ワイルドカード (* と ?) の無い名前は可。ワイルドカードがあれば、最初のワイルドカードより前の固定の部分に、
+// "/" で閉じた空でない区切りが 2 つ以上要る (/a/b/* と a/b/* は可、*・/*・a/*・/a/*・/a/b*・//a/* は不可)。ARN の形 (arn:) は書けない (名前で書く)。
+func CheckBulkExemptPattern(g string) error {
+	if strings.HasPrefix(g, "arn:") {
+		return fmt.Errorf("bulk: %s secrets must be names, not ARNs: %q", BulkExempt, g)
+	}
+	i := strings.IndexAny(g, "*?")
+	if i < 0 {
+		return nil
+	}
+	parts := strings.Split(g[:i], "/")
+	// 最後の要素は "/" で閉じていない (ワイルドカードの直前の途中の名前) ので数えない。先頭の "/" の前の空の要素は数えない
+	parts = parts[:len(parts)-1]
+	if len(parts) > 0 && parts[0] == "" {
+		parts = parts[1:]
+	}
+	if len(parts) < 2 {
+		return fmt.Errorf("bulk: %s pattern is too broad (needs at least two fixed path segments before a wildcard): %q", BulkExempt, g)
+	}
+	for _, p := range parts {
+		if p == "" {
+			return fmt.Errorf("bulk: %s pattern has an empty path segment: %q", BulkExempt, g)
+		}
+	}
+	return nil
+}
+
+// HasBulkExempt は bulk: exempt の項目が 1 つでもあるか (secret_access が引き受けの記録を引くかの判断に使う)。
+func (l *List) HasBulkExempt() bool {
+	for i := range l.SecretsAccess {
+		if l.SecretsAccess[i].Bulk == BulkExempt {
+			return true
+		}
+	}
+	return false
+}
+
+// SecretBulkExempt は arn が secret を読むことが bulk: exempt の項目に書いてあるか。一致した glob (書いたままの値) を返す。
+// 比べ方は SecretExpected と同じ (シークレットの ARN は名前の部分でも比べる)。
+func (l *List) SecretBulkExempt(arn, secret string) (string, bool) {
+	cands := []string{secret}
+	if _, name, ok := strings.Cut(secret, ":secret:"); ok && strings.HasPrefix(secret, "arn:") {
+		cands = append(cands, name)
+	}
+	for i := range l.SecretsAccess {
+		e := &l.SecretsAccess[i]
+		if e.Principal != arn || e.Bulk != BulkExempt {
+			continue
+		}
+		for k, re := range e.secrets {
+			for _, c := range cands {
+				if re.MatchString(c) {
+					return e.Secrets[k], true
+				}
+			}
+		}
+	}
+	return "", false
 }
 
 // SourceIPAllowed は IP が source_ips のいずれかに含まれるか。
