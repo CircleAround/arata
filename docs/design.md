@@ -699,8 +699,13 @@ profiles:
 - `default-<cadence>` の省略記法は手書きの設定のために残す (後方互換)。ただし版が上がって増えたチェックが黙って入るので、雛形では使わない。
 - `arata config init --diff` は現在の設定と最新の雛形の差分を出す: どのプロファイルにも入っていないチェック (`unused_check`)、
   プロファイルに書かれているがこの版に無いチェック (`unknown_check`)、雛形にあって設定に無いプロファイル (`missing_profile`)、
-  `checks:` に書いた値がこの版の既定値と違うパラメータ (`param_changed`)、雛形が必ず書くのに設定に無いキー (`missing_key`。`audit_account`。ADR 0045)、arata が知らないキー (`unknown_key`)。設定は Load せずに緩く読む (未知のキーで読めない設定にも使える)。
-  `checks:` に書いていないパラメータは実行時にこの版の既定値が効くので差分にしない。overrides は意図した上書きなので比べない。
+  `checks:` に書いた値がこの版の既定値と違うパラメータ (`param_changed`)、雛形が書くのに設定のそのチェックの節に無いパラメータ (`missing_param`)、
+  雛形が必ず書くのに設定に無いキー (`missing_key`。`audit_account`。ADR 0045)、arata が知らないキー (`unknown_key`)。設定は Load せずに緩く読む (未知のキーで読めない設定にも使える)。overrides は意図した上書きなので比べない。
+  決定 (2026-11-20。以前の「`checks:` に書いていないパラメータは差分にしない」を置き換え): 版を上げて増えた既定値 (例: `secret_access.bulk_exempt_within`) は、
+  既存の設定のままでは見えないまま効く (ADR 0014 の「新しい既定値は `config init --diff` で見える」を満たさない)。そこで、設定にそのチェックの節があり、
+  どれかのプロファイルで動くチェックについて、雛形が書くのに節に無いパラメータを `missing_param` (`template` に雛形の値) で出す。
+  節ごと書いていないチェックは全部を既定値に任せているので出さない (手書きの短い設定で全パラメータが並ぶのを避ける。却下: 節の有無によらず全部を出す)。
+  `config-diff` のスキーマは `kind` の値が 1 つ増えるだけで、項目と型は変わらない (互換。ADR 0054)
 - 決定 (ADR 0045): `arata config init` は **監査する側のアカウント** を `--audit-account` で必ず選ばせる (既定は無い。無ければ 2 つの選択肢を示して `CONFIG_INVALID`)。
   - `--audit-account <12 桁の ID>`: 別のアカウントのロールが、監査対象の読み取り専用ロールを引き受けて監査する。設定に `audit_account: "<ID>"` を書き、
     既知リスト (`--out` と同じ場所の `allowlist.yaml`) の `principals` に `account: "<ID>"` を note つきで書く。ロール側の CloudTrail には呼び出し元の

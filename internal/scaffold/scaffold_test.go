@@ -180,6 +180,19 @@ checks:
 		"missing_profile profiles.hourly |root_usage, ecs_exec, unknown_assume_role, oidc_assume_role",
 		"missing_profile profiles.weekly |credential_hygiene, guardduty_findings, posture, access_analyzer, waf_review, log_hygiene",
 		"param_changed checks.login_bruteforce.min_count 30|20",
+		// 節のあるチェックで、書いていないパラメータ (missing_param)。節の無いチェック (secret_access など) は出さない
+		"missing_param checks.login_bruteforce.paths |[/users/sign_in, /login, /signin]",
+		"missing_param checks.login_bruteforce.failure_statuses |[401, 403, 422]",
+		"missing_param checks.login_bruteforce.baseline_days |14",
+		"missing_param checks.login_bruteforce.min_baseline_days |7",
+		"missing_param checks.login_bruteforce.top_ip_min_count |5",
+		"missing_param checks.probe_paths.paths |[/.env, /.git/, /.aws/, /.ssh/, /wp-login.php, /wp-admin, /xmlrpc.php, /phpmyadmin, /pma, /server-status, /actuator, /config.json, /backup, /.DS_Store]",
+		"missing_param checks.probe_paths.statuses |[403, 404]",
+		"missing_param checks.probe_paths.baseline_days |14",
+		"missing_param checks.probe_paths.factor |3",
+		"missing_param checks.probe_paths.min_count |10",
+		"missing_param checks.probe_paths.min_baseline_days |7",
+		"missing_param checks.probe_paths.top_ip_min_count |5",
 		"missing_key audit_account |\"<12 桁のアカウント ID>\" か none",
 		"missing_key ip_list |active: 7d, reasons: waf_block / probe / sign_in_failure",
 		"unknown_key profiles.daily.overide |",
@@ -350,5 +363,56 @@ func TestDiffSilenced(t *testing.T) {
 	// 意図して false と書いたものは差分にしない (書いた値は利用者の判断)
 	if items, err := Diff([]byte(strings.Replace(string(b), "\n    silenced: true ", "\n    silenced: false ", 1)), reg); err != nil || len(items) != 0 {
 		t.Fatalf("%v %+v", err, items)
+	}
+}
+
+// missing_param: 雛形が書くのに設定に無いパラメータ (版を上げて増えた既定値が、見えないまま効くのを防ぐ。ADR 0014)。
+// 出すのは、設定にそのチェックの節があり、どれかのプロファイルで動くチェックだけ (節ごと書いていないチェックは、全部を既定値に任せている)。
+func TestDiffMissingParam(t *testing.T) {
+	reg := checks.NewRegistry()
+	full := string(Generate(reg, config.AuditAccountNone))
+	// 雛形から secret_access.bulk_exempt_within の行だけを消す (この項目より前の版で作った設定)
+	lines := strings.Split(full, "\n")
+	var kept []string
+	for _, l := range lines {
+		if !strings.HasPrefix(strings.TrimSpace(l), "bulk_exempt_within:") {
+			kept = append(kept, l)
+		}
+	}
+	if len(kept) != len(lines)-1 {
+		t.Fatalf("the template must write bulk_exempt_within once")
+	}
+	items, err := Diff([]byte(strings.Join(kept, "\n")), reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].Kind != DiffMissingParam || items[0].Path != "checks.secret_access.bulk_exempt_within" || items[0].Template != "2m" ||
+		!strings.Contains(items[0].Detail, "既定値") || !strings.Contains(items[0].Detail, "bulk: exempt") {
+		t.Fatalf("items: %+v", items)
+	}
+	var b strings.Builder
+	if err := WriteDiff(&b, items); err != nil || !strings.Contains(b.String(), "[missing_param] checks.secret_access.bulk_exempt_within (雛形では 2m)") {
+		t.Fatalf("%v\n%s", err, b.String())
+	}
+
+	// 節ごと無いチェック・どのプロファイルでも動かないチェックの節は出さない
+	cur := `
+profiles:
+  daily:
+    checks: [secret_access]
+checks:
+  login_bruteforce:
+    min_count: 20
+audit_account: none
+ip_list: {}
+`
+	items, err = Diff([]byte(cur), reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range items {
+		if it.Kind == DiffMissingParam {
+			t.Errorf("unexpected missing_param: %+v", it)
+		}
 	}
 }

@@ -1,5 +1,12 @@
-この版の雛形との差分: 4 件
+この版の雛形との差分: 11 件
   [missing_key] profiles.weekly.silenced (雛形では true) — 雛形は silenced: true を書く。報告に「黙らせているもの」(ack・snooze 中の finding、7 日以内に期日の snooze、30 日以内に期限の allowlist の項目) の節を出す。aratam の通知にも件数の 1 行が出る (ADR 0068)。出したくなければ silenced: false を書く
   [param_changed] checks.probe_paths.min_count: 設定 3 / 雛形 10 — この版の既定値と違う
+  [missing_param] checks.probe_paths.paths (雛形では [/.env, /.git/, /.aws/, /.ssh/, /wp-login.php, /wp-admin, /xmlrpc.php, /phpmyadmin, /pma, /server-status, /actuator, /config.json, /backup, /.DS_Store]) — 設定のこのチェックの節に無い (雛形の値が、この版の既定値として黙って効いている)。値を確かめて書く。機密パスの接頭辞。集計条件なので overrides では変えられない
+  [missing_param] checks.probe_paths.exclude_paths (雛形では []) — 設定のこのチェックの節に無い (雛形の値が、この版の既定値として黙って効いている)。値を確かめて書く。対象から外す接頭辞 (正規の管理画面など)
+  [missing_param] checks.probe_paths.statuses (雛形では [403, 404]) — 設定のこのチェックの節に無い (雛形の値が、この版の既定値として黙って効いている)。値を確かめて書く。探索とみなすステータス
+  [missing_param] checks.probe_paths.baseline_days (雛形では 14) — 設定のこのチェックの節に無い (雛形の値が、この版の既定値として黙って効いている)。値を確かめて書く。平常帯の日数
+  [missing_param] checks.probe_paths.factor (雛形では 3) — 設定のこのチェックの節に無い (雛形の値が、この版の既定値として黙って効いている)。値を確かめて書く。平常帯の倍率
+  [missing_param] checks.probe_paths.min_baseline_days (雛形では 7) — 設定のこのチェックの節に無い (雛形の値が、この版の既定値として黙って効いている)。値を確かめて書く。「初出」判定に要る過去日数
+  [missing_param] checks.probe_paths.top_ip_min_count (雛形では 5) — 設定のこのチェックの節に無い (雛形の値が、この版の既定値として黙って効いている)。値を確かめて書く。その日の最多 IP が初出なら、この件数以上で報告
   [missing_key] ip_list (雛形では active: 7d, reasons: waf_block / probe / sign_in_failure) — 怪しい IP の一覧を作らない (ADR 0069)。作るなら雛形の ip_list: を写す (書いた理由だけが効く)
   [unknown_key] profiles.hourly.max_catchupp — arata が知らないキー (綴りの誤りか、この版で無くなったキー。設定の読み込みは失敗する)
