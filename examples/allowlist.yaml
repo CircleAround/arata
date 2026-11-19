@@ -64,6 +64,7 @@ secrets_access:
   - principal: arn:aws:iam::123456789012:role/example-app-task
     secrets: ["prod/app/*", "/example/prod/*"]
   # 起動のたびに ECS がタスクの実行用のロールで決まった組を読む。サービスに引き受けられたロールのときだけ外れる。note 必須、広い glob は読み込みエラー
+  # 外れるのは ECS が発行した認証情報の直後 (checks.secret_access.bulk_exempt_within) の読み取りだけ。それ以外は medium で出る (ADR 0076)
   - principal: arn:aws:iam::123456789012:role/example-app-task-execution
     secrets: ["/example-app/prod/secrets/*"]
     bulk: exempt

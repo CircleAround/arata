@@ -33,6 +33,12 @@ import (
 //     外すのは、その主体が平常帯の始まりから窓の終わりまでに AWS のサービスに引き受けられたロール (serviceAssumedRoles。principal_new_source と同じ) のときだけ。
 //     そうでなければ外さず、data に bulk_exempt_ignored: not_service_role を残す (人の SSO のロールなどを書き方次第で黙らせない。記録が無ければ鳴る側)。
 //     外した結果、何も報告しない主体は info の行 (Key は BulkExemptKeyPrefix + 主体) に残す (黙って消さない。Fingerprint は固定)
+//   - 決定 (ADR 0076): 窓の側で外すのは、ECS (ecs-tasks.amazonaws.com) の AssumeRole で発行された認証情報 (issued_key_hash と読み取りの
+//     session_key_hash が一致し、role_arn が主体) が、発行の bulkExemptSkew 前から bulk_exempt_within 後までに使われた読み取りだけ。
+//     秘匿値ごとに、窓のその主体の読み取りが全部外せるときだけ外す。発行の記録は窓に限らず保存済みのものから引く。記録が無い・遅れた・窓の外は外さない (鳴る側)。
+//     平常帯の側は突き合わせによらず外す (外せない読み取りが平常帯に入って閾値を上げないため)。
+//     外せない読み取りが 1 つでもあれば、閾値を超えなくても medium (Key は BulkExemptUnmatchedKeyPrefix + 主体。理由ごとの件数を data に)。
+//     一括読み出しの high のときは medium を重ねず、high の data に同じ項目を載せる
 type SecretAccess struct {
 	Config config.SecretAccess
 }
@@ -55,6 +61,77 @@ const BulkExemptKeyPrefix = "bulk-exempt:"
 
 // bulkExemptIgnoredNotServiceRole は、bulk: exempt の項目に一致したが外さなかった理由 (サービスに引き受けられたロールではない)。
 const bulkExemptIgnoredNotServiceRole = "not_service_role"
+
+// BulkExemptUnmatchedKeyPrefix は、bulk: exempt の組を、ECS が発行した認証情報の直後でない読み取りで読んだ主体の medium の Key の先頭 (ADR 0076)。
+const BulkExemptUnmatchedKeyPrefix = "bulk-exempt-unmatched:"
+
+const (
+	// bulkExemptIgnoredSessionUnmatched は、外せない読み取り (ECS が発行した認証情報の直後でない) があった理由 (ADR 0076)。
+	bulkExemptIgnoredSessionUnmatched = "session_unmatched"
+	// 外せない読み取りの理由: 読み取りにキーの印が無い / 対になる ECS の発行が無い / 発行から窓の外
+	unmatchedNoKey         = "no_key"
+	unmatchedNoIssuance    = "no_issuance"
+	unmatchedOutsideWindow = "outside_window"
+	// bulkExemptSkew は発行より前に見える読み取りを許す幅 (記録の時刻は秒の単位で、STS と読み取りの記録の時刻は別に付く)。
+	bulkExemptSkew  = 5 * time.Second
+	ecsTasksService = "ecs-tasks.amazonaws.com"
+)
+
+// issuance は ECS が AssumeRole で発行した認証情報 1 つ (ADR 0076)。
+type issuance struct {
+	role string
+	at   time.Time
+}
+
+// ecsIssuances は [from, to) に ECS が発行した認証情報を、キーのハッシュごとに返す。
+func ecsIssuances(ctx context.Context, q store.Query, from, to time.Time) (map[string][]issuance, error) {
+	evs, err := q.Events(ctx, from, to, store.EventFilter{NamePrefixes: []string{"AssumeRole"}, PrincipalKinds: []record.PrincipalKind{record.PrincipalService}})
+	if err != nil {
+		return nil, err
+	}
+	out := map[string][]issuance{}
+	for _, e := range evs {
+		h, r := dataStr(e.Data, "issued_key_hash"), dataStr(e.Data, "role_arn")
+		if e.Name != "AssumeRole" || e.EventSource != "sts.amazonaws.com" || e.ErrorCode != "" || e.PrincipalARN != ecsTasksService || h == "" || r == "" {
+			continue
+		}
+		out[h] = append(out[h], issuance{role: r, at: e.Time})
+	}
+	return out, nil
+}
+
+// sessionMatch は読み取り e が、主体 arn に ECS が発行した認証情報の、発行の直後の利用か。外せなければ理由と (発行があれば) 発行からの遅れ。
+func sessionMatch(e record.TrailEvent, arn string, iss map[string][]issuance, within time.Duration) (ok bool, reason string, hash string, delay time.Duration) {
+	hash = dataStr(e.Data, "session_key_hash")
+	if hash == "" {
+		return false, unmatchedNoKey, "", 0
+	}
+	found := false
+	var best time.Duration
+	for _, is := range iss[hash] {
+		if is.role != arn {
+			continue
+		}
+		d := e.Time.Sub(is.at)
+		if d >= -bulkExemptSkew && d <= within {
+			return true, "", hash, max(d, 0)
+		}
+		if !found || absDur(d) < absDur(best) {
+			best, found = d, true
+		}
+	}
+	if !found {
+		return false, unmatchedNoIssuance, hash, 0
+	}
+	return false, unmatchedOutsideWindow, hash, best
+}
+
+func absDur(d time.Duration) time.Duration {
+	if d < 0 {
+		return -d
+	}
+	return d
+}
 
 var secretReadAPIs = concatAPIs(
 	apisOf(srcSecretsManager, "GetSecretValue", "BatchGetSecretValue"),
@@ -152,7 +229,9 @@ func (c SecretAccess) Evaluate(ctx context.Context, q store.Query, w collect.Win
 		kind    record.PrincipalKind
 		secrets map[string]bool
 		paths   map[string]bool
+		reads   []record.TrailEvent // 窓の読み取り (bulk: exempt の突き合わせ。ADR 0076)
 	}
+	var firstRead time.Time
 	byP := map[string]*cur{}
 	for _, e := range evs {
 		if !secretTarget(e) {
@@ -168,6 +247,10 @@ func (c SecretAccess) Evaluate(ctx context.Context, q store.Query, w collect.Win
 			byP[e.PrincipalARN] = p
 		}
 		p.agg.add(e.Time, e.Name, e.IP)
+		p.reads = append(p.reads, e)
+		if firstRead.IsZero() || e.Time.Before(firstRead) {
+			firstRead = e.Time
+		}
 		for _, r := range refs {
 			p.secrets[r.key] = true
 			if r.path != "" {
@@ -233,8 +316,14 @@ func (c SecretAccess) Evaluate(ctx context.Context, q store.Query, w collect.Win
 	}
 	firstReads := withData >= b.MinBaselineDays
 	var serviceRoles map[string]bool
+	var issued map[string][]issuance
+	within := b.BulkExemptWithinDuration()
 	if al.HasBulkExempt() {
 		if serviceRoles, err = serviceAssumedRoles(ctx, q, histFrom, w.To); err != nil {
+			return nil, err
+		}
+		// 発行の記録は窓に限らず引く (窓の始まりの前の発行と、窓の中の読み取りを組ませる)
+		if issued, err = ecsIssuances(ctx, q, firstRead.Add(-within), w.To.Add(bulkExemptSkew)); err != nil {
 			return nil, err
 		}
 	}
@@ -243,14 +332,48 @@ func (c SecretAccess) Evaluate(ctx context.Context, q store.Query, w collect.Win
 	for arn, p := range byP {
 		// bulk: exempt (ADR 0073): 窓で一致した秘匿値と glob。外すのはサービスに引き受けられたロールのときだけ
 		exemptPats := map[string]bool{}
-		exempted := 0
+		patMatched := 0
 		for s := range p.secrets {
 			if pat, ok := al.SecretBulkExempt(arn, secretName(s)); ok {
 				exemptPats[pat] = true
-				exempted++
+				patMatched++
 			}
 		}
 		applyExempt := serviceRoles[arn]
+		// ADR 0076: 一致した秘匿値の読み取りを、ECS が発行した認証情報と突き合わせる。1 回でも外せなければその秘匿値は数える
+		unmatched := map[string]bool{} // 外せない読み取りのあった秘匿値
+		reasons := map[string]int{}    // 外せない読み取りの数の理由ごとの内訳
+		sessions := map[string]bool{}  // 突き合わせた発行 (キーのハッシュ)
+		var maxDelay, maxLate time.Duration
+		unAgg := newEventAgg()
+		if applyExempt && patMatched > 0 {
+			for _, e := range p.reads {
+				var hit []string
+				for _, r := range secretsOf(e, true) {
+					if _, ok := al.SecretBulkExempt(arn, secretName(r.key)); ok {
+						hit = append(hit, r.key)
+					}
+				}
+				if len(hit) == 0 {
+					continue
+				}
+				ok, reason, hash, d := sessionMatch(e, arn, issued, within)
+				if ok {
+					sessions[hash] = true
+					maxDelay = max(maxDelay, d)
+					continue
+				}
+				reasons[reason]++
+				if reason == unmatchedOutsideWindow {
+					maxLate = max(maxLate, d)
+				}
+				unAgg.add(e.Time, e.Name, e.IP)
+				for _, k := range hit {
+					unmatched[k] = true
+				}
+			}
+		}
+		exempted := patMatched - len(unmatched)
 		vals := make([]float64, 0, len(bds))
 		for _, bd := range bds {
 			n := 0
@@ -275,6 +398,33 @@ func (c SecretAccess) Evaluate(ctx context.Context, q store.Query, w collect.Win
 			counted -= exempted
 		}
 		bulk := float64(counted) > thr
+		unmatchedData := func(d map[string]any) {
+			d["bulk_exempt_unmatched"] = reasons
+			d["unmatched_secrets"] = len(unmatched)
+			if reasons[unmatchedOutsideWindow] > 0 && maxLate > 0 {
+				d["bulk_exempt_max_delay_seconds"] = int(maxLate / time.Second)
+			}
+		}
+		if len(unmatched) > 0 && !bulk {
+			// 決定 (ADR 0076 の 5 節): 外せない読み取りは「起動の外での利用」の強い手がかり。閾値を超えなくても medium で報告する
+			k := BulkExemptUnmatchedKeyPrefix + arn
+			unAgg.extra["principal"] = arn
+			unAgg.extra["principal_kind"] = string(p.kind)
+			unAgg.extra["bulk_exempt_patterns"] = sortedKeys(exemptPats)
+			unAgg.extra["bulk_exempted"] = exempted
+			unAgg.extra["bulk_counted"] = counted
+			unmatchedData(unAgg.extra)
+			markAccountOnly(unAgg.extra, "principal_identity", arn, p.kind)
+			rs := make([]string, 0, len(reasons))
+			for r := range reasons {
+				rs = append(rs, r)
+			}
+			sort.Strings(rs)
+			obs[k] = Observation{Check: c.Name(), Key: k, Severity: Medium,
+				Summary: fmt.Sprintf("秘匿値の読み取り: %s が、一括読み出しから外すと書いた秘匿値 %d 個を、ECS が発行した認証情報の直後でない読み取りで読んだ (%s。起動の外での利用の疑い)",
+					record.PrincipalLabel(arn, p.kind), len(unmatched), strings.Join(rs, ", ")),
+				Data: unAgg.data(), Fingerprint: fingerprint(Medium, nil, "bulk-exempt-unmatched", strings.Join(rs, ","))}
+		}
 		var newSecrets []string
 		matched := 0
 		for s := range p.secrets {
@@ -296,7 +446,7 @@ func (c SecretAccess) Evaluate(ctx context.Context, q store.Query, w collect.Win
 		case len(newSecrets) > 0:
 			sev = Low
 		default:
-			if applyExempt && exempted > 0 {
+			if applyExempt && exempted > 0 && len(unmatched) == 0 {
 				k := BulkExemptKeyPrefix + arn
 				a := p.agg
 				a.extra["bulk_exempt"] = true
@@ -305,6 +455,8 @@ func (c SecretAccess) Evaluate(ctx context.Context, q store.Query, w collect.Win
 				a.extra["bulk_exempted"] = exempted
 				a.extra["bulk_counted"] = counted
 				a.extra["bulk_exempt_patterns"] = sortedKeys(exemptPats)
+				a.extra["bulk_exempt_sessions"] = len(sessions)
+				a.extra["bulk_exempt_max_delay_seconds"] = int(maxDelay / time.Second)
 				markAccountOnly(a.extra, "principal_identity", arn, p.kind)
 				// 決定: Fingerprint は固定 (読んだ顔ぶれや回数は起動のたびに変わるので、入れると毎回 changed になる)
 				obs[k] = Observation{Check: c.Name(), Key: k, Severity: Info,
@@ -329,11 +481,15 @@ func (c SecretAccess) Evaluate(ctx context.Context, q store.Query, w collect.Win
 		if matched > 0 {
 			a.extra["secrets_access_matched"] = matched
 		}
-		if exempted > 0 {
+		if patMatched > 0 {
 			a.extra["bulk_counted"] = counted
 			if applyExempt {
 				a.extra["bulk_exempted"] = exempted
 				a.extra["bulk_exempt_patterns"] = sortedKeys(exemptPats)
+				if len(unmatched) > 0 {
+					a.extra["bulk_exempt_ignored"] = bulkExemptIgnoredSessionUnmatched
+					unmatchedData(a.extra)
+				}
 			} else {
 				a.extra["bulk_exempt_ignored"] = bulkExemptIgnoredNotServiceRole
 			}

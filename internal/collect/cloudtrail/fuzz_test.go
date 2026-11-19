@@ -51,7 +51,9 @@ func FuzzNormalizeEvent(f *testing.F) {
 		oidcBody(ghProvider, "repo:example-org@1234567/example-repo@7654321:ref:refs/heads/main", "arn:aws:iam::123456789012:role/gha-deploy", ghAgent),
 		oidcBody("cognito-identity.amazonaws.com", "ap-northeast-1:00000000-0000-0000-0000-000000000000", "arn:aws:iam::123456789012:role/app", ""),
 		`{"userIdentity":{"type":"WebIdentityUser","userName":["x"],"identityProvider":{"a":1}},"eventSource":"sts.amazonaws.com","eventName":"AssumeRoleWithWebIdentity","userAgent":"exec-env/GitHubActions md/run_id#1\n<!here>"}`,
-		ecsExecOK,
+		ecsExecOK, ecsTaskAssume, ecsStartupRead,
+		`{"userIdentity":{"type":"AWSService","invokedBy":"ecs-tasks.amazonaws.com"},"eventSource":"sts.amazonaws.com","eventName":"AssumeRole","requestParameters":{"roleArn":"ASIAEXAMPLE000000001"},"responseElements":{"credentials":{"accessKeyId":["ASIAEXAMPLE000000001"]}}}`,
+		`{"userIdentity":{"type":"AssumedRole","accessKeyId":7,"arn":"arn:aws:sts::123456789012:assumed-role/r/s"},"eventSource":"secretsmanager.amazonaws.com","eventName":"GetSecretValue","requestParameters":{"secretId":"ASIAEXAMPLE00000000"}}`,
 		`{"eventSource":"ecs.amazonaws.com","eventName":"ExecuteCommand","requestParameters":{"cluster":"arn:aws:ecs:x:1:cluster/a|b","task":["t"],"container":"","command":"sh\u0000\u202e-c x","interactive":"true"},"responseElements":{"session":{"sessionId":"ecs-execute-command-AB","tokenValue":"not-a-real-token","streamUrl":"wss://example.invalid/s?x=1"},"clusterArn":1}}`,
 		`{"eventSource":"ecs.amazonaws.com","eventName":"ExecuteCommand","requestParameters":{"command":"not-a-real-token"},"responseElements":{"session":"x"}}`,
 		`{"requestParameters":[],"responseElements":"x","additionalEventData":1,"resources":{}}`, `{"userIdentity":null,"resources":[null,{"ARN":1}]}`, `[]`, `null`, ``,
@@ -243,6 +245,34 @@ func FuzzNormalizeEvent(f *testing.F) {
 				}
 			}
 		}
+		// 認証情報のキー (ADR 0076): ハッシュは決まった記録にだけ、形の合うキーのときだけ付く。キーそのものは data に残さない
+		raw := r0(body)
+		issuedKey := ""
+		if cred, ok := raw.ResponseElements["credentials"].(map[string]any); ok {
+			issuedKey, _ = cred["accessKeyId"].(string)
+		}
+		sessionKey, _ := raw.UserIdentity.AccessKeyID.(string)
+		wantIssued, issuedOK := record.SessionKeyHash(issuedKey)
+		issuedOK = issuedOK && raw.EventSource == "sts.amazonaws.com" && raw.EventName == "AssumeRole" && raw.ErrorCode == "" &&
+			raw.UserIdentity.Type == "AWSService" && raw.UserIdentity.InvokedBy == ecsTasksService
+		if v, has := e.Data["issued_key_hash"]; has != issuedOK || has && v != wantIssued {
+			t.Fatalf("data.issued_key_hash が規則に合わない: %v (%s %s)", v, raw.EventSource, raw.EventName)
+		}
+		wantSession, sessionOK := record.SessionKeyHash(sessionKey)
+		sessionOK = sessionOK && secretReadOps[raw.EventSource+" "+raw.EventName] && raw.UserIdentity.Type == "AssumedRole"
+		if v, has := e.Data["session_key_hash"]; has != sessionOK || has && v != wantSession {
+			t.Fatalf("data.session_key_hash が規則に合わない: %v (%s %s)", v, raw.EventSource, raw.EventName)
+		}
+		for _, key := range []string{issuedKey, sessionKey} {
+			if len(key) < 8 || strings.Contains(fuzzRest(body), key) {
+				continue // ほかの欄 (呼ぶ側が書ける値) にも同じ文字列があるときは、その欄から残りうる
+			}
+			for k, v := range e.Data {
+				if s, ok := v.(string); ok && strings.Contains(s, key) {
+					t.Fatalf("認証情報のキーが data.%s に残った: %q", k, s)
+				}
+			}
+		}
 		DefaultNotable(e)
 		// セッション名には個人名やメールアドレスが入る。種類が AssumedRole のときも、知らない種類のときも、ロールに寄せる
 		// (IAMUser・Role・Root は AWS が決める種類で、その ARN はセッションの形にならない)
@@ -356,6 +386,27 @@ func FuzzPublicStatements(f *testing.F) {
 }
 
 // r0 は本文を rawEvent として読む (読めなければゼロ値)。
+// fuzzRest は本文から認証情報のキーの 2 つの欄を除いた残り (JSON)。
+func fuzzRest(body string) string {
+	var m map[string]any
+	if json.Unmarshal([]byte(body), &m) != nil {
+		return ""
+	}
+	if u, ok := m["userIdentity"].(map[string]any); ok {
+		delete(u, "accessKeyId")
+	}
+	if re, ok := m["responseElements"].(map[string]any); ok {
+		if c, ok := re["credentials"].(map[string]any); ok {
+			delete(c, "accessKeyId")
+		}
+	}
+	var b strings.Builder
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(m)
+	return b.String()
+}
+
 func r0(body string) rawEvent {
 	var r rawEvent
 	_ = json.Unmarshal([]byte(body), &r)

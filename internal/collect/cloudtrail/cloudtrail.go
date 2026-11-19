@@ -310,6 +310,9 @@ type rawEvent struct {
 		ARN         string `json:"arn"`
 		AccountID   string `json:"accountId"`
 		InvokedBy   string `json:"invokedBy"`
+		// AccessKeyID は呼び出しに使ったアクセスキーの ID。そのまま残さず、秘匿値の読み取りでだけハッシュにする (ADR 0076)。
+		// 文字列でない値でも記録ごと捨てないように any で受ける
+		AccessKeyID any `json:"accessKeyId"`
 		// AssumeRoleWithWebIdentity の記録 (type は WebIdentityUser) にある。userName はトークンの sub、identityProvider は OIDC プロバイダ (ADR 0055)。
 		// 文字列でない値でも記録ごと捨てないように any で受ける
 		UserName         any `json:"userName"`
@@ -430,7 +433,44 @@ func normalizeRaw(source string, r rawEvent, id string, t *time.Time) (record.Tr
 	}
 	oidcDetail(r, e.Data)
 	ecsExecDetail(r, e.Data)
+	sessionKeyDetail(r, e.Data)
 	return e, true
+}
+
+// ecsTasksService は ECS のタスクのロール・実行用のロールを引き受けるサービスの主体。
+const ecsTasksService = "ecs-tasks.amazonaws.com"
+
+// secretReadOps は session_key_hash を残す秘匿値の読み取り ("<eventSource> <eventName>")。secret_access が見る操作と同じ (テストで突き合わせる)。
+var secretReadOps = map[string]bool{
+	"secretsmanager.amazonaws.com GetSecretValue":      true,
+	"secretsmanager.amazonaws.com BatchGetSecretValue": true,
+	"ssm.amazonaws.com GetParameter":                   true,
+	"ssm.amazonaws.com GetParameters":                  true,
+	"ssm.amazonaws.com GetParametersByPath":            true,
+}
+
+// sessionKeyDetail は、ECS が発行した認証情報と秘匿値の読み取りを突き合わせるためのハッシュを足す (ADR 0076 の 4 節)。
+//
+// 決定:
+//   - issued_key_hash: 成功した sts:AssumeRole で、呼び出し側が AWSService の ecs-tasks.amazonaws.com のときの responseElements.credentials.accessKeyId
+//   - session_key_hash: 秘匿値の読み取りで、userIdentity.type が AssumedRole のときの userIdentity.accessKeyId
+//   - どちらもキーが一時的な認証情報の形のときだけ (record.SessionKeyHash)。キーそのもの・セッション名・セッショントークンは残さない
+func sessionKeyDetail(r rawEvent, d map[string]any) {
+	u := r.UserIdentity
+	if r.EventSource == "sts.amazonaws.com" && r.EventName == "AssumeRole" && r.ErrorCode == "" && u.Type == "AWSService" && u.InvokedBy == ecsTasksService {
+		cred, _ := r.ResponseElements["credentials"].(map[string]any)
+		key, _ := cred["accessKeyId"].(string)
+		if h, ok := record.SessionKeyHash(key); ok {
+			d["issued_key_hash"] = h
+		}
+		return
+	}
+	if secretReadOps[r.EventSource+" "+r.EventName] && u.Type == "AssumedRole" {
+		key, _ := u.AccessKeyID.(string)
+		if h, ok := record.SessionKeyHash(key); ok {
+			d["session_key_hash"] = h
+		}
+	}
 }
 
 // oidcDetail は OIDC でのロールの引き受け (AssumeRoleWithWebIdentity) の記録に、プロバイダと sub から読んだ値を足す (ADR 0055)。

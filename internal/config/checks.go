@@ -195,6 +195,18 @@ type SecretAccess struct {
 	Factor float64 `yaml:"factor"`
 	// MinDistinct は一括読み出しとみなす異なる秘匿値の数の下限 (これを超えたら)。
 	MinDistinct int `yaml:"min_distinct"`
+	// BulkExemptWithin は allowlist の bulk: exempt で外す読み取りの窓。ECS が AssumeRole で認証情報を発行してから、この時間内の読み取りだけを外す (ADR 0076)。
+	// 決定: 既定 2m (実際の記録の最大 11 秒の約 10 倍)。0 より長く 15m 以下 (認証情報の有効期間に近い窓では外す範囲が広がりすぎる)。
+	BulkExemptWithin string `yaml:"bulk_exempt_within"`
+}
+
+// MaxBulkExemptWithin は bulk_exempt_within の上限 (ADR 0076)。
+const MaxBulkExemptWithin = 15 * time.Minute
+
+// BulkExemptWithinDuration は BulkExemptWithin の期間 (検証済みの前提。解釈できなければ 0)。
+func (s SecretAccess) BulkExemptWithinDuration() time.Duration {
+	d, _ := ParseDuration(s.BulkExemptWithin)
+	return d
 }
 
 // UnusedRegionActivity は unused_region_activity (ふだん使わないリージョンでの書き込み) の設定 (ADR 0032)。
@@ -517,6 +529,9 @@ func (c *Checks) applyDefaults() {
 	setInt(&sa.MinBaselineDays, (sa.BaselineDays+1)/2)
 	setFloat(&sa.Factor, 3)
 	setInt(&sa.MinDistinct, 10)
+	if sa.BulkExemptWithin == "" {
+		sa.BulkExemptWithin = "2m"
+	}
 	if c.CredentialHygiene.UnusedDays == 0 {
 		c.CredentialHygiene.UnusedDays = 90
 	}
@@ -611,6 +626,9 @@ func (c *Checks) validate() error {
 	}
 	if sa := c.SecretAccess; sa.BaselineDays < 1 || sa.MinBaselineDays < 1 || sa.MinBaselineDays > sa.BaselineDays || sa.Factor <= 0 || sa.MinDistinct < 1 {
 		return fmt.Errorf("secret_access: baseline_days >= 1, 1 <= min_baseline_days <= baseline_days, factor > 0, min_distinct >= 1")
+	}
+	if d, err := ParseDuration(c.SecretAccess.BulkExemptWithin); err != nil || d <= 0 || d > MaxBulkExemptWithin {
+		return fmt.Errorf("secret_access: bulk_exempt_within %q must be longer than 0 and at most %s (e.g. 2m)", c.SecretAccess.BulkExemptWithin, MaxBulkExemptWithin)
 	}
 	if err := c.EndpointAbuse.validate(); err != nil {
 		return fmt.Errorf("endpoint_abuse: %w", err)

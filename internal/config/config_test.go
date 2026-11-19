@@ -480,8 +480,11 @@ func TestSecurityChecksConfig(t *testing.T) {
 		t.Fatalf("public_exposure defaults: %+v", pe)
 	}
 	if ns, sa := cfg.Checks.PrincipalNewSource, cfg.Checks.SecretAccess; ns != (PrincipalNewSource{BaselineDays: 30, MinBaselineDays: 15, MinWrites: 5}) ||
-		sa != (SecretAccess{BaselineDays: 14, MinBaselineDays: 7, Factor: 3, MinDistinct: 10}) {
+		sa != (SecretAccess{BaselineDays: 14, MinBaselineDays: 7, Factor: 3, MinDistinct: 10, BulkExemptWithin: "2m"}) || sa.BulkExemptWithinDuration() != 2*time.Minute {
 		t.Fatalf("principal_new_source / secret_access defaults: %+v %+v", ns, sa)
+	}
+	if c, err := Load(write(t, minimal+"checks:\n  secret_access:\n    bulk_exempt_within: 15m\n")); err != nil || c.Checks.SecretAccess.BulkExemptWithinDuration() != 15*time.Minute {
+		t.Fatalf("bulk_exempt_within: %+v %v", c, err)
 	}
 	// min_baseline_days を書かなければ baseline_days の半分 (導入直後は報告しない)
 	if c, err := Load(write(t, minimal+"checks:\n  principal_new_source:\n    baseline_days: 60\n")); err != nil || c.Checks.PrincipalNewSource.MinBaselineDays != 30 {
@@ -503,6 +506,11 @@ func TestSecurityChecksConfig(t *testing.T) {
 		minimal + "checks:\n  principal_new_source:\n    min_writes: -1\n",
 		minimal + "checks:\n  secret_access:\n    min_distinct: -1\n",
 		minimal + "checks:\n  secret_access:\n    factor: -1\n",
+		// bulk_exempt_within (ADR 0076): 0 より長く 15 分以下
+		minimal + "checks:\n  secret_access:\n    bulk_exempt_within: 16m\n",
+		minimal + "checks:\n  secret_access:\n    bulk_exempt_within: -1m\n",
+		minimal + "checks:\n  secret_access:\n    bulk_exempt_within: 0s\n",
+		minimal + "checks:\n  secret_access:\n    bulk_exempt_within: soon\n",
 	} {
 		if _, err := Load(write(t, body)); err == nil {
 			t.Fatalf("expected error for %q", body)

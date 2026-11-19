@@ -280,14 +280,46 @@ func (s *secretSeed) serviceAssume(role string, at time.Time) {
 }
 
 // startupRead は起動時の読み取り (GetParameters の 1 回) を入れる。names は prefix の後ろに 00.. の番号を付けた n 個。
-func (s *secretSeed) startupRead(arn string, at time.Time, prefix string, from, n int) {
+// key が空でなければ、その認証情報で読んだ印 (session_key_hash) を付ける (ADR 0076)。
+func (s *secretSeed) startupRead(arn string, at time.Time, prefix string, from, n int, key ...string) {
 	s.t.Helper()
 	names := []any{}
 	for i := from; i < from+n; i++ {
 		names = append(names, fmt.Sprintf("%s%02d", prefix, i))
 	}
-	s.read(arn, record.PrincipalAssumedRole, at, "ssm:GetParameters", "", map[string]any{"names": names, "with_decryption": true})
+	d := map[string]any{"names": names, "with_decryption": true}
+	if len(key) > 0 {
+		d["session_key_hash"] = keyHash(s.t, key[0])
+	}
+	s.read(arn, record.PrincipalAssumedRole, at, "ssm:GetParameters", "", d)
 }
+
+// issue は ECS (by が空なら ecs-tasks.amazonaws.com) が role を引き受け、key の認証情報を発行した記録を at に入れる (ADR 0076)。
+func (s *secretSeed) issue(role string, at time.Time, key string, by ...string) {
+	s.t.Helper()
+	svc := "ecs-tasks.amazonaws.com"
+	if len(by) > 0 {
+		svc = by[0]
+	}
+	s.n++
+	e := record.TrailEvent{EventID: fmt.Sprintf("i%05d", s.n), Time: at, Source: "trail", Name: "AssumeRole", EventSource: "sts.amazonaws.com",
+		PrincipalARN: svc, PrincipalKind: record.PrincipalService, ReadOnly: true, Data: map[string]any{"role_arn": role, "issued_key_hash": keyHash(s.t, key)}}
+	if err := s.st.InsertEvent(context.Background(), e); err != nil {
+		s.t.Fatal(err)
+	}
+}
+
+func keyHash(t *testing.T, key string) string {
+	t.Helper()
+	h, ok := record.SessionKeyHash(key)
+	if !ok {
+		t.Fatalf("テストのキーの形が違う: %q", key)
+	}
+	return h
+}
+
+// testKey は架空の一時的な認証情報のキー (ASIA + 16 桁)。
+func testKey(n int) string { return fmt.Sprintf("ASIAEXAMPLE%09d", n) }
 
 // bulk: exempt (ADR 0073): 起動時に決まった組を読むサービスのロールは、その組を一括読み出しの数から外す。
 // 外した結果、何も報告しない主体は info の行 (bulk-exempt:<主体>) に残す。組の外・サービスのロールでない主体は今どおり数える。
@@ -312,15 +344,19 @@ func TestSecretAccessBulkExempt(t *testing.T) {
 		s.startupRead(execAvg, at, "/example-app/prod/other/O", 0, 2)
 	}
 	in := now.Add(-3 * time.Hour)
+	// 起動の 1 秒前に、ECS が実行用のロールの認証情報を発行する (ADR 0076。外すのはその直後の読み取りだけ)
+	for i, r := range []string{exec, execMix, execAvg} {
+		s.issue(r, in.Add(-time.Second), testKey(i+1))
+	}
 	// exec: 外す組 17 個だけ (7 + 10 の 2 回) → finding は出さず、info の行
-	s.startupRead(exec, in, set, 0, 7)
-	s.startupRead(exec, in, set, 7, 10)
+	s.startupRead(exec, in, set, 0, 7, testKey(1))
+	s.startupRead(exec, in, set, 7, 10, testKey(1))
 	// execMix: 外す組 17 個 + 組の外 11 個 → 外した後の 11 が閾値 10 を超えて high
-	s.startupRead(execMix, in, set, 0, 17)
-	s.startupRead(execMix, in, "/example-app/prod/other/O", 0, 11)
+	s.startupRead(execMix, in, set, 0, 17, testKey(2))
+	s.startupRead(execMix, in, "/example-app/prod/other/O", 0, 11, testKey(2))
 	// execAvg: 外す組 15 個 + 組の外 12 個 (うち 2 個はいつもの) → 12 > max(10, 2 × 3) で high
-	s.startupRead(execAvg, in, set, 0, 15)
-	s.startupRead(execAvg, in, "/example-app/prod/other/O", 0, 12)
+	s.startupRead(execAvg, in, set, 0, 15, testKey(3))
+	s.startupRead(execAvg, in, "/example-app/prod/other/O", 0, 12, testKey(3))
 	// human: bulk: exempt を書いたが、サービスに引き受けられたロールではない → 外さず high
 	s.startupRead(human, in, set, 0, 17)
 
@@ -347,7 +383,8 @@ func TestSecretAccessBulkExempt(t *testing.T) {
 	line := m[BulkExemptKeyPrefix+exec]
 	if line.Severity != Info || line.Data["bulk_exempt"] != true || line.Data["bulk_exempted"] != 17 || line.Data["bulk_counted"] != 0 ||
 		fmt.Sprint(line.Data["bulk_exempt_patterns"]) != "[/example-app/prod/secrets/*]" || line.Data["principal"] != exec ||
-		line.Data["count"] != 2 || fmt.Sprint(line.Data["ips"]) != "[198.51.100.1]" || !strings.Contains(line.Summary, "17 個") {
+		line.Data["count"] != 2 || fmt.Sprint(line.Data["ips"]) != "[198.51.100.1]" || !strings.Contains(line.Summary, "17 個") ||
+		line.Data["bulk_exempt_sessions"] != 1 || line.Data["bulk_exempt_max_delay_seconds"] != 1 {
 		t.Fatalf("info の行: %+v", line)
 	}
 	if line.Fingerprint != fingerprint(Info, nil, "bulk-exempt") {
@@ -375,5 +412,120 @@ func TestSecretAccessBulkExempt(t *testing.T) {
 	}
 	if o := obsByKey(obs)[exec]; o.Severity != High || o.Data["bulk_counted"] != nil || o.Data["bulk_exempt_ignored"] != nil {
 		t.Fatalf("bulk の無い項目: %+v", o)
+	}
+}
+
+// bulk: exempt (ADR 0076): 外すのは、ECS が AssumeRole で発行した認証情報 (キーのハッシュが一致) が、発行から bulk_exempt_within の内に使われた読み取りだけ。
+// 外せなかった読み取りが 1 つでもあれば medium (bulk-exempt-unmatched:<主体>)。一括読み出しの high のときは high の data に載せるだけ。
+func TestSecretAccessBulkExemptSession(t *testing.T) {
+	const set = "/example-app/prod/secrets/S"
+	role := func(n string) string { return "arn:aws:iam::123456789012:role/example-" + n + "-task-execution" }
+	var (
+		ok       = role("ok")       // 発行から 11 秒後に読む → 外す (info)
+		boundary = role("boundary") // 窓の始まりの前 (前日の終わり) に発行、窓の中で読む → 外す
+		skew     = role("skew")     // 記録の時刻のずれで、発行の 3 秒前に見える → 外す
+		noKey    = role("nokey")    // 読み取りにキーの印が無い (以前の版で集めた・長期のキー) → medium
+		noIssue  = role("noissue")  // 発行の記録が無い → medium
+		late     = role("late")     // 発行から 5 分後 (窓の外) → medium
+		mix      = role("mix")      // 起動時に 17 個を読み、うち 1 個を外からも読む → その 1 個だけ数え、medium
+		stolen   = role("stolen")   // 外から 12 個を読む → 数えて high (medium は重ねない)
+		other    = role("other")    // 発行は別のロールのもの → medium
+		ec2      = role("ec2")      // 発行したのが ECS でない → medium
+	)
+	st := newStore(t)
+	s := &secretSeed{st: st, t: t}
+	coverage(t, st, 14)
+	in := now.Add(-3 * time.Hour)
+	all := []string{ok, boundary, skew, noKey, noIssue, late, mix, stolen, other, ec2}
+	for _, r := range all {
+		s.serviceAssume(r, time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC)) // どれもサービスに引き受けられたロール (0073 の 4 節)
+	}
+	s.issue(ok, in.Add(-11*time.Second), testKey(1))
+	s.startupRead(ok, in, set, 0, 17, testKey(1))
+	s.issue(boundary, appWindow.From.Add(-30*time.Second), testKey(2))
+	s.startupRead(boundary, appWindow.From.Add(10*time.Second), set, 0, 17, testKey(2))
+	s.issue(skew, in.Add(3*time.Second), testKey(3))
+	s.startupRead(skew, in, set, 0, 17, testKey(3))
+	s.issue(noKey, in.Add(-time.Second), testKey(4))
+	s.startupRead(noKey, in, set, 0, 3)
+	s.startupRead(noIssue, in, set, 0, 3, testKey(5))
+	s.issue(late, in.Add(-5*time.Minute), testKey(6))
+	s.startupRead(late, in, set, 0, 3, testKey(6))
+	s.issue(mix, in.Add(-time.Second), testKey(7))
+	s.startupRead(mix, in, set, 0, 17, testKey(7))
+	s.startupRead(mix, in.Add(time.Hour), set, 4, 1, testKey(70))
+	s.issue(stolen, in.Add(-time.Second), testKey(8))
+	s.startupRead(stolen, in, set, 0, 17, testKey(8))
+	s.startupRead(stolen, in.Add(2*time.Hour), set, 0, 12, testKey(8))
+	s.issue(role("unrelated"), in.Add(-time.Second), testKey(9))
+	s.startupRead(other, in, set, 0, 3, testKey(9))
+	s.issue(ec2, in.Add(-time.Second), testKey(10), "ec2.amazonaws.com")
+	s.startupRead(ec2, in, set, 0, 3, testKey(10))
+
+	var b strings.Builder
+	b.WriteString("secrets_access:\n")
+	for _, r := range all {
+		b.WriteString("  - principal: " + r + "\n    secrets: [\"/example-app/prod/secrets/*\"]\n    bulk: exempt\n    note: 起動時に ECS が読む\n")
+	}
+	al, err := allowlist.Parse([]byte(b.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	obs, err := secretCheck().Evaluate(context.Background(), st, appWindow, al)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := obsByKey(obs)
+	for _, r := range []string{ok, boundary, skew} {
+		line, has := m[BulkExemptKeyPrefix+r]
+		if !has || line.Severity != Info || line.Data["bulk_exempted"] != 17 || line.Data["bulk_exempt_sessions"] != 1 {
+			t.Errorf("%s: 外して info の行: %+v", r, line)
+		}
+		if _, has := m[BulkExemptUnmatchedKeyPrefix+r]; has {
+			t.Errorf("%s: 外せた読み取りを medium にした", r)
+		}
+	}
+	if d := m[BulkExemptKeyPrefix+ok].Data["bulk_exempt_max_delay_seconds"]; d != 11 {
+		t.Errorf("最大の遅れ: %v", d)
+	}
+	for r, want := range map[string]string{noKey: "map[no_key:1]", noIssue: "map[no_issuance:1]", late: "map[outside_window:1]", other: "map[no_issuance:1]", ec2: "map[no_issuance:1]"} {
+		o, has := m[BulkExemptUnmatchedKeyPrefix+r]
+		if !has || o.Severity != Medium || fmt.Sprint(o.Data["bulk_exempt_unmatched"]) != want || o.Data["unmatched_secrets"] != 3 ||
+			o.Data["principal"] != r || fmt.Sprint(o.Data["ips"]) != "[198.51.100.1]" || fmt.Sprint(o.Data["bulk_exempt_patterns"]) != "[/example-app/prod/secrets/*]" {
+			t.Errorf("%s: medium: %+v", r, o)
+		}
+		if _, has := m[BulkExemptKeyPrefix+r]; has {
+			t.Errorf("%s: medium と info の行を両方出した", r)
+		}
+		if _, has := m[r]; has {
+			t.Errorf("%s: 閾値を超えないのに一括読み出し・初出を出した: %+v", r, m[r])
+		}
+	}
+	if o := m[BulkExemptUnmatchedKeyPrefix+noKey]; o.Fingerprint != fingerprint(Medium, nil, "bulk-exempt-unmatched", "no_key") {
+		t.Errorf("medium の Fingerprint は重大度と理由の集合: %s", o.Fingerprint)
+	}
+	if o := m[BulkExemptUnmatchedKeyPrefix+late]; o.Data["bulk_exempt_max_delay_seconds"] != 300 {
+		t.Errorf("窓の外の遅れ: %+v", o.Data)
+	}
+	if o := m[BulkExemptUnmatchedKeyPrefix+mix]; o.Severity != Medium || o.Data["unmatched_secrets"] != 1 || o.Data["bulk_exempted"] != 16 || o.Data["bulk_counted"] != 1 {
+		t.Errorf("mix: %+v", o)
+	}
+	if _, has := m[BulkExemptUnmatchedKeyPrefix+stolen]; has {
+		t.Errorf("stolen: high に重ねて medium を出した")
+	}
+	if o := m[stolen]; o.Severity != High || o.Data["bulk_counted"] != 12 || o.Data["bulk_exempted"] != 5 || o.Data["bulk_exempt_ignored"] != "session_unmatched" ||
+		fmt.Sprint(o.Data["bulk_exempt_unmatched"]) != "map[outside_window:1]" || o.Data["unmatched_secrets"] != 12 {
+		t.Errorf("stolen: high の data: %+v", o)
+	}
+
+	// 窓を延ばせば (設定)、5 分後の読み取りも外れる
+	c := secretCheck()
+	c.Config.BulkExemptWithin = "10m"
+	obs, err = c.Evaluate(context.Background(), st, appWindow, al)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := obsByKey(obs); m[BulkExemptKeyPrefix+late].Severity != Info || m[BulkExemptUnmatchedKeyPrefix+late].Key != "" {
+		t.Errorf("bulk_exempt_within: 10m で外れない: %+v", m[BulkExemptUnmatchedKeyPrefix+late])
 	}
 }

@@ -107,6 +107,9 @@ func TestTriageEscalation(t *testing.T) {
 func TestTriageEscalationCovered(t *testing.T) {
 	for _, check := range TriageChecks() {
 		for _, r := range TriageRows(check) {
+			if r.KeyPrefix != "" {
+				continue // 接頭辞の行は上がる余地「なし」だけ (TestTriageTableRules)
+			}
 			for _, sev := range r.Severities {
 				_, tested := escalationCases[check][sev]
 				if r.Escalates != tested {
@@ -117,7 +120,7 @@ func TestTriageEscalationCovered(t *testing.T) {
 	}
 	for check, bySev := range escalationCases {
 		for sev := range bySev {
-			if r, ok := TriageRowOf(check, sev); !ok || !r.Escalates {
+			if r, ok := TriageRowOf(check, "", sev); !ok || !r.Escalates {
 				t.Errorf("%s %s is tested as escalating but the table says otherwise", check, sev)
 			}
 		}

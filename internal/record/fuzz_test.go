@@ -151,3 +151,41 @@ func FuzzECSNameOf(f *testing.F) {
 		}
 	})
 }
+
+// FuzzSessionKeyHash: ログ由来のキー (ADR 0076) は、どんな入力でも
+//   - 形 (ASIA + 英大文字・数字 16 桁) に合うときだけハッシュになり、ハッシュは常に 16 進 32 桁
+//   - ハッシュは入力の文字列を含まない (キーそのものを残さない)
+//   - 同じ入力は同じハッシュ (突き合わせの前提)
+func FuzzSessionKeyHash(f *testing.F) {
+	for _, s := range []string{"", "ASIAEXAMPLE000000001", "AKIAEXAMPLE000000001", "ASIA", "ASIAEXAMPLE00000000\x00", "ASIAＥXAMPLE00000001", "0123456789abcdef0123456789abcdef"} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		h, ok := SessionKeyHash(s)
+		if ok != sessionKeyShape(s) || ok != (h != "") {
+			t.Fatalf("SessionKeyHash(%q) = %q, %v", s, h, ok)
+		}
+		if !ok {
+			return
+		}
+		if len(h) != 32 || strings.Trim(h, "0123456789abcdef") != "" || strings.Contains(h, s) {
+			t.Fatalf("SessionKeyHash(%q) = %q: 16 進 32 桁でない・入力を含む", s, h)
+		}
+		if h2, _ := SessionKeyHash(s); h2 != h {
+			t.Fatalf("SessionKeyHash(%q): 毎回違う", s)
+		}
+	})
+}
+
+// sessionKeyShape は規則をそのまま書いたもの (実装の正規表現と独立に比べる)。
+func sessionKeyShape(s string) bool {
+	if len(s) != 20 || !strings.HasPrefix(s, "ASIA") {
+		return false
+	}
+	for _, c := range []byte(s[4:]) {
+		if !(c >= 'A' && c <= 'Z' || c >= '0' && c <= '9') {
+			return false
+		}
+	}
+	return true
+}

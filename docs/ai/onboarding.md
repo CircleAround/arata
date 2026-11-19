@@ -52,7 +52,7 @@ secret_access の一括読み出しの注: 閾値は `max(min_distinct, その�
 - **ack しない**。high は secret_access の最も重い重大度なので、ack すると本物の持ち出しが後で起きても報告されない (下の「使い分け」)。
   arata も high・critical の ack を止める (`ACK_REFUSED`)
 - allowlist.yaml の `secrets_access` は初出 (low / medium) を止めるだけで、一括読み出しの数には数える。`bulk: exempt` を書いた項目の組だけは一括読み出しからも外れる
-  (AWS のサービスに引き受けられるロールだけ。デプロイが数日に 1 回だと中央値は 0 のまま。書き方は `arata help ai playbook secret_access` の「起動時の読み取り」)
+  (サービスに引き受けられるロールが、ECS が発行した認証情報の直後に読んだものだけ。外れなければ medium (`bulk-exempt-unmatched:`。ack できない。確かめて resolve)。デプロイが数日に 1 回だと中央値は 0 のまま。書き方は `arata help ai playbook secret_access` の「起動時の読み取り」)
 
 チェックごとの確かめ方は `arata help ai playbook <check>`、承認してよいかの基準は `arata help ai approve`。
 

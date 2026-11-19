@@ -92,3 +92,19 @@ func TestApproveRejectsECSExec(t *testing.T) {
 		t.Fatalf("err: %v", err)
 	}
 }
+
+// secret_access の bulk-exempt-unmatched: の medium は、同じ重大度の初出の medium と違い ack を止める (ADR 0077。Key の接頭辞の行)。
+func TestAckGuardedByKeyPrefix(t *testing.T) {
+	const arn = "arn:aws:iam::123456789012:role/example-app-task-execution"
+	unmatched := store.Finding{Check: "secret_access", Key: checks.BulkExemptUnmatchedKeyPrefix + arn, Severity: "medium"}
+	first := store.Finding{Check: "secret_access", Key: arn, Severity: "medium"}
+	if !ackGuarded(unmatched) || ackGuarded(first) {
+		t.Fatalf("ackGuarded: unmatched %v, first read %v", ackGuarded(unmatched), ackGuarded(first))
+	}
+	if info := triageOf(unmatched); strings.Join(info.Allowed, ",") != "snooze,resolve" || info.Escalates {
+		t.Fatalf("triageOf(unmatched): %+v", info)
+	}
+	if info := triageOf(first); strings.Join(info.Allowed, ",") != "ack,snooze,resolve" || !info.Escalates {
+		t.Fatalf("triageOf(first): %+v", info)
+	}
+}

@@ -245,6 +245,7 @@ checks:
     min_baseline_days: 7                         # 初出の判定に要る、CloudTrail を収集し終えた過去日数 (活動の無い日も数える (導入直後は初出を報告しない。一括読み出しは報告する)
     factor: 3                                    # 一括読み出しの平常帯 = その主体の日ごとの異なる秘匿値の数の中央値 × factor
     min_distinct: 10                             # 1 日に読んだ異なる秘匿値の数がこれを超えたら一括読み出し (high)。GetParametersByPath はパス単位で 1 と数える
+    bulk_exempt_within: 2m                       # allowlist の bulk: exempt で外すのは、ECS が認証情報を発行してからこの時間内の読み取りだけ (上限 15m。ADR 0076)
   oidc_assume_role:
     baseline_days: 14                            # 既知の入り口の回数の平常帯 = その組 (プロバイダ・sub・ロール) 自身の直近 baseline_days 日の日次の回数の中央値 × factor
     factor: 3                                    # 平常帯の倍率
