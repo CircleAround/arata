@@ -96,3 +96,4 @@
 | [0070](0070-waf-label-rules.md) | 目印 (ラベル) を付けるための COUNT のルールを、BLOCK にするかの材料から分けて出す | 採用 |
 | [0071](0071-user-authz-probe.md) | ログインした利用者の、パスや ID の総当たり (認可の抜け漏れの探り) を、利用者ごとの時の部品で見る (`user_denied`・`user_id_enumeration`・`user_path_breadth`) | 採用 |
 | [0072](0072-ecs-exec.md) | 本番のコンテナでシェルを開く操作 (ECS Exec の `ExecuteCommand`) を、誰が・どこに・何を、で毎回報告する (`ecs_exec`) | 採用 |
+| [0073](0073-secret-access-bulk-exempt.md) | 起動のたびに決まった秘匿値をまとめて読むロールは、`secrets_access` の項目に `bulk: exempt` を明示して、その秘匿値だけを一括読み出しの数から外す | 採用 |
