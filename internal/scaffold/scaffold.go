@@ -107,6 +107,7 @@ var paramComments = map[string]string{ // #nosec G101 -- 設定の説明文の�
 	"secret_access.min_baseline_days":             "初出の判定に要る、CloudTrail を収集し終えた過去日数 (活動の無い日も数える (導入直後は初出を報告しない。一括読み出しは報告する)",
 	"secret_access.factor":                        "一括読み出しの平常帯 = その主体の日ごとの異なる秘匿値の数の中央値 × factor",
 	"secret_access.min_distinct":                  "1 日に読んだ異なる秘匿値の数がこれを超えたら一括読み出し (high)。GetParametersByPath はパス単位で 1 と数える",
+	"secret_access.bulk_exempt_within":            "allowlist の bulk: exempt で外すのは、ECS が認証情報を発行してからこの時間内の読み取りだけ (上限 15m。ADR 0076)",
 	"credential_hygiene.unused_days":              "アクセスキーを未使用とみなす日数 (最終使用、使われていなければ作成・ローテーションから)",
 	"posture.min_password_length":                 "IAM パスワードポリシーの最小文字数の下限",
 	"log_hygiene.sources":                         "見る cloudwatch-logs のソースの id (例 [app_prod])。空なら何も読まない。weekly の run ごとに 1 本、種類ごとの行数だけを数える。集計条件",

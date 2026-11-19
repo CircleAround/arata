@@ -57,6 +57,7 @@ profile daily (window 24h, max_catchup 7d)
   secret_access.min_baseline_days              既定値     7
   secret_access.factor                         既定値     3
   secret_access.min_distinct                   既定値     10
+  secret_access.bulk_exempt_within             既定値     2m
   oidc_assume_role.baseline_days               既定値     14
   oidc_assume_role.factor                      既定値     3
   oidc_assume_role.min_count                   既定値     20
