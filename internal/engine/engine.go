@@ -653,7 +653,11 @@ func (e *Engine) Collect(ctx context.Context, w collect.Window, o CollectOptions
 				if r := fr.FormatStats().OutOfRange; r != "" {
 					res.outOfRange[src.ID] = r
 				}
-				res.Formats = append(res.Formats, e.formatCoverage(ctx, *fr.FormatStats(), err, o.RunID))
+				fc := e.formatCoverage(ctx, *fr.FormatStats(), err, o.RunID)
+				if err == nil {
+					fc.Yields = providedKinds(c)
+				}
+				res.Formats = append(res.Formats, fc)
 			}
 			if err == nil {
 				err = e.replaceSnapshots(ctx, c, src.ID, snapshots, w.CollectedAt, &res)
@@ -1080,6 +1084,21 @@ func (e *Engine) availableKinds(cr *CollectResult) (map[record.Kind]bool, map[re
 	return available, failed
 }
 
+// providedKinds は collector がこの収集で出した種類 (取れなかった種類を除く。coverage.formats[].yields。ADR 0075)。
+func providedKinds(c collect.Collector) []string {
+	var unavailable map[record.Kind]string
+	if ar, ok := c.(collect.AvailabilityReporter); ok {
+		unavailable = ar.Unavailable()
+	}
+	var out []string
+	for _, k := range c.Yields() {
+		if _, ok := unavailable[k]; !ok {
+			out = append(out, string(k))
+		}
+	}
+	return out
+}
+
 // kindsOf はソースが出し得るレコード種類。cloudwatch-logs は形式の種類に加えて、checks.log_hygiene.sources にあれば log_hygiene も出す (ADR 0050)。
 func kindsOf(cfg *config.Config, src config.Source) []record.Kind {
 	if src.Kind == config.KindCloudWatchLogs && cfg.Checks.LogHygiene.Covers(src.ID) {
@@ -1097,8 +1116,9 @@ func formatKinds(src config.Source) []record.Kind {
 		if src.Yields == "" {
 			return nil
 		}
-		// ユーザー ID を取り出す設定のあるソースは http_user も出す (ADR 0051 の 2 節。0 件の run では collector が Unavailable で外す)
-		if src.UserIDFrom() != config.UserIDFromNone {
+		// ユーザー ID を取り出す設定のあるソースは http_user も出す (ADR 0051 の 2 節。0 件の run では collector が Unavailable で外す)。
+		// yields: http_user のソースは http_user だけ (ADR 0075)
+		if src.UserIDFrom() != config.UserIDFromNone && src.Yields != config.YieldsHTTPUser {
 			return []record.Kind{record.Kind(src.Yields), record.KindHTTPUser}
 		}
 		return []record.Kind{record.Kind(src.Yields)}
@@ -1138,6 +1158,10 @@ func (e *Engine) neededKinds(prof config.Profile) map[record.Kind]bool {
 				out[k] = true
 			}
 		}
+	}
+	// 決定 (ADR 0075): records に書いた種類は、要るチェックが無くても引く (http_user だけを出すソースの日次の集計と coverage を貯める)
+	for _, k := range prof.Records {
+		out[record.Kind(k)] = true
 	}
 	return out
 }

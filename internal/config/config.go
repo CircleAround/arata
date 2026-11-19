@@ -135,6 +135,9 @@ type Profile struct {
 	MaxCatchup    time.Duration `yaml:"-"`
 	MaxCatchupRaw string        `yaml:"max_catchup"`
 	Checks        []string      `yaml:"checks"`
+	// Records は、プロファイルのチェックが必要としなくても、この run で引く記録の種類 (ADR 0075)。今は http_user だけ書ける。
+	// 決定: http_user を要るチェックがまだ無い間も、http_user だけを出すソースの日次の集計と coverage を毎日貯めるため。暗黙の既定は持たない (ADR 0014)。
+	Records []string `yaml:"records"`
 	// Silenced は報告に「黙らせているもの」の節 (ack・snooze 中の finding、期日の近い snooze、期限の近い allowlist の項目) を出す (ADR 0068)。
 	// 暗黙の既定は持たない (ADR 0014)。雛形では weekly に書く。
 	Silenced bool `yaml:"silenced"`
@@ -469,8 +472,44 @@ func (c *Config) Validate() error {
 		if err := eff.validate(); err != nil {
 			return fmt.Errorf("config: profile %s: overrides: %w", name, err)
 		}
+		if err := c.validateRecords(p.Records); err != nil {
+			return fmt.Errorf("config: profile %s: %w", name, err)
+		}
 	}
 	return nil
+}
+
+// ProfileRecords はプロファイルの records に書ける種類 (ADR 0075)。
+// 決定: 今は http_user だけ。ほかの種類は、チェック無しで引く理由が出てから足す
+// (log_hygiene を daily で引くと weekly のスナップショットを置き換え、http_access を hourly で引くと費用が増える)。
+var ProfileRecords = []string{YieldsHTTPUser}
+
+// validateRecords は profiles.<name>.records を確かめる。書いた種類を出すソースが無ければ拒否する (書いても何も起きない設定を黙って受け取らない)。
+func (c *Config) validateRecords(records []string) error {
+	seen := map[string]bool{}
+	for _, r := range records {
+		if !contains(ProfileRecords, r) {
+			return fmt.Errorf("records: %q: want %s", r, strings.Join(ProfileRecords, ", "))
+		}
+		if seen[r] {
+			return fmt.Errorf("records: duplicate %q", r)
+		}
+		seen[r] = true
+		if !c.yieldsRecord(r) {
+			return fmt.Errorf("records: %s: no source yields %s (a request_lines source with request.user_id)", r, r)
+		}
+	}
+	return nil
+}
+
+// yieldsRecord は kind を出すソースがあるか (今は http_user だけを見る)。
+func (c *Config) yieldsRecord(kind string) bool {
+	for _, s := range c.Sources {
+		if kind == YieldsHTTPUser && s.Kind == KindCloudWatchLogs && s.UserIDFrom() != UserIDFromNone {
+			return true
+		}
+	}
+	return false
 }
 
 // safeName は source の id や profile 名をファイルのパスと S3 のキーに使えるか (ストアの外を指さないか)。ADR 0037

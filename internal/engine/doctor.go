@@ -46,7 +46,7 @@ const (
 type DoctorRow struct {
 	Source string `json:"source"`
 	Kind   string `json:"kind"`
-	Item   string `json:"item"` // config / audit_account / permission / log_group / match_rate / requests / queries / check
+	Item   string `json:"item"` // config / audit_account / permission / log_group / match_rate / requests / records / queries / check
 	Status string `json:"status" jsonschema:"enum=ok|warn|ng|skip"`
 	Code   string `json:"code,omitempty"`
 	Detail string `json:"detail"`
@@ -414,6 +414,9 @@ func (d *doctor) logs(ctx context.Context, src config.Source) {
 	if prof.RequestLines() {
 		d.requests(ctx, src, c)
 	}
+	if src.Yields == config.YieldsHTTPUser {
+		d.userOnlyRecords(src)
+	}
 	daily := 0.0
 	if prof.Yields == record.KindWAFAction {
 		daily = d.wafCost(ctx, src, c)
@@ -422,6 +425,39 @@ func (d *doctor) logs(ctx context.Context, src config.Source) {
 	if hygiene {
 		d.hygieneCost(src, daily)
 	}
+}
+
+// userOnlyRecords は、http_user だけを出すソース (yields: http_user。ADR 0075) を、どのプロファイルの run が引くかを出す。
+// 決定: http_access のチェックはこのソースを引かないので、records: [http_user] か http_user を要るチェックのあるプロファイルが無ければ、
+// 何も集まらない。設定としては正しいので ng にせず warn にする (arata collect で引くことはできる)。
+func (d *doctor) userOnlyRecords(src config.Source) {
+	names := make([]string, 0, len(d.cfg.Profiles))
+	for name := range d.cfg.Profiles {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var by []string
+	for _, name := range names {
+		prof := d.cfg.Profiles[name]
+		var why []string
+		for _, r := range prof.Records {
+			if r == config.YieldsHTTPUser {
+				why = append(why, "records: "+r)
+			}
+		}
+		if d.profileNeeds(prof, record.KindHTTPUser) {
+			why = append(why, "http_user を要るチェック")
+		}
+		if len(why) > 0 {
+			by = append(by, name+" ("+strings.Join(why, "、")+")")
+		}
+	}
+	if len(by) == 0 {
+		d.add(src, "records", DoctorWarn, "", "yields: http_user のソースを、どのプロファイルの run も引かない (http_access のチェックは引かない)。"+
+			"ユーザー ID と auth の日次の集計を貯めるなら、daily のプロファイルに records: [http_user] を書く")
+		return
+	}
+	d.add(src, "records", DoctorOK, "", "http_user だけを出すソース。引くプロファイル: "+strings.Join(by, ", "))
 }
 
 // hygieneCost は log_hygiene の読み取りの費用を出す (ADR 0050)。そのチェックを入れたプロファイルの run ごとに 1 本、範囲は run の窓。

@@ -31,8 +31,8 @@ var formatYields = map[string][]string{
 	FormatWAFv2:       {YieldsWAFAction},
 	FormatJSON:        {YieldsHTTPAccess},
 	FormatRegex:       {YieldsHTTPAccess},
-	// request_lines は request.go (ADR 0051)
-	FormatRequestLines: {YieldsHTTPAccess},
+	// request_lines は request.go (ADR 0051)。http_user だけを出す指定もできる (ADR 0075)
+	FormatRequestLines: {YieldsHTTPAccess, YieldsHTTPUser},
 	FormatText:         {},
 }
 

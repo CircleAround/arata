@@ -295,6 +295,7 @@ func GenerateWith(reg *checks.Registry, o Options) []byte {
 	w("  #   kind: %s\n", config.KindCloudWatchLogs)
 	w("  #   log_group: /my-app/rails\n")
 	cm("  #   format: "+config.FormatRequestLines, "1 リクエストが複数行のログを request_id でまとめる → http_access。書き方は arata help ai request_lines")
+	cm("  #   # yields: "+config.YieldsHTTPUser, "入口のアクセスログ (ALB・nginx) を別のソースで読むなら、http_access を出さずユーザー ID と auth の集計だけを出す (同じリクエストを二重に数えない。user_id が要る。daily に records: [http_user] を書く。ADR 0075)")
 	w("  #   request:\n")
 	cm(`  #     id: '(?:^| -- : )\[(?P<request_id>[A-Za-z0-9_@-]{1,255})\] '`, "まとめる鍵。前の区切りまで含めて書く (最初の角括弧を取らない)")
 	cm(fmt.Sprintf("  #     # max_duration: %ds", int(config.DefaultRequestMaxDuration.Seconds())), "問い合わせ範囲の後ろに足す余白")
@@ -351,6 +352,7 @@ func GenerateWith(reg *checks.Registry, o Options) []byte {
 			w("      - %-*s  # %s\n", width, n, Descriptions[n])
 		}
 		if p.Name == "daily" {
+			cm("    # records: ["+config.YieldsHTTPUser+"]", "チェックが要らなくてもこの run で引く記録の種類。yields: http_user のソースの日次の集計を貯める (ADR 0075)")
 			cm("    # overrides:", "このプロファイルでだけ判定のパラメータを変える (書かなければ checks: の値)")
 			cm("    #   login_bruteforce: { min_count: 50 }", "集計条件 (paths / methods / statuses など) は変えられない")
 		}

@@ -76,6 +76,31 @@ end
   `auth_reason` は小文字と `_` の 64 文字まで。合わない値 (`@` を含む ID など) は**捨てて数だけ残す** (`user_id_invalid`・`auth` の `invalid`)。ID が数字だけのアプリは `[0-9]{1,20}` のように狭く書いてよい
 - 1 つのリクエストに行が複数あれば、最後の行を使う。`auth` は `user_id` が無くても書ける (`auth` だけでは `http_user` は出ない)
 
+## 入口のアクセスログと並べる (yields: http_user)
+
+ALB・nginx のログを `http_access` のソースにしていて、アプリのログからは**ユーザー ID と auth の行だけ**を読むなら、このソースに `yields: http_user` を書き、daily に `records: [http_user]` を書く (例は架空)。
+行頭に別の角括弧 (ホスト名) が付く独自の formatter の例 (`arata help ai request_lines` の「鍵の書き方」)。`request.id` は鍵の直前の区切りだけを受ける。
+
+```
+[web-1] I, [2026-11-01T01:02:03.000000 #1]  INFO -- : [5b0c1d2e-7a3f-4c1b-9e2d-0a1b2c3d4e5f] Started GET "/orders" for 203.0.113.10 at 2026-11-01 01:02:03 +0000
+[web-1] I, [2026-11-01T01:02:03.010000 #1]  INFO -- : [5b0c1d2e-7a3f-4c1b-9e2d-0a1b2c3d4e5f] actor kind=user id=42
+```
+
+```yaml
+  - id: rails_users                  # sources: の 1 つ。http_access は ALB (format: alb_access) のソースだけが出す
+    format: request_lines
+    yields: http_user                # 書かなければ http_access (今までどおり)。request.user_id が要る (無ければ CONFIG_INVALID)
+    request:
+      id: ' -- : \[(?P<request_id>[A-Za-z0-9_@-]{1,255})\] '   # 行頭の角括弧を拾わない。lines・user_id・auth は request_lines の見本と上の見本のまま
+profiles:
+  daily:
+    records: [http_user]             # チェックが要らなくても、この run でこのソースを引く (今は http_user だけ書ける)
+```
+
+- `http_access` を出さない (同じリクエストを二重に数えない)。クエリは解釈率の 1 本だけで、日次の metric はすべて `From` が `http_user`。最初の行 (ip と path) は要る (リクエストの数と割合の分母)
+- 引くのは `records: [http_user]` か、`http_user` を要るチェックのあるプロファイルの run だけ。どれも無ければ doctor の `records` の行が warn。endpoint_abuse の `sources` には書けない
+- report.json の `coverage.formats[].yields` に `http_user` が出る。ID の付いたリクエストが 0 件の run では出ない (ソースは失敗にせず、標準エラーに WARN)
+
 ## debug_sql (消えうる取り方)
 
 - `from: debug_sql` は、debug レベルの SQL の行 (セッションから利用者を読み込む問い合わせ) から同じ仕組みで読む。**消えうる取り方**: 本番で debug のログが出ているのは誤設定で、

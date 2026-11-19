@@ -358,6 +358,12 @@
             "type": "string"
           }
         },
+        "yields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "requests": {
           "$ref": "#/$defs/RequestCoverage"
         }

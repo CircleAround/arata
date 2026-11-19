@@ -86,6 +86,7 @@ func FuzzLoad(f *testing.F) {
 		"name: a\nstore: dir:///tmp/x\nsources: [{id: t, kind: cloudtrail-s3, bucket: b-1, prefix: x/../y, account_id: '123456789012', regions: [us-east-1]}]\nprofiles: {d: {window: 1h, checks: [root_usage]}}\n",
 		"name: acme\nstore: dir:///tmp/x\n", "name: acme\nstore: s3://example-bucket/p\nsources: [{id: a, kind: cloudtrail-lookup}]\nprofiles: {daily: {checks: [default-daily]}}\n",
 		"sources: [{id: web, kind: cloudwatch-logs, log_group: prod-nginx-access, format: nginx_access, yields: http_access, ingest_delay: 0d}]\n",
+		"name: a\nstore: dir:///tmp/x\nsources: [{id: app, kind: cloudwatch-logs, log_group: prod-app, region: ap-northeast-1, format: request_lines, yields: http_user, request: {id: '\\[(?P<request_id>\\w+)\\]', lines: [{name: s, regex: 'Started (?P<path>\\S+) for (?P<ip>\\S+)'}], user_id: {from: app_line, regex: 'actor kind=(?P<user_kind>[a-z]+) id=(?P<user_id>\\d+)$'}}}]\nprofiles: {daily: {window: 24h, checks: [probe_paths], records: [http_user]}}\n",
 		"sources: [null]\nprofiles: {x: null}\nchecks: null\n", "profiles: {a: {window: 9223372036854775807d}}\n", "name: [1]\n", "- x\n", "a: &a [*a]\n", "",
 	} {
 		f.Add([]byte(s))
@@ -134,9 +135,27 @@ func FuzzLoad(f *testing.F) {
 				t.Fatalf("cloudtrail-s3 でないソースに bucket などを受け入れた: %+v", s)
 			}
 		}
-		for name := range cfg.Profiles {
+		userSources := 0
+		for _, s := range cfg.Sources {
+			// http_user だけを出すソースは、ユーザー ID の取り方を持つ (何も出さないソースを受け取らない。ADR 0075)
+			if s.Yields == YieldsHTTPUser && (s.Format != FormatRequestLines || s.UserIDFrom() == UserIDFromNone) {
+				t.Fatalf("ユーザー ID の取り方の無い yields: http_user を受け入れた: %+v", s)
+			}
+			if s.UserIDFrom() != UserIDFromNone {
+				userSources++
+			}
+		}
+		for name, p := range cfg.Profiles {
 			if strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") {
 				t.Fatalf("パスの区切りを含む profile 名を受け入れた: %q", name)
+			}
+			// records は決まった種類だけで、重複が無く、それを出すソースがある
+			seen := map[string]bool{}
+			for _, r := range p.Records {
+				if !contains(ProfileRecords, r) || seen[r] || userSources == 0 {
+					t.Fatalf("profile %s の records を検証せずに受け入れた: %v", name, p.Records)
+				}
+				seen[r] = true
 			}
 		}
 		cfg.MaxIngestDelay()

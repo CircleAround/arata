@@ -128,8 +128,9 @@ func (c *Collector) Yields() []record.Kind {
 	var out []record.Kind
 	if c.formatSelected() {
 		out = append(out, c.prof.Yields)
-		// ユーザー ID を取り出す設定のあるソースは http_user も出す (ADR 0051 の 2 節。0 件の run は Unavailable で外す)
-		if c.userConfigured() {
+		// ユーザー ID を取り出す設定のあるソースは http_user も出す (ADR 0051 の 2 節。0 件の run は Unavailable で外す)。
+		// yields: http_user のソースは http_user だけ (ADR 0075)
+		if c.userConfigured() && c.prof.Yields != record.KindHTTPUser {
 			out = append(out, record.KindHTTPUser)
 		}
 	}
@@ -198,6 +199,10 @@ func (c *Collector) dayQueries() []MergedQuery {
 	switch c.prof.Yields {
 	case record.KindWAFAction:
 		return WAFQueries(c.prof, c.checks)
+	case record.KindHTTPUser:
+		// 決定 (ADR 0075): http_user だけを出すソースは、解釈率のクエリ (ユーザー ID と auth の割合を 2 段目の軸で数える) の 1 本だけ。
+		// http_access の集計は入口のアクセスログの側が出すので、探索パスの印も付けない (checks を渡さない)
+		return []MergedQuery{{Name: httpLines, Query: HTTPLinesQuery(c.prof, config.Checks{}), Bin: c.prof.binName("day")}}
 	case record.KindHTTPAccess:
 		qs := []MergedQuery{
 			{Name: httpLines, Query: HTTPLinesQuery(c.prof, c.checks), Metrics: []string{MetricProbePaths}, Bin: c.prof.binName("day")},
