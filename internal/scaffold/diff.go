@@ -20,6 +20,7 @@ const (
 	DiffUnknownKey     = "unknown_key"     // arata が知らないキー (綴りの誤り、廃止されたキー)
 	DiffMissingProfile = "missing_profile" // 雛形にあって設定に無いプロファイル
 	DiffMissingKey     = "missing_key"     // 雛形が必ず書くのに設定に無いキー (audit_account。ADR 0045)
+	DiffMissingParam   = "missing_param"   // 雛形が書くのに、設定のそのチェックの節に無いパラメータ (この版の既定値が効いている)
 )
 
 // DiffItem は差分 1 件。
@@ -50,8 +51,11 @@ type rawConfig struct {
 }
 
 // Diff は現在の設定 (YAML) とこの版の雛形の差分を返す。設定が Load で失敗する状態 (未知のキーなど) でも動く。
-// 決定: checks: に書いていないパラメータは実行時にこの版の既定値が効くので差分にしない。書いた値が既定値と違うものだけを出す
-// (監査対象ごとに意図して変えた値か、古い版の既定値を写したままかは人が判断する)。overrides は意図した上書きなので比べない。
+// 決定: checks: に書いた値が既定値と違うものを param_changed で出す (監査対象ごとに意図して変えた値か、古い版の既定値を写したままかは人が判断する)。
+// overrides は意図した上書きなので比べない。
+// 決定 (設計書 2 章。以前の「書いていないパラメータは差分にしない」を置き換え): 設定にそのチェックの節があるのに、雛形が書くパラメータが無ければ
+// missing_param で出す (版を上げて増えた既定値が、見えないまま効くのを防ぐ。ADR 0014)。出すのはどれかのプロファイルで動くチェックだけ。
+// 節ごと書いていないチェックは全部を既定値に任せているので出さない (手書きの短い設定で全パラメータが並ぶのを避ける)。
 func Diff(current []byte, reg *checks.Registry) ([]DiffItem, error) {
 	var cur rawConfig
 	if err := yaml.Unmarshal(current, &cur); err != nil {
@@ -109,6 +113,21 @@ func Diff(current []byte, reg *checks.Registry) ([]DiffItem, error) {
 		if c, t := flow(v), flow(p.Value); c != t {
 			out = append(out, DiffItem{Kind: DiffParamChanged, Path: "checks." + p.Check + "." + p.Key, Current: c, Template: t, Detail: "この版の既定値と違う"})
 		}
+	}
+	for _, p := range config.DefaultChecks().Params() {
+		sec, ok := cur.Checks[p.Check]
+		if !ok || len(used[p.Check]) == 0 {
+			continue
+		}
+		if _, ok := sec[p.Key]; ok {
+			continue
+		}
+		t := flow(p.Value)
+		detail := "設定のこのチェックの節に無い (雛形の値が、この版の既定値として黙って効いている)。値を確かめて書く"
+		if c := paramComments[p.Check+"."+p.Key]; c != "" {
+			detail += "。" + c
+		}
+		out = append(out, DiffItem{Kind: DiffMissingParam, Path: "checks." + p.Check + "." + p.Key, Template: t, Detail: detail})
 	}
 	// 決定 (ADR 0045): audit_account は雛形が必ず書く (config init が選ばせる)。この項目より前の版で作った設定には無いので、
 	// 無いことを差分に出して選ばせる。run は止めない。値の誤りはここでは見ない (Load / config check が止める)
