@@ -475,6 +475,12 @@ auth result=success|failure|impersonate kind=user id=42|none [via=password|remem
 - **`http_user`**: `from` が `none` でないソースは `http_access` に加えて `http_user` を出す (`auth` だけのソースは出さない)。その run で ID の付いたリクエストが 0 件なら、
   collector が「取れない」と報告し (`Unavailable`。GuardDuty が無効なときと同じ仕組み)、`http_user` を必要とするチェックは skip されて `coverage.checks_skipped` に理由 (ソース・取り方・0 件) が出る。
   ソースは失敗にしない (段 0 は同じに動く)。標準エラーに WARN を出す。プロファイルのチェックが `http_user` だけを必要としていても、このソースを引く
+- **`yields: http_user`** (ADR 0075): 入口のアクセスログ (ALB・nginx) を別のソースで読むとき、request_lines のソースに書くと `http_access` を出さず `http_user` だけを出す
+  (同じリクエストを二重に数えない)。`request.user_id` が要る (無ければ `CONFIG_INVALID`)。クエリは解釈率の 1 本だけで、日次の metric の `From` はすべて `http_user`。
+  `http_access` のチェックはこのソースを引かない
+- **`profiles.<name>.records`** (ADR 0075): 書いた記録の種類 (今は `http_user` だけ) は、プロファイルのチェックが要らなくてもその run で引く。`http_user` を要るチェックがまだ無い間も、
+  `yields: http_user` のソースの日次の集計と coverage を貯めるため。それを出すソースが無ければ `CONFIG_INVALID`。暗黙の既定は持たない (雛形は daily にコメントで見せる)。
+  run の `coverage.formats[].yields` にソースが出した種類 (取れなかった種類を除く) が出る。doctor は `yields: http_user` のソースを引くプロファイルを `records` の行に出し、無ければ warn
 - **保存** (日次の metric。`From` は `http_user`。後の値で置き換える): `user_requests` (key = 種類)・`user_requests_by`・`user_id_invalid`・`auth_success` (key = 手段。無ければ空)・
   `auth_failures` (key = 理由。無ければ空)・`auth_impersonate`・`auth_invalid`。ユーザー ID を key に置く集計は作らない (段 1 のチェックが、下限を超えた key の上位 N 件と分布として足す。
   そのとき主体は `<kind>:<id>` の 1 つの軸にする。値の規則から `:` と `|` は入らない)

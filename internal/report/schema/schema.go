@@ -189,6 +189,9 @@ type FormatCoverage struct {
 	Code          string   `json:"code,omitempty"`
 	// Truncated は結果が行の上限 (10000) に当たった集計の名前 (件数は少なめ)。
 	Truncated []string `json:"truncated,omitempty"`
+	// Yields はこの run でこのソースが出した記録の種類 (http_access・http_user・waf_action。ADR 0075)。
+	// 取れなかった種類 (ID の付いたリクエストが 0 件の run の http_user) と、失敗したソースの種類は入らない。
+	Yields []string `json:"yields,omitempty"`
 	// Requests は request_lines 形式のソースの、リクエスト単位にまとめた結果 (ADR 0051)。それ以外の形式では出さない。
 	Requests *RequestCoverage `json:"requests,omitempty"`
 }

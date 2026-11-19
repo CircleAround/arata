@@ -64,6 +64,7 @@ const (
 )
 
 // YieldsHTTPUser は、ユーザー ID を取り出す設定のあるソースが http_access に加えて出す種類 (record.KindHTTPUser と同じ文字列)。
+// `yields: http_user` と書けば、http_access を出さずにこれだけを出す (ADR 0075。入口のアクセスログを別のソースで読むとき、同じリクエストを二重に数えない)。
 const YieldsHTTPUser = "http_user"
 
 // RequestUserFields は request.user_id.regex の名前付きキャプチャ。user_kind と user_id は必須、by_kind と by_id は 2 つとも書くか書かないか。
@@ -139,8 +140,15 @@ func (s *Source) validateRequest() error {
 	if _, err := s.Request.UserGroups(); err != nil {
 		return err
 	}
-	_, err := s.Request.AuthGroups()
-	return err
+	if _, err := s.Request.AuthGroups(); err != nil {
+		return err
+	}
+	// 決定 (ADR 0075): http_user だけを出すソースは、ユーザー ID の取り方が要る (無ければ何も出さないソースになる)。
+	// auth の集計は http_user の metric なので、auth だけでも足りない
+	if s.Yields == YieldsHTTPUser && s.UserIDFrom() == UserIDFromNone {
+		return fmt.Errorf("yields http_user needs request.user_id (from: app_line or debug_sql); without it the source yields nothing")
+	}
+	return nil
 }
 
 // UserIDFrom はユーザー ID の取り方 (UserIDFrom*)。request_lines でない・書いていないソースは none。

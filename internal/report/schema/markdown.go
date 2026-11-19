@@ -76,6 +76,9 @@ func (r *Report) Markdown() string {
 			if len(f.Truncated) > 0 {
 				fmt.Fprintf(&b, "、行の上限に当たった集計 (件数は少なめ): %s", strings.Join(f.Truncated, ", "))
 			}
+			if len(f.Yields) > 0 {
+				fmt.Fprintf(&b, "、記録: %s", strings.Join(f.Yields, ", "))
+			}
 			b.WriteString("\n")
 			if q := f.Requests; q != nil && q.CompleteRate != nil {
 				fmt.Fprintf(&b, "    - リクエスト単位: まとめられた割合 %.2f (%d/%d)、閾値 %.2f、ステータスあり %d、request_id の使い回し %d、タグの無い最初の行 %d\n",

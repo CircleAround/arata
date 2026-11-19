@@ -77,6 +77,7 @@ sources:
   #   kind: cloudwatch-logs
   #   log_group: /my-app/rails
   #   format: request_lines                      # 1 リクエストが複数行のログを request_id でまとめる → http_access。書き方は arata help ai request_lines
+  #   # yields: http_user                        # 入口のアクセスログ (ALB・nginx) を別のソースで読むなら、http_access を出さずユーザー ID と auth の集計だけを出す (同じリクエストを二重に数えない。user_id が要る。daily に records: [http_user] を書く。ADR 0075)
   #   request:
   #     id: '(?:^| -- : )\[(?P<request_id>[A-Za-z0-9_@-]{1,255})\] ' # まとめる鍵。前の区切りまで含めて書く (最初の角括弧を取らない)
   #     # max_duration: 60s                      # 問い合わせ範囲の後ろに足す余白
@@ -162,6 +163,7 @@ profiles:
       - cost_anomaly            # AWS Cost Anomaly Detection の費用の異常を予想に対する増加の割合で (medium / high)。費用の削減の提案はしない
       - waf_block_trend         # WAF の新しく鳴り始めたルール・Top IP の入れ替わり (low)
       - ai_path_usage           # allowlist で tags: [ai] の主体の利用を主体 × 送信元 IP で毎回 1 行 (info。自己監査)
+    # records: [http_user]                       # チェックが要らなくてもこの run で引く記録の種類。yields: http_user のソースの日次の集計を貯める (ADR 0075)
     # overrides:                                 # このプロファイルでだけ判定のパラメータを変える (書かなければ checks: の値)
     #   login_bruteforce: { min_count: 50 }      # 集計条件 (paths / methods / statuses など) は変えられない
   weekly:                                        # 設定不備・衛生状態の差分

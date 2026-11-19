@@ -10,6 +10,8 @@ import (
 
 	"github.com/CircleAround/arata/internal/collect"
 	"github.com/CircleAround/arata/internal/collect/cwlogs/cwlogstest"
+	"github.com/CircleAround/arata/internal/config"
+	"github.com/CircleAround/arata/internal/record"
 )
 
 // ユーザー ID と auth の行のファズテスト (ADR 0041・0052)。対象は、アプリのログから取り出した値 (ログ由来) と Insights の結果を解釈する関数。
@@ -187,5 +189,41 @@ func FuzzUserCollect(f *testing.F) {
 			}
 		}
 		checkRecords(t, sink.recs, secrets...)
+
+		// yields: http_user のソース (ADR 0075) は、同じ行から、既定のソースと同じユーザー ID と auth の数・http_user の metric をちょうど出し、
+		// http_access の metric は 1 つも出さない (入口のアクセスログと二重に数えない)
+		only := userSource(looseActor, looseAuth)
+		only.Yields = config.YieldsHTTPUser
+		osink, ocol, _, err := collectRequests(t, only, checksCfg(), ev, userWindow)
+		if err != nil {
+			t.Fatalf("yields: http_user: %v", err)
+		}
+		if ors := ocol.FormatStats().Requests; fmt.Sprint(*ors.Users) != fmt.Sprint(*rs.Users) || fmt.Sprint(*ors.Auth) != fmt.Sprint(*rs.Auth) ||
+			ors.Starts != rs.Starts {
+			t.Fatalf("yields: http_user の数が違う: %+v %+v / %+v %+v", ors.Users, ors.Auth, rs.Users, rs.Auth)
+		}
+		if (ocol.Unavailable() == nil) != (col.Unavailable() == nil) {
+			t.Fatalf("yields: http_user の 0 件の扱いが違う: %v / %v", ocol.Unavailable(), col.Unavailable())
+		}
+		want := map[string]float64{}
+		for _, r := range sink.recs {
+			if mt := r.(record.Metric); mt.From == record.KindHTTPUser {
+				want[mt.Date+"|"+mt.Metric+"|"+mt.Key] = mt.Value
+			}
+		}
+		got := map[string]float64{}
+		for _, r := range osink.recs {
+			mt := r.(record.Metric)
+			if mt.From != record.KindHTTPUser {
+				t.Fatalf("yields: http_user のソースが %s の %s を出した", mt.From, mt.Metric)
+			}
+			if strings.HasPrefix(mt.Metric, "user_") || strings.HasPrefix(mt.Metric, "auth_") {
+				got[mt.Date+"|"+mt.Metric+"|"+mt.Key] = mt.Value
+			}
+		}
+		if fmt.Sprint(got) != fmt.Sprint(want) {
+			t.Fatalf("yields: http_user の http_user の metric が違う:\n%v\n%v", got, want)
+		}
+		checkRecords(t, osink.recs, secrets...)
 	})
 }

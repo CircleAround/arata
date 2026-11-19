@@ -29,7 +29,7 @@ arata のチェックは、設定の `sources` に書いた記録からしか動
 
 - `cloudtrail-lookup` (か `cloudtrail-s3`) だけで 10 個のチェックが動く。最初はこれとアカウント単位のソース (追加の準備が要らない) から始め、アプリ層 (`cloudwatch-logs`) を足していく
 - `http_access` は、送信元 IP・パス・ステータスが**同じ 1 行**にあるアクセスログ。ALB・nginx・アプリの JSON 行ログのどれか 1 つあればよい (同じリクエストを二重に数えないよう、1 つの入口につき 1 つ)。
-  1 リクエストが複数行に分かれるアプリのログしか無いときは、`format: request_lines` でリクエスト単位にまとめて読む (書き方は `arata help ai request_lines`)
+  1 リクエストが複数行に分かれるアプリのログしか無いときは、`format: request_lines` でリクエスト単位にまとめて読む (書き方は `arata help ai request_lines`)。入口のログと並べてユーザー ID と auth だけを読むなら `yields: http_user` (`arata help ai user_id` の「入口のアクセスログと並べる」)
 - `waf_review` は weekly に WebACL の設定を読み、daily が貯めた wafv2 の日次集計と突き合わせる (両方のソースが要る)
 - `log_hygiene` は、設定の `checks.log_hygiene.sources` に書いたソースだけを読む (既定は空で、書くまで何も読まない)。アプリのログ (アクセスログでないもの) は
   `format: text` (行を解釈しない) で登録する。表の他の形式のソースも `sources` に書ける (アクセスログのクエリ文字列に署名付き URL が残ることがある)
