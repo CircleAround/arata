@@ -100,3 +100,4 @@
 | [0075](0075-request-lines-yields-http-user.md) | request_lines のソースに `yields: http_user` を明示して http_access を出さないようにし、プロファイルの `records` で、要るチェックが無くても引かせる | 採用 |
 | [0076](0076-bulk-exempt-ecs-issued-session.md) | `bulk: exempt` で外すのを、ECS の `AssumeRole` で発行された認証情報が直後に使われた読み取りだけにする | 採用 (5 節の ack の扱いは 0077 で置き換え) |
 | [0077](0077-bulk-exempt-unmatched-no-ack.md) | `bulk-exempt-unmatched:` の medium は ack を止め、片付けの表に Key の接頭辞の行を足す (0076 の 5 節の ack の扱いを置き換え) | 採用 |
+| [0078](0078-repo-init-collect-workflow.md) | `arata repo init --collect-every <間隔>` で取得だけのワークフローを書き出す (監査と同じ group で順に待たせ、失敗は知らせずに daily に追いつかせる) | 採用 |
