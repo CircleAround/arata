@@ -1,7 +1,7 @@
 # 0078. `arata repo init --collect-every <間隔>` で、取得だけを短い間隔で回すワークフロー (`arata-collect.yml`) を書き出す。監査と同じ concurrency の group で順に待たせ、失敗は知らせずに daily に追いつかせる
 
 - 日付: 2026-11-21
-- 状態: 提案
+- 状態: 採用 (実際の GitHub では確かめていない。「結果」)
 - 関係する判断: ADR 0059・0060 (`arata repo init` / `repo check`)、0064・0065 (`collect --incremental`、`collect: hourly`)、0034 (S3 ストアの条件付きの書き込み)、
   0068 の 7 節 (`queue: max`)、0014 (暗黙の既定を持たない)、0057 (environment)
 
@@ -127,6 +127,15 @@ ADR 0064 の 4 節は、`repo init` の出力にこのワークフローを足�
   - ワークフローの準備の step が、監査と取得の 2 つのファイルにある (雛形の中の重複)。テストで 2 つの step の一致を固定する
 - **確かめていないこと**: 実際の GitHub では確かめていない (開発では実環境に接続しない)。リリースの前に、開発リードが試しのリポジトリで、
   `queue: max` で取得の待ちが daily を取り消さないこと、cron の `25 */N` が期待の時刻に動くこと、終了コード 3 が警告として見えることを確かめる
+- **`queue: max` が効くかを、リリース後の利用者のリポジトリで見る方法** (開発リードが見る。どれも読むだけか、通知しない取得だけ):
+  - 記録で見る: 監査と取得の定時の実行の一覧を読み、取り消されたもの (`conclusion` が `cancelled`) が無いことと、重なった回で後から来た方が待ってから動いたことを見る。
+    `gh run list -R <owner>/<repo> -w arata-audit.yml --json databaseId,event,createdAt,startedAt,conclusion` と、同じく `-w arata-collect.yml`。
+    待ったかは、ジョブの開始の時刻で見る (`gh api repos/<owner>/<repo>/actions/runs/<run の ID>/jobs --jq '.jobs[] | {name, started_at, completed_at, conclusion}'`)。
+    daily のジョブ (アカウントごと) の `started_at` が、同じアカウントの取得のジョブの `completed_at` 以後で、`conclusion` が `cancelled` でなければ、待って動いている
+  - 重なりが自然に起きないとき (取得が 1 分ほどで終わり、daily と重ならない) は、手で重ねる: `arata-collect` を `workflow_dispatch` で続けて 3 回流す
+    (`gh workflow run arata-collect.yml -R <owner>/<repo>` を 3 回)。1 回目が動いている間に 2 回目と 3 回目が待ち、**2 回目が取り消されずに、3 つとも順に成功する**こと
+    (既定の `queue: single` なら 2 回目が `cancelled` になる)。取得は通知しないので、利用者の Slack には何も出ない。ストアは順に続きを集めるだけで、判定と通知の結果は変わらない
+  - 取り消しが見えたら、`queue` が効いていない。取得のワークフローを外し (`--collect-every` を外して `--force` の PR)、group の扱いを決め直す
 - 攻撃の対応表 (ADR 0058): 新しいチェックではないので変えない
 - 次の段 (この ADR では決めない): `repo check --github` で、取得のワークフローの直近の実行の結果を読んで (GET だけ) 失敗が続いていれば warn にする。
   `collect: hourly` を既定にしたときに、`collect --incremental` が全部のソースを集めるようにする (ADR 0065 の既定にする道筋)
