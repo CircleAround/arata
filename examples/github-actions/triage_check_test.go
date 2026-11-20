@@ -599,7 +599,7 @@ func copyTree(t *testing.T, src string) string {
 func TestCheckRunsRepoCheckOnTheSet(t *testing.T) {
 	w, text := load(t, checkFile)
 	s := stepByID(t, w, "repo-check")
-	want := "arata repo check --owner example-org --repo security-audit --accounts prod,staging --audit-account 111122223333 --store-bucket example-arata-store --region ap-northeast-1 --alert-channel C0123456782 --schedule --out . </dev/null 2>/dev/null"
+	want := "arata repo check --owner example-org --repo security-audit --accounts prod,staging --audit-account 111122223333 --store-bucket example-arata-store --region ap-northeast-1 --alert-channel C0123456782 --schedule --collect-every 1h --out . </dev/null 2>/dev/null"
 	if s.Run != want {
 		t.Fatalf("repo-check runs:\n%s\nwant:\n%s", s.Run, want)
 	}

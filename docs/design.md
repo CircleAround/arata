@@ -1480,7 +1480,7 @@ arata config init --audit-account <12 桁の ID>|none [--by NAME] [--out FILE|-]
                                # 推奨設定の雛形を書き出す (既定 ./arata.yaml。監査する側のアカウントは必須。ID なら既知リストにも書く。ADR 0045) / 雛形との差分 (3 章、ADR 0014)
 arata repo init --owner O --repo R --accounts a,b --audit-account <12 桁の ID>|none --store-bucket B --region REGION
                 --alert-channel <チャンネル ID>|none [--channel a=<ID>,…] [--urgent-channel a=<ID>|same,…] --out DIR
-                [--schedule] [--force] | --diff [--format text|json]
+                [--schedule [--collect-every 1h|2h|3h|4h|6h|8h|12h]] [--force] | --diff [--format text|json]
                                # 監査を回すリポジトリの一式を書き出す / 今ある一式とこの版の一式を比べる (9 章、ADR 0059・0060)。違いがあれば終了コード 1。
                                # チャンネル ID は、端末から打って足りないときだけ聞く。端末でなければ CONFIG_INVALID
 arata repo check <repo init と同じ引数> [--github] [--format table|json]
@@ -1684,6 +1684,12 @@ Actions のログには arata / aratam の `level`・`code`・`source` と終了
 - 決定 (ADR 0060 の記述の訂正): ADR 0060 は「`github/` の fmt・validate・偽の API への apply は残す」と書いたが、**`github/` を偽の API に apply するテストは、元から無い**
   (偽の GitHub API は、秘密の箱 `github/secrets/` のためだけのものだった)。秘密の箱をやめたので、Terraform のテストは fmt と validate だけで、plan も apply もしない。
   `github/` の apply は、実際の GitHub で人が plan を読んで確かめる (書き出す README の 3)
+- 決定 (取得だけのワークフロー。ADR 0078): `--collect-every <間隔>` (24 時間を割り切る `1h`〜`12h`。`--schedule` と一緒にだけ) を付けたときだけ、
+  `.github/workflows/arata-collect.yml` (`arata collect --incremental` だけ。判定・報告・通知はしない) を書き出す。既定は書き出さない (ADR 0014)。
+  cron の分は 25 に固定 (`25 * * * *` / `25 */N * * *`。毎時ちょうどを避け、CloudTrail の `ingest_delay` の既定より後、daily の 15 分前に 0 時の回が入る)。
+  concurrency は監査と同じ group (`arata-audit-<アカウント>`、`cancel-in-progress: false`、`queue: max`) で、同じストアへの書き込みを順番にする (別の group だと STORE_CONFLICT で後の方を失う)。
+  準備の step は監査と同じ (テストで一致を固定)。秘密は認証の 2 つだけ。Slack には送らない (失敗しても daily が位置から追いつく)。
+  終了コード 3 (一部・`max_collect`) は警告にして成功、ほかの失敗は赤。`repo check` は同じ引数を取るだけで、項目は足さない
 - 決定 (`arata repo check`。ADR 0060): 引数は `repo init` と同じ。何も書かない。出力は doctor と同じ ok / warn / ng / skip の行で、`--format json` のスキーマは `repo-check`
   (`missing_secrets` に、足りない秘密のコマンド・値の形・取得元)。ng があれば終了コード 2、warn だけなら 0。ng と warn の行は、標準エラーにも code 付きで出す
   - ファイルの検査 (いつも): この版の一式との差 (`--diff` と同じ比べ方。`github/` の下は `terraform` の項目)、ワークフローが参照する秘密 (YAML として読み、式 `${{ }}` の中の

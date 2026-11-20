@@ -18,7 +18,7 @@ Slack へは bot トークンで送ります (arata の ADR 0061)。決めるの
 | `--channel <アカウント>=<ID>,…` | アカウントごとの通常用のチャンネル。`aratam.yaml` を新しく作るアカウントに要ります |
 | `--urgent-channel <アカウント>=<ID>\|same,…` | アカウントごとの緊急用のチャンネル。分けないなら `same` (通常用に、メンション付きで送ります)。`aratam.yaml` を新しく作るアカウントに要ります |
 
-書き出される一式の見本が [examples/audit-repo](../audit-repo) です (上の引数に `--schedule` を足した出力そのもの。緊急用を分けるアカウントと分けないアカウントが 1 つずつ、知らせのチャンネルあり、の形です。arata のテストが、雛形と 1 バイトも違わないことを固定しています)。
+書き出される一式の見本が [examples/audit-repo](../audit-repo) です (上の引数に `--schedule --collect-every 1h` を足した出力そのもの。緊急用を分けるアカウントと分けないアカウントが 1 つずつ、知らせのチャンネルあり、の形です。arata のテストが、雛形と 1 バイトも違わないことを固定しています)。
 置く順番は、書き出される [README.md](../audit-repo/README.md) にあります。
 
 | 書き出すもの | 中身 |
@@ -27,6 +27,7 @@ Slack へは bot トークンで送ります (arata の ADR 0061)。決めるの
 | [arata-triage.yml](../audit-repo/.github/workflows/arata-triage.yml) | 手動 (Actions の画面) で、finding を ack / snooze / resolve する (下の「finding を片付ける」) |
 | [arata-check.yml](../audit-repo/.github/workflows/arata-check.yml) | PR で、設定と allowlist.yaml の形と、この一式が揃っていること (`arata repo check`) を検査する (下の「PR で設定を検査する」) |
 | [arata-notify-test.yml](../audit-repo/.github/workflows/arata-notify-test.yml) | 手動で、監査をせずに Slack へ試験メッセージを 1 通送る (通常用・緊急用・知らせ。下の「Slack への送信だけを確かめる」) |
+| [arata-collect.yml](../audit-repo/.github/workflows/arata-collect.yml) | `--collect-every` を付けたときだけ。取得だけ (`arata collect --incremental`) を短い間隔で回す。判定も通知もしない (下の「取得だけを短い間隔で回す」) |
 | [github/](../audit-repo/github) | GitHub の設定の Terraform (非公開、fork の禁止、main の保護、Actions の許可、environment `audit`)。秘密には触れない。下の「GitHub の設定を Terraform で当てる」 |
 | [aws/<アカウント>/](../audit-repo/aws) | アカウントごとの `arata.yaml`・`allowlist.yaml`・`aratam.yaml` の雛形 (`arata config init`・`aratam config init` と同じ。`aratam.yaml` には、引数のチャンネル ID を書き入れる) |
 
@@ -899,6 +900,42 @@ GITHUB_TOKEN="$(gh auth token)" arata repo check … --out . --github
 - `ARATA_VERSION` は `--dry-run` のある版 (v0.11.0 より後) にします。それより前の版は `--dry-run` を知らず、終了コード 2 で止まります (何も書かれません)
 - 導入時の「最初の run」(手順 6) には使いません。あれは溜まっていた指摘を報告済みにするための実行です
 
+## 取得だけを短い間隔で回す (`--collect-every`)
+
+取得 (`arata collect --incremental`) を、判定と通知 (毎朝の daily) と別のタイミングで回します (arata の ADR 0078)。
+先に集めておくと、daily は読み直さずに判定だけに近づき、1 回の収集が上限 (`max_collect`) に当たって一部だけ (partial) になることも減ります。
+止まった後の追いつきも、間隔ごとに少しずつ進みます。
+
+```sh
+arata repo init <README.md のコマンドの引数> --schedule --collect-every 1h --force
+```
+
+- 間隔は `1h`・`2h`・`3h`・`4h`・`6h`・`8h`・`12h` (24 時間を割り切る時間) のどれかです。既定はありません。書かなければ取得のワークフローは入りません
+- `--schedule` と一緒にだけ使えます。導入の流れ (`arata help ai onboarding`) の `arata init` より前に、取得がストアへ書かないようにするためです。定時を有効にする PR か、その後の PR で入れます
+- cron の分は 25 に固定です (`1h` なら `25 * * * *`、`6h` なら `25 */6 * * *`)。毎時ちょうどを避け、記録の遅れ (CloudTrail の `ingest_delay` の既定 15 分) より後にしています。
+  どの間隔でも 0 時を含むので、daily (UTC 00:40) の 15 分前に 1 回入ります
+- やめるときは、`--collect-every` を外して `--force` で書き直し、残った `.github/workflows/arata-collect.yml` を消します (`arata repo check` が「この版の一式に無い」と出します)
+
+**集めるもの**: CloudTrail の種類 (`cloudtrail-lookup`・`cloudtrail-s3`・`cloudtrail-unused-regions`) と、`collect: hourly` を書いた cloudwatch-logs のソースだけです (arata の ADR 0064・0065)。
+日の頭から読み直す cloudwatch-logs のソースは、短い間隔で回すと読み取り (費用) が増えるので、これまでどおり daily が読みます。
+ソースに `max_collect` を書いておくと、止まった後の追いつきでも 1 回の時間が認証の期限 (1 時間) に収まります。
+
+**daily とぶつかったとき**: 取得のジョブは、監査と同じ concurrency の group (`arata-audit-<アカウント>`) で動きます。走っている実行は中断せず、待っている実行も取り消しません (`queue: max`)。
+同じストアへの書き込みは順番になるので、`STORE_CONFLICT` にはなりません。daily が長ければ取得が待ち、取得が長ければ daily が待ちます。どちらも遅れるだけで、捨てません。
+group を分けると、取得と daily が同時に確定し、後から確定した方 (daily なら、その日の判定と通知) が失われます。
+
+**取得が失敗したとき**: 取得は Slack に何も送りません (1 時間ごとの一時的な失敗で、1 日に何度も鳴らさないため)。失敗しても、集めるはずだったものは失われません。
+daily がソースの位置から続きを自分で集めます。失うのは「daily が軽くなる」効果だけです。失敗が続いたときは、次のどれかで見えます。
+
+- 原因が daily と共通 (認証、秘密、ストア、バイナリ、設定) なら、daily も失敗し、いつもの知らせ (aratam の「実行されていない」、知らせのチャンネル) が届きます
+- 取得だけが止まって daily の量が戻ると、daily が `max_collect` に当たり、通知とレポートのカバレッジに「一部だけ」と出ます
+- 取得のジョブは赤になり、Actions の画面で見えます
+
+取得の終了コード 3 (一部のソースが取れなかった、または `max_collect` に当たった) は、ログに警告を出してジョブを成功にします。追いつきの途中では毎回起き、次の回が続きから集めるためです。
+
+**時間**: 1 回あたり、準備とストアの読み書きの数十秒に、取得の時間が乗ります。課金は 1 回ごとに分へ切り上げるので、`1h` ならアカウントごとに 1 日 24 回、30 日で少なくとも 720 分です
+(daily の時間は減りますが、切り上げと準備の分だけ、合計は増えます)。抑えたいときは間隔を長くします (`6h` なら 1 日 4 回)。
+
 ## Slack への送信だけを確かめる
 
 [arata-notify-test.yml](../audit-repo/.github/workflows/arata-notify-test.yml) で、Actions の画面から `aratam test-notify` を実行できます。
@@ -1006,7 +1043,7 @@ Actions の artifacts はリポジトリを読める人に見えるので使い�
 
 | 項目 | 目安 |
 |---|---|
-| Actions | 1 回 1〜3 分として月 34 回で 100 分ほど。非公開リポジトリでも GitHub Free の無料枠 (月 2,000 分) に収まる。分単位で切り上げ |
+| Actions | 1 回 1〜3 分として月 34 回で 100 分ほど。非公開リポジトリでも GitHub Free の無料枠 (月 2,000 分) に収まる。分単位で切り上げ。取得だけのワークフロー (`--collect-every 1h`) を足すと、アカウントごとに月 720 分以上増える (上の「取得だけを短い間隔で回す」) |
 | Logs Insights | 使うときの主な費用。`arata doctor` の `cost` の行に 1 日・30 日の概算が出る (東京 0.0076 USD/GB)。`max_scan_gb` を必ず設定する |
 | Cost Explorer | `cost-anomaly` のソースを使うと 1 リクエスト 0.01 USD。1 回の run で 2 回ほどなので月 1 USD 未満 |
 | S3 | SQLite の gzip と raw の出し入れだけで、ふつうは僅か |
