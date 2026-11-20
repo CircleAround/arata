@@ -72,7 +72,10 @@ type Params struct {
 	StoreBucket  string   // ストアのバケットの名前
 	Region       string   // AWS のリージョン
 	Schedule     bool     // 監査のワークフローに定時を入れる
-	Version      string   // arata の版 (vX.Y.Z)
+	// CollectEvery は、取得だけ (arata collect --incremental) を回す間隔 (CollectIntervals のどれか)。空なら取得のワークフローを書き出さない (ADR 0078)。
+	// Schedule と一緒にだけ使える (導入の流れの arata init より前に、取得がストアへ書かないように)。
+	CollectEvery string
+	Version      string // arata の版 (vX.Y.Z)
 
 	// AlertChannel は、定時の通知が送れなかったことを知らせるチャンネル ID か、NoAlert (知らせない)。ワークフローに入る (生成物)。
 	AlertChannel string
@@ -97,6 +100,28 @@ var (
 
 // yamlWords は、引用符なしの YAML で文字列にならない語。アカウントの名前は引用符なしで matrix と name に入るので拒む。
 var yamlWords = map[string]bool{"true": true, "false": true, "null": true, "yes": true, "no": true, "on": true, "off": true, "y": true, "n": true, "nan": true, "inf": true}
+
+// CollectIntervals は --collect-every が受け付ける間隔 (24 時間を割り切る時間) と、その時間の数 (ADR 0078)。
+// 割り切らない間隔は、cron の */N が 0 時で切り直されるので、日の終わりで間隔がずれ、00:25 の取得を保証できない。
+// 1 時間より短い間隔は、collect: hourly が終わった時しか読まないので効果が無い。
+var CollectIntervals = map[string]int{"1h": 1, "2h": 2, "3h": 3, "4h": 4, "6h": 6, "8h": 8, "12h": 12}
+
+// collectMinute は取得の cron の分 (ADR 0078 の 2 節)。毎時ちょうどを避け、CloudTrail の ingest_delay の既定 (15 分) より後にする。
+// */N は 0 時を含むので、どの間隔でも daily (00:40) の 15 分前に 1 回入る。
+const collectMinute = 25
+
+// CollectCron は、間隔から取得の cron を作る。間隔が CollectIntervals に無ければ空。
+func CollectCron(every string) string {
+	n, ok := CollectIntervals[every]
+	switch {
+	case !ok:
+		return ""
+	case n == 1:
+		return fmt.Sprintf("%d * * * *", collectMinute)
+	default:
+		return fmt.Sprintf("%d */%d * * *", collectMinute, n)
+	}
+}
 
 // Validate は引数の形を確かめる。通らなければ、一式は 1 つも作らない。
 func (p Params) Validate() error {
@@ -168,6 +193,14 @@ func (p Params) ValidateBase() error {
 	if !versionRE.MatchString(p.Version) {
 		return fmt.Errorf("arata version %q: must be a release version (vX.Y.Z)", p.Version)
 	}
+	if p.CollectEvery != "" {
+		if _, ok := CollectIntervals[p.CollectEvery]; !ok {
+			return fmt.Errorf("--collect-every %q: must be one of 1h, 2h, 3h, 4h, 6h, 8h, 12h (hours that divide a day)", printableArg(p.CollectEvery))
+		}
+		if !p.Schedule {
+			return errors.New("--collect-every can be used only with --schedule (the collection is scheduled; enable it after the onboarding, with the schedule)")
+		}
+	}
 	return nil
 }
 
@@ -203,11 +236,17 @@ type File struct {
 	Missing []string
 }
 
-// 生成物の一覧。雛形のパス → 書き出すパス。
-var generated = []struct {
+// generatedFile は生成物の 1 つ (雛形のパス → 書き出すパス)。
+type generatedFile struct {
 	template, path string
 	mode           fs.FileMode
-}{
+}
+
+// collectWorkflow は、--collect-every を付けたときだけ書き出す取得のワークフロー (ADR 0078)。
+var collectWorkflow = generatedFile{"workflows/arata-collect.yml", ".github/workflows/arata-collect.yml", 0o644}
+
+// 生成物の一覧 (いつも書き出すもの)。
+var generated = []generatedFile{
 	{"workflows/arata-audit.yml", ".github/workflows/arata-audit.yml", 0o644},
 	{"workflows/arata-triage.yml", ".github/workflows/arata-triage.yml", 0o644},
 	{"workflows/arata-notify-test.yml", ".github/workflows/arata-notify-test.yml", 0o644},
@@ -239,6 +278,9 @@ func (p Params) args() string {
 		p.Owner, p.Repo, strings.Join(p.Accounts, ","), p.AuditAccount, p.StoreBucket, p.Region, p.AlertChannel)
 	if p.Schedule {
 		s += " --schedule"
+	}
+	if p.CollectEvery != "" {
+		s += " --collect-every " + p.CollectEvery
 	}
 	return s + " --out ."
 }
@@ -294,6 +336,10 @@ func Files(p Params, reg *checks.Registry, today time.Time) ([]File, error) {
 		routeAlertReadme = "・知らせ (`alert`) "
 		alertText = "`" + p.AlertChannel + "`。定時の通知が送れなかったときに、ここへ知らせます"
 	}
+	collectReadme := "この一式は、取得だけのワークフローを入れていません (判定と同じ daily の中で集めます)"
+	if p.CollectEvery != "" {
+		collectReadme = "この一式は、取得だけを `" + p.CollectEvery + "` ごとに回しています (`.github/workflows/arata-collect.yml`。cron `" + CollectCron(p.CollectEvery) + "`)"
+	}
 	quoted := make([]string, len(p.Accounts))
 	for i, a := range p.Accounts {
 		quoted[i] = "`" + a + "`"
@@ -318,9 +364,16 @@ func Files(p Params, reg *checks.Registry, today time.Time) ([]File, error) {
 		"@@ROUTE_ALERT_TEXT@@", routeAlertText,
 		"@@ROUTE_ALERT_README@@", routeAlertReadme,
 		"@@ALERT_TEXT@@", alertText,
+		"@@COLLECT_CRON@@", CollectCron(p.CollectEvery),
+		"@@COLLECT_EVERY@@", p.CollectEvery,
+		"@@COLLECT_README@@", collectReadme,
 	)
+	gen := generated
+	if p.CollectEvery != "" {
+		gen = append(append([]generatedFile(nil), generated...), collectWorkflow)
+	}
 	var files []File
-	for _, g := range generated {
+	for _, g := range gen {
 		b, err := templates.ReadFile("templates/" + g.template)
 		if err != nil {
 			return nil, err

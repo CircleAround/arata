@@ -30,7 +30,7 @@ const (
 // workflowFiles は定時の監査の見本。allFiles は見本のすべて。
 var (
 	workflowFiles = []string{multiFile}
-	allFiles      = []string{multiFile, triageFile, checkFile, notifyTestFile}
+	allFiles      = []string{multiFile, triageFile, checkFile, notifyTestFile, collectFile}
 )
 
 type step struct {

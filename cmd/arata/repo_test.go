@@ -101,6 +101,43 @@ func TestRepoInitDoesNotOverwrite(t *testing.T) {
 	}
 }
 
+// TestRepoInitCollectEvery は、--collect-every で取得のワークフローを足し、外すと「この版の一式に無い」と出ること、
+// --schedule 無しでは止まって何も書かないことを確かめる (ADR 0078)。
+func TestRepoInitCollectEvery(t *testing.T) {
+	withVersion(t, "v0.15.0")
+	c := newCLI(t)
+	out := filepath.Join(c.dir, "repo")
+	collect := filepath.Join(out, ".github/workflows/arata-collect.yml")
+	// 定時と一緒にだけ使える。形の誤りと同じく、1 つも書かない
+	if code := c.repo("--out", out, "--collect-every", "1h"); code != 2 || !strings.Contains(c.stderr.String(), "--schedule") {
+		t.Fatalf("without --schedule: exit %d: %s", code, c.stderr)
+	}
+	if code := c.repo("--out", out, "--schedule", "--collect-every", "5h"); code != 2 {
+		t.Fatalf("5h: exit %d", code)
+	}
+	if _, err := os.Stat(out); !os.IsNotExist(err) {
+		t.Fatalf("nothing must be written: %v", err)
+	}
+	if code := c.repo("--out", out, "--schedule", "--collect-every", "6h"); code != 0 {
+		t.Fatalf("exit %d: %s%s", code, c.stdout, c.stderr)
+	}
+	if b, err := os.ReadFile(collect); err != nil || !strings.Contains(string(b), "cron: '25 */6 * * *'") {
+		t.Fatalf("collect workflow: %v\n%s", err, b)
+	}
+	// repo check は同じ引数で揃っている (--collect-every を受け取る)
+	check := append([]string{"repo", "check"}, repoArgs[2:]...)
+	if code := c.run(append(check, "--out", out, "--schedule", "--collect-every", "6h")...); code != 0 {
+		t.Fatalf("repo check exit %d: %s", code, c.stdout)
+	}
+	// 外して書き直すと、取得のワークフローは「この版の一式に無い」と出る (消すのは人。書き出しの後の検査が ng で終了コード 2)
+	if code := c.repo("--out", out, "--schedule", "--force"); code != 2 || !strings.Contains(c.stdout.String(), "arata-collect.yml") {
+		t.Fatalf("--force exit %d: %s", code, c.stdout)
+	}
+	if code := c.repo("--out", out, "--schedule", "--diff"); code != 1 || !strings.Contains(c.stdout.String(), "arata-collect.yml") {
+		t.Fatalf("diff exit %d: %s", code, c.stdout)
+	}
+}
+
 // TestRepoInitDiffJSON は、--diff --format json の形と終了コードを固定する (機械が読む出力。ADR 0054)。
 func TestRepoInitDiffJSON(t *testing.T) {
 	withVersion(t, "v0.15.0")

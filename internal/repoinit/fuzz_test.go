@@ -25,17 +25,17 @@ import (
 //   - 引数の値は、引用符・改行・式 (${{、$( ) を生成物に持ち込まない
 //   - アカウントごとの設定の雛形は、name が引数の名前のままで読める
 func FuzzFiles(f *testing.F) {
-	f.Add("example-org", "security-audit", "prod,staging", "111122223333", "example-arata-store", "ap-northeast-1", "v0.15.0", true, "C0123456782", "prod=C0123456789,staging=C0123456781", "prod=C0123456780,staging=same")
-	f.Add("a", "b", "x", "none", "abc", "us-gov-west-1", "v1.0.0", false, "none", "", "")
-	f.Add("example-org", "x\"\n${{ secrets.X }}", "prod", "none", "example-arata-store", "ap-northeast-1", "v0.15.0", false, "none", "", "")
-	f.Add("example-org", "repo", "true,null", "none", "example-arata-store", "ap-northeast-1", "v0.15.0", false, "none", "", "")
-	f.Add("example-org", "repo", "prod", "none", "example-arata-store/$(id)", "ap-northeast-1\n  evil: 1", "v0.15.0`id`", false, "none", "", "")
-	f.Add("-a", "..", "1e3,0x10", "123", "a..b", "AP", "dev", true, "", "", "")
-	f.Add("example-org", "repo", "prod", "none", "example-arata-store", "ap-northeast-1", "v0.15.0", false, "C0123456782\n          EVIL: ${{ secrets.X }}", "prod=C0123456789\"", "prod=same,prod=same")
-	f.Add("example-org", "repo", "prod", "none", "example-arata-store", "ap-northeast-1", "v0.15.0", false, "#alerts", "prod=xoxb-not-a-channel", "dev=same")
+	f.Add("example-org", "security-audit", "prod,staging", "111122223333", "example-arata-store", "ap-northeast-1", "v0.15.0", true, "C0123456782", "prod=C0123456789,staging=C0123456781", "prod=C0123456780,staging=same", "1h")
+	f.Add("a", "b", "x", "none", "abc", "us-gov-west-1", "v1.0.0", false, "none", "", "", "")
+	f.Add("example-org", "x\"\n${{ secrets.X }}", "prod", "none", "example-arata-store", "ap-northeast-1", "v0.15.0", false, "none", "", "", "6h")
+	f.Add("example-org", "repo", "true,null", "none", "example-arata-store", "ap-northeast-1", "v0.15.0", false, "none", "", "", "")
+	f.Add("example-org", "repo", "prod", "none", "example-arata-store/$(id)", "ap-northeast-1\n  evil: 1", "v0.15.0`id`", false, "none", "", "", "5h")
+	f.Add("-a", "..", "1e3,0x10", "123", "a..b", "AP", "dev", true, "", "", "", "1h\n  evil: 1")
+	f.Add("example-org", "repo", "prod", "none", "example-arata-store", "ap-northeast-1", "v0.15.0", false, "C0123456782\n          EVIL: ${{ secrets.X }}", "prod=C0123456789\"", "prod=same,prod=same", "30m")
+	f.Add("example-org", "repo", "prod", "none", "example-arata-store", "ap-northeast-1", "v0.15.0", false, "#alerts", "prod=xoxb-not-a-channel", "dev=same", "12h")
 	reg := checks.NewRegistry()
-	f.Fuzz(func(t *testing.T, owner, repo, accounts, auditAccount, bucket, region, version string, schedule bool, alert, channels, urgent string) {
-		p := Params{Owner: owner, Repo: repo, AuditAccount: auditAccount, StoreBucket: bucket, Region: region, Version: version, Schedule: schedule, AlertChannel: alert}
+	f.Fuzz(func(t *testing.T, owner, repo, accounts, auditAccount, bucket, region, version string, schedule bool, alert, channels, urgent, collectEvery string) {
+		p := Params{Owner: owner, Repo: repo, AuditAccount: auditAccount, StoreBucket: bucket, Region: region, Version: version, Schedule: schedule, AlertChannel: alert, CollectEvery: collectEvery}
 		if accounts != "" {
 			p.Accounts = strings.Split(accounts, ",")
 		}
@@ -63,6 +63,9 @@ func FuzzFiles(f *testing.F) {
 		}
 		// 形を通った値は、解釈される文字を持たない
 		values := append([]string{owner, repo, bucket, region, version, auditAccount, alert}, p.Accounts...)
+		if collectEvery != "" {
+			values = append(values, collectEvery)
+		}
 		for _, m := range []map[string]string{p.Channels, p.UrgentChannels} {
 			for _, v := range m {
 				values = append(values, v)
@@ -107,6 +110,28 @@ func FuzzFiles(f *testing.F) {
 		for _, file := range files {
 			if file.Kind == Generated && (alert == NoAlert) == bytes.Contains(file.Body, []byte("chat.postMessage")) && strings.HasSuffix(file.Path, "arata-audit.yml") {
 				t.Fatalf("%s: the alert step does not follow --alert-channel %s", file.Path, alert)
+			}
+		}
+		// 取得のワークフロー (ADR 0078) は --collect-every を付けたときだけあり、定時が無ければ付けられない。cron は間隔から決まった形で、
+		// アカウントの matrix と、監査と同じ秘密の部分集合 (Slack のトークンは渡さない) を持つ
+		var collect *File
+		for i := range files {
+			if files[i].Path == collectPath {
+				collect = &files[i]
+			}
+		}
+		if (collect != nil) != (collectEvery != "") || (collectEvery != "" && !schedule) {
+			t.Fatalf("collect workflow: written=%v --collect-every=%q --schedule=%v", collect != nil, collectEvery, schedule)
+		}
+		if collect != nil {
+			w := parseWorkflow(t, *collect)
+			if len(w.On.Schedule) != 1 || w.On.Schedule[0].Cron != CollectCron(collectEvery) || CollectCron(collectEvery) == "" ||
+				strings.Join(w.Jobs["collect"].Strategy.Matrix.Account, ",") != accounts || w.Env["ARATA_VERSION"] != version {
+				t.Fatalf("collect workflow does not carry the arguments: %+v", w)
+			}
+			names, dynamic, err := WorkflowSecrets(collect.Body)
+			if err != nil || dynamic || strings.Join(names, ",") != "ARATA_AUDIT_ROLE_ARNS,ARATA_RUNNER_ROLE_ARN" {
+				t.Fatalf("collect workflow secrets: %v dynamic=%v err=%v", names, dynamic, err)
 			}
 		}
 		audit := parseWorkflow(t, byPath(t, files, workflowPaths[0]))

@@ -25,6 +25,8 @@ func exampleParams() Params {
 		Owner: "example-org", Repo: "security-audit", Accounts: []string{"prod", "staging"},
 		AuditAccount: "111122223333", StoreBucket: "example-arata-store", Region: "ap-northeast-1",
 		Schedule: true, Version: "v0.15.0",
+		// 取得だけを 1 時間ごとに回す (ADR 0078)。見本は取得のワークフローも持つ
+		CollectEvery: "1h",
 		// 緊急用を分けるアカウント (prod) と分けないアカウント (staging)、知らせのチャンネルあり (ADR 0060 の見本の形)
 		AlertChannel:   "C0123456782",
 		Channels:       map[string]string{"prod": "C0123456789", "staging": "C0123456781"},
@@ -108,6 +110,13 @@ func TestValidateRejectsValuesOutsideTheShapes(t *testing.T) {
 		"channel other account":  func(p *Params) { p.Channels["dev"] = "C0123456789" },
 		"urgent channel name":    func(p *Params) { p.UrgentChannels["prod"] = "general" },
 		"urgent other account":   func(p *Params) { p.UrgentChannels["dev"] = SameChannel },
+		"collect every 5h":       func(p *Params) { p.CollectEvery = "5h" },
+		"collect every 24h":      func(p *Params) { p.CollectEvery = "24h" },
+		"collect every 30m":      func(p *Params) { p.CollectEvery = "30m" },
+		"collect every 60m":      func(p *Params) { p.CollectEvery = "60m" },
+		"collect every 01h":      func(p *Params) { p.CollectEvery = "01h" },
+		"collect every newline":  func(p *Params) { p.CollectEvery = "1h\n  evil: 1" },
+		"collect no schedule":    func(p *Params) { p.Schedule = false },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -130,6 +139,9 @@ func TestValidateRejectsValuesOutsideTheShapes(t *testing.T) {
 		func(p *Params) { p.Channels, p.UrgentChannels = nil, nil }, // aratam.yaml が既にあるアカウントには要らない
 		func(p *Params) { p.UrgentChannels = map[string]string{"prod": SameChannel} },
 		func(p *Params) { p.AlertChannel = "G0123456789ABCDEF" },
+		func(p *Params) { p.CollectEvery = "" },
+		func(p *Params) { p.CollectEvery, p.Schedule = "", false },
+		func(p *Params) { p.CollectEvery = "12h" },
 	} {
 		p := exampleParams()
 		ok(&p)
@@ -189,7 +201,7 @@ func TestFilesFillInTheArguments(t *testing.T) {
 		}
 	}
 	want := []string{
-		".github/workflows/arata-audit.yml", ".github/workflows/arata-check.yml", ".github/workflows/arata-notify-test.yml", ".github/workflows/arata-triage.yml",
+		".github/workflows/arata-audit.yml", ".github/workflows/arata-check.yml", ".github/workflows/arata-collect.yml", ".github/workflows/arata-notify-test.yml", ".github/workflows/arata-triage.yml",
 		".gitignore", "README.md",
 		"aws/prod/allowlist.yaml", "aws/prod/arata.yaml", "aws/prod/aratam.yaml",
 		"aws/staging/allowlist.yaml", "aws/staging/arata.yaml", "aws/staging/aratam.yaml",
@@ -234,7 +246,7 @@ func TestFilesFillInTheArguments(t *testing.T) {
 		}
 	}
 	readme := string(byPath(t, files, "README.md").Body)
-	if !strings.Contains(readme, "arata repo init --owner example-org --repo security-audit --accounts prod,staging --audit-account 111122223333 --store-bucket example-arata-store --region ap-northeast-1 --alert-channel C0123456782 --schedule --out .\n") {
+	if !strings.Contains(readme, "arata repo init --owner example-org --repo security-audit --accounts prod,staging --audit-account 111122223333 --store-bucket example-arata-store --region ap-northeast-1 --alert-channel C0123456782 --schedule --collect-every 1h --out .\n") {
 		t.Errorf("README must show the command that reproduces this set:\n%s", readme[:600])
 	}
 	// 通知のチャンネル ID は aratam.yaml だけが持つ (README のコマンドにも、ワークフローにも入れない。ADR 0060)
@@ -258,6 +270,8 @@ func TestFilesFillInTheArguments(t *testing.T) {
 // TestScheduleIsOptIn は、--schedule を付けないと定時が入らないことを確かめる (導入の流れが済んでから PR で入れる)。
 func TestScheduleIsOptIn(t *testing.T) {
 	p := exampleParams()
+	p.CollectEvery = "" // 取得 (ADR 0078) は定時と一緒にだけ使える。ここでは定時だけを比べる
+	base := p
 	on := parseWorkflow(t, byPath(t, mustFiles(t, p), workflowPaths[0]))
 	if len(on.On.Schedule) != 2 {
 		t.Fatalf("with --schedule: %+v", on.On.Schedule)
@@ -272,13 +286,72 @@ func TestScheduleIsOptIn(t *testing.T) {
 		t.Error("README must show the command without --schedule")
 	}
 	// 変わるのは監査のワークフローと README だけ
-	a, b := mustFiles(t, exampleParams()), files
+	a, b := mustFiles(t, base), files
 	for i := range a {
 		same := bytes.Equal(a[i].Body, b[i].Body)
 		// PR の検査は arata repo check に同じ引数を渡すので、--schedule の有無で変わる
 		if changes := a[i].Path == workflowPaths[0] || a[i].Path == workflowPaths[3] || a[i].Path == "README.md"; same == changes {
 			t.Errorf("%s: same=%v", a[i].Path, same)
 		}
+	}
+}
+
+// collectPath は、取得だけを短い間隔で回すワークフロー (ADR 0078)。--collect-every を付けたときだけ書き出す。
+const collectPath = ".github/workflows/arata-collect.yml"
+
+// TestCollectIsOptIn は、--collect-every を付けたときだけ取得のワークフローを書き出し、cron が間隔から決まった形になり、
+// 変わるのは取得のワークフロー・PR の検査 (repo check の引数)・README だけであることを確かめる (ADR 0078)。
+func TestCollectIsOptIn(t *testing.T) {
+	p := exampleParams()
+	p.CollectEvery = ""
+	off := mustFiles(t, p)
+	for _, f := range off {
+		if f.Path == collectPath {
+			t.Fatal("without --collect-every the collect workflow must not be written")
+		}
+	}
+	offBody := map[string][]byte{}
+	for _, f := range off {
+		offBody[f.Path] = f.Body
+	}
+	for every, cron := range map[string]string{
+		"1h": "25 * * * *", "2h": "25 */2 * * *", "3h": "25 */3 * * *", "4h": "25 */4 * * *",
+		"6h": "25 */6 * * *", "8h": "25 */8 * * *", "12h": "25 */12 * * *",
+	} {
+		t.Run(every, func(t *testing.T) {
+			p := exampleParams()
+			p.CollectEvery = every
+			files := mustFiles(t, p)
+			f := byPath(t, files, collectPath)
+			if f.Kind != Generated || f.Mode != 0o644 {
+				t.Errorf("the collect workflow is a generated file: %+v", f.Kind)
+			}
+			w := parseWorkflow(t, f)
+			if len(w.On.Schedule) != 1 || w.On.Schedule[0].Cron != cron {
+				t.Errorf("cron: %+v, want %q", w.On.Schedule, cron)
+			}
+			job, ok := w.Jobs["collect"]
+			if !ok || job.Environment != Environment || strings.Join(job.Strategy.Matrix.Account, ",") != strings.Join(p.Accounts, ",") {
+				t.Errorf("collect job: %+v", job)
+			}
+			if w.Env["ARATA_VERSION"] != p.Version || w.Env["AWS_REGION"] != p.Region {
+				t.Errorf("env: %v", w.Env)
+			}
+			for _, path := range []string{"README.md", workflowPaths[3]} {
+				if !strings.Contains(string(byPath(t, files, path).Body), " --schedule --collect-every "+every+" --out .") {
+					t.Errorf("%s must carry --collect-every %s", path, every)
+				}
+			}
+			for _, g := range files {
+				if g.Path == collectPath {
+					continue
+				}
+				changes := g.Path == "README.md" || g.Path == workflowPaths[3]
+				if same := bytes.Equal(g.Body, offBody[g.Path]); same == changes {
+					t.Errorf("%s: same=%v", g.Path, same)
+				}
+			}
+		})
 	}
 }
 
@@ -359,7 +432,7 @@ func TestWorkflowsUseOnlyTheThreeSecrets(t *testing.T) {
 	}
 	withAlert, noAlert, noSchedule := exampleParams(), exampleParams(), exampleParams()
 	noAlert.AlertChannel = NoAlert
-	noSchedule.Schedule = false
+	noSchedule.Schedule, noSchedule.CollectEvery = false, ""
 	for name, p := range map[string]Params{"alert": withAlert, "no alert": noAlert, "no schedule": noSchedule} {
 		files := mustFiles(t, p)
 		if got := usedSecrets(t, files); strings.Join(got, ",") != strings.Join(SecretNames, ",") {
