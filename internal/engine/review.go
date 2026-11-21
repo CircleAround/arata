@@ -626,49 +626,145 @@ func (e *Engine) SetStatus(ctx context.Context, id, status string, until time.Ti
 	return &c.Finding, nil
 }
 
-// ChangeStatus は SetStatus の本体。o.DryRun なら何も書かずに、変えるはずの結果を返す。
+// ChangeStatus は SetStatus の本体 (1 件の ChangeStatuses)。o.DryRun なら何も書かずに、変えるはずの結果を返す。
 func (e *Engine) ChangeStatus(ctx context.Context, id, status string, until time.Time, o StatusOptions) (*StatusChange, error) {
+	b, err := e.ChangeStatuses(ctx, []string{id}, status, until, o)
+	if err != nil {
+		if b != nil && len(b.Items) == 1 && b.Items[0].Err != nil {
+			return nil, b.Items[0].Err
+		}
+		return nil, err
+	}
+	return b.Items[0].Change, nil
+}
+
+// StatusBatch は ChangeStatuses の結果。Items は渡した ID の順。
+type StatusBatch struct {
+	Status string
+	Until  time.Time
+	DryRun bool
+	Items  []StatusItem
+	// Stopped は検査で止めた ID の数。1 以上なら何も書いていない。
+	Stopped int
+}
+
+// StatusItem は 1 つの ID の結果。検査を通れば Change (止めた ID があれば書いていない)、止めたら Err と Code。
+type StatusItem struct {
+	ID     string
+	Change *StatusChange
+	// Found は止めた ID でも、ストアで引けた finding (見つからなければ nil)。
+	Found *store.Finding
+	Err   error
+	Code  string
+	// Refused は片付けの表が止めた ack (Code が ACK_REFUSED のとき)。
+	Refused *AckRefusedError
+}
+
+// ChangeStatuses は複数の finding を同じ status・理由・期日・force・操作した人で変える (ADR 0080)。
+// 検査 (ID の形と重複・finding の有無・片付けの表・期日) を書く前に全部済ませ、1 件でも通らなければ何も書かずに、
+// 止めた ID を全部 Items に載せて返す (err は ExitError。code は全部が ACK_REFUSED なら ACK_REFUSED、ほかは CONFIG_INVALID)。
+// 止めた ID ごとに ERROR のログを 1 行出す。通れば 1 つのトランザクションで書く。ストアの確定 (Commit) は呼び出し側が 1 回行う。
+// ID の並び全体の誤り・理由と操作した人・期日の誤りは、Items を作らずに (nil で) 返す。
+func (e *Engine) ChangeStatuses(ctx context.Context, ids []string, status string, until time.Time, o StatusOptions) (*StatusBatch, error) {
+	if _, err := ParseFindingIDs(ids); err != nil {
+		return nil, e.configErr(err)
+	}
 	act, err := e.triageAction(statusActions[status], o.By, o.Reason)
 	if err != nil {
 		return nil, err
-	}
-	f, err := e.findingForUpdate(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	if status == store.FindingAcked {
-		// 止める場所はここ 1 か所 (CLI もワークフローも通る)。ストアを書く前に止める
-		if o.Force && strings.TrimSpace(o.Reason) == "" {
-			return nil, e.ackRefused(f, true)
-		}
-		if ackGuarded(*f) {
-			if !o.Force {
-				return nil, e.ackRefused(f, false)
-			}
-			act.Forced = true
-		}
 	}
 	now := e.deps.Now()
 	if status == store.FindingSnoozed && !until.After(now) {
 		return nil, e.configErr(fmt.Errorf("--until must be in the future"))
 	}
-	change := &StatusChange{Before: f.Status, Forced: act.Forced, DryRun: o.DryRun}
+	b := &StatusBatch{Status: status, Until: until, DryRun: o.DryRun}
+	allRefused := true
+	for _, id := range ids {
+		it, err := e.checkStatusChange(ctx, id, status, o)
+		if err != nil {
+			return nil, err
+		}
+		if it.Err != nil {
+			b.Stopped++
+			if it.Code != CodeAckRefused {
+				allRefused = false
+			}
+		}
+		b.Items = append(b.Items, it)
+	}
+	if b.Stopped > 0 {
+		code := CodeConfigInvalid
+		if allRefused {
+			code = CodeAckRefused
+		}
+		e.log.Info("finding status not changed (some ids were stopped; nothing written)", "stopped", b.Stopped, "ids", len(ids))
+		return b, &ExitError{Code: code, Exit: ExitConfig, Err: fmt.Errorf("%d of %d finding ids were stopped; nothing was written", b.Stopped, len(ids))}
+	}
 	if !o.DryRun {
-		if err := e.st.SetFindingStatus(ctx, f.ID, status, until, now, act); err != nil {
+		ups := make([]store.StatusUpdate, 0, len(b.Items))
+		for _, it := range b.Items {
+			a := act
+			a.Forced = it.Change.Forced
+			ups = append(ups, store.StatusUpdate{ID: it.ID, Status: status, SnoozeUntil: until, At: now, Action: a})
+		}
+		if err := e.st.SetFindingStatuses(ctx, ups); err != nil {
 			return nil, err
 		}
 	}
-	f.Status, f.LastChanged = status, now
-	if status == store.FindingSnoozed {
-		f.SnoozeUntil = until
+	for i := range b.Items {
+		c := b.Items[i].Change
+		f := &c.Finding
+		f.Status, f.LastChanged = status, now
+		if status == store.FindingSnoozed {
+			f.SnoozeUntil = until
+		}
+		if o.DryRun {
+			e.log.Info("finding status dry run (nothing written)", "finding", f.ID, "check", f.Check, "status", status)
+		} else {
+			e.log.Info("finding status changed", "finding", f.ID, "check", f.Check, "status", status)
+		}
 	}
-	if o.DryRun {
-		e.log.Info("finding status dry run (nothing written)", "finding", f.ID, "check", f.Check, "status", status)
-	} else {
-		e.log.Info("finding status changed", "finding", f.ID, "check", f.Check, "status", status)
+	return b, nil
+}
+
+// checkStatusChange は 1 つの ID の検査 (書かない)。止めた理由は StatusItem に載せ、ストアの読み取りの失敗だけを err で返す。
+func (e *Engine) checkStatusChange(ctx context.Context, id, status string, o StatusOptions) (StatusItem, error) {
+	it := StatusItem{ID: id}
+	stop := func(err error) (StatusItem, error) {
+		it.Err = err
+		var xe *ExitError
+		if errors.As(err, &xe) {
+			it.Code = xe.Code
+		}
+		errors.As(err, &it.Refused)
+		return it, nil
 	}
-	change.Finding = *f
-	return change, nil
+	f, err := e.st.Finding(ctx, id)
+	if err != nil {
+		return it, err
+	}
+	if f == nil {
+		return stop(e.configErr(fmt.Errorf("finding %q not found (see `arata review`)", id)))
+	}
+	it.Found = f
+	if f.Status == store.FindingResolved {
+		return stop(e.configErr(fmt.Errorf("finding %s is already resolved", id)))
+	}
+	forced := false
+	if status == store.FindingAcked {
+		// 止める場所はここ 1 か所 (CLI もワークフローも通る)。ストアを書く前に止める
+		if o.Force && strings.TrimSpace(o.Reason) == "" {
+			return stop(e.ackRefused(f, true))
+		}
+		if ackGuarded(*f) {
+			if !o.Force {
+				return stop(e.ackRefused(f, false))
+			}
+			forced = true
+		}
+	}
+	it.Change = &StatusChange{Finding: *f, Before: f.Status, Forced: forced, DryRun: o.DryRun}
+	return it, nil
 }
 
 func (e *Engine) ackRefused(f *store.Finding, noReason bool) error {

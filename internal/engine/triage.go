@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/CircleAround/arata/internal/checks"
+	"github.com/CircleAround/arata/internal/record"
 	"github.com/CircleAround/arata/internal/report/schema"
 	"github.com/CircleAround/arata/internal/store"
 )
@@ -128,4 +129,148 @@ func (e *AckRefusedError) Guidance() string {
 	fmt.Fprintf(&b, "根拠: arata help ai playbook %s の「片付け」\n", e.Check)
 	b.WriteString("終わった出来事だと確かめたうえでどうしても ack するなら、人が --force --reason \"<理由>\" を付けて実行します (記録に force が残り、週次の報告に出ます)。\n")
 	return b.String()
+}
+
+// MaxFindingIDs は ack / snooze / resolve に 1 回で渡せる finding の数。
+// 決定 (ADR 0080): 100。日次の片付けの実例 (42 件) の 2 倍を超え、ワークフローの Summary に ID ごとの中身を出しても
+// 人が 1 画面ずつ確かめられる量に収まる。これを超える片付けは、確かめずに流す片付けになりやすいので、分けて実行する。
+const MaxFindingIDs = 100
+
+// maxIDErrorLen は ParseFindingIDs のエラーの文の上限 (バイト)。通らない値は 1 つ 20 文字までに切って挙げる。
+const maxIDErrorLen = 32 << 10
+
+// maxIDEchoRunes は、エラーの文に写す通らない値の長さ (文字)。
+const maxIDEchoRunes = 20
+
+var findingIDPattern = regexp.MustCompile(`^[0-9a-f]{12}$`)
+
+// isIDSeparator は ID の並びの区切り。空白 (スペース・タブ・改行) とカンマだけ。見本のワークフローの入力の検査と同じ規則
+// (全角の空白や CR は区切りにしない。どちらで分けても同じ並びになる)。
+func isIDSeparator(r rune) bool {
+	return r == ' ' || r == '\t' || r == '\n' || r == ','
+}
+
+// ParseFindingIDs は ack / snooze / resolve の引数を finding の ID の並びにする。引数ごとに、空白とカンマで分ける。
+// 形 (arata が振る 12 桁の小文字の 16 進)・重複・件数 (1〜MaxFindingIDs) を確かめ、通らない値を全部挙げて止める (ストアを開く前。ADR 0080)。
+// 返す並びは入力に現れた順。
+func ParseFindingIDs(args []string) ([]string, error) {
+	var ids []string
+	for _, a := range args {
+		ids = append(ids, strings.FieldsFunc(a, isIDSeparator)...)
+	}
+	if len(ids) == 0 {
+		return nil, errors.New("no finding id (give one or more ids of `arata review`, separated by spaces or commas)")
+	}
+	if len(ids) > MaxFindingIDs {
+		return nil, fmt.Errorf("%d finding ids: up to %d at a time (split the list and run again)", len(ids), MaxFindingIDs)
+	}
+	var bad []string
+	seen := map[string]bool{}
+	for _, id := range ids {
+		switch {
+		case !findingIDPattern.MatchString(id):
+			bad = append(bad, fmt.Sprintf("%q is not a finding id (12 lowercase hex digits)", echoID(id)))
+		case seen[id]:
+			bad = append(bad, fmt.Sprintf("%q appears twice", id))
+		}
+		seen[id] = true
+	}
+	if len(bad) > 0 {
+		return nil, errors.New("finding ids: " + strings.Join(bad, "; "))
+	}
+	return ids, nil
+}
+
+// echoID はエラーの文に写す値 (先頭の maxIDEchoRunes 文字。長ければ … を付ける)。%q で書くので制御文字は残らない。
+func echoID(s string) string {
+	n := 0
+	for i := range s {
+		if n == maxIDEchoRunes {
+			return s[:i] + "…"
+		}
+		n++
+	}
+	return s
+}
+
+// ack / snooze / resolve の --format json のスキーマの名前と版 (ADR 0054・0080)。名前は `arata schema <名前>` の名前。
+const (
+	TriageResultSchema        = "triage-result"
+	TriageResultSchemaVersion = 1
+)
+
+// TriageResult の各 ID の結果。
+const (
+	// TriageChanged は書いた (ストアの確定まで済んだ)。
+	TriageChanged = "changed"
+	// TriageWouldChange は試し (--dry-run) で、検査を通った。
+	TriageWouldChange = "would_change"
+	// TriageRefused は検査で止めた (Code に理由)。
+	TriageRefused = "refused"
+	// TriageNotWritten は検査を通ったが、ほかの ID を止めたか、ストアの確定に失敗したので書いていない。
+	TriageNotWritten = "not_written"
+)
+
+// TriageResult は ack / snooze / resolve の --format json の出力。ID ごとの結果 (渡した順)。
+type TriageResult struct {
+	// Schema と SchemaVersion はスキーマの名前と版 (ADR 0054)。
+	Schema        string `json:"schema" jsonschema:"const=triage-result"`
+	SchemaVersion int    `json:"schema_version" jsonschema:"const=1"`
+	Action        string `json:"action" jsonschema:"enum=ack|snooze|resolve"`
+	// DryRun は試し (ストアは書かない)。
+	DryRun bool `json:"dry_run"`
+	// Written はストアに書いて確定したか。止めた ID があるとき・試し・確定の失敗では false (どの ID も書いていない)。
+	Written bool `json:"written"`
+	// SnoozeUntil は snooze の期日 (YYYY-MM-DD、UTC)。snooze のときだけ。
+	SnoozeUntil string             `json:"snooze_until,omitempty"`
+	Items       []TriageResultItem `json:"items"`
+}
+
+// TriageResultItem は 1 つの ID の結果。
+type TriageResultItem struct {
+	ID     string `json:"id"`
+	Result string `json:"result" jsonschema:"enum=changed|would_change|refused|not_written"`
+	// Check と Severity は finding のもの (見つからない ID では省く)。
+	Check    string `json:"check,omitempty"`
+	Severity string `json:"severity,omitempty"`
+	// Before は操作の前の状態、After は操作の後の (試しでは、なるはずの) 状態。見つからない ID では省く。止めた ID では After を省く。
+	Before string `json:"before,omitempty"`
+	After  string `json:"after,omitempty"`
+	// Forced は片付けの表が許さない ack を --force で通す (通した) か。
+	Forced bool `json:"forced"`
+	// Code は止めた理由 (ACK_REFUSED・CONFIG_INVALID)。機械はこれを読む。
+	Code string `json:"code,omitempty"`
+	// Error は止めた理由の文 (人向け。機械で読まない)。
+	Error string `json:"error,omitempty"`
+}
+
+// Result は --format json の出力にする。written はストアの確定まで済んだか。
+func (b *StatusBatch) Result(action string, written bool) TriageResult {
+	r := TriageResult{Schema: TriageResultSchema, SchemaVersion: TriageResultSchemaVersion, Action: action, DryRun: b.DryRun, Written: written && b.Stopped == 0 && !b.DryRun, Items: []TriageResultItem{}}
+	if b.Status == store.FindingSnoozed {
+		r.SnoozeUntil = b.Until.UTC().Format(record.DateLayout)
+	}
+	for _, it := range b.Items {
+		ri := TriageResultItem{ID: it.ID}
+		switch {
+		case it.Err != nil:
+			ri.Result, ri.Code, ri.Error = TriageRefused, it.Code, it.Err.Error()
+			if it.Found != nil {
+				ri.Check, ri.Severity, ri.Before = it.Found.Check, it.Found.Severity, it.Found.Status
+			}
+		default:
+			c := it.Change
+			ri.Check, ri.Severity, ri.Before, ri.After, ri.Forced = c.Finding.Check, c.Finding.Severity, c.Before, b.Status, c.Forced
+			switch {
+			case b.DryRun:
+				ri.Result = TriageWouldChange
+			case r.Written:
+				ri.Result = TriageChanged
+			default:
+				ri.Result = TriageNotWritten
+			}
+		}
+		r.Items = append(r.Items, ri)
+	}
+	return r
 }

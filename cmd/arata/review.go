@@ -3,8 +3,8 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -132,13 +132,24 @@ LLM は approve を実行せず、人に提案するだけにすること (arata
 }
 
 func newStatusCmd(d *Deps, g *globalFlags, use, status, short string) *subcmd.Command {
-	var until string
+	var until, format string
 	var o engine.StatusOptions
 	cmd := &subcmd.Command{
-		Use:   use + " <finding-id>",
+		Use:   use + " <finding-id>...",
 		Short: short,
-		Args:  subcmd.ExactArgs(1),
+		Long: fmt.Sprintf(`finding を %[1]s にする。ID は 1 つ以上 (%[2]d 件まで)。空白かカンマで区切る (arata %[3]s <id> <id>、arata %[3]s <id>,<id>)。
+同じ status・--reason・--by (と --until・--force) を全部の ID に当て、ストアへの確定は 1 回 (S3 のストアでも 1 回の書き込み)。
+検査 (ID の形と重複・finding の有無・片付けの表・期日) は書く前に全部済ませ、1 件でも通らなければ何も書かずに止め、止めた ID と理由を全部出す (ADR 0080)。
+--format json は ID ごとの結果 (arata schema triage-result)。`, status, engine.MaxFindingIDs, use),
 		Run: func(ctx context.Context, args []string) error {
+			if format != "text" && format != "json" {
+				return formatErr(format, "text|json")
+			}
+			ids, err := engine.ParseFindingIDs(args)
+			if err != nil {
+				d.Engine.Logger.Error("invalid finding ids", "code", engine.CodeConfigInvalid, "error", err.Error())
+				return &engine.ExitError{Code: engine.CodeConfigInvalid, Exit: engine.ExitConfig, Err: err}
+			}
 			var u time.Time
 			if status == store.FindingSnoozed {
 				t, err := time.Parse(record.DateLayout, until)
@@ -149,7 +160,6 @@ func newStatusCmd(d *Deps, g *globalFlags, use, status, short string) *subcmd.Co
 				u = t
 			}
 			var e *engine.Engine
-			var err error
 			if o.DryRun {
 				// 試しはストアを書かない (Commit しない)。S3 でも何も送らない
 				e, err = openEngineForRead(ctx, d, g)
@@ -160,34 +170,42 @@ func newStatusCmd(d *Deps, g *globalFlags, use, status, short string) *subcmd.Co
 				return err
 			}
 			defer e.Close()
-			c, err := e.ChangeStatus(ctx, args[0], status, u, o)
-			var refused *engine.AckRefusedError
-			if errors.As(err, &refused) {
-				fmt.Fprint(d.Stdout, refused.Guidance())
+			b, err := e.ChangeStatuses(ctx, ids, status, u, o)
+			if b == nil {
+				return err
+			}
+			written := false
+			if err == nil && !o.DryRun {
+				err = e.Commit(ctx)
+				written = err == nil
+			}
+			if format == "json" {
+				out, merr := json.MarshalIndent(b.Result(use, written), "", "  ")
+				if merr != nil {
+					return merr
+				}
+				if _, werr := d.Stdout.Write(append(out, '\n')); werr != nil {
+					return werr
+				}
+				return err
+			}
+			if b.Stopped > 0 {
+				fmt.Fprint(d.Stdout, stoppedText(b, use))
+				return err
 			}
 			if err != nil {
 				return err
 			}
-			f := c.Finding
-			if o.DryRun {
-				msg := fmt.Sprintf("試し: finding %s (%s、重大度 %s、%s) を %s から %s にします (ストアは変えていません)。", f.ID, f.Check, f.Severity, f.Summary, c.Before, f.Status)
-				if status == store.FindingSnoozed {
-					msg += fmt.Sprintf(" 期日 %s (UTC)。", f.SnoozeUntil.UTC().Format(record.DateLayout))
+			for _, it := range b.Items {
+				fmt.Fprintln(d.Stdout, statusLine(it.Change, status, o.DryRun))
+			}
+			if n := len(b.Items); n > 1 {
+				if o.DryRun {
+					fmt.Fprintf(d.Stdout, "試し: %d 件を %s にします (ストアは変えていません)。\n", n, status)
+				} else {
+					fmt.Fprintf(d.Stdout, "%d 件を %s にしました。\n", n, status)
 				}
-				if c.Forced {
-					msg += " 片付けの表が許さない ack を force で通します (記録に force が残ります)。"
-				}
-				fmt.Fprintln(d.Stdout, msg)
-				return nil
 			}
-			if err := e.Commit(ctx); err != nil {
-				return err
-			}
-			msg := fmt.Sprintf("finding %s (%s) を %s にしました。", f.ID, f.Check, f.Status)
-			if status == store.FindingSnoozed {
-				msg += fmt.Sprintf(" %s (UTC) 以降の再観測で再報告します。", f.SnoozeUntil.UTC().Format(record.DateLayout))
-			}
-			fmt.Fprintln(d.Stdout, msg)
 			return nil
 		},
 	}
@@ -199,9 +217,76 @@ func newStatusCmd(d *Deps, g *globalFlags, use, status, short string) *subcmd.Co
 	if status == store.FindingAcked {
 		cmd.BoolVar(&o.Force, "force", false, "片付けの表が ack を許さない finding (high・critical など) も ack する (--reason が必須。記録に force が残る。ADR 0068)")
 	}
-	cmd.BoolVar(&o.DryRun, "dry-run", false, "試し: 検査 (形・finding の有無・片付けの表・期日) だけ行い、何をどう変えるかを出す。ストアは書かない (ADR 0068)")
+	cmd.BoolVar(&o.DryRun, "dry-run", false, "試し: 検査 (形・finding の有無・片付けの表・期日) だけ行い、ID ごとに何をどう変えるかを出す。ストアは書かない (ADR 0068)")
 	cmd.StringVar(&o.By, "by", "", "操作した人 (英数字と . _ - のハンドル。省略時は OS のユーザー名。メールアドレスや氏名は書けない)")
+	cmd.StringVar(&format, "format", "text", "出力形式 (text|json。json は ID ごとの結果。arata schema triage-result)")
 	return cmd
+}
+
+// statusLine は 1 件の結果の行 (人向け)。
+func statusLine(c *engine.StatusChange, status string, dryRun bool) string {
+	f := c.Finding
+	if dryRun {
+		msg := fmt.Sprintf("試し: finding %s (%s、重大度 %s、%s) を %s から %s にします (ストアは変えていません)。", f.ID, f.Check, f.Severity, f.Summary, c.Before, f.Status)
+		if status == store.FindingSnoozed {
+			msg += fmt.Sprintf(" 期日 %s (UTC)。", f.SnoozeUntil.UTC().Format(record.DateLayout))
+		}
+		if c.Forced {
+			msg += " 片付けの表が許さない ack を force で通します (記録に force が残ります)。"
+		}
+		return msg
+	}
+	msg := fmt.Sprintf("finding %s (%s) を %s にしました。", f.ID, f.Check, f.Status)
+	if status == store.FindingSnoozed {
+		msg += fmt.Sprintf(" %s (UTC) 以降の再観測で再報告します。", f.SnoozeUntil.UTC().Format(record.DateLayout))
+	}
+	return msg
+}
+
+// stoppedText は検査で止めたときの案内 (人向け。機械は --format json か、ログの code を読む)。
+// 1 件だけで ack を止めたときは、今までと同じ案内 (AckRefusedError.Guidance) を出す。
+func stoppedText(b *engine.StatusBatch, use string) string {
+	if len(b.Items) == 1 && b.Items[0].Refused != nil {
+		return b.Items[0].Refused.Guidance()
+	}
+	var sb strings.Builder
+	if len(b.Items) > 1 {
+		fmt.Fprintf(&sb, "%d 件のうち %d 件が通らないので、何も変えていません (ストアは書いていません)。止めた ID:\n", len(b.Items), b.Stopped)
+	}
+	refused, approvable := false, false
+	for _, it := range b.Items {
+		if it.Err == nil {
+			continue
+		}
+		switch {
+		case it.Refused != nil && it.Refused.NoReason:
+			fmt.Fprintf(&sb, "  - %s (%s、重大度 %s): --force には --reason (なぜ黙らせてよいか、1 行) が要ります\n", it.ID, it.Refused.Check, it.Refused.Severity)
+		case it.Refused != nil:
+			refused = true
+			approvable = approvable || it.Refused.Approvable
+			fmt.Fprintf(&sb, "  - %s (%s、重大度 %s): 片付けの表が ack を許しません (arata help ai playbook %s の「片付け」)\n", it.ID, it.Refused.Check, it.Refused.Severity, it.Refused.Check)
+		case it.Found == nil:
+			fmt.Fprintf(&sb, "  - %s: 見つかりません (arata review で ID を確かめる)\n", it.ID)
+		case it.Found.Status == store.FindingResolved:
+			fmt.Fprintf(&sb, "  - %s (%s): 既に resolved です (%s から外す)\n", it.ID, it.Found.Check, use)
+		default:
+			fmt.Fprintf(&sb, "  - %s: %v\n", it.ID, it.Err)
+		}
+	}
+	if refused {
+		sb.WriteString("ack できない finding は、同じ指摘のまま重大度が上がる余地が無い (または最も重い側) ので、ack すると後で本物が起きても二度と報告されません。次のどれかを使ってください:\n")
+		if approvable {
+			sb.WriteString("  - approve: 正規の主体だと確かめた (arata approve <id> --note \"<理由>\"。Actions の運用では allowlist.yaml を PR で直す)\n")
+		}
+		sb.WriteString("  - snooze --until YYYY-MM-DD: 期日を決めて見直す (期日の後に再び観測されたら再報告される)\n")
+		sb.WriteString("  - resolve: 直した (再び観測されたら新規として報告される)\n")
+		sb.WriteString("根拠: arata help ai playbook <check> の「片付け」\n")
+		sb.WriteString("終わった出来事だと確かめたうえでどうしても ack するなら、人が --force --reason \"<理由>\" を付けて実行します (記録に force が残り、週次の報告に出ます)。\n")
+	}
+	if len(b.Items) > 1 {
+		sb.WriteString("止めた ID を外す (または直す) と、残りを 1 回で実行できます。\n")
+	}
+	return sb.String()
 }
 
 // lastActionCell は表の LAST_ACTION の欄 (`ack alice 2026-11-17`)。理由は json と報告に出す (表の幅を崩さない)。

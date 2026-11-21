@@ -337,3 +337,39 @@ func TestS3StoreFirstInitFailsAtDatabase(t *testing.T) {
 		t.Fatalf("run: exit %d\n%s", code, c.stderr)
 	}
 }
+
+// 複数の ID の片付けは、S3 のストアへの書き込みが 1 回 (ADR 0080)。1 件でも通らなければ何も送らない。
+func TestS3StoreManyIDsWriteOnce(t *testing.T) {
+	c, f := newS3CLI(t)
+	c.rootLogin("r1")
+	c.fake.Add(cloudtrailtest.Event("u1", c.now.Add(-2*time.Hour), cloudtrailtest.User(acct, "mallory"), "ec2.amazonaws.com", "DescribeInstances", "ap-northeast-1", "198.51.100.7", true, nil))
+	if code := c.run("run", "--config", c.cfg, "--profile", "daily"); code != 0 {
+		t.Fatalf("run: exit %d\n%s", code, c.stderr)
+	}
+	if code := c.run("review", "--config", c.cfg, "--format", "json"); code != 0 {
+		t.Fatalf("review: exit %d\n%s", code, c.stderr)
+	}
+	var items []struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(c.stdout.Bytes(), &items); err != nil || len(items) < 2 {
+		t.Fatalf("want 2 or more findings: %v\n%s", err, c.stdout)
+	}
+	var ids []string
+	for _, it := range items {
+		ids = append(ids, it.ID)
+	}
+	f.ResetRequests()
+	if code := c.run(append([]string{"resolve", "--config", c.cfg, "--reason", "x", "0000000000ff"}, ids...)...); code != 2 {
+		t.Fatalf("a list with a missing id: exit %d", code)
+	}
+	if puts := f.Requests("PUT"); len(puts) != 0 {
+		t.Fatalf("a stopped list must not write: %+v", puts)
+	}
+	if code := c.run("resolve", "--config", c.cfg, "--reason", "x", strings.Join(ids, ",")); code != 0 {
+		t.Fatalf("resolve: exit %d\n%s", code, c.stderr)
+	}
+	if puts := f.Requests("PUT"); len(puts) != 1 || puts[0].Key != s3DB {
+		t.Fatalf("%d ids must be written at once: %+v", len(ids), puts)
+	}
+}

@@ -105,3 +105,51 @@ func TestMigrateAddsFindingActions(t *testing.T) {
 		t.Fatalf("after migration: %+v", last)
 	}
 }
+
+// 複数の finding の状態は 1 つのトランザクションで変える (ack / snooze / resolve に複数の ID。全部か無しか)。
+// 途中の 1 件が失敗したら、先の分の状態も記録も残らない。
+func TestSetFindingStatusesIsAllOrNothing(t *testing.T) {
+	st, _ := open(t)
+	ctx := context.Background()
+	for _, id := range []string{"f1", "f2", "f3"} {
+		if err := st.UpsertFinding(ctx, Finding{ID: id, Check: "posture", Key: id, Severity: "low", FirstSeen: ts, LastSeen: ts, LastChanged: ts, Status: FindingOpen}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	act := Action{Name: ActionResolve, By: "alice", Reason: "fixed"}
+	if err := st.SetFindingStatuses(ctx, []StatusUpdate{
+		{ID: "f1", Status: FindingResolved, At: ts, Action: act},
+		{ID: "nope", Status: FindingResolved, At: ts, Action: act},
+		{ID: "f2", Status: FindingResolved, At: ts, Action: act},
+	}); err == nil {
+		t.Fatal("unknown id must fail")
+	}
+	for _, id := range []string{"f1", "f2"} {
+		f, err := st.Finding(ctx, id)
+		if err != nil || f.Status != FindingOpen {
+			t.Fatalf("%s must stay open: %+v %v", id, f, err)
+		}
+		if hist, _ := st.FindingActions(ctx, id); len(hist) != 0 {
+			t.Fatalf("%s: no record for a failed batch: %+v", id, hist)
+		}
+	}
+	until := ts.Add(48 * time.Hour)
+	if err := st.SetFindingStatuses(ctx, []StatusUpdate{
+		{ID: "f1", Status: FindingSnoozed, SnoozeUntil: until, At: ts, Action: Action{Name: ActionSnooze, By: "alice"}},
+		{ID: "f3", Status: FindingSnoozed, SnoozeUntil: until, At: ts, Action: Action{Name: ActionSnooze, By: "alice"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"f1", "f3"} {
+		f, _ := st.Finding(ctx, id)
+		if f.Status != FindingSnoozed || !f.SnoozeUntil.Equal(until) {
+			t.Fatalf("%s: %+v", id, f)
+		}
+		if hist, _ := st.FindingActions(ctx, id); len(hist) != 1 || hist[0].Action != ActionSnooze {
+			t.Fatalf("%s: %+v", id, hist)
+		}
+	}
+	if f, _ := st.Finding(ctx, "f2"); f.Status != FindingOpen {
+		t.Fatalf("f2 is not in the batch: %+v", f)
+	}
+}

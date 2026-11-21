@@ -659,21 +659,46 @@ func (s *Dir) Finding(ctx context.Context, id string) (*Finding, error) {
 }
 
 func (s *Dir) SetFindingStatus(ctx context.Context, id, status string, snoozeUntil, at time.Time, act Action) error {
-	if status != FindingSnoozed {
-		snoozeUntil = time.Time{}
-	}
-	f, err := s.Finding(ctx, id)
-	if err != nil {
-		return err
-	}
-	if f == nil {
-		return fmt.Errorf("store: finding %q not found", id)
+	return s.SetFindingStatuses(ctx, []StatusUpdate{{ID: id, Status: status, SnoozeUntil: snoozeUntil, At: at, Action: act}})
+}
+
+// SetFindingStatuses は複数の finding の状態を 1 つのトランザクションで変える。1 件でも失敗したら何も変えない。
+// 同じ ID を 2 回含めない (操作の前の状態は、トランザクションの前に読んだもの)。
+func (s *Dir) SetFindingStatuses(ctx context.Context, ups []StatusUpdate) error {
+	before := make([]*Finding, len(ups))
+	seen := map[string]bool{}
+	for i, u := range ups {
+		if seen[u.ID] {
+			return fmt.Errorf("store: finding %q appears twice", u.ID)
+		}
+		seen[u.ID] = true
+		f, err := s.Finding(ctx, u.ID)
+		if err != nil {
+			return err
+		}
+		if f == nil {
+			return fmt.Errorf("store: finding %q not found", u.ID)
+		}
+		before[i] = f
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return wrap(err)
 	}
 	defer tx.Rollback()
+	for i, u := range ups {
+		if err := setFindingStatus(ctx, tx, *before[i], u); err != nil {
+			return err
+		}
+	}
+	return wrap(tx.Commit())
+}
+
+func setFindingStatus(ctx context.Context, tx *sql.Tx, f Finding, u StatusUpdate) error {
+	id, status, snoozeUntil, at, act := u.ID, u.Status, u.SnoozeUntil, u.At, u.Action
+	if status != FindingSnoozed {
+		snoozeUntil = time.Time{}
+	}
 	suppressed := ""
 	if status == FindingAcked || status == FindingSnoozed {
 		suppressed = f.Severity
@@ -696,7 +721,7 @@ func (s *Dir) SetFindingStatus(ctx context.Context, id, status string, snoozeUnt
 			return wrap(err)
 		}
 	}
-	return wrap(tx.Commit())
+	return nil
 }
 
 const findingActionCols = `seq, finding_id, "check", key, action, "by", reason, forced, severity, status_before, snooze_until, at`

@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/CircleAround/arata/internal/checks"
@@ -107,4 +109,103 @@ func TestAckGuardedByKeyPrefix(t *testing.T) {
 	if info := triageOf(first); strings.Join(info.Allowed, ",") != "ack,snooze,resolve" || !info.Escalates {
 		t.Fatalf("triageOf(first): %+v", info)
 	}
+}
+
+// ack / snooze / resolve の ID の並び。引数ごとに、空白 (スペース・タブ・改行) とカンマで分ける (ワークフローの入力と同じ規則)。
+// 形 (12 桁の小文字の 16 進)・重複・件数を、ストアを開く前に全部確かめ、通らない値を全部挙げる。
+func TestParseFindingIDs(t *testing.T) {
+	a, b, c := "0123456789ab", "ffffffffffff", "a1b2c3d4e5f6"
+	for name, tc := range map[string]struct {
+		args []string
+		want []string
+	}{
+		"one":              {[]string{a}, []string{a}},
+		"args":             {[]string{a, b, c}, []string{a, b, c}},
+		"comma":            {[]string{a + "," + b + "," + c}, []string{a, b, c}},
+		"comma and spaces": {[]string{" " + a + ", " + b + " ,\t" + c + "\n"}, []string{a, b, c}},
+		"empty fields":     {[]string{a + ",,", "", b}, []string{a, b}},
+		"limit":            {manyIDs(MaxFindingIDs), manyIDs(MaxFindingIDs)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := ParseFindingIDs(tc.args)
+			if err != nil || strings.Join(got, " ") != strings.Join(tc.want, " ") {
+				t.Fatalf("got %v, %v", got, err)
+			}
+		})
+	}
+	for name, tc := range map[string]struct {
+		args []string
+		want []string // エラーの文に全部が出る
+	}{
+		"none":            {[]string{" , "}, []string{"no finding id"}},
+		"no args":         {nil, []string{"no finding id"}},
+		"duplicate":       {[]string{a, b, a}, []string{`"` + a + `" appears twice`}},
+		"bad shapes":      {[]string{"0123456789AB", a, "--force", "0123456789a"}, []string{`"0123456789AB"`, `"--force"`, `"0123456789a"`}},
+		"ideographic":     {[]string{a + "\u3000" + b}, []string{`"` + a + `\u3000fffffff…"`}}, // 全角の空白は区切りにしない。長い値は切って写す
+		"carriage return": {[]string{a + "\r"}, []string{`"` + a + `\r"`}},
+		"too many":        {manyIDs(MaxFindingIDs + 1), []string{"101 finding ids", "up to 100"}},
+	} {
+		t.Run("bad/"+name, func(t *testing.T) {
+			got, err := ParseFindingIDs(tc.args)
+			if err == nil {
+				t.Fatalf("must be rejected: %v", got)
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(err.Error(), w) {
+					t.Errorf("error lacks %q: %v", w, err)
+				}
+			}
+		})
+	}
+}
+
+func manyIDs(n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = fmt.Sprintf("%012x", i)
+	}
+	return out
+}
+
+var findingIDShape = regexp.MustCompile(`^[0-9a-f]{12}$`)
+
+// ID の並びは利用者の入力 (ワークフローの入力をそのまま渡すこともある)。ADR 0041 の規則:
+// 受け付けた並びは 1〜MaxFindingIDs 件で、どれも 12 桁の小文字の 16 進・重複なし・入力に現れた順。
+// 並びを書き直して読み直しても同じ。止めたときの文は 1 行で、上限を超える長さにならない (ログと Summary に出す)。
+func FuzzParseFindingIDs(f *testing.F) {
+	for _, s := range []string{"0123456789ab", "0123456789ab,ffffffffffff", " 0123456789ab ,\tffffffffffff\n", "0123456789ab 0123456789ab",
+		"--help", "0123456789AB", "0123456789ab　ffffffffffff", "0123456789ab\r", ",,,", "\xff\xfe", strings.Join(manyIDs(101), ",")} {
+		f.Add(s, "")
+		f.Add(s, "a1b2c3d4e5f6")
+	}
+	f.Fuzz(func(t *testing.T, s1, s2 string) {
+		got, err := ParseFindingIDs([]string{s1, s2})
+		if err != nil {
+			msg := err.Error()
+			if strings.ContainsAny(msg, "\n\r") || !utf8.ValidString(msg) || len(msg) > maxIDErrorLen {
+				t.Fatalf("error must be one short line: %q", msg)
+			}
+			return
+		}
+		if len(got) == 0 || len(got) > MaxFindingIDs {
+			t.Fatalf("count %d", len(got))
+		}
+		seen := map[string]bool{}
+		rest := s1 + " " + s2
+		for _, id := range got {
+			if !findingIDShape.MatchString(id) || seen[id] {
+				t.Fatalf("id %q (dup %v) accepted from %q %q", id, seen[id], s1, s2)
+			}
+			seen[id] = true
+			i := strings.Index(rest, id)
+			if i < 0 {
+				t.Fatalf("%q is not in the input order", id)
+			}
+			rest = rest[i+len(id):]
+		}
+		again, err := ParseFindingIDs([]string{strings.Join(got, ",")})
+		if err != nil || strings.Join(again, " ") != strings.Join(got, " ") {
+			t.Fatalf("not stable: %v -> %v %v", got, again, err)
+		}
+	})
 }

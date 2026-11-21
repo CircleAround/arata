@@ -186,6 +186,12 @@ func TestTriageTriggerAndInputs(t *testing.T) {
 	if got := regexp.MustCompile(`secrets\.\w+`).FindAllString(text, -1); len(got) != 2 || got[0] != "secrets.ARATA_RUNNER_ROLE_ARN" || got[1] != got[0] {
 		t.Errorf("secrets: %v", got)
 	}
+	// 分けて確かめた ID の並びは、validate の出力 (12 桁の 16 進を空白で区切ったもの) から後の step に渡す (入力を分け直さない)
+	for _, id := range []string{"finding", "triage", "summary"} {
+		if s := stepByID(t, w, id); s.Env["FINDING_IDS"] != "${{ steps.validate.outputs.ids }}" {
+			t.Errorf("step %s must take the ids from the validate step: %v", id, s.Env)
+		}
+	}
 	order := map[string]int{}
 	for i, s := range steps(t, w) {
 		order[s.ID] = i
@@ -203,7 +209,7 @@ func TestTriageTriggerAndInputs(t *testing.T) {
 }
 
 func triageEnv(kv ...string) []string {
-	env := map[string]string{"ACCOUNT": "prod", "ARATA_CONFIG_DIR": "aws/prod", "ACTION": "ack", "FINDING_ID": "0123456789ab", "REASON": "既知の作業", "UNTIL": "", "FORCE": "false", "DRY_RUN": "false"}
+	env := map[string]string{"ACCOUNT": "prod", "ARATA_CONFIG_DIR": "aws/prod", "ACTION": "ack", "FINDING_ID": "0123456789ab", "FINDING_IDS": "0123456789ab", "REASON": "既知の作業", "UNTIL": "", "FORCE": "false", "DRY_RUN": "false"}
 	for i := 0; i+1 < len(kv); i += 2 {
 		env[kv[i]] = kv[i+1]
 	}
@@ -231,6 +237,11 @@ func TestTriageValidatesInputs(t *testing.T) {
 		{"DRY_RUN", "true"},
 		{"DRY_RUN", ""},
 		{"DRY_RUN", "true", "ACTION", "snooze", "UNTIL", "2027-03-31"},
+		// 複数の ID (ADR 0080)。空白かカンマで区切る。上限まで
+		{"FINDING_ID", "0123456789ab ffffffffffff"},
+		{"FINDING_ID", "0123456789ab,ffffffffffff, a1b2c3d4e5f6 ,"},
+		{"FINDING_ID", "0123456789ab\tffffffffffff\na1b2c3d4e5f6"},
+		{"FINDING_ID", manyIDs(100, ",")},
 	}
 	for _, kv := range ok {
 		t.Run("ok/"+strings.Join(kv, " "), func(t *testing.T) {
@@ -251,6 +262,11 @@ func TestTriageValidatesInputs(t *testing.T) {
 		"flag as id":           {"FINDING_ID", "--help"},
 		"id with a command":    {"FINDING_ID", "0123456789ab; id"},
 		"id with a newline":    {"FINDING_ID", "0123456789ab\n--until"},
+		"only separators":      {"FINDING_ID", " , ,"},
+		"one bad among many":   {"FINDING_ID", "0123456789ab,ffffffffffff,0123456789AB"},
+		"duplicate id":         {"FINDING_ID", "0123456789ab ffffffffffff 0123456789ab"},
+		"ideographic space":    {"FINDING_ID", "0123456789ab\u3000ffffffffffff"},
+		"too many ids":         {"FINDING_ID", manyIDs(101, " ")},
 		"approve":              {"ACTION", "approve"},
 		"unknown action":       {"ACTION", "review"},
 		"empty action":         {"ACTION", ""},
@@ -283,21 +299,67 @@ func TestTriageValidatesInputs(t *testing.T) {
 	}
 }
 
+func manyIDs(n int, sep string) string {
+	ids := make([]string, n)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("%012x", i)
+	}
+	return strings.Join(ids, sep)
+}
+
+// ID の並びの分け方は arata (engine.ParseFindingIDs) と同じ: 受け付けるかどうかと、分けた並びが一致する。
+// 分けた並びを validate の出力 ids に書き、後の step はそれを使う。止めたときは、通らない値の位置と重複した ID を全部出す (値そのものは写さない)。
+func TestTriageSplitsIDsLikeArata(t *testing.T) {
+	w, _ := load(t, triageFile)
+	script := stepByID(t, w, "validate").Run
+	for _, in := range []string{"0123456789ab", "0123456789ab ffffffffffff", " 0123456789ab,,ffffffffffff\t\n", "0123456789ab,ffffffffffff,0123456789ab",
+		"0123456789ab\rffffffffffff", "0123456789ab\u3000ffffffffffff", "0123456789ab;ffffffffffff", ",", manyIDs(100, ","), manyIDs(101, ","), "-0123456789ab"} {
+		t.Run(fmt.Sprintf("%q", in), func(t *testing.T) {
+			want, werr := engine.ParseFindingIDs([]string{in})
+			out, code, tmp := runStep(t, script, t.TempDir(), triageEnv("FINDING_ID", in)...)
+			if (werr == nil) != (code == 0) {
+				t.Fatalf("arata %v, workflow exit %d\n%s", werr, code, out)
+			}
+			b, _ := os.ReadFile(filepath.Join(tmp, "github_output"))
+			if werr != nil {
+				if strings.Contains(string(b), "ids=") {
+					t.Errorf("no ids on failure: %q", b)
+				}
+				return
+			}
+			if string(b) != "ids="+strings.Join(want, " ")+"\n" {
+				t.Errorf("output %q, want the ids %v", b, want)
+			}
+		})
+	}
+	out, _, _ := runStep(t, script, t.TempDir(), triageEnv("FINDING_ID", "0123456789ab,--help,ffffffffffff,0123456789ab,x y")...)
+	for _, w := range []string{"2 番目", "5 番目", "6 番目", "0123456789ab が 2 回"} {
+		if !strings.Contains(out, w) {
+			t.Errorf("the error lacks %q:\n%s", w, out)
+		}
+	}
+	if strings.Contains(out, "--help") {
+		t.Errorf("a bad value must not be echoed:\n%s", out)
+	}
+}
+
 func TestTriageRunsArataWithExpectedArguments(t *testing.T) {
 	w, _ := load(t, triageFile)
 	script := stepByID(t, w, "triage").Run
-	bin := fakeBin(t, "arata", `printf '%s\n' "$@" >"$RUNNER_TEMP/args"`+"\n")
+	bin := fakeBin(t, "arata", `printf '%s\n' "$@" >"$RUNNER_TEMP/args"`+"\necho '{\"schema\":\"triage-result\"}'\n")
 	for name, tc := range map[string]struct {
 		kv   []string
 		want string
 	}{
-		"ack":     {nil, "ack\n-c\naws/prod/arata.yaml\n--reason\n既知の作業\n--by\nalice\n0123456789ab\n"},
-		"resolve": {[]string{"ACTION", "resolve", "ACCOUNT", "staging", "ARATA_CONFIG_DIR", "aws/staging"}, "resolve\n-c\naws/staging/arata.yaml\n--reason\n既知の作業\n--by\nalice\n0123456789ab\n"},
-		"snooze":  {[]string{"ACTION", "snooze", "UNTIL", "2027-03-31"}, "snooze\n-c\naws/prod/arata.yaml\n--until\n2027-03-31\n--reason\n既知の作業\n--by\nalice\n0123456789ab\n"},
+		"ack":     {nil, "ack\n-c\naws/prod/arata.yaml\n--format\njson\n--reason\n既知の作業\n--by\nalice\n0123456789ab\n"},
+		"resolve": {[]string{"ACTION", "resolve", "ACCOUNT", "staging", "ARATA_CONFIG_DIR", "aws/staging"}, "resolve\n-c\naws/staging/arata.yaml\n--format\njson\n--reason\n既知の作業\n--by\nalice\n0123456789ab\n"},
+		"snooze":  {[]string{"ACTION", "snooze", "UNTIL", "2027-03-31"}, "snooze\n-c\naws/prod/arata.yaml\n--until\n2027-03-31\n--format\njson\n--reason\n既知の作業\n--by\nalice\n0123456789ab\n"},
 		// 理由はそのまま 1 つの引数として渡す (シェルに解釈させない)。形の検査は arata が行う (ADR 0068)
-		"ack dry run":    {[]string{"DRY_RUN", "true"}, "ack\n-c\naws/prod/arata.yaml\n--dry-run\n--reason\n既知の作業\n--by\nalice\n0123456789ab\n"},
-		"ack force":      {[]string{"FORCE", "true"}, "ack\n-c\naws/prod/arata.yaml\n--force\n--reason\n既知の作業\n--by\nalice\n0123456789ab\n"},
-		"hostile reason": {[]string{"REASON", "$(touch pwned) `id` --force"}, "ack\n-c\naws/prod/arata.yaml\n--reason\n$(touch pwned) `id` --force\n--by\nalice\n0123456789ab\n"},
+		"ack dry run": {[]string{"DRY_RUN", "true"}, "ack\n-c\naws/prod/arata.yaml\n--dry-run\n--format\njson\n--reason\n既知の作業\n--by\nalice\n0123456789ab\n"},
+		"ack force":   {[]string{"FORCE", "true"}, "ack\n-c\naws/prod/arata.yaml\n--force\n--format\njson\n--reason\n既知の作業\n--by\nalice\n0123456789ab\n"},
+		// 複数の ID は 1 つずつの引数で、最後に渡す (ADR 0080)
+		"many":           {[]string{"FINDING_IDS", "0123456789ab ffffffffffff a1b2c3d4e5f6"}, "ack\n-c\naws/prod/arata.yaml\n--format\njson\n--reason\n既知の作業\n--by\nalice\n0123456789ab\nffffffffffff\na1b2c3d4e5f6\n"},
+		"hostile reason": {[]string{"REASON", "$(touch pwned) `id` --force"}, "ack\n-c\naws/prod/arata.yaml\n--format\njson\n--reason\n$(touch pwned) `id` --force\n--by\nalice\n0123456789ab\n"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			out, code, tmp := runStep(t, script, bin, triageEnv(tc.kv...)...)
@@ -310,6 +372,10 @@ func TestTriageRunsArataWithExpectedArguments(t *testing.T) {
 			}
 			if string(b) != tc.want {
 				t.Errorf("args:\n%s\nwant:\n%s", b, tc.want)
+			}
+			// 結果 (--format json) は実行環境の一時ファイルに置き、Summary の step が読む。ログには出さない
+			if r, _ := os.ReadFile(filepath.Join(tmp, "triage.json")); !strings.Contains(string(r), "triage-result") || strings.Contains(out, "triage-result") {
+				t.Errorf("triage.json %q, log:\n%s", r, out)
 			}
 		})
 	}
@@ -370,7 +436,7 @@ cat <<'JSON'
  {"id":"ffffffffffff","check":"posture","key":"root_mfa","severity":"high","status":"open","summary":"x","first_seen":"2026-10-20T01:00:00Z","last_seen":"2026-10-20T01:00:00Z","data":{}}]
 JSON
 `
-	out, code, tmp := runStep(t, step.Run, fakeBin(t, "arata", review), triageEnv()...)
+	out, code, tmp := runStep(t, step.Run, fakeBin(t, "arata", review), triageEnv("FINDING_IDS", "0123456789ab a1b2c3d4e5f6")...)
 	if code != 0 {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
@@ -381,8 +447,9 @@ JSON
 	if string(args) != "review\n-c\naws/prod/arata.yaml\n--format\njson\n--status\nopen,acked,snoozed,resolved\n" {
 		t.Errorf("review args:\n%s", args)
 	}
+	// 渡した ID のものだけを、ID ごとに引く (ストアに無い ID は載らない)
 	b, err := os.ReadFile(filepath.Join(tmp, "finding.json"))
-	if err != nil || !strings.Contains(string(b), `"check":"secret_access"`) || strings.Contains(string(b), "posture") || strings.Contains(string(b), "prod/db") {
+	if err != nil || !strings.Contains(string(b), `{"0123456789ab":{"check":"secret_access"`) || strings.Contains(string(b), "posture") || strings.Contains(string(b), "prod/db") || strings.Contains(string(b), "a1b2c3d4e5f6") {
 		t.Fatalf("finding.json: %v %s", err, b)
 	}
 	// review が失敗しても片付けは止めない (Summary に「引けなかった」と出る)
@@ -397,7 +464,7 @@ JSON
 	// Summary: 12 桁の数字 (アカウント ID) は伏せ、値はコードの中に入れる
 	s := stepByID(t, w, "summary")
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "finding.json"), []byte(`{"check":"secret_access","key":"arn:aws:iam::123456789012:role/app|x","severity":"high","status":"open","first_seen":"2026-10-20T01:00:00Z","summary":"a `+"`"+`b\nc 123456789012"}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "finding.json"), []byte(`{"0123456789ab":{"check":"secret_access","key":"arn:aws:iam::123456789012:role/app|x","severity":"high","status":"open","first_seen":"2026-10-20T01:00:00Z","summary":"a `+"`"+`b\nc 123456789012"}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	_, _, tmp = runStep(t, s.Run, t.TempDir(), append(triageEnv("DRY_RUN", "true"), "RESULT=success", "RUNNER_TEMP="+dir)...)
@@ -655,4 +722,58 @@ func TestCheckRunsRepoCheckOnTheSet(t *testing.T) {
 			t.Fatalf("exit %d\n%s", code, out)
 		}
 	})
+}
+
+// 複数の ID では、Summary に ID ごとの中身 (操作の前) と結果 (arata の --format json) を出す (ADR 0080)。
+// 値はログ由来・利用者の入力なので、コードの中に入れ、12 桁の数字を伏せ、長い値は切る。
+func TestTriageSummaryPerID(t *testing.T) {
+	w, _ := load(t, triageFile)
+	s := stepByID(t, w, "summary")
+	dir := t.TempDir()
+	long := strings.Repeat("x", 500)
+	files := map[string]string{
+		"finding.json": `{"0123456789ab":{"check":"secret_access","key":"arn:aws:iam::123456789012:role/app","severity":"high","status":"open","first_seen":"2026-10-20T01:00:00Z","summary":"` + long + `"},
+"ffffffffffff":{"check":"posture","key":"root_mfa","severity":"low","status":"acked","first_seen":"2026-10-19T01:00:00Z","summary":"s"}}`,
+		"triage.json": `{"schema":"triage-result","schema_version":1,"action":"ack","dry_run":false,"written":false,"items":[
+{"id":"0123456789ab","result":"refused","check":"secret_access","severity":"high","before":"open","forced":false,"code":"ACK_REFUSED","error":"x 123456789012"},
+{"id":"ffffffffffff","result":"not_written","check":"posture","severity":"low","before":"acked","after":"acked","forced":false},
+{"id":"a1b2c3d4e5f6","result":"refused","forced":false,"code":"CONFIG_INVALID"}]}`,
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	env := append(triageEnv("FINDING_ID", "0123456789ab,ffffffffffff,a1b2c3d4e5f6", "FINDING_IDS", "0123456789ab ffffffffffff a1b2c3d4e5f6"), "RESULT=failure", "REFUSED=true", "RUNNER_TEMP="+dir)
+	out, code, tmp := runStep(t, s.Run, t.TempDir(), env...)
+	if code != 0 || strings.TrimSpace(out) != "" {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	b, _ := os.ReadFile(filepath.Join(tmp, "summary"))
+	sum := string(b)
+	for _, want := range []string{"| findings | 3 件 |",
+		"`0123456789ab`", "`refused`", "`ACK_REFUSED`", "`secret_access`", "`high`",
+		"`ffffffffffff`", "`not_written`", "`acked`", "`posture`",
+		"`a1b2c3d4e5f6`", "`CONFIG_INVALID`", "引けなかった",
+		"何も書いていない"} {
+		if !strings.Contains(sum, want) {
+			t.Errorf("summary lacks %q:\n%s", want, sum)
+		}
+	}
+	// ID の順に並ぶ
+	if i, j, k := strings.Index(sum, "`0123456789ab`"), strings.Index(sum, "`ffffffffffff`"), strings.Index(sum, "`a1b2c3d4e5f6`"); !(i < j && j < k) {
+		t.Errorf("order of the ids:\n%s", sum)
+	}
+	if regexp.MustCompile(`[0-9]{12}`).MatchString(strings.NewReplacer("0123456789ab", "", "ffffffffffff", "").Replace(sum)) || strings.Contains(sum, long) {
+		t.Errorf("summary must mask 12 digits and cut long values:\n%s", sum)
+	}
+	// 結果が読めない (arata が JSON を出す前に止まった) ときも、ID ごとの行は出る
+	if err := os.WriteFile(filepath.Join(dir, "triage.json"), []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, code, tmp = runStep(t, s.Run, t.TempDir(), env...)
+	b, _ = os.ReadFile(filepath.Join(tmp, "summary"))
+	if code != 0 || !strings.Contains(string(b), "`a1b2c3d4e5f6`") || !strings.Contains(string(b), "結果は不明") {
+		t.Errorf("exit %d, summary without the result:\n%s", code, b)
+	}
 }
