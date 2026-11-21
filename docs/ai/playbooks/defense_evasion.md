@@ -13,6 +13,8 @@ CloudTrail・GuardDuty・Access Analyzer・CloudWatch Logs・VPC フローログ
   `reason`、`changes` (`multi_region=false`・`log_validation=false`・`s3_bucket=...`・`include_management_events=false`・`enable=false`・`<機能>=DISABLED` など)、
   `audit_log_group`、`retention_days` / `min_log_retention_days`、`shorter_than_baseline_days` (arata の平常帯の日数より短い)、
   `lifecycle_expiration_days`、`known_deploy_principal`、`count`、`ips`、`first_time`、`last_time`
+- GitHub の OIDC から来たセッション (`oidc_origins`。ADR 0081): 呼び出し側のセッションを 1 段目の `AssumeRoleWithWebIdentity` までキーの一致でたどれたら、1 段目の `repo`・`ref` / `environment`・`run_id`・`assumed_at`・`chain_depth` が付く (たどれない理由は `oidc_origin_unmatched`)。
+  **手がかりであって証拠ではない** (`run_id` は呼ぶ側が書ける)。`https://github.com/<repo>/actions/runs/<run_id>` の実行と時刻を人に見てもらう。読み方は `arata help ai playbook oidc_assume_role`
 
 ## まず確かめること
 
@@ -68,6 +70,7 @@ CloudTrail・GuardDuty・Access Analyzer・CloudWatch Logs・VPC フローログ
 - 「今は戻っている」ことを確かめずに ack しない。止まっていた間の操作を調べずに閉じない
 - LLM が証跡・GuardDuty・ログの設定を変えない。元に戻す操作も提案まで
 - 削除されたロググループ・止められた間のログが残っていると書かない (戻せないものは戻せないと伝える)
+- `oidc_origins` があることや、既知のリポジトリ・environment から来たことだけを理由に、片付けたり「CI の正規の操作」と書いたりしない (`run_id` は呼ぶ側が書ける。ADR 0081)
 
 ## 関連する事例
 

@@ -440,37 +440,42 @@ func normalizeRaw(source string, r rawEvent, id string, t *time.Time) (record.Tr
 // ecsTasksService は ECS のタスクのロール・実行用のロールを引き受けるサービスの主体。
 const ecsTasksService = "ecs-tasks.amazonaws.com"
 
-// secretReadOps は session_key_hash を残す秘匿値の読み取り ("<eventSource> <eventName>")。secret_access が見る操作と同じ (テストで突き合わせる)。
-var secretReadOps = map[string]bool{
-	"secretsmanager.amazonaws.com GetSecretValue":      true,
-	"secretsmanager.amazonaws.com BatchGetSecretValue": true,
-	"ssm.amazonaws.com GetParameter":                   true,
-	"ssm.amazonaws.com GetParameters":                  true,
-	"ssm.amazonaws.com GetParametersByPath":            true,
-}
-
-// sessionKeyDetail は、ECS が発行した認証情報と秘匿値の読み取りを突き合わせるためのハッシュを足す (ADR 0076 の 4 節)。
+// sessionKeyDetail は、発行された認証情報とその利用を突き合わせるためのハッシュを足す (ADR 0076 の 4 節・ADR 0081 の 1 節)。
 //
 // 決定:
-//   - issued_key_hash: 成功した sts:AssumeRole で、呼び出し側が AWSService の ecs-tasks.amazonaws.com のときの responseElements.credentials.accessKeyId
-//   - session_key_hash: 秘匿値の読み取りで、userIdentity.type が AssumedRole のときの userIdentity.accessKeyId
+//   - issued_key_hash: 成功した次の発行の responseElements.credentials.accessKeyId
+//     (ECS の sts:AssumeRole (呼び出し側が AWSService の ecs-tasks.amazonaws.com)・役割の連鎖の sts:AssumeRole (呼び出し側が AssumedRole)・
+//     sts:AssumeRoleWithWebIdentity (プロバイダを問わない))。どの発行かは記録の名前と主体の種類で分かるので、名前は分けない。
+//     IAM ユーザー・root の AssumeRole は残さない (OIDC からの鎖の途中に現れない)
+//   - session_key_hash: userIdentity.type が AssumedRole の記録の userIdentity.accessKeyId (0076 は秘匿値の読み取りだけだった。
+//     events に残るのは注目イベントだけなので、保存されるのも注目イベントだけ)。役割の連鎖の AssumeRole には両方が付く
 //   - どちらもキーが一時的な認証情報の形のときだけ (record.SessionKeyHash)。キーそのもの・セッション名・セッショントークンは残さない
 func sessionKeyDetail(r rawEvent, d map[string]any) {
 	u := r.UserIdentity
-	if r.EventSource == "sts.amazonaws.com" && r.EventName == "AssumeRole" && r.ErrorCode == "" && u.Type == "AWSService" && u.InvokedBy == ecsTasksService {
+	if r.EventSource == "sts.amazonaws.com" && r.ErrorCode == "" && issuesKey(r.EventName, u.Type, u.InvokedBy) {
 		cred, _ := r.ResponseElements["credentials"].(map[string]any)
 		key, _ := cred["accessKeyId"].(string)
 		if h, ok := record.SessionKeyHash(key); ok {
 			d["issued_key_hash"] = h
 		}
-		return
 	}
-	if secretReadOps[r.EventSource+" "+r.EventName] && u.Type == "AssumedRole" {
+	if u.Type == "AssumedRole" {
 		key, _ := u.AccessKeyID.(string)
 		if h, ok := record.SessionKeyHash(key); ok {
 			d["session_key_hash"] = h
 		}
 	}
+}
+
+// issuesKey は issued_key_hash を残す発行か (STS の成功した呼び出しであることは呼ぶ側で確かめる)。
+func issuesKey(name, callerType, invokedBy string) bool {
+	switch name {
+	case "AssumeRole":
+		return callerType == "AWSService" && invokedBy == ecsTasksService || callerType == "AssumedRole"
+	case "AssumeRoleWithWebIdentity":
+		return true
+	}
+	return false
 }
 
 // oidcDetail は OIDC でのロールの引き受け (AssumeRoleWithWebIdentity) の記録に、プロバイダと sub から読んだ値を足す (ADR 0055)。

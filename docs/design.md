@@ -988,6 +988,14 @@ oidc_subjects:                   # OIDC でのロールの引き受けの、既�
   どのサービス経由かを events の `data.invoked_by` に残す (`invokedBy` を優先、形に合わなければ `sourceIPAddress`。サービスの主体の記録には足さない)。
   root_usage は送信元の IP が無いとき、見出しを「… が AWS のサービス (`<名前>`) 経由で N 件の操作」とし、finding の data に `invoked_by` (一覧) を出す。
 - 決定 (ADR 0076): 成功した `sts:AssumeRole` で呼び出し側が `AWSService` の `ecs-tasks.amazonaws.com` の記録には `data.issued_key_hash` (`responseElements.credentials.accessKeyId`)、秘匿値の読み取り (secret_access の対象の 5 つの操作) で `userIdentity.type` が `AssumedRole` の記録には `data.session_key_hash` (`userIdentity.accessKeyId`) を残す。値はキーが一時的な認証情報の形 (`ASIA` + 英大文字・数字 16 桁) のときだけ、SHA-256 の先頭 32 桁 (`record.SessionKeyHash`)。キーそのもの・セッション名・セッショントークンは残さず、report・通知にも出さない
+  決定 (ADR 0081。0076 の範囲を広げる): `issued_key_hash` は、役割の連鎖の `sts:AssumeRole` (呼び出し側が `AssumedRole`) と、成功した `sts:AssumeRoleWithWebIdentity` (プロバイダを問わない) にも付ける。
+  名前は分けない (どの発行かは記録の名前と主体の種類で分かる。secret_access は ECS の発行だけを引く)。`session_key_hash` は秘匿値の読み取りに限らず、`userIdentity.type` が `AssumedRole` の記録の全部に付ける
+  (events に残るのは注目イベントだけ)。役割の連鎖の `AssumeRole` には両方が付く
+- 決定 (ADR 0081): unknown_assume_role・iam_changes・defense_evasion・public_exposure は、finding にまとめた記録の `session_key_hash` から、発行の `issued_key_hash` を
+  1 段目の `AssumeRoleWithWebIdentity` までたどる (最大 4 段。発行は run の窓によらず保存済みの注目イベントから、記録の時刻の 15 時間前までを引く。発行の寿命は OIDC 12 時間・連鎖 1 時間・ECS 12 時間、±5 秒)。
+  たどれたら data の `oidc_origins` (要素は `repo`・`sub_kind`・`ref`・`environment`・`run_id`・`assumed_at`・`role_arn`・`provider`・`chain_depth`。古い順に上限 10 個) と `oidc_origins_total` に出す。
+  値は付けるときに形を確かめ直す。重大度・Key・Fingerprint・見出し・既知リストの判定には使わない (`run_id` は呼ぶ側が書ける)。
+  たどれなかった理由 `oidc_origin_unmatched` (`no_key` / `no_issuance` / `not_oidc` / `too_deep`) は、一部だけたどれたときと、鎖の上に OIDC の入り口のロール (範囲内の `AssumeRoleWithWebIdentity` の `role_arn`) があるときだけ出す
 - 決定 (unknown_assume_role の向き): 引き受けの向きを規則で決め、見出しと data (`direction`: outbound / inbound / internal、`caller_account`、`role_account`) に出す。
   見出しは「既知リストに無い自アカウントの user/alice が外部アカウント 111122223333 のロール partner-admin を 1 回引き受け (外向き、MFA あり)」の形。
   向きが無いと、読む人と LLM が「外部の主体が監査対象のロールを引き受けた」と逆に読むことがあったため。

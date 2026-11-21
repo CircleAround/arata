@@ -235,6 +235,7 @@ func (c UnknownAssumeRole) Evaluate(ctx context.Context, q store.Query, w collec
 		return nil, err
 	}
 	aggs := map[string]*assumeAgg{}
+	tr := &originTracer{}
 	for _, e := range evs {
 		// 決定 (ADR 0055): OIDC での引き受け (AssumeRoleWithWebIdentity) は名前で対象から外す。oidc_assume_role が (プロバイダ, sub, ロール) の組で見る。
 		// この記録は呼び出し元の ARN が無く、主体が空なので今までも対象外だったが、形の結果ではなく決定として固定する (同じ出来事を二重に出さない)
@@ -264,6 +265,7 @@ func (c UnknownAssumeRole) Evaluate(ctx context.Context, q store.Query, w collec
 			aggs[k] = a
 		}
 		a.add(e.Time, e.Name, e.IP)
+		a.uses = append(a.uses, tr.note(e))
 		a.recipients[dataStr(e.Data, "recipient_account")] = true
 		a.mfa[assumeMFA(e.Data)] = true
 		if name, ok := record.ServiceName(dataStr(e.Data, "invoked_by")); ok {
@@ -272,6 +274,10 @@ func (c UnknownAssumeRole) Evaluate(ctx context.Context, q store.Query, w collec
 		if e.ErrorCode != "" {
 			a.extra["has_errors"] = true
 		}
+	}
+	// 決定 (ADR 0081): OIDC で入ったセッションから先の引き受けに、1 段目の手がかりを付ける (判定には使わない)
+	if err := tr.load(ctx, q); err != nil {
+		return nil, err
 	}
 	obs := map[string]Observation{}
 	known := map[string]*knownDestAgg{}
@@ -320,6 +326,7 @@ func (c UnknownAssumeRole) Evaluate(ctx context.Context, q store.Query, w collec
 		if len(a.ips) == 0 && len(a.services) > 0 {
 			a.extra["invoked_by"] = capList(sortedKeys(a.services), maxInvokedBy)
 		}
+		tr.attach(a.extra, a.uses)
 		caller := a.caller
 		acct, accountOnly := record.ExternalAccount(a.caller, a.kind)
 		if accountOnly {

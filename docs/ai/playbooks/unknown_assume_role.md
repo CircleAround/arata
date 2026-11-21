@@ -33,6 +33,8 @@ AWS のサービス主体 (EC2・Lambda などのインスタンスロール) �
 - data: `caller`、`caller_kind`、`caller_identity` (`account_only` のときだけ)、`role_arn`、`direction`・`caller_account`・`role_account` (向きが決まったとき)、`mfa`、`external_account` (そのときのアカウント ID)、`allowlist_status` (unknown / expired)、`count`、`ips`、`event_names` (AssumeRole / AssumeRoleWithSAML など)、
   `has_errors` (失敗した引き受けを含む)、`invoked_by` (送信元の IP が無く、AWS のサービス経由のとき。コンソールのスイッチロールなど)
 - `ips` が無いのは、記録の送信元が AWS のサービス名で IP が無いとき (収集で落としているのではない)
+- GitHub の OIDC から来たセッション (`oidc_origins`。ADR 0081): 呼び出し側のセッションを 1 段目の `AssumeRoleWithWebIdentity` までキーの一致でたどれたら、1 段目の `repo`・`ref` / `environment`・`run_id`・`assumed_at`・`chain_depth` が付く (たどれない理由は `oidc_origin_unmatched`)。
+  **手がかりであって証拠ではない** (`run_id` は呼ぶ側が書ける)。`https://github.com/<repo>/actions/runs/<run_id>` の実行と時刻を人に見てもらう。読み方は `arata help ai playbook oidc_assume_role`
 
 ## まず確かめること
 
@@ -107,6 +109,7 @@ AWS のサービス主体 (EC2・Lambda などのインスタンスロール) �
 - 向きを逆に書かない。外向き (自アカウントの主体が外部のロールを引き受けた) を「外部の主体が自アカウントのロールを引き受けた」と要約しない。見出しの括弧と `direction` のとおりに書く
 - `mfa: unknown` を「MFA なし」と書かない
 - 外向きを止めるために呼び出し元を承認しない (知らないアカウントへの引き受けまで止まる)。行き先が何者か確かめずに `--destination` を提案しない
+- `oidc_origins` があることや、既知のリポジトリ・environment から来たことだけを理由に、片付けたり「CI の正規の操作」と書いたりしない (`run_id` は呼ぶ側が書ける。ADR 0081)
 
 ## 関連する事例
 

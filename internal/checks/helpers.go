@@ -27,6 +27,8 @@ type eventAgg struct {
 	names map[string]bool
 	ips   map[string]bool
 	extra map[string]any
+	// uses は、1 段目までたどる記録 (ADR 0081。originTracer.note で足し、attach で data に付ける)
+	uses []originUse
 }
 
 func newEventAgg() *eventAgg {

@@ -92,6 +92,7 @@ func (c DefenseEvasion) Evaluate(ctx context.Context, q store.Query, w collect.W
 	aggs := map[string]*eventAgg{}
 	sev := map[string]Severity{}
 	reasons := map[string]string{}
+	tr := &originTracer{}
 	for _, e := range evs {
 		if e.ErrorCode != "" {
 			continue
@@ -128,9 +129,15 @@ func (c DefenseEvasion) Evaluate(ctx context.Context, q store.Query, w collect.W
 			reasons[k] = j.reason
 		}
 		a.add(e.Time, e.Name, e.IP)
+		a.uses = append(a.uses, tr.note(e))
+	}
+	// 決定 (ADR 0081): OIDC で入ったセッションから先の操作に、1 段目の手がかりを付ける (判定には使わない)
+	if err := tr.load(ctx, q); err != nil {
+		return nil, err
 	}
 	obs := map[string]Observation{}
 	for k, a := range aggs {
+		tr.attach(a.extra, a.uses)
 		target := a.extra["target"].(string)
 		shown := target
 		if shown == "" {

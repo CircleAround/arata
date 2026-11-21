@@ -51,7 +51,7 @@ func FuzzNormalizeEvent(f *testing.F) {
 		oidcBody(ghProvider, "repo:example-org@1234567/example-repo@7654321:ref:refs/heads/main", "arn:aws:iam::123456789012:role/gha-deploy", ghAgent),
 		oidcBody("cognito-identity.amazonaws.com", "ap-northeast-1:00000000-0000-0000-0000-000000000000", "arn:aws:iam::123456789012:role/app", ""),
 		`{"userIdentity":{"type":"WebIdentityUser","userName":["x"],"identityProvider":{"a":1}},"eventSource":"sts.amazonaws.com","eventName":"AssumeRoleWithWebIdentity","userAgent":"exec-env/GitHubActions md/run_id#1\n<!here>"}`,
-		ecsExecOK, ecsTaskAssume, ecsStartupRead,
+		ecsExecOK, ecsTaskAssume, ecsStartupRead, ghaAssume, ghaChainedAssume,
 		`{"userIdentity":{"type":"AWSService","invokedBy":"ecs-tasks.amazonaws.com"},"eventSource":"sts.amazonaws.com","eventName":"AssumeRole","requestParameters":{"roleArn":"ASIAEXAMPLE000000001"},"responseElements":{"credentials":{"accessKeyId":["ASIAEXAMPLE000000001"]}}}`,
 		`{"userIdentity":{"type":"AssumedRole","accessKeyId":7,"arn":"arn:aws:sts::123456789012:assumed-role/r/s"},"eventSource":"secretsmanager.amazonaws.com","eventName":"GetSecretValue","requestParameters":{"secretId":"ASIAEXAMPLE00000000"}}`,
 		`{"eventSource":"ecs.amazonaws.com","eventName":"ExecuteCommand","requestParameters":{"cluster":"arn:aws:ecs:x:1:cluster/a|b","task":["t"],"container":"","command":"sh\u0000\u202e-c x","interactive":"true"},"responseElements":{"session":{"sessionId":"ecs-execute-command-AB","tokenValue":"not-a-real-token","streamUrl":"wss://example.invalid/s?x=1"},"clusterArn":1}}`,
@@ -253,13 +253,16 @@ func FuzzNormalizeEvent(f *testing.F) {
 		}
 		sessionKey, _ := raw.UserIdentity.AccessKeyID.(string)
 		wantIssued, issuedOK := record.SessionKeyHash(issuedKey)
-		issuedOK = issuedOK && raw.EventSource == "sts.amazonaws.com" && raw.EventName == "AssumeRole" && raw.ErrorCode == "" &&
-			raw.UserIdentity.Type == "AWSService" && raw.UserIdentity.InvokedBy == ecsTasksService
+		// 決定 (ADR 0081): 発行は ECS の AssumeRole・役割の連鎖の AssumeRole (呼び出し側が AssumedRole)・AssumeRoleWithWebIdentity だけ
+		issuedOK = issuedOK && raw.EventSource == "sts.amazonaws.com" && raw.ErrorCode == "" &&
+			(raw.EventName == "AssumeRole" && (raw.UserIdentity.Type == "AWSService" && raw.UserIdentity.InvokedBy == ecsTasksService || raw.UserIdentity.Type == "AssumedRole") ||
+				raw.EventName == "AssumeRoleWithWebIdentity")
 		if v, has := e.Data["issued_key_hash"]; has != issuedOK || has && v != wantIssued {
 			t.Fatalf("data.issued_key_hash が規則に合わない: %v (%s %s)", v, raw.EventSource, raw.EventName)
 		}
 		wantSession, sessionOK := record.SessionKeyHash(sessionKey)
-		sessionOK = sessionOK && secretReadOps[raw.EventSource+" "+raw.EventName] && raw.UserIdentity.Type == "AssumedRole"
+		// 決定 (ADR 0081。0076 の 7 節の「秘匿値の読み取りにだけ」を置き換える): userIdentity.type が AssumedRole の記録の全部
+		sessionOK = sessionOK && raw.UserIdentity.Type == "AssumedRole"
 		if v, has := e.Data["session_key_hash"]; has != sessionOK || has && v != wantSession {
 			t.Fatalf("data.session_key_hash が規則に合わない: %v (%s %s)", v, raw.EventSource, raw.EventName)
 		}
