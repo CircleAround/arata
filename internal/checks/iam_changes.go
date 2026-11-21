@@ -151,6 +151,7 @@ func (c IAMChanges) Evaluate(ctx context.Context, q store.Query, w collect.Windo
 	codes := map[string]map[string]bool{}
 	deploy := map[string]bool{}
 	trusts := map[string]*iamTrust{}
+	tr := &originTracer{}
 	for _, e := range evs {
 		if !isIAMChange(e.Name) {
 			continue
@@ -179,6 +180,7 @@ func (c IAMChanges) Evaluate(ctx context.Context, q store.Query, w collect.Windo
 			t.add(e, ownAccountOf(e))
 		}
 		a.add(e.Time, e.Name, e.IP)
+		a.uses = append(a.uses, tr.note(e))
 		if e.ErrorCode != "" {
 			a.extra["has_errors"] = true
 			errs[k]++
@@ -188,8 +190,13 @@ func (c IAMChanges) Evaluate(ctx context.Context, q store.Query, w collect.Windo
 			codes[k][e.ErrorCode] = true
 		}
 	}
+	// 決定 (ADR 0081): OIDC で入ったセッションから先の IAM の操作に、1 段目の手がかりを付ける (判定には使わない)
+	if err := tr.load(ctx, q); err != nil {
+		return nil, err
+	}
 	obs := map[string]Observation{}
 	for k, a := range aggs {
+		tr.attach(a.extra, a.uses)
 		name, _, _ := strings.Cut(k, "|")
 		// 決定 (ADR 0056): 下げない理由があれば、デプロイ主体でも medium。`*` は誰でも high
 		var reasons []string

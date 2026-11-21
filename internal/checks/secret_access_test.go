@@ -310,6 +310,17 @@ func (s *secretSeed) issue(role string, at time.Time, key string, by ...string) 
 	}
 }
 
+// otherIssue は ECS 以外の発行 (役割の連鎖の AssumeRole・AssumeRoleWithWebIdentity) を入れる (ADR 0081)。
+func (s *secretSeed) otherIssue(role string, at time.Time, key, name, caller string, kind record.PrincipalKind) {
+	s.t.Helper()
+	s.n++
+	e := record.TrailEvent{EventID: fmt.Sprintf("o%05d", s.n), Time: at, Source: "trail", Name: name, EventSource: "sts.amazonaws.com",
+		PrincipalARN: caller, PrincipalKind: kind, ReadOnly: true, Data: map[string]any{"role_arn": role, "issued_key_hash": keyHash(s.t, key)}}
+	if err := s.st.InsertEvent(context.Background(), e); err != nil {
+		s.t.Fatal(err)
+	}
+}
+
 func keyHash(t *testing.T, key string) string {
 	t.Helper()
 	h, ok := record.SessionKeyHash(key)
@@ -432,12 +443,14 @@ func TestSecretAccessBulkExemptSession(t *testing.T) {
 		stolen   = role("stolen")   // 外から 12 個を読む → 数えて high (medium は重ねない)
 		other    = role("other")    // 発行は別のロールのもの → medium
 		ec2      = role("ec2")      // 発行したのが ECS でない → medium
+		chained  = role("chained")  // 発行が役割の連鎖の AssumeRole (ADR 0081 で issued_key_hash が付く) → 外さず medium
+		webID    = role("webid")    // 発行が AssumeRoleWithWebIdentity (同上) → 外さず medium
 	)
 	st := newStore(t)
 	s := &secretSeed{st: st, t: t}
 	coverage(t, st, 14)
 	in := now.Add(-3 * time.Hour)
-	all := []string{ok, boundary, skew, noKey, noIssue, late, mix, stolen, other, ec2}
+	all := []string{ok, boundary, skew, noKey, noIssue, late, mix, stolen, other, ec2, chained, webID}
 	for _, r := range all {
 		s.serviceAssume(r, time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC)) // どれもサービスに引き受けられたロール (0073 の 4 節)
 	}
@@ -462,6 +475,11 @@ func TestSecretAccessBulkExemptSession(t *testing.T) {
 	s.startupRead(other, in, set, 0, 3, testKey(9))
 	s.issue(ec2, in.Add(-time.Second), testKey(10), "ec2.amazonaws.com")
 	s.startupRead(ec2, in, set, 0, 3, testKey(10))
+	// 決定 (ADR 0081): issued_key_hash を ECS 以外の発行にも付けるが、0076 の突き合わせは ECS の発行だけを使う (挙動を変えない)
+	s.otherIssue(chained, in.Add(-time.Second), testKey(11), "AssumeRole", "arn:aws:iam::123456789012:role/gha-deploy", record.PrincipalAssumedRole)
+	s.startupRead(chained, in, set, 0, 3, testKey(11))
+	s.otherIssue(webID, in.Add(-time.Second), testKey(12), OIDCAssumeEvent, "", record.PrincipalUnknown)
+	s.startupRead(webID, in, set, 0, 3, testKey(12))
 
 	var b strings.Builder
 	b.WriteString("secrets_access:\n")
@@ -489,7 +507,8 @@ func TestSecretAccessBulkExemptSession(t *testing.T) {
 	if d := m[BulkExemptKeyPrefix+ok].Data["bulk_exempt_max_delay_seconds"]; d != 11 {
 		t.Errorf("最大の遅れ: %v", d)
 	}
-	for r, want := range map[string]string{noKey: "map[no_key:1]", noIssue: "map[no_issuance:1]", late: "map[outside_window:1]", other: "map[no_issuance:1]", ec2: "map[no_issuance:1]"} {
+	for r, want := range map[string]string{noKey: "map[no_key:1]", noIssue: "map[no_issuance:1]", late: "map[outside_window:1]", other: "map[no_issuance:1]", ec2: "map[no_issuance:1]",
+		chained: "map[no_issuance:1]", webID: "map[no_issuance:1]"} {
 		o, has := m[BulkExemptUnmatchedKeyPrefix+r]
 		if !has || o.Severity != Medium || fmt.Sprint(o.Data["bulk_exempt_unmatched"]) != want || o.Data["unmatched_secrets"] != 3 ||
 			o.Data["principal"] != r || fmt.Sprint(o.Data["ips"]) != "[198.51.100.1]" || fmt.Sprint(o.Data["bulk_exempt_patterns"]) != "[/example-app/prod/secrets/*]" {

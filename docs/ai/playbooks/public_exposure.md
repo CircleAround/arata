@@ -20,6 +20,8 @@
 - Key は `<サービス>:<操作>|<資源>|<開いた中身>` (例 `ec2:AuthorizeSecurityGroupIngress|sg-0abc|tcp/22 0.0.0.0/0`)。同じ資源を同じように開いた呼び出しは主体をまとめて 1 件
 - data: `api`、`target`、`exposure`、`principal` / `principals`、`sensitive`、`direction_unknown`、`public_statements` (`Sid: action,...`)、
   `known_deploy_principal`、`count`、`ips`、`first_time`、`last_time`。ポリシー全文は残していない
+- GitHub の OIDC から来たセッション (`oidc_origins`。ADR 0081): 呼び出し側のセッションを 1 段目の `AssumeRoleWithWebIdentity` までキーの一致でたどれたら、1 段目の `repo`・`ref` / `environment`・`run_id`・`assumed_at`・`chain_depth` が付く (たどれない理由は `oidc_origin_unmatched`)。
+  **手がかりであって証拠ではない** (`run_id` は呼ぶ側が書ける)。`https://github.com/<repo>/actions/runs/<run_id>` の実行と時刻を人に見てもらう。読み方は `arata help ai playbook oidc_assume_role`
 
 ## まず確かめること
 
@@ -72,6 +74,7 @@
 - deploy タグの主体の変更でも、公開の中身を確かめずに ack しない
 - 公開された中身 (秘匿値など) を report・通知・会話に書き写さない
 - LLM が SG・バケット・DB の設定を変えない。閉じる操作も提案まで
+- `oidc_origins` があることや、既知のリポジトリ・environment から来たことだけを理由に、片付けたり「CI の正規の操作」と書いたりしない (`run_id` は呼ぶ側が書ける。ADR 0081)
 
 ## 関連する事例
 

@@ -55,7 +55,7 @@ CI は `.github/workflows/fuzz.yml` が週 1 回と手動 (`workflow_dispatch`�
 | | `FuzzUserCollect` | ログの行 (種類・ID・auth の結果が任意の文字列。設定の正規表現は緩い。偽の Insights) | 形に合った種類と ID のリクエストだけが ID つきに、合わないものは捨てた数に、ちょうど入る。合わない値は record に残らない。段 0 の数は変わらない。ID が 0 件なら `http_user` は「取れない」になる |
 | | `FuzzHygieneQuery` `FuzzNotPrecededBy` | 設定の項目名・`stream_prefix` (log_hygiene。ADR 0050) | どんな値でもクエリの段の数と並び (`fields` と `stats`) が変わらない。`/.../` を抜け出さない。一時フィールドの名前は全部異なり決まった字だけ。正規表現は Go の regexp でも読め、`=>` と `:`・空白の有無の 4 つの書き方に一致し、`[FILTERED]`・空の値・別の鍵に一致しない。検査を通らない項目名はクエリに入らない。「直前が〜でない」の表現が素直な判定と同じ意味 |
 | | `FuzzHygieneRows` | Insights の結果の行 (偽の API。log_hygiene) | 受け取るのは有限で負でない整数だけ (別の方法で読んだ値と一致)。それ以外は収集の失敗で、0 件にしない・何も出さない。record とエラーの文に結果の文字列が残らない |
-| `internal/collect/cloudtrail` | `FuzzNormalizeEvent` `FuzzRoleARNFromSession` `FuzzReadTrailFile` | イベントの本文 (JSON)、ARN、trail の S3 のファイル (gzip の JSON) | 取り出す値の型と上限。セッション名を主体に残さない。ファイルの誤りは中身の誤りだけで、解いた大きさの上限を超えて読まず、管理イベント以外を管理イベントにしない |
+| `internal/collect/cloudtrail` | `FuzzNormalizeEvent` `FuzzRoleARNFromSession` `FuzzReadTrailFile` | イベントの本文 (JSON)、ARN、trail の S3 のファイル (gzip の JSON) | 取り出す値の型と上限。セッション名を主体に残さない。キーのハッシュは決まった記録 (発行の 3 種類と AssumedRole の記録) にだけ付き、キーそのものは残さない (ADR 0076・0081)。ファイルの誤りは中身の誤りだけで、解いた大きさの上限を超えて読まず、管理イベント以外を管理イベントにしない |
 | | `FuzzPublicStatements` | バケットポリシー、CIDR | 公開の判定が見逃す側に倒れない (条件を外す・公開のステートメントを足す・広い CIDR・否定の演算子) |
 | `internal/record` `internal/report` | `FuzzMask` `FuzzFindingMasksIdentity` | 任意の文字列の間に置いたメールアドレス・セッション名 | レポートに元の形で残らない。冪等 |
 | `internal/report/schema` | `FuzzParse` `FuzzMarkdownLogValues` | report.json、ログ由来の値 | 読めたものは書き直しても同じ。report.md の行を増やせない (run と期間レポート) |
@@ -63,6 +63,7 @@ CI は `.github/workflows/fuzz.yml` が週 1 回と手動 (`workflow_dispatch`�
 | | `FuzzAppendDestination` | `approve --destination` が書く行き先 (アカウントは finding の data、ロールと note は人の入力) | 書けたなら読め、行き先がちょうど 1 件増え、ほかの節と元の行は変わらない。12 桁の数字でないアカウント・空の note は書かない |
 | | `FuzzCheck` | allowlist.yaml (`config check`) | エラーの有無が `Parse` と一致する (check が通したものは run でも読める)。エラーは 1 件まで、警告は重複した主体・重なる行き先・期限切れの行き先の数と一致。行番号がファイルの行数を超えない |
 | `internal/checks` | `FuzzKnownDestination` | 呼び出し元・ロールの ARN、受け取ったアカウント、MFA の値 (ログ由来) | 行き先が既知になるのは、外向きで、ロールの ARN のアカウントが既知リストに書いた 12 桁と文字どおり同じときだけ。finding の data からの判定は、それに加えて `mfa` が文字どおり `true` のときだけ |
+| | `FuzzOriginTrace` | 保存済みの発行 (AssumeRole*) の種類・キーのハッシュ・時刻の任意の組 | 必ず止まる。たどれたら段数は 1〜4、根は AssumeRoleWithWebIdentity で、1 段目までの時刻の差は寿命の和 (12 時間 + 1 時間 × 段数 - 1) を超えない。たどれなければ 1 段目の値を返さない (ADR 0081) |
 | | `FuzzALBsWithoutWAF` | posture_item の `without_waf` (ストアから戻した JSON。ALB の名前は利用者が決める) | 返す名前は空でなく、finding の key の区切り (`\|`) を含まない |
 | | `FuzzLogHygieneSnapshot` | log_hygiene のスナップショットの項目 (ストアから戻した値) | key は設定のソース id と種類、重大度は種類で決まる。行数は 1 以上の整数、`retention` は決まった 3 つ、`fields` は設定の項目名だけ。項目の中の文字列が finding に残らない |
 | `internal/config` | `FuzzLogHygieneParamField` | `checks.log_hygiene.param_fields` の項目名 | 検査を通った名前は 1〜64 字の英数字・`_`・`-` だけ |

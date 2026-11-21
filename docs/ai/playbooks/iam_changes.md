@@ -18,6 +18,8 @@
   `known_deploy_principal`、`not_lowered`、`trust_policy` (ok / unreadable)、`trust_wildcard`、`trust_external_accounts`、`trust_external_federated`、`trust_has_condition`、
   `denied` (すべて拒否された試行)、`has_errors` (失敗が混ざる)、`error_codes`
 - `denied: true` は変更は起きていないが、権限の無い主体が IAM を変えようとした (対象は記録されないので「不明」)
+- GitHub の OIDC から来たセッション (`oidc_origins`。ADR 0081): 呼び出し側のセッションを 1 段目の `AssumeRoleWithWebIdentity` までキーの一致でたどれたら、1 段目の `repo`・`ref` / `environment`・`run_id`・`assumed_at`・`chain_depth` が付く (たどれない理由は `oidc_origin_unmatched`)。
+  **手がかりであって証拠ではない** (`run_id` は呼ぶ側が書ける)。`https://github.com/<repo>/actions/runs/<run_id>` の実行と時刻を人に見てもらう。読み方は `arata help ai playbook oidc_assume_role`
 
 ## まず確かめること
 
@@ -71,6 +73,7 @@
 - 外のアカウントが `principals` で承認済みでも、信頼ポリシーに足してよいとは限らない (承認は「呼び出し元として既知」)
 - 拒否された試行 (`denied`) を「変更は起きていないので問題なし」と書かない
 - LLM が IAM を変更しない。元に戻す操作も提案まで
+- `oidc_origins` があることや、既知のリポジトリ・environment から来たことだけを理由に、片付けたり「CI の正規の操作」と書いたりしない (`run_id` は呼ぶ側が書ける。ADR 0081)
 
 ## 関連する事例
 

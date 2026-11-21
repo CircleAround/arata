@@ -31,6 +31,15 @@ OIDC のトークンでのロールの引き受け (`AssumeRoleWithWebIdentity`)
   `role_known`、`role_recorded` (false のときだけ)、`entrance_known`、`allowlist_status` (unknown / expired / approved)、`count`、`ips`、`run_ids`、`has_errors`、`denied`、`outside_count`。
   平常帯の行は `date`・`count`・`baseline_median`・`threshold`。info の行は `subjects`・`subjects_total`
 
+### 2 段目以降の finding に付く `oidc_origins` (ADR 0081)
+
+1 段目のセッションが別のロールを引き受けた (2 段目以降) ときの unknown_assume_role・iam_changes・defense_evasion・public_exposure の finding には、発行されたキーの一致 (AWS が発行した値) で 1 段目までたどった値が付く (最大 4 段)。
+
+- `oidc_origins`: 1 段目の 1 回ごとの要素 (古い順、上限 10。全部の数は `oidc_origins_total`)。`repo`・`sub_kind`・`ref` / `environment`・`run_id`・`assumed_at` (1 段目の時刻)・`role_arn`・`provider`・`chain_depth` (1 段目のセッションが直接呼んだ記録が 1)
+- `oidc_origin_unmatched`: たどれなかった記録の理由ごとの数 (`no_key`・`no_issuance`・`not_oidc` 鎖の根が ECS・`too_deep`)。一部だけたどれたとき (同じロールが GitHub の実行とそれ以外から使われた手がかり) と、OIDC の入り口のロールなのに 1 段目が見つからないときだけ出る
+- 証拠ではない。`run_id` は呼ぶ側が書け、既知のリポジトリの既存のワークフローを書き換えられた場合も `repo`・`ref` は正規の値のまま。合わない・実行が無いなら `run_id` を偽った疑い
+- CloudFormation が引き受けた実行のロール (`cfn-exec-role` など) の操作には付かない (キーで deploy-role に戻れない)。付かないことは「GitHub から来ていない」を意味しない
+
 ## まず確かめること
 
 1. `arata review --format json` で、同じロール (`role_arn`) が主体の finding (iam_changes・secret_access・access_denied・unknown_assume_role・new_principal) を探す。

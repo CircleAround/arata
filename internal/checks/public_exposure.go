@@ -52,6 +52,7 @@ func (c PublicExposure) Evaluate(ctx context.Context, q store.Query, w collect.W
 	aggs := map[string]*eventAgg{}
 	sev := map[string]Severity{}
 	principals := map[string]map[string]bool{}
+	tr := &originTracer{}
 	for _, e := range evs {
 		if e.ErrorCode != "" {
 			continue
@@ -88,9 +89,15 @@ func (c PublicExposure) Evaluate(ctx context.Context, q store.Query, w collect.W
 			a.extra["known_deploy_principal"] = true
 		}
 		a.add(e.Time, e.Name, e.IP)
+		a.uses = append(a.uses, tr.note(e))
+	}
+	// 決定 (ADR 0081): OIDC で入ったセッションから先の操作に、1 段目の手がかりを付ける (判定には使わない)
+	if err := tr.load(ctx, q); err != nil {
+		return nil, err
 	}
 	obs := map[string]Observation{}
 	for k, a := range aggs {
+		tr.attach(a.extra, a.uses)
 		ps := sortedKeys(principals[k])
 		a.extra["principals"] = ps
 		who := record.PrincipalLabel(a.extra["principal"].(string), record.PrincipalKind(a.extra["principal_kind"].(string)))
