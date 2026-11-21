@@ -247,3 +247,18 @@ cloudtrail collector (`normalizeRaw`。LookupEvents と trail の S3 の共通) 
   - 上げる前に集めた記録はたどれない (`no_key` / `no_issuance`)。保存の形・スキーマ (finding の `data` は型を決めていない。ADR 0054) は互換
 - 実装: `record` (変えない。`SessionKeyHash` を使う)・cloudtrail collector (1 節)・`internal/checks` の共通の関数 (2〜4・6 節) と 4 つのチェック・ファズ・playbook と文書 (8 節)。
   権限・設定は増えない (既定値も無い。ADR 0014 の `config init --diff` に出るものは無い)
+
+## 追記 (2026-11-21): 実際の記録では `run_id` が付かない
+
+本文は変えず、採用の後に分かった事実を書く。
+
+- 出典: 利用者の CloudTrail (40 時間分) を新しいストアに集め直して `run --dry-run` を流した形 (2026-11-21、開発リード)。名前と ID は書かない
+- 4 つの finding (unknown_assume_role の high 2 つ、defense_evasion の medium 2 つ) に `oidc_origins` が付き、`oidc_origin_unmatched` は無かった。
+  付いた値は `provider`・`repo`・`sub_kind`・`environment`・`assumed_at`・`role_arn`。`assumed_at` は 1 段目の記録の時刻と一致した
+- **`run_id` は 1 つも付かなかった。** 1 段目の記録 (4 件) の `userAgent` は、どれも `aws-sdk-js/3.x … configure-aws-credentials-for-github-actions` の形で、
+  実行の ID (`md/run_id#<数字>`) が入っていなかった。ADR 0055 から当てにしていた「userAgent の run_id」は、今の configure-aws-credentials ではふつう入らない
+- 以前の版で集めた記録 (ハッシュの無い記録) だけのストアでは `no_key` になった (1 節の移行のとおり)
+
+9 節 (次の段) への影響: GitHub との突き合わせは、`run_id` ではなく、`sub` の `repo`・`environment` (GitHub が署名した値) と、1 段目の引き受けの時刻 `assumed_at` が主になる。
+9 節の 3 点のうち、1 (リポジトリと environment) と 2 (時刻が実行の開始から終了の間) と 3 (その時刻の Deployments の記録) で実行を絞り、`run_id` は、あれば同じ時刻に候補が複数あるときに見分けるためにだけ使う。
+playbook と説明書は、`run_id` はふつう無く、実行は `repo`・`environment` / `ref`・`assumed_at` で GitHub の Actions の一覧から探す、と直した。
