@@ -352,13 +352,13 @@ func Files(p Params, reg *checks.Registry, today time.Time) ([]File, error) {
 	// --flash (ADR 0082): 取得のワークフローに、hourly の判定と通知を足す。付けなければ、どの印も今の文のまま (出力は 1 バイトも変わらない)
 	collectTitle := "# 取得だけ (arata collect --incremental) を短い間隔で回す (アカウントごとに 1 つのジョブ。matrix)。判定・報告・通知はしない (ADR 0078)。"
 	collectSlack := "# Slack には何も送らない。取得が失敗しても集めるはずだったものは失われず、daily がソースの位置から続きを自分で集める (説明書「取得だけを短い間隔で回す」)。"
-	secretsNote := "取得は Slack に送らないので、Slack のトークンは渡さない。"
+	slackNote := "取得は Slack に送らないので、Slack のトークンは渡さない。"
 	flashSteps, collectIf, collectTimeout, flashAlert, flashReadme := "", "", "50", "", ""
 	if p.Flash {
 		collectReadme += "。取得の前に `hourly` のプロファイルを判定し、重大度の下限 (`min_severity`) 以上だけを知らせます (`--flash`)"
 		collectTitle = "# 取得 (arata collect --incremental) を短い間隔で回し、その前に hourly のプロファイルを判定して、high 以上だけを知らせる (アカウントごとに 1 つのジョブ。matrix。ADR 0078・0082)。"
 		collectSlack = "# Slack に送るのは、hourly の判定で重大度の下限 (min_severity) 以上の指摘があったときと、それが届かなかったときだけ。判定・取得の失敗では送らない (説明書「取得の回に high 以上を知らせる」)。"
-		secretsNote = "Slack のトークンは、通知と知らせの step にだけ渡す。未登録なら aratam が CONFIG_INVALID で止まる。"
+		slackNote = "Slack のトークンは、通知と知らせの step にだけ渡す。未登録なら aratam が CONFIG_INVALID で止まる。"
 		b, err := templates.ReadFile("templates/workflows/flash-steps.txt")
 		if err != nil {
 			return nil, err
@@ -400,7 +400,7 @@ func Files(p Params, reg *checks.Registry, today time.Time) ([]File, error) {
 		"@@COLLECT_README@@", collectReadme,
 		"@@COLLECT_TITLE@@", collectTitle,
 		"@@COLLECT_SLACK@@", collectSlack,
-		"@@SECRETS_NOTE@@", secretsNote,
+		"@@SECRETS_NOTE@@", slackNote,
 		"@@FLASH_STEPS@@", flashSteps,
 		"@@COLLECT_IF@@", collectIf,
 		"@@COLLECT_TIMEOUT@@", collectTimeout,
