@@ -328,6 +328,32 @@ func (c SecretAccess) Evaluate(ctx context.Context, q store.Query, w collect.Win
 		}
 	}
 
+	// principal_pattern (ADR 0079 の 4 節): 主体ごとに一致した pattern と、同じ pattern に一致した窓の主体の数
+	principalPats := map[string][]string{}
+	for arn := range byP {
+		if pats := al.SecretPrincipalPatterns(arn); len(pats) > 0 {
+			principalPats[arn] = pats
+		}
+	}
+	// patternData は finding と info の行の data に、一致した principal_pattern を足す。principal (完全一致) だけなら何も書かない。
+	// 決定: Fingerprint には入れない (作り直しのたびに changed にしない)。重大度も変えない (作り直しの日に鳴らさない)
+	patternData := func(d map[string]any, arn string) {
+		pats := principalPats[arn]
+		if len(pats) == 0 {
+			return
+		}
+		d["secrets_access_principal_patterns"] = pats
+		n := 0
+		for other, ops := range principalPats {
+			if other == arn || sharesAny(pats, ops) {
+				n++
+			}
+		}
+		if n >= 2 {
+			d["principal_pattern_principals"] = n
+		}
+	}
+
 	obs := map[string]Observation{}
 	for arn, p := range byP {
 		// bulk: exempt (ADR 0073): 窓で一致した秘匿値と glob。外すのはサービスに引き受けられたロールのときだけ
@@ -414,6 +440,7 @@ func (c SecretAccess) Evaluate(ctx context.Context, q store.Query, w collect.Win
 			unAgg.extra["bulk_exempted"] = exempted
 			unAgg.extra["bulk_counted"] = counted
 			unmatchedData(unAgg.extra)
+			patternData(unAgg.extra, arn)
 			markAccountOnly(unAgg.extra, "principal_identity", arn, p.kind)
 			rs := make([]string, 0, len(reasons))
 			for r := range reasons {
@@ -457,6 +484,7 @@ func (c SecretAccess) Evaluate(ctx context.Context, q store.Query, w collect.Win
 				a.extra["bulk_exempt_patterns"] = sortedKeys(exemptPats)
 				a.extra["bulk_exempt_sessions"] = len(sessions)
 				a.extra["bulk_exempt_max_delay_seconds"] = int(maxDelay / time.Second)
+				patternData(a.extra, arn)
 				markAccountOnly(a.extra, "principal_identity", arn, p.kind)
 				// 決定: Fingerprint は固定 (読んだ顔ぶれや回数は起動のたびに変わるので、入れると毎回 changed になる)
 				obs[k] = Observation{Check: c.Name(), Key: k, Severity: Info,
@@ -502,6 +530,7 @@ func (c SecretAccess) Evaluate(ctx context.Context, q store.Query, w collect.Win
 			a.extra["new_secret_count"] = len(newSecrets)
 			a.extra["first_reader"] = firstReader
 		}
+		patternData(a.extra, arn)
 		markAccountOnly(a.extra, "principal_identity", arn, p.kind)
 		label := record.PrincipalLabel(arn, p.kind)
 		var parts []string
@@ -524,6 +553,18 @@ func (c SecretAccess) Evaluate(ctx context.Context, q store.Query, w collect.Win
 			Fingerprint: fingerprint(sev, nil, bulk, strings.Join(newSecrets, ","))}
 	}
 	return sortedObs(obs), nil
+}
+
+// sharesAny は a と b に共通の値があるか。
+func sharesAny(a, b []string) bool {
+	for _, x := range a {
+		for _, y := range b {
+			if x == y {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // lateInWindow は e が再走査で遅れて届いたイベント (windowEvents が窓に含めるもの) か。履歴から除く (窓と二重に数えて初出を隠さない)。

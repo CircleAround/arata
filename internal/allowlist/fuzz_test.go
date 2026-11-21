@@ -38,6 +38,9 @@ func FuzzParse(f *testing.F) {
 		"secrets_access:\n  - principal: arn:aws:iam::123456789012:role/app\n    secrets: [\"/example-app/prod/*\", \"x\"]\n    bulk: exempt\n    note: n\n",
 		"secrets_access:\n  - principal: arn:aws:iam::123456789012:user/alice\n    secrets: [\"/a/b/*\"]\n    bulk: exempt\n    note: n\n",
 		"secrets_access: [{principal: x, secrets: [\"*\"], bulk: \"\"}]\n",
+		"secrets_access:\n  - principal_pattern: arn:aws:iam::123456789012:role/example-app-prod-AppTaskDefExecutionRole1A2B3C4D-*\n    secrets: [\"/example-app/prod/secrets/*\"]\n    bulk: exempt\n    note: n\n",
+		"secrets_access:\n  - principal_pattern: arn:aws:iam::123456789012:role/example-app-*\n    principal: arn:aws:iam::123456789012:role/x\n    secrets: [\"*\"]\n",
+		"secrets_access:\n  - principal_pattern: arn:aws:iam::999999999999:role/a-fuzz-*\n    secrets: [\"*\"]\n  - principal_pattern: \"arn:aws:iam::123456789012:role/a/b-c-*\"\n    secrets: [\"x\"]\n",
 		"oidc_subjects: &o [*o]\n", "principals:\n  - arn: arn:aws:iam::123456789012:role/gha-deploy\n    tags: [deploy]\noidc_subjects: []\n",
 	} {
 		f.Add([]byte(s))
@@ -185,10 +188,29 @@ func FuzzParse(f *testing.F) {
 			if e.Bulk != "" && e.Bulk != BulkExempt {
 				t.Fatalf("secrets_access[%d]: bulk に書けない値を受け入れた: %q", i, e.Bulk)
 			}
+			// principal_pattern (ADR 0079): 主体は principal と排他。読めた pattern は必ず CheckPrincipalPattern の形
+			if (e.Principal == "") == (e.PrincipalPattern == "") {
+				t.Fatalf("secrets_access[%d]: principal と principal_pattern の排他が抜けた: %+v", i, e)
+			}
+			subject := e.Principal
+			if e.PrincipalPattern != "" {
+				if err := CheckPrincipalPattern(e.PrincipalPattern); err != nil {
+					t.Fatalf("secrets_access[%d]: 書けない principal_pattern を受け入れた: %v", i, err)
+				}
+				subject = strings.TrimSuffix(e.PrincipalPattern, "*") + "Ab1"
+				for _, bad := range []string{"", "-x", "/x", ":x", "_x", "x y"} {
+					if MatchPrincipalPattern(e.PrincipalPattern, strings.TrimSuffix(e.PrincipalPattern, "*")+bad) {
+						t.Fatalf("secrets_access[%d]: %q が英数字でない乱数 %q に一致した", i, e.PrincipalPattern, bad)
+					}
+				}
+				if !MatchPrincipalPattern(e.PrincipalPattern, subject) {
+					t.Fatalf("secrets_access[%d]: %q が乱数の形の %q に一致しない", i, e.PrincipalPattern, subject)
+				}
+			}
 			if e.Bulk != BulkExempt {
 				continue
 			}
-			if strings.TrimSpace(e.Note) == "" || !strings.Contains(e.Principal, ":role/") || !strings.HasPrefix(e.Principal, "arn:") {
+			if strings.TrimSpace(e.Note) == "" || !strings.Contains(subject, ":role/") || !strings.HasPrefix(subject, "arn:") {
 				t.Fatalf("secrets_access[%d]: bulk: exempt の検証が抜けた: %+v", i, e)
 			}
 			for _, g := range e.Secrets {
@@ -200,7 +222,7 @@ func FuzzParse(f *testing.F) {
 					fixed = g[:k]
 				}
 				for _, c := range []string{"x", "/x", "/x/y", "x/y/z", "/", ""} {
-					if p, ok := l.SecretBulkExempt(e.Principal, c); ok && p == g && !strings.HasPrefix(c, fixed) {
+					if p, ok := l.SecretBulkExempt(subject, c); ok && p == g && !strings.HasPrefix(c, fixed) {
 						t.Fatalf("secrets_access[%d]: %q が固定の部分の外の %q に当たった", i, g, c)
 					}
 				}
@@ -209,7 +231,7 @@ func FuzzParse(f *testing.F) {
 		if _, ok := l.SecretBulkExempt(outsider, "/example-app/prod/secrets/X"); ok {
 			found := false
 			for i := range l.SecretsAccess {
-				found = found || l.SecretsAccess[i].Principal == outsider
+				found = found || l.SecretsAccess[i].Principal == outsider || MatchPrincipalPattern(l.SecretsAccess[i].PrincipalPattern, outsider)
 			}
 			if !found {
 				t.Fatal("書いていない主体の秘匿値を一括読み出しの数から外した")
@@ -251,6 +273,53 @@ func FuzzMatchPattern(f *testing.F) {
 		}
 		CheckDeniedGlob(pattern)
 		AccountOf(s)
+	})
+}
+
+// principal_pattern の形と照合 (ADR 0079。照合の相手はログ由来の主体の ARN)。守る規則:
+//   - CheckPrincipalPattern を通った値は、arn:<パーティション>:iam::<12 桁>:role/ で始まり、ワイルドカードは末尾の -* の 1 つだけ
+//   - 一致したなら、ARN は固定の部分 (末尾の * の前) で始まり、残りは英数字 (ASCII) の 1 文字以上だけ (/・:・- を含まない)
+//   - 一致したなら、ARN のアカウントは pattern のアカウントと同じ
+//   - CheckPrincipalPattern を通らない値は何にも一致しない
+func FuzzPrincipalPattern(f *testing.F) {
+	for _, s := range [][2]string{
+		{"arn:aws:iam::123456789012:role/example-app-prod-AppTaskDefExecutionRole1A2B3C4D-*", "arn:aws:iam::123456789012:role/example-app-prod-AppTaskDefExecutionRole1A2B3C4D-AbcDef123Ghi"},
+		{"arn:aws:iam::123456789012:role/example-app-*", "arn:aws:iam::123456789012:role/example-app-x/evil"},
+		{"arn:aws:iam::123456789012:role/example-app-*", "arn:aws:iam::123456789012:role/example-app-a-b"},
+		{"arn:aws:iam::123456789012:role/*", "arn:aws:iam::123456789012:role/x"},
+		{"arn:aws:iam::123456789012:role/a/b-c-*", "arn:aws:iam::123456789012:role/a/b-c-\xff"},
+		{"arn:aws:iam::123456789012:role/a-b-*", "arn:aws:iam::123456789012:role/a-b-Ａ"},
+	} {
+		f.Add(s[0], s[1])
+	}
+	f.Fuzz(func(t *testing.T, pattern, arn string) {
+		ok := MatchPrincipalPattern(pattern, arn)
+		if err := CheckPrincipalPattern(pattern); err != nil {
+			if ok {
+				t.Fatalf("書けない %q が %q に一致した", pattern, arn)
+			}
+			return
+		}
+		if !strings.HasPrefix(pattern, "arn:") || !strings.Contains(pattern, ":iam::") || !strings.Contains(pattern, ":role/") ||
+			!strings.HasSuffix(pattern, "-*") || strings.Count(pattern, "*") != 1 || strings.Contains(pattern, "?") || !accountRe.MatchString(AccountOf(pattern)) {
+			t.Fatalf("CheckPrincipalPattern が %q を受け入れた", pattern)
+		}
+		if !ok {
+			return
+		}
+		fixed := strings.TrimSuffix(pattern, "*")
+		rest, has := strings.CutPrefix(arn, fixed)
+		if !has || rest == "" {
+			t.Fatalf("%q が固定の部分の外の %q に一致した", pattern, arn)
+		}
+		for _, r := range rest {
+			if !('A' <= r && r <= 'Z' || 'a' <= r && r <= 'z' || '0' <= r && r <= '9') {
+				t.Fatalf("%q が英数字でない乱数の %q に一致した", pattern, arn)
+			}
+		}
+		if AccountOf(arn) != AccountOf(pattern) {
+			t.Fatalf("%q がアカウントの違う %q に一致した", pattern, arn)
+		}
 	})
 }
 

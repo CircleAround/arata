@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/CircleAround/arata/internal/allowlist"
+	"github.com/CircleAround/arata/internal/collect"
 	"github.com/CircleAround/arata/internal/config"
 	"github.com/CircleAround/arata/internal/record"
 	"github.com/CircleAround/arata/internal/store"
@@ -546,5 +547,163 @@ func TestSecretAccessBulkExemptSession(t *testing.T) {
 	}
 	if m := obsByKey(obs); m[BulkExemptKeyPrefix+late].Severity != Info || m[BulkExemptUnmatchedKeyPrefix+late].Key != "" {
 		t.Errorf("bulk_exempt_within: 10m で外れない: %+v", m[BulkExemptUnmatchedKeyPrefix+late])
+	}
+}
+
+// principal_pattern (ADR 0079): CDK でスタックを作り直して末尾の乱数が変わったロールも、同じ項目で外れる。
+// 照合 (0073 の 4 節・0076 の発行の突き合わせ) は実際の主体の ARN ごと。一致した pattern と、同じ pattern に一致した主体の数を data に出す。
+func TestSecretAccessPrincipalPattern(t *testing.T) {
+	const (
+		set     = "/example-app/prod/secrets/S"
+		stack   = "arn:aws:iam::123456789012:role/example-app-prod-AppTaskDefExecutionRole1A2B3C4D-"
+		pat     = stack + "*"
+		solo    = "arn:aws:iam::123456789012:role/example-batch-prod-JobExecutionRole5E6F7A8B-"
+		soloPat = solo + "*"
+	)
+	var (
+		before = stack + "AbcDef123Ghi" // 作り直しの前
+		after  = stack + "XyZ789uvWxyz" // 作り直しの後 (同じ日に両方が読んだ)
+		cross  = stack + "Cross0000000" // 同じ pattern の別のロールに発行されたキーで読む → 外さない (medium)
+		alone  = solo + "Alone1234567"  // 1 つだけ。組の外の秘匿値も 1 つ読む → 初出の low
+	)
+	st := newStore(t)
+	s := &secretSeed{st: st, t: t}
+	coverage(t, st, 14)
+	in := now.Add(-3 * time.Hour)
+	for _, r := range []string{before, after, cross, alone} {
+		s.serviceAssume(r, time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC))
+	}
+	s.issue(before, in.Add(-time.Second), testKey(1))
+	s.startupRead(before, in, set, 0, 17, testKey(1))
+	s.issue(after, in.Add(time.Hour-time.Second), testKey(2))
+	s.startupRead(after, in.Add(time.Hour), set, 0, 17, testKey(2))
+	s.startupRead(cross, in, set, 0, 3, testKey(2))
+	s.issue(alone, in.Add(-time.Second), testKey(3))
+	s.startupRead(alone, in, set, 0, 17, testKey(3))
+	s.secret(alone, record.PrincipalAssumedRole, in, "prod/unlisted/db")
+
+	al, err := allowlist.Parse([]byte(`
+secrets_access:
+  - principal_pattern: ` + pat + `
+    secrets: ["/example-app/prod/secrets/*"]
+    bulk: exempt
+    note: 起動時に ECS が読む。作り直すと末尾の乱数が変わる
+  - principal_pattern: ` + soloPat + `
+    secrets: ["/example-app/prod/secrets/*"]
+    bulk: exempt
+    note: 起動時に ECS が読む
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	obs, err := secretCheck().Evaluate(context.Background(), st, appWindow, al)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := obsByKey(obs)
+	for _, r := range []string{before, after} {
+		line, has := m[BulkExemptKeyPrefix+r]
+		if !has || line.Severity != Info || line.Data["bulk_exempted"] != 17 || line.Data["principal"] != r ||
+			fmt.Sprint(line.Data["secrets_access_principal_patterns"]) != "["+pat+"]" || line.Data["principal_pattern_principals"] != 3 {
+			t.Errorf("%s: 作り直しの前後のどちらも外れて info: %+v", r, line)
+		}
+		if line.Fingerprint != fingerprint(Info, nil, "bulk-exempt") {
+			t.Errorf("%s: Fingerprint に pattern を入れた: %s", r, line.Fingerprint)
+		}
+	}
+	// 発行の突き合わせは実際の ARN で行う (同じ pattern に一致する別のロールの発行とは組まない)
+	if o := m[BulkExemptUnmatchedKeyPrefix+cross]; o.Severity != Medium || fmt.Sprint(o.Data["bulk_exempt_unmatched"]) != "map[no_issuance:1]" ||
+		fmt.Sprint(o.Data["secrets_access_principal_patterns"]) != "["+pat+"]" || o.Data["principal_pattern_principals"] != 3 {
+		t.Errorf("cross: %+v", o)
+	}
+	if o := m[alone]; o.Severity != Low || o.Data["new_secret_count"] != 1 || fmt.Sprint(o.Data["secrets_access_principal_patterns"]) != "["+soloPat+"]" {
+		t.Errorf("alone: 組の外の初出: %+v", o)
+	} else if _, has := o.Data["principal_pattern_principals"]; has {
+		t.Errorf("alone: 1 つだけなのに principal_pattern_principals を書いた: %+v", o.Data)
+	}
+
+	// principal (完全一致) の項目だけなら、data に pattern の項目を書かない
+	al, err = allowlist.Parse([]byte("secrets_access:\n  - principal: " + before + "\n    secrets: [\"/example-app/prod/secrets/*\"]\n    bulk: exempt\n    note: n\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	obs, err = secretCheck().Evaluate(context.Background(), st, appWindow, al)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = obsByKey(obs)
+	if line := m[BulkExemptKeyPrefix+before]; line.Severity != Info || line.Data["secrets_access_principal_patterns"] != nil || line.Data["principal_pattern_principals"] != nil {
+		t.Errorf("principal の項目: %+v", line)
+	}
+	// 作り直しの後のロールは、完全一致の項目では外れない (今までどおり)
+	if _, has := m[BulkExemptKeyPrefix+after]; has {
+		t.Errorf("完全一致の項目が作り直しの後のロールに効いた")
+	}
+}
+
+// principal_pattern の data の項目と差分判定 (ADR 0079 の 4 節への追記): data を書くのは、その run で new・changed・recurred
+// (と ack / snooze 中) になった行だけ。still_open の行は前の data のまま。作り直しの日は、新しいロールの Key が new になるので、その行に出る。
+func TestSecretAccessPrincipalPatternExistingKey(t *testing.T) {
+	const (
+		set   = "/example-app/prod/secrets/S"
+		stack = "arn:aws:iam::123456789012:role/example-app-prod-AppTaskDefExecutionRole1A2B3C4D-"
+	)
+	before, after := stack+"AbcDef123Ghi", stack+"XyZ789uvWxyz"
+	st := newStore(t)
+	s := &secretSeed{st: st, t: t}
+	coverage(t, st, 14)
+	for _, r := range []string{before, after} {
+		s.serviceAssume(r, time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC))
+	}
+	read := func(r string, at time.Time, key int) {
+		s.issue(r, at.Add(-time.Second), testKey(key))
+		s.startupRead(r, at, set, 0, 17, testKey(key))
+	}
+	read(before, now.Add(-30*time.Hour), 1) // 1 回目の run: 作り直しの前のロールだけ
+	read(before, now.Add(-3*time.Hour), 2)  // 2 回目の run: 前のロールが読んだ後に作り直し、新しいロールも読む
+	read(after, now.Add(-2*time.Hour), 3)
+	read(after, now.Add(3*time.Hour), 4) // 3 回目の run: 新しいロールだけ
+	al, err := allowlist.Parse([]byte("secrets_access:\n  - principal_pattern: " + stack + "*\n    secrets: [\"/example-app/prod/secrets/*\"]\n    bulk: exempt\n    note: n\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	ids := seqID()
+	run := func(to time.Time) map[string]Result {
+		t.Helper()
+		w := collect.Window{From: to.Add(-24 * time.Hour), To: to}
+		obs, err := secretCheck().Evaluate(ctx, st, w, al)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := Diff(ctx, st, DiffParams{Check: "secret_access", Mode: ModeEvent, Window: w, Now: to, NewID: ids}, obs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]Result{}
+		for _, r := range res {
+			out[r.Finding.Key] = r
+			r.Finding.ReportedAt = to // 報告した (ADR 0038: 報告していない open は new のまま)
+			if err := st.UpsertFinding(ctx, r.Finding); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return out
+	}
+	kb, ka := BulkExemptKeyPrefix+before, BulkExemptKeyPrefix+after
+	if r := run(now.Add(-24 * time.Hour))[kb]; r.Class != ClassNew || r.Finding.Data["principal_pattern_principals"] != nil {
+		t.Fatalf("1 回目: %+v", r)
+	}
+	second := run(now)
+	if r := second[kb]; r.Class != ClassStillOpen || r.Finding.Data["principal_pattern_principals"] != nil ||
+		fmt.Sprint(r.Finding.Data["secrets_access_principal_patterns"]) != "["+stack+"*]" {
+		t.Errorf("2 回目の前のロール: still_open で data は前のまま: %+v", r)
+	}
+	if r := second[ka]; r.Class != ClassNew || r.Finding.Data["principal_pattern_principals"] != 2 {
+		t.Errorf("2 回目の新しいロール: new の行に 2 が出る: %+v", r)
+	}
+	// 3 回目: 新しいロールだけになっても、still_open の行は 2 のまま残る (書き直さない)
+	if r := run(now.Add(24 * time.Hour))[ka]; r.Class != ClassStillOpen || fmt.Sprint(r.Finding.Data["principal_pattern_principals"]) != "2" { // ストアから読んだ値は JSON の数
+		t.Errorf("3 回目: %+v", r)
 	}
 }
