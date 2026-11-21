@@ -202,6 +202,9 @@ AWS にもストアにも繋がず、認証も要らない。PR の CI で allow
               allowlist に無ければ ng (監査そのものの AssumeRole を unknown_assume_role が high で報告する)。選んでいない設定は warn
   - allowlist 未知のキー、主体の指定 (arn / account / arn_pattern のどれか 1 つ)、expires の日付、expected_denied の書式など
               (run / doctor と同じ規則)。同じ主体の項目の重複は warn (run は受け付けるが、expires や tags は片方しか使われない)
+              secrets_access の主体 (principal / principal_pattern のどれか 1 つ。principal_pattern はロールの ARN で、
+              ワイルドカードは CloudFormation が付ける末尾の乱数の分の、末尾の -* だけ。ADR 0079)、
+              bulk: exempt の項目の note・ロールの主体・secrets の glob の広さ (ADR 0073)
 
 行ごとに ok / warn / ng / skip を出す。分かるときは「ファイル:行」を添える。ng が 1 つでもあれば終了コード 2 (warn だけなら 0)。
 権限・ロググループ・ログの形式は見ない (arata doctor)。雛形との差分は見ない (arata config init --diff)。
