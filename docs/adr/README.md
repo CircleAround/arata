@@ -102,3 +102,4 @@
 | [0077](0077-bulk-exempt-unmatched-no-ack.md) | `bulk-exempt-unmatched:` の medium は ack を止め、片付けの表に Key の接頭辞の行を足す (0076 の 5 節の ack の扱いを置き換え) | 採用 |
 | [0078](0078-repo-init-collect-workflow.md) | `arata repo init --collect-every <間隔>` で取得だけのワークフローを書き出す (監査と同じ group で順に待たせ、失敗は知らせずに daily に追いつかせる) | 採用 |
 | [0079](0079-secrets-access-principal-pattern.md) | `secrets_access` の主体を、CloudFormation が付ける末尾の乱数だけを除いた形 (`principal_pattern`) でも書けるようにする | 採用 |
+| [0080](0080-triage-many-ids.md) | ack / snooze / resolve に複数の finding ID (100 件まで) を渡し、全部を確かめてから 1 回で書く (1 件でも通らなければ何も書かない) | 採用 |

@@ -1089,6 +1089,7 @@ oidc_subjects:                   # OIDC でのロールの引き受けの、既�
    │       表は high・critical と、同じ Key で重大度の上がる余地の無い行で ack を許さない (一部の Key だけの行は Key の接頭辞で引く。ADR 0077)。review --format json の triage.allowed に許す操作。--force --reason でだけ通し、記録に forced (守りを越えたときだけ真。--force には --reason が要る。ADR 0068)
    ├─ arata snooze <finding-id> --until 2026-11-01   → 期日まで沈黙、期日に再報告
    ├─ arata resolve <finding-id>     → resolved。再び観測されたら new
+   │     (ack / snooze / resolve は ID を複数取る。全部を確かめてから 1 回で書き、1 件でも通らなければ何も書かない。ADR 0080)
    └─ 放置                              → その run で同じ内容で再び観測されれば still_open として報告に出る (event 型は観測の無い窓では出ない)。
                                            未対応の全部は arata review (ADR 0068 の追記)
 
@@ -1121,6 +1122,11 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
   表の正は各 playbook の「片付け」の節の表 (| 重大度 | 上がる余地 | 許す操作 |) で、`internal/checks` のテストが行の順まで突き合わせる。
   表の決まり (テスト): ack を許すのは上がる余地のある行だけ、high・critical は ack を許さない、approve は `arata approve` が受け付けるチェックだけ、snooze・resolve は常に許す。
   上がる余地ありの行は、同じ Key で軽い観測と重い観測を作るテストで確かめる。一部の Key だけ上がるチェック (iam_changes の信頼ポリシー) は「なし」に倒す。
+- 決定 (ADR 0080): ack / snooze / resolve は ID を 1〜100 件取る (引数ごとに空白・タブ・改行・カンマで分ける。`engine.ParseFindingIDs`)。同じ status・理由・期日・force・操作した人を全部に当てる。
+  書く前に全部の ID の形・重複・finding の有無と状態・片付けの表・期日を確かめ、1 件でも通らなければ何も書かずに止め、止めた ID を全部出す (ID ごとに ERROR のログ 1 行。
+  終了コード 2。code は全部が ack の守りなら ACK_REFUSED、ほかが混ざれば CONFIG_INVALID)。重複はエラー。通れば 1 つのトランザクション (`SetFindingStatuses`) で書き、確定 (Commit) は 1 回。
+  `--format json` は ID ごとの結果 (`arata schema triage-result`。止めたときも出す)。上限 100 は、日次の片付けの実例 (42 件) の 2 倍を超え、Summary で人が確かめられる量。
+  却下した案 (ID のファイル、ワークフローで 1 件ずつ回す、通った分だけ書く) は ADR 0080
 - 決定: run の report.json の各 finding にも、review と同じ `triage` を載せる (項目の追加なので互換。期間の報告の `open` には載せない)。Slack や報告から片付けの案を作る人が review を引かずに済むように。
   report は engine に依存しないので、`report.Input.Triage` に engine の関数を渡す。aratam は triage を LLM に渡さない (同じ表は playbook の「片付け」の節として system に入る。LLM の入力の大きさは変えない。`docs/aratam.md` 3 章)
   表に無い組 (この版が知らない重大度) は ack を許さない
@@ -1501,12 +1507,12 @@ arata report    --from 2026-10-01 --to 2026-10-31 --format md|json [--template m
 arata review    [--status open|acked]
 arata approve   <finding-id> --note "..." [--expires date] [--tag deploy] [--by name] [--commit] [--account | --arn-pattern glob]
 arata approve   <finding-id> --destination --note "..." [--destination-role glob] [--expires date] [--by name] [--commit]   # 行き先のアカウントを既知にする (ADR 0047)
-arata ack|snooze|resolve <finding-id>        # snooze は --until date
+arata ack|snooze|resolve <finding-id>...     # snooze は --until date。ID は空白かカンマで区切って 100 件まで (ADR 0080)。--format text|json
 arata help ai [report|approve|runtime|onboarding|logs|playbook [check]|threats [id]] [--format json]   # LLM 向けの使い方 (arata ai と同じ)。playbook はチェックごとの対処手順、threats は攻撃の事例との対応表
 arata schema [名前]            # 機械が読む出力の JSON Schema (引数なしで名前の一覧。arata help schema も同じ。ADR 0054)
 arata prune     [--dry-run]
 arata rebuild   [--from-scratch [--baseline]] [--format text|json]   # raw JSONL から SQLite を再構築 (5-4、ADR 0033)
-                # --format json のある出力 (doctor・profiles・rebuild・help ai) は、最上位に schema / schema_version を持つ (arata schema <名前>)
+                # --format json のある出力 (doctor・profiles・rebuild・help ai・ack / snooze / resolve) は、最上位に schema / schema_version を持つ (arata schema <名前>)
 ```
 
 - 決定 (ADR 0054): **機械が読む出力は `--format json` と report.json で、読んでよい項目は JSON Schema (`schemas/<名前>.schema.json`) に書いたものがすべて。**

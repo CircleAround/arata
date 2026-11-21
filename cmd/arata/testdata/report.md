@@ -12,7 +12,7 @@
   - ips: [198.51.100.8]
   - last_time: 2026-10-22T08:00:00Z
   - principal: arn:aws:iam::123456789012:root
-  - id: id-006 (初出 2026-10-22T09:00:00Z)
+  - id: f00000000006 (初出 2026-10-22T09:00:00Z)
 - **[high]** 既知リストに無い自アカウントの user/mallory が自アカウントのロール Admin を 1 回引き受け (内部、MFA 不明) `unknown_assume_role`
   - allowlist_status: unknown
   - caller: arn:aws:iam::123456789012:user/mallory
@@ -27,7 +27,7 @@
   - mfa: unknown
   - role_account: 123456789012
   - role_arn: arn:aws:iam::123456789012:role/Admin
-  - id: id-007 (初出 2026-10-22T09:00:00Z)
+  - id: f00000000007 (初出 2026-10-22T09:00:00Z)
 - **[medium]** 新規の主体 arn:aws:iam::123456789012:user/mallory (user) `new_principal`
   - allowlist_status: unknown
   - count: 1
@@ -35,7 +35,7 @@
   - ips: [198.51.100.7]
   - kind: user
   - last_seen: 2026-10-22T07:00:00Z
-  - id: id-005 (初出 2026-10-22T09:00:00Z)
+  - id: f00000000005 (初出 2026-10-22T09:00:00Z)
 
 ## 変化 (0)
 

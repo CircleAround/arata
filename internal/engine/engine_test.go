@@ -76,7 +76,7 @@ sources:
 	n := 0
 	h.deps = Deps{
 		Now:   func() time.Time { return h.now },
-		NewID: func() string { n++; return fmt.Sprintf("id-%03d", n) },
+		NewID: func() string { n++; return fmt.Sprintf("f%011x", n) }, // arata が振る ID と同じ形 (12 桁の 16 進。12 桁の数字にしない: 秘密の検査がアカウント ID と読む)
 		CloudTrail: func(ctx context.Context, cfg *config.Config, src config.Source, region string) (cloudtrail.API, error) {
 			h.regions = append(h.regions, region)
 			return h.fake, nil

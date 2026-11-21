@@ -7,7 +7,7 @@
     "to": "2026-10-22T09:00:00Z"
   },
   "name": "acme",
-  "run_id": "id-004",
+  "run_id": "f00000000004",
   "generated_at": "2026-10-22T09:00:00Z",
   "summary": {
     "new": 3,
@@ -21,7 +21,7 @@
   "findings": {
     "new": [
       {
-        "id": "id-006",
+        "id": "f00000000006",
         "check": "root_usage",
         "key": "arn:aws:iam::123456789012:root|198.51.100.8",
         "severity": "critical",
@@ -53,7 +53,7 @@
         }
       },
       {
-        "id": "id-007",
+        "id": "f00000000007",
         "check": "unknown_assume_role",
         "key": "arn:aws:iam::123456789012:user/mallory-\u003earn:aws:iam::123456789012:role/Admin",
         "severity": "high",
@@ -93,7 +93,7 @@
         }
       },
       {
-        "id": "id-005",
+        "id": "f00000000005",
         "check": "new_principal",
         "key": "arn:aws:iam::123456789012:user/mallory",
         "severity": "medium",

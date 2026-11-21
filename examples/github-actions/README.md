@@ -739,21 +739,22 @@ name: prod                                # 通知に出す名前。アカウン
 
 ストアが S3 にあると、手元にストアを書ける認証が無い人は `arata ack` を実行できません。[arata-triage.yml](../audit-repo/.github/workflows/arata-triage.yml) で、Actions の画面から行えます。
 
-1. Slack の通知で finding の ID (`id: 0123456789ab` の 12 桁) を確かめます
+1. Slack の通知で finding の ID (`id: 0123456789ab` の 12 桁) を確かめます。同じ action と理由で片付けるものは、まとめて 1 回で流せます (100 件まで)
 2. GitHub の Actions → **arata-triage** → **Run workflow** を開き、ブランチは **main** のまま、次を入れて実行します
 
    | 入力 | 中身 |
    |---|---|
    | `account` | アカウント (ディレクトリの名前) |
    | `action` | `ack` = 確認した。再報告しないが未対応の一覧には残る / `snooze` = 期日まで沈黙させる / `resolve` = 対応が終わった (再び観測されたら新規として報告) |
-   | `finding_id` | 通知の ID |
+   | `finding_id` | 通知の ID。複数なら空白かカンマで区切る (`0123456789ab, ffffffffffff`。100 件まで)。全部に同じ `action`・`reason`・`until`・`force` を当てます |
    | `reason` | 理由 (必須、1 行、300 文字まで)。ストアに残り、`arata review` と報告に出ます。ARN やアカウント ID は書かないでください (リポジトリを読める人に見えます) |
    | `until` | `snooze` の期日 (`YYYY-MM-DD`。その日の 0 時 UTC まで)。`snooze` のときだけ |
    | `force` | `ack` のときだけ。片付けの表が ack を許さない finding も ack する (既定は false。下の「ack できないもの」) |
    | `dry_run` | 試し (既定は false)。検査 (ID・期日・片付けの表) だけ行い、何をどう変えるかを Summary に出す。ストアは変えない |
 
 3. 誰が (実行した人の GitHub のハンドル)・どの finding を・どうしたか・理由が、ストアと実行の Summary に残ります。
-   Summary には、操作の前の指摘の中身 (check・重大度・状態・初出・要約・Key) も出ます (ID の取り違えに気づけるように。12 桁の数字は伏せます)。
+   Summary には、ID ごとに、操作の前の指摘の中身 (check・重大度・状態・初出・要約・Key) と結果 (`changed`・`would_change`・`refused` と code・`not_written`) が出ます
+   (ID の取り違えに気づけるように。12 桁の数字は伏せ、長い値は切ります)。
    迷ったら、先に `dry_run` を付けて流し、Summary で中身と結果 (止められるか) を確かめます
 
 知っておくこと:
@@ -761,6 +762,9 @@ name: prod                                # 通知に出す名前。アカウン
 - **理由と操作した人はストアに残ります** (`arata ack --reason … --by <実行した人>`。ADR 0068)。`arata review` の `LAST_ACTION` の欄と `--format json` の `last_action` で見られます。
   Actions の実行の記録 (Summary) には保持期間があります (リポジトリの設定。ログの既定は 90 日) が、ストアの記録は消えません。
   ストアの schema 8 より前 (この版より前の arata) の操作には記録がありません。監査と片付けのワークフローは同じ版の arata で動かします (古い版の操作は記録を残しません)
+- **複数の ID は全部か無しかです** (ADR 0080)。arata が書く前に全部の ID を確かめ (形・重複・finding の有無・既に resolved・片付けの表・期日)、
+  1 件でも通らなければ何も書きません。止めた ID と理由は Summary に全部出るので、その ID を外す (または直す) と、残りを 1 回で流し直せます。
+  ストアへの書き込みは 1 回なので、42 件でも 1 回の実行 (約 1 分) で済みます。ワークフローを ID ごとに並べて流すと STORE_CONFLICT になります
 - **人が画面から実行します**。操作した人は arata の `--by` の形 (英数字と `.` `_` `-`) でなければならず、bot (名前に `[bot]`) からの実行は入力の確かめで止まります
 - **main で動かします**。environment のデプロイできるブランチも、実行用ロールの信頼も main だけなので、ほかのブランチを選ぶと、ジョブが始まる前に失敗します。
   `runner.yaml` の `GitHubWorkflowRef` で監査のワークフローのファイルに絞っている場合は、このワークフローからは引き受けられません (`GitHubWorkflowRef` を空にするか、手元で実行します)
@@ -771,7 +775,7 @@ name: prod                                # 通知に出す名前。アカウン
 - **ack できないもの**: 重大度が high・critical の finding と、同じ指摘のまま重大度の上がる余地の無いもの (root_usage・new_principal・posture など。`arata help ai playbook <check>` の「片付け」の表) の ack は、arata が止めます (`ACK_REFUSED`。ADR 0068)。ack すると、重大度が上がる余地が無く、後で本物が起きても二度と報告されないためです。
   止められると、ログと Summary に案内が出ます。正規の主体なら allowlist.yaml を PR で直す、期日を決めて見直すなら `snooze`、直したなら `resolve` を選びます (`arata help ai playbook <check>` の「片付け」)。
   終わった出来事だと確かめたうえでどうしても ack するときだけ、`force` を付けて実行し直します。理由と実行した人が force として残り、週次の報告に出ます
-- **失敗の見分け**: ログの方針は監査と同じで、出るのは `code` と終了コードだけです。`ACK_REFUSED` は表が許さない ack (上)、`CONFIG_INVALID` は ID が無い・既に resolved・期日が過去・理由に使えない文字 (改行・見えない文字) がある、`STORE_CONFLICT` は同時に書かれた (もう一度実行します)
+- **失敗の見分け**: ログの方針は監査と同じで、出るのは `code` と終了コードだけです。`ACK_REFUSED` は表が許さない ack (上)、`CONFIG_INVALID` は ID が無い・既に resolved・同じ ID が 2 回ある・期日が過去・理由に使えない文字 (改行・見えない文字) がある、`STORE_CONFLICT` は同時に書かれた (もう一度実行します)
 - ack / snooze 中でも、重大度が上がれば再報告されます (ADR 0022)
 
 ### approve は PR で allowlist.yaml を直す
