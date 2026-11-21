@@ -200,3 +200,24 @@ playbook に、前者なら何もしなくてよく、後者なら glob を狭�
 - 実装: `internal/allowlist` (項目・規則・照合・ファズ)・`internal/checks/secret_access.go` (data の 2 項目)・文書 (5 節)。
   テストは、規則の可否 (2 節の各例)・作り直しの前後のロールの両方が外れる・64 文字で切られた名前の形・タスクのロールと別の論理 ID・パス付きのロール・別のアカウントには一致しない・
   0076 の突き合わせは実際の ARN で行う (pattern に一致する別のロールの発行とは組まない)・data の項目、を固定する
+
+## 4 節への追記 (2026-11-21。実装のレビューで分かったこと)
+
+- 事実: 差分判定 (`internal/checks/diff.go` の Diff。全チェック共通) は、その run で new・changed・recurred・suppressed (ack / snooze 中) になった行にだけ data を書く。
+  still_open (重大度と Fingerprint が前と同じで、前の run から続いて観測された) の行は、前に書いた data のまま (ADR 0068 の 5 節への追記と同じ前提)。
+  `bulk-exempt:` の info の行は Fingerprint が固定なので、前の run から続く行に 4 節の 2 項目は後から付かない
+- 実際の記録で起きた形: 作り直しの日に、前のロールの行 (今朝の run で既に出ていた Key) には `principal_pattern_principals` が無く、新しいロールの行 (new) にだけ `2` が付いた
+- 決定: 4 節の 2 項目は「その run で data を書いた行に付く」とする。Fingerprint には入れないまま、Diff も変えない
+  - 作り直しの日は、新しいロールの Key が必ず new になるので、その行に出る。glob が別のロールにも一致する場合も、後から現れたロールの最初の行 (new) に出る
+  - 窓が続いていれば、2 つの主体が初めて同じ窓に並んだ run では、少なくとも片方の行が new か recurred になる
+    (両方が still_open になるには、両方が前の run にも出ている、つまり前の run で既に並んでいる必要がある)。そのため、どちらかの行には出る
+  - **出ない・合わない場合**:
+    - 前の run から続く行には付かない。片方の行に無くても、同じ pattern に一致する主体が 1 つだけとは言えない
+    - 2 つのロールが続いた run に別々に現れ、同じ窓で初めて並んだ場合は、前から続く方の行には付かない。もう片方は recurred か new になり、そちらに付く
+    - 一度付いた行は、still_open のあいだ値が残る (もう片方が読まなくなっても `2` のまま)
+  - そのため playbook では、この項目を「同じ pattern の行を並べて見るきっかけ」とし、数そのものは `arata review` で同じ pattern の行を並べて確かめるよう書く
+- 却下: (1) Fingerprint に「2 以上か」を入れる。作り直しの日に、info でない行 (初出の low・`bulk-exempt-unmatched:` の medium) が changed として通知に出直し、
+  次の日に 1 に戻るとまた changed になる。4 節の「作り直しの日に鳴らさない」に反する。
+  (2) still_open でも data を書き直す (全チェック)。全チェックの report.json の still_open の data の意味が変わり、ADR 0068 の追記と設計書の前提を変える。
+  この ADR の範囲を超える (要るなら別の ADR で)
+- テスト: 前の run で既に出ている Key に、新しく現れたロールが同じ pattern で並んだとき、新しい方の行にだけ付き、前の行は still_open で前の data のまま、を固定する

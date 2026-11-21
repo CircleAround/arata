@@ -69,3 +69,9 @@ secrets_access:
     secrets: ["/example-app/prod/secrets/*"]
     bulk: exempt
     note: タスクの起動のたびに ECS がタスク定義の secrets を読む
+  # CDK の既定の名前のロールは、スタックを作り直すと末尾の乱数が変わる。principal の代わりに、乱数だけを -* にした principal_pattern で書ける (ADR 0079)
+  # * は英数字だけに一致する (- を越えない)。論理 ID まで書く。名前が 64 文字で切られていたら、似た名前のロールが無いかを確かめる
+  - principal_pattern: arn:aws:iam::123456789012:role/example-app-prod-AppTaskDefExecutionRole1A2B3C4D-*
+    secrets: ["/example-app/prod/secrets/*"]
+    bulk: exempt
+    note: タスクの起動のたびに ECS がタスク定義の secrets を読む。作り直すと末尾の乱数が変わる

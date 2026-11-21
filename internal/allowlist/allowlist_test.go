@@ -1,6 +1,7 @@
 package allowlist
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -427,5 +428,122 @@ secrets_access:
 		if _, err := Parse([]byte(body)); err != nil {
 			t.Errorf("%q: %v", body, err)
 		}
+	}
+}
+
+// principal_pattern (ADR 0079): CloudFormation が付ける末尾の乱数だけを `-*` にした形。
+// `*` は英数字の 1 文字以上にだけ一致し、`/`・`:`・`-` を越えない。principal と排他。
+func TestSecretsAccessPrincipalPattern(t *testing.T) {
+	const (
+		pat      = "arn:aws:iam::123456789012:role/example-app-prod-AppTaskDefExecutionRole1A2B3C4D-*"
+		before   = "arn:aws:iam::123456789012:role/example-app-prod-AppTaskDefExecutionRole1A2B3C4D-AbcDef123Ghi"
+		after    = "arn:aws:iam::123456789012:role/example-app-prod-AppTaskDefExecutionRole1A2B3C4D-XyZ789uvWxyz"
+		exact    = "arn:aws:iam::123456789012:role/example-app-task-execution"
+		taskRole = "arn:aws:iam::123456789012:role/example-app-prod-AppTaskDefTaskRole5E6F7A8B-AbcDef123Ghi"
+	)
+	l := load(t, `
+secrets_access:
+  - principal_pattern: `+pat+`
+    secrets: ["/example-app/prod/secrets/*"]
+    bulk: exempt
+    note: タスクの起動のたびに ECS が読む。作り直すと末尾の乱数が変わる
+  - principal_pattern: arn:aws:iam::123456789012:role/example-app-prod-*
+    secrets: ["prod/other/*"]
+  - principal: `+exact+`
+    secrets: ["prod/exact/*"]
+`)
+	for _, tc := range []struct {
+		arn, secret, pattern string
+		ok                   bool
+	}{
+		{before, "/example-app/prod/secrets/DB_PASSWORD", "/example-app/prod/secrets/*", true},
+		{after, "/example-app/prod/secrets/DB_PASSWORD", "/example-app/prod/secrets/*", true},
+		// 同じスタックのタスクのロール (論理 ID が違う。乱数の前に - を含む) には一致しない
+		{taskRole, "/example-app/prod/secrets/DB_PASSWORD", "", false},
+		// パス付きのロール・乱数の部分に - や記号を含む・乱数が空・別のアカウント
+		{"arn:aws:iam::123456789012:role/example-app-prod-AppTaskDefExecutionRole1A2B3C4D-x/evil", "/example-app/prod/secrets/A", "", false},
+		{"arn:aws:iam::123456789012:role/example-app-prod-AppTaskDefExecutionRole1A2B3C4D-ab-cd", "/example-app/prod/secrets/A", "", false},
+		{"arn:aws:iam::123456789012:role/example-app-prod-AppTaskDefExecutionRole1A2B3C4D-ab_cd", "/example-app/prod/secrets/A", "", false},
+		{"arn:aws:iam::123456789012:role/example-app-prod-AppTaskDefExecutionRole1A2B3C4D-", "/example-app/prod/secrets/A", "", false},
+		{"arn:aws:iam::111122223333:role/example-app-prod-AppTaskDefExecutionRole1A2B3C4D-AbcDef123Ghi", "/example-app/prod/secrets/A", "", false},
+	} {
+		p, ok := l.SecretBulkExempt(tc.arn, tc.secret)
+		if ok != tc.ok || p != tc.pattern {
+			t.Errorf("SecretBulkExempt(%s, %s) = %q, %v", tc.arn, tc.secret, p, ok)
+		}
+	}
+	// 初出を止める側も同じ照合。`example-app-prod-*` は `-` を越えないので、論理 ID を含む名前には一致しない
+	if !l.SecretExpected(after, "/example-app/prod/secrets/X") || l.SecretExpected(taskRole, "prod/other/x") || l.SecretExpected(after, "prod/other/x") {
+		t.Fatal("SecretExpected (principal_pattern)")
+	}
+	if !l.SecretExpected("arn:aws:iam::123456789012:role/example-app-prod-Ab12", "prod/other/x") {
+		t.Fatal("SecretExpected: 固定の部分の直後が英数字だけなら一致する")
+	}
+	if !l.SecretExpected(exact, "prod/exact/x") || l.SecretExpected(exact+"-AbcDef123Ghi", "prod/exact/x") {
+		t.Fatal("SecretExpected (principal)")
+	}
+	// 一致した principal_pattern の値 (書いたままの値)。principal の項目は入れない
+	if got := l.SecretPrincipalPatterns(after); fmt.Sprint(got) != "["+pat+"]" {
+		t.Fatalf("SecretPrincipalPatterns(after) = %v", got)
+	}
+	if got := l.SecretPrincipalPatterns("arn:aws:iam::123456789012:role/example-app-prod-Ab12"); fmt.Sprint(got) != "[arn:aws:iam::123456789012:role/example-app-prod-*]" {
+		t.Fatalf("SecretPrincipalPatterns = %v", got)
+	}
+	if got := l.SecretPrincipalPatterns(exact); len(got) != 0 {
+		t.Fatalf("SecretPrincipalPatterns(exact) = %v", got)
+	}
+
+	entry := func(key, principal string) string {
+		return "secrets_access:\n  - " + key + ": " + principal + "\n    secrets: [\"/example-app/prod/*\"]\n    bulk: exempt\n    note: n\n"
+	}
+	for _, tc := range []struct{ name, body string }{
+		{"両方", "secrets_access:\n  - principal: " + exact + "\n    principal_pattern: " + pat + "\n    secrets: [\"/a/b/*\"]\n"},
+		{"どちらも無い", "secrets_access:\n  - secrets: [\"/a/b/*\"]\n"},
+		{"arn: でない", entry("principal_pattern", "example-app-*")},
+		{"アカウントが無い", entry("principal_pattern", "arn:aws:iam::*:role/example-app-prod-*")},
+		{"アカウントが 12 桁でない", entry("principal_pattern", "arn:aws:iam::12345:role/example-app-prod-*")},
+		{"ロールでない", entry("principal_pattern", "arn:aws:iam::123456789012:user/example-app-prod-*")},
+		{"IAM でない", entry("principal_pattern", "arn:aws:sts::123456789012:assumed-role/example-app-prod-*")},
+		{"末尾が * でない", entry("principal_pattern", "arn:aws:iam::123456789012:role/example-app-prod-*-x")},
+		{"ワイルドカードが無い", entry("principal_pattern", exact)},
+		{"? がある", entry("principal_pattern", "arn:aws:iam::123456789012:role/example-app-pro?-*")},
+		{"* が 2 つ", entry("principal_pattern", "arn:aws:iam::123456789012:role/example-*-prod-*")},
+		{"* の直前が - でない", entry("principal_pattern", "arn:aws:iam::123456789012:role/example-app-prod*")},
+		{"区切りが 1 つ", entry("principal_pattern", "arn:aws:iam::123456789012:role/app-*")},
+		{"名前が空", entry("principal_pattern", "arn:aws:iam::123456789012:role/-*")},
+		{"空の区切り", entry("principal_pattern", "arn:aws:iam::123456789012:role/example--prod-*")},
+		{"パスの後の名前が 1 つ", entry("principal_pattern", "arn:aws:iam::123456789012:role/example-app/prod-*")},
+		{"使えない文字", entry("principal_pattern", "arn:aws:iam::123456789012:role/example app-prod-*")},
+		{"bulk の無い項目も同じ規則", "secrets_access:\n  - principal_pattern: arn:aws:iam::123456789012:role/*\n    secrets: [\"prod/*\"]\n"},
+	} {
+		if _, err := Parse([]byte(tc.body)); err == nil {
+			t.Errorf("%s: 読み込みエラーにならない: %q", tc.name, tc.body)
+		}
+	}
+	for _, body := range []string{
+		entry("principal_pattern", pat),
+		entry("principal_pattern", "arn:aws:iam::123456789012:role/example-app-*"),
+		entry("principal_pattern", "arn:aws-cn:iam::123456789012:role/example-app-*"),
+		entry("principal_pattern", "arn:aws:iam::123456789012:role/service/example-app-*"),
+		"secrets_access:\n  - principal_pattern: arn:aws:iam::123456789012:role/example-app-*\n    secrets: [\"*\"]\n",
+	} {
+		if _, err := Parse([]byte(body)); err != nil {
+			t.Errorf("%q: %v", body, err)
+		}
+	}
+}
+
+// 64 文字で論理 ID が途中で切られた名前 (ADR 0079 の背景の 6) も、乱数の前までを書けば一致する
+func TestPrincipalPatternTruncatedName(t *testing.T) {
+	const name = "example-app-prod-WorkerTaskDefinitionExecutionRoleC-AbcDef123Ghi"
+	if len(name) != 64 {
+		t.Fatalf("len = %d", len(name))
+	}
+	p := "arn:aws:iam::123456789012:role/" + name[:len(name)-12] + "*"
+	if err := CheckPrincipalPattern(p); err != nil {
+		t.Fatal(err)
+	}
+	if !MatchPrincipalPattern(p, "arn:aws:iam::123456789012:role/"+name) {
+		t.Fatal("一致しない")
 	}
 }

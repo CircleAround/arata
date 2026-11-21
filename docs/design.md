@@ -945,6 +945,10 @@ admin_users: [113, 2048]         # アプリ層の管理者 ID
 secrets_access:
   - principal: arn:aws:iam::...:role/ProdEcsTaskRoleMyApp
     secrets: ["prod/db/*"]
+  - principal_pattern: arn:aws:iam::...:role/example-app-prod-AppTaskDefExecutionRole1A2B3C4D-*   # 末尾の乱数だけを -* に (ADR 0079)
+    secrets: ["/example-app/prod/secrets/*"]
+    bulk: exempt
+    note: 起動時に ECS が読む
 assume_destinations:             # 外向きの引き受けで、行き先として既知のアカウント (ADR 0047)。principals (呼び出し元) とは別
   - account: "111122223333"
     note: 運用を受託しているアカウント
@@ -1037,6 +1041,7 @@ oidc_subjects:                   # OIDC でのロールの引き受けの、既�
 - 決定 (ADR 0027): 主体の項目の `dynamic_source: true` は「送信元が毎回変わる主体」(CI のランナーなど)。principal_new_source の low (新しい送信元だけ) を出さない (medium 以上は出す)。
 - 決定 (ADR 0027): `secrets_access` は「主体 (ARN の完全一致) × 読んでよい秘匿値 (名前・パスの glob)」。secret_access は一致する秘匿値を初出に数えない (一括読み出しの数には数える)。シークレットの ARN はシークレット名の部分でも比べる。空の `secrets`・空の要素・`principal` の無い項目は読み込みエラー。
 - 決定 (ADR 0073): `secrets_access` の項目の `bulk: exempt` (明示の opt-in) は、一致する秘匿値を secret_access の一括読み出しの数からも外す (起動のたびに決まった組をまとめて読むロール)。値は `exempt` だけ (書かなければ今までどおり)。`note` は必須、`principal` はロールの ARN (`:role/` を含む)、`secrets` は名前 (`arn:` は不可) で、ワイルドカードがあれば最初のワイルドカードより前に `/` で閉じた空でない区切りが 2 つ以上 (`/a/b/*`・`a/b/*` は可、`*`・`/*`・`a/*`・`/a/b*` は不可)。外れたら読み込みエラー。`approve` は書かない。
+- 決定 (ADR 0079): `secrets_access` の項目の主体は `principal` (完全一致) か `principal_pattern` のどちらか 1 つ (両方・どちらも無いのは読み込みエラー)。`principal_pattern` は CloudFormation が付ける末尾の乱数だけを `-*` にしたロールの ARN で、`arn:<パーティション>:iam::<12 桁>:role/` で始まり、ワイルドカードは末尾の `-*` の 1 つだけ、ロールの名前の固定の部分は `-` で区切った空でない部分が 2 つ以上。照合では `*` は英数字の 1 文字以上にだけ一致する (`/`・`:`・`-` を越えない。`principals` の `arn_pattern` より狭い)。`bulk` の有無によらず同じ規則。外すかの判定 (サービスのロールか・ECS の発行との突き合わせ) は読み取りの実際の主体の ARN で行う。一致した主体の finding・info の行の data に `secrets_access_principal_patterns` と、同じ pattern に一致した窓の主体が 2 つ以上なら `principal_pattern_principals` を書く (重大度と Fingerprint は変えない。data を書くのはその run で new・changed・recurred になった行だけなので、前の run から続く still_open の行には付かない。ADR 0079 の 4 節への追記)。
 - 決定 (ADR 0076): `bulk: exempt` で窓の側の読み取りを外すのは、ECS (`ecs-tasks.amazonaws.com`) の `AssumeRole` で発行された認証情報が、発行から `checks.secret_access.bulk_exempt_within` (既定 2m、0 より長く 15m 以下) の内に使われたものだけ (secret_access の決定)。Lambda・EC2 のインスタンスプロファイルのロールは外れない
 - `tags` の語彙は `deploy` (ADR 0008) と `ai` (決定: Step 3。監査ロール・AI 用の主体。ai_path_usage が利用を毎回 info に出す)。approve は語彙外のタグを拒否する。
 - 決定 (ADR 0022): `expected_denied` は access_denied で数えない「想定済みの拒否」(「サービス:操作」の glob。`*` は任意の文字列、`?` は 1 文字、大文字小文字を区別)。
