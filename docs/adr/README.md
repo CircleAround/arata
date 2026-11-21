@@ -104,3 +104,4 @@
 | [0079](0079-secrets-access-principal-pattern.md) | `secrets_access` の主体を、CloudFormation が付ける末尾の乱数だけを除いた形 (`principal_pattern`) でも書けるようにする | 採用 (4 節に実装の追記) |
 | [0080](0080-triage-many-ids.md) | ack / snooze / resolve に複数の finding ID (100 件まで) を渡し、全部を確かめてから 1 回で書く (1 件でも通らなければ何も書かない) | 採用 |
 | [0081](0081-oidc-chained-assume-origin.md) | OIDC で入ったセッションから先の引き受けと操作の finding に、1 段目の GitHub の実行の手がかりを、発行されたキーのハッシュの突き合わせで付ける (判定には使わない) | 採用 |
+| [0082](0082-hourly-urgent-notify.md) | 取得の回に `hourly` を重大度の下限 (`min_severity: high`) 付きで判定し、high 以上だけを通知する (`arata repo init --flash`。下限より下は記録せず daily に残す) | 提案 |
