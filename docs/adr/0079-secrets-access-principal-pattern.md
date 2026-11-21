@@ -1,7 +1,7 @@
 # 0079. `secrets_access` の主体を、CloudFormation が付ける末尾の乱数だけを除いた形 (`principal_pattern`) でも書けるようにする
 
 - 日付: 2026-11-21
-- 状態: 提案
+- 状態: 採用
 
 ## 背景
 
