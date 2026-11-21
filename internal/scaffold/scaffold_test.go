@@ -440,6 +440,13 @@ func TestDiffMinSeverity(t *testing.T) {
 	if !strings.Contains(items[0].Detail, "daily") {
 		t.Errorf("detail: %s", items[0].Detail)
 	}
+	// 空文字・null は書いていないのと同じに見せる (config は CONFIG_INVALID、repo check --flash は ng。足す行を出す)
+	for _, v := range []string{`""`, "~", "null"} {
+		items, err := Diff([]byte(strings.Replace(string(b), "\n    min_severity: high ", "\n    min_severity: "+v+" ", 1)), reg)
+		if err != nil || len(items) != 1 || items[0].Path != "profiles.hourly.min_severity" || items[0].Template != "high" {
+			t.Fatalf("%s: %v %+v", v, err, items)
+		}
+	}
 	// 書いた値は利用者の判断 (critical に上げても差分にしない)
 	if items, err := Diff([]byte(strings.Replace(string(b), "\n    min_severity: high ", "\n    min_severity: critical ", 1)), reg); err != nil || len(items) != 0 {
 		t.Fatalf("%v %+v", err, items)

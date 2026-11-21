@@ -145,7 +145,10 @@ type Profile struct {
 	// (次の下限なしのプロファイル、ふつうは daily が新規として報告する)。書かなければ下限なし。暗黙の既定は持たない (ADR 0014)。雛形では hourly に書く。
 	// 決定: 入れられるのは event 型のチェックだけ (state 型は観測を捨てると既存の finding を解消してしまう)。チェックの型はこのパッケージから見えないので、
 	// engine (run・config check・doctor) が確かめる。
-	MinSeverity string `yaml:"min_severity"`
+	// 決定: 書いたかどうかを区別するため、YAML の節のまま受け取る (MinSeverityRaw)。空文字・null も誤り (書いたのに下限なし、を受け取らない。
+	// repo check --flash と config init --diff が同じに見えるように)。
+	MinSeverity    string    `yaml:"-"`
+	MinSeverityRaw yaml.Node `yaml:"min_severity"`
 	// Overrides はこのプロファイルでだけ変える判定パラメータ (書かなければ全体の checks: の値)。
 	// 決定: 集計条件 (CollectionParams) は書けない (params.go)。
 	Overrides Checks `yaml:"overrides"`
@@ -362,6 +365,16 @@ func (c *Config) applyDefaults() error {
 			}
 			p.MaxCatchup = mc
 		}
+		if p.MinSeverityRaw.Kind != 0 {
+			v := p.MinSeverityRaw.Value
+			if p.MinSeverityRaw.Kind != yaml.ScalarNode || p.MinSeverityRaw.Tag != "!!str" || !contains(MinSeverities, v) {
+				if len(v) > 40 {
+					v = v[:40]
+				}
+				return fmt.Errorf("config: profile %s: min_severity: %q: want %s (an empty value is an error; remove the line for no floor)", name, v, strings.Join(MinSeverities, ", "))
+			}
+			p.MinSeverity = v
+		}
 		c.Profiles[name] = p
 	}
 	return nil
@@ -479,9 +492,6 @@ func (c *Config) Validate() error {
 		}
 		if err := c.validateRecords(p.Records); err != nil {
 			return fmt.Errorf("config: profile %s: %w", name, err)
-		}
-		if p.MinSeverity != "" && !contains(MinSeverities, p.MinSeverity) {
-			return fmt.Errorf("config: profile %s: min_severity: %q: want %s", name, p.MinSeverity, strings.Join(MinSeverities, ", "))
 		}
 	}
 	return nil

@@ -1639,6 +1639,7 @@ arata rebuild   [--from-scratch [--baseline]] [--format text|json]   # raw JSONL
 - 決定 (ADR 0082): プロファイルに `min_severity` (`critical | high | medium | low`。雛形では hourly に `high`) を書いたときだけ、下限より下の観測を差分判定に渡す前に捨てる。
   findings に書かず (first_seen も reported_at も付かない)、報告にも出さない。次の下限なしの run (daily) が同じ観測を新規として報告する。ack / snooze の状態も触らない。
   入れられるのは event 型のチェックだけ (state 型は観測を捨てると既存の finding を解消してしまう。`run` は `CONFIG_INVALID`、`config check` と `doctor` は ng)。
+  空文字・null (`min_severity: ""`・`~`) は `CONFIG_INVALID` (書いたのに下限なし、を受け取らない)。`config init --diff` と `repo check --flash` も、書いていないのと同じに扱って足す行を出す
   報告には `min_severity` と `summary.deferred` (捨てた観測の数) を足し、report.md の冒頭に 1 行を出す (中身は出さない)。書かない報告は今までと 1 バイトも変わらない。
   窓の追いつき (遅れ・飛び・`max_catchup`) は今の規則のまま。`max_catchup` を超えた分は hourly で評価しないが、記録もしないので daily が新規として報告する
 - `coverage.checks_run` を追加し、実際に走ったチェック名を出す。
