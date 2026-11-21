@@ -109,6 +109,24 @@ aws cloudformation deploy --stack-name arata-runner-<会社の名前> \
   1 つのリポジトリから読み出されたときに、ほかの会社のチャンネルにも投稿できます。**Slack アプリ (トークン) を会社ごとに作り**、bot を招待するのは通知に使うチャンネルだけにします
 - 既に 1 つのリポジトリで複数の会社を回しているときは、会社ごとに新しいリポジトリを書き出し、`aws/<アカウント>/` の設定を移します。ストアは、新しいバケットへ写すか、新しく `arata init` します
 
+ストアを新しいバケットへ写す手順です (`<アカウント>` はストアの prefix で、例は `example-account`。バケット名は `example-arata-store-old` と `example-arata-store-new`)。
+S3 のストアは、実行の始めにオブジェクトの ETag を読み、書き込みの条件 (If-Match / If-None-Match) にするだけで、ETag やバケット名をストアの中に持ちません。だから、オブジェクトをそのまま写せば、新しい側で続けられます。
+
+1. **古い側で、ストアに書くものを全部止めます。** 古いリポジトリの定時 (audit・collect) と片付け (triage) を止め、走っている実行が無いことを確かめます。新しい側もまだ動かしません。
+   リポジトリをまたぐと Actions の concurrency の待ち合わせが効かないので、両方から同時に書かせてはいけません
+2. 写します。prefix (アカウント名) は同じにします。**今の版だけが写ります** (古い版の履歴は写りません)
+
+   ```sh
+   aws s3 sync s3://example-arata-store-old/<アカウント> s3://example-arata-store-new/<アカウント>
+   ```
+
+3. 確かめます。
+   - 両方の `aws s3api list-objects-v2 --prefix <アカウント>/` の Key と Size が一致する
+   - `arata review --format json` の出力が両方で同じ
+   - `arata run --dry-run` の件数と check・key が同じ (finding の ID は first_seen を含むので、新規の分は回ごとに違います)
+4. 新しい側を動かします。取得は前の位置から続き、ack・snooze の状態も引き継がれます
+5. 古いバケットの写した prefix は、新しい側が数日動いたのを確かめてから消します
+
 ### 2. この一式を手元に置く
 
 もう済んでいます (この README がその結果です)。まだ push しません。
