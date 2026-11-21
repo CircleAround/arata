@@ -51,4 +51,4 @@
 ## 予定している改善
 
 - 承認済みのロールからの乗り移り (CI のロールから、初めてのロールへの `AssumeRole`) を見ること (予定。まだ決めていない。ADR 0055 に次の候補として書いてある)
-- GitHub のワークフローの実行の履歴を読み、AWS に OIDC で入った実行 (CloudTrail の userAgent の `run_id`) が GitHub から消えていないかを突き合わせること (案。検討中で、まだ予定にしていない。リポジトリの `docs/github-source.md`)
+- GitHub のワークフローの実行の履歴を読み、AWS に OIDC で入った実行 (CloudTrail の `sub` のリポジトリ・environment と時刻。userAgent の `run_id` はふつう無い) が GitHub から消えていないかを突き合わせること (案。検討中で、まだ予定にしていない。リポジトリの `docs/github-source.md`)
