@@ -24,7 +24,7 @@ on:
         options: [ack, snooze, resolve]
         required: true
       finding_id:
-        description: finding の ID (Slack の通知か arata review に出る 12 桁の 16 進)
+        description: finding の ID (Slack の通知か arata review に出る 12 桁の 16 進)。複数なら空白かカンマで区切る (100 件まで。全部に同じ action・reason を当て、1 件でも通らなければ何も変えない)
         type: string
         required: true
       reason:
@@ -87,6 +87,9 @@ jobs:
     steps:
       # 入力の形は認証より先に確かめる。API からの実行は画面の選択肢を通らないので、choice の値も確かめる。
       # finding の ID は arata が振る 12 桁の 16 進。形を決めておけば、引数がフラグとして読まれることも無い。
+      # ID は 1〜100 件。空白 (スペース・タブ・改行) かカンマで区切る (arata の ID の並びの規則と同じ。ADR 0080)。
+      # 100 件は arata の上限と同じ: 日次の片付けの実例 (42 件) の 2 倍を超え、Summary で ID ごとの中身を人が確かめられる量。
+      # 分けた並び (確かめた ID だけ) を出力 ids に書き、後の step はそれを使う (入力を分け直さない)。
       - id: validate
         name: 入力を確かめる
         run: |
@@ -95,7 +98,25 @@ jobs:
             exit 1
           }
           [[ "$ACCOUNT" =~ ^[a-z0-9][a-z0-9-]*$ ]] || fail "account は小文字の英数字とハイフン"
-          [[ "$FINDING_ID" =~ ^[0-9a-f]{12}$ ]] || fail "finding_id は 12 桁の 16 進 (Slack の通知か arata review の ID)"
+          read -r -d '' -a ids <<<"${FINDING_ID//,/ }" || true
+          [ "${#ids[@]}" -ge 1 ] || fail "finding_id が空 (Slack の通知か arata review の ID。複数なら空白かカンマで区切る)"
+          [ "${#ids[@]}" -le 100 ] || fail "finding_id が ${#ids[@]} 件。1 回に 100 件まで (分けて実行する)"
+          # 通らない値は位置だけを出す (値そのものはログに写さない)。重複は確かめた形の ID なので出してよい
+          declare -A seen=()
+          bad=()
+          for i in "${!ids[@]}"; do
+            id=${ids[$i]}
+            if [[ ! "$id" =~ ^[0-9a-f]{12}$ ]]; then
+              bad+=("$((i + 1)) 番目が 12 桁の 16 進ではない")
+            elif [ -n "${seen[$id]:-}" ]; then
+              bad+=("$id が 2 回")
+            fi
+            seen[$id]=1
+          done
+          if [ "${#bad[@]}" -gt 0 ]; then
+            msg=$(printf '%s、' "${bad[@]}")
+            fail "finding_id: ${msg%、} (Slack の通知か arata review の ID。何も変えていない)"
+          fi
           case "$ACTION" in
             ack | resolve)
               [ -z "$UNTIL" ] || fail "until は snooze のときだけ書く"
@@ -129,6 +150,7 @@ jobs:
           fi
           # 操作した人は arata の --by の形 (英数字と . _ -)。bot (名前に [bot]) からの実行は受け付けない
           [[ "$GITHUB_ACTOR" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || fail "実行した人 ($GITHUB_ACTOR) が arata の --by の形ではない (人が画面から実行する)"
+          echo "ids=${ids[*]}" >>"$GITHUB_OUTPUT"
 
       - id: checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -196,6 +218,8 @@ jobs:
       - id: finding
         name: 指摘の中身を引く
         timeout-minutes: 10
+        env:
+          FINDING_IDS: ${{ steps.validate.outputs.ids }}
         run: |
           status=0
           arata review -c "$ARATA_CONFIG_DIR/arata.yaml" --format json --status open,acked,snoozed,resolved \
@@ -203,7 +227,9 @@ jobs:
           jq -Rc 'fromjson? | objects | select(.level != "INFO") | {level, code, source}' "$RUNNER_TEMP/review.log" || true
           : >"$RUNNER_TEMP/finding.json"
           if [ "$status" -eq 0 ]; then
-            jq -c --arg id "$FINDING_ID" 'first(.[] | select(.id == $id) | {check, key, severity, status, first_seen, summary}) // empty' \
+            # 渡した ID のものだけを、ID → 中身 の形で置く (ストアに無い ID は載らない)
+            jq -c --arg ids "$FINDING_IDS" '($ids | split(" ")) as $want
+              | map(select(.id as $i | $want | index($i)) | {key: .id, value: {check, key, severity, status, first_seen, summary}}) | from_entries' \
               "$RUNNER_TEMP/review.json" >"$RUNNER_TEMP/finding.json" || : >"$RUNNER_TEMP/finding.json"
           fi
           echo "arata review exit=$status"
@@ -211,9 +237,13 @@ jobs:
       # 片付けの表 (playbook の「片付け」) が許さない ack は arata が止める (ACK_REFUSED。high・critical と、重大度の上がる余地の無いもの。ADR 0068)。止める規則はここに書かない (arata の 1 か所)。
       # 止められたら、ログと Summary に案内を出す (refused の出力を Summary の step が読む)。
       # 失敗の見分け: ACK_REFUSED = 表が許さない ack / CONFIG_INVALID = ID が無い・既に resolved・期日が過去・理由に使えない文字 / STORE_CONFLICT = 同時に書かれた (もう一度実行する)。
+      # 複数の ID は 1 回の arata に渡す。arata が書く前に全部を確かめ、1 件でも通らなければ何も書かない。ストアへの書き込みは 1 回 (ADR 0080)。
+      # ID ごとの結果 (--format json。arata schema triage-result) は実行環境の一時ファイルに置き、Summary の step が読む (ログには出さない)。
       - id: triage
         name: arata ack / snooze / resolve
         timeout-minutes: 10
+        env:
+          FINDING_IDS: ${{ steps.validate.outputs.ids }}
         run: |
           log="$RUNNER_TEMP/arata.log"
           args=("$ACTION" -c "$ARATA_CONFIG_DIR/arata.yaml")
@@ -227,14 +257,15 @@ jobs:
             args+=(--dry-run)
           fi
           # 理由と操作した人はストアに残る (ADR 0068)。理由の形 (見えない文字など) は arata も確かめる
-          args+=(--reason "$REASON" --by "$GITHUB_ACTOR")
+          args+=(--format json --reason "$REASON" --by "$GITHUB_ACTOR")
+          read -r -a ids <<<"$FINDING_IDS"
           status=0
-          arata "${args[@]}" "$FINDING_ID" >"$log" 2>&1 || status=$?
+          arata "${args[@]}" "${ids[@]}" >"$RUNNER_TEMP/triage.json" 2>"$log" || status=$?
           jq -Rc 'fromjson? | objects | select(.level != "INFO") | {level, code, source}' "$log" || true
           # code は機械が読む値 (人向けの文言は読まない。ADR 0054)
           if jq -Re 'fromjson? | objects | select(.code == "ACK_REFUSED")' "$log" >/dev/null; then
             echo "refused=true" >>"$GITHUB_OUTPUT"
-            echo "::error::ACK_REFUSED: この finding は ack できない (high・critical か、同じ指摘のまま重大度が上がる余地が無い。ack すると後で本物が起きても再報告されない)。正規の主体なら allowlist.yaml を PR で直す (approve に当たる)、期日を決めて見直すなら snooze、直したなら resolve。根拠は arata help ai playbook <check> の「片付け」。終わった出来事だと確かめてどうしても ack するなら force を付けて実行し直す"
+            echo "::error::ACK_REFUSED: ack できない finding がある (どれかは Summary。何も変えていない)。その finding は ack できない (high・critical か、同じ指摘のまま重大度が上がる余地が無い。ack すると後で本物が起きても再報告されない)。正規の主体なら allowlist.yaml を PR で直す (approve に当たる)、期日を決めて見直すなら snooze、直したなら resolve。根拠は arata help ai playbook <check> の「片付け」。終わった出来事だと確かめてどうしても ack するなら force を付けて実行し直す"
           fi
           echo "arata exit=$status"
           exit "$status"
@@ -245,9 +276,16 @@ jobs:
         name: 記録を Summary に残す
         if: always() && steps.validate.outcome == 'success'
         env:
+          FINDING_IDS: ${{ steps.validate.outputs.ids }}
           RESULT: ${{ steps.triage.outcome }}
           REFUSED: ${{ steps.triage.outputs.refused }}
         run: |
+          # ID ごとの中身 (操作の前) と結果 (arata の --format json)。読めないファイルは無いものとして扱う
+          finding="$RUNNER_TEMP/finding.json"
+          result="$RUNNER_TEMP/triage.json"
+          jq -e 'objects' "$finding" >/dev/null 2>&1 || finding=/dev/null
+          jq -e 'objects' "$result" >/dev/null 2>&1 || result=/dev/null
+          read -r -a ids <<<"$FINDING_IDS"
           {
             echo "### arata-triage"
             echo
@@ -255,7 +293,7 @@ jobs:
             echo "|---|---|"
             echo "| account | \`$ACCOUNT\` |"
             echo "| action | \`$ACTION\` |"
-            echo "| finding | \`$FINDING_ID\` |"
+            echo "| findings | ${#ids[@]} 件 |"
             if [ "$ACTION" = snooze ]; then
               echo "| until | \`$UNTIL\` (UTC) |"
             fi
@@ -274,15 +312,27 @@ jobs:
               echo "**試し (dry_run)**: 検査だけで、ストアは変えていない。よければ dry_run を外して実行し直す"
               echo
             fi
-            # 指摘の中身 (ログ由来の値)。12 桁の数字 (アカウント ID) は伏せ、改行とバッククォートを除いてコードの中に入れる
-            if [ -s "$RUNNER_TEMP/finding.json" ]; then
-              echo "指摘 (操作の前):"
+            # ID ごとの中身 (ログ由来の値) と結果。12 桁の数字 (アカウント ID) は伏せ、改行とバッククォートを除き、200 文字で切ってコードの中に入れる。
+            # 止めた ID が 1 件でもあれば、arata は何も書いていない (refused 以外の ID も not_written)
+            echo "finding ごと (中身は操作の前):"
+            echo
+            jq -rn --arg ids "$FINDING_IDS" --slurpfile f "$finding" --slurpfile r "$result" '
+              def safe: tostring | gsub("[0-9]{12}"; "************") | gsub("[\r\n]"; " ") | gsub("`"; "'"'"'") | .[0:200];
+              ($f[0] // {}) as $found
+              | (($r[0] // {}).items // [] | map({key: .id, value: .}) | from_entries) as $res
+              | $ids | split(" ")[] as $id
+              | ($res[$id]) as $x | ($found[$id]) as $y
+              | (if $x == null then "- `\($id)`: 結果は不明 (arata の結果が無い。ログの code を見る)"
+                 else "- `\($id)`: 結果 `\($x.result | safe)`"
+                   + (if $x.code then " (`\($x.code | safe)`)" else "" end)
+                   + (if $x.after then " (`\($x.before | safe)` → `\($x.after | safe)`)" else "" end)
+                   + (if $x.forced then " force" else "" end) end),
+                (if $y == null then "  - 指摘: ストアから引けなかった (ID の取り違え、または読み取りの失敗)"
+                 else "  - check: `\($y.check | safe)` / severity: `\($y.severity | safe)` / status: `\($y.status | safe)` / first_seen: `\($y.first_seen | safe)`",
+                   "  - summary: `\($y.summary | safe)`", "  - key: `\($y.key | safe)`" end)'
+            if [ "$RESULT" != success ] && [ "$DRY_RUN" != true ]; then
               echo
-              jq -r 'def safe: tostring | gsub("[0-9]{12}"; "************") | gsub("[\r\n]"; " ") | gsub("`"; "'"'"'");
-                "- check: `\(.check | safe)`", "- severity: `\(.severity | safe)`", "- status: `\(.status | safe)`",
-                "- first_seen: `\(.first_seen | safe)`", "- summary: `\(.summary | safe)`", "- key: `\(.key | safe)`"' "$RUNNER_TEMP/finding.json"
-            else
-              echo "指摘: ストアから引けなかった (ID の取り違え、または読み取りの失敗。ログの code を見る)"
+              echo "止めた ID があるか、書き込みに失敗したので、ストアには何も書いていない (止めた ID を外すか直して、もう一度実行する)"
             fi
             if [ "$REFUSED" = true ]; then
               echo

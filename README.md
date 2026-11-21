@@ -331,6 +331,7 @@ arata approve <finding-id> --destination --note "運用を受託しているア�
 arata ack     <finding-id>       # 確認済み。再報告しないが一覧には残る
 arata snooze  <finding-id> --until 2026-11-01
 arata resolve <finding-id>
+arata resolve <id> <id>,<id> --reason "直した"   # 複数の ID (100 件まで)。全部を確かめてから 1 回で書く。1 件でも通らなければ何も書かない
 ```
 
 - `approve` は allowlist.yaml の principals の末尾に追記する (他の行・コメント・空行は変えない)。git への commit は人が行う。`--commit` は allowlist.yaml だけを commit する

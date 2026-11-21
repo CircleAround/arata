@@ -193,6 +193,13 @@ type Query interface {
 	IPListDays(ctx context.Context, from, to string) ([]IPListRow, error)
 }
 
+// StatusUpdate は SetFindingStatuses の 1 件 (引数の意味は SetFindingStatus と同じ)。
+type StatusUpdate struct {
+	ID, Status      string
+	SnoozeUntil, At time.Time
+	Action          Action
+}
+
 // Store は読み書き全体。dir バックエンド (Dir: SQLite + JSONL) と s3 バックエンド (S3: Dir の作業用の複製を出し入れする) が実装する。
 type Store interface {
 	Query
@@ -219,6 +226,8 @@ type Store interface {
 	// resolved にしたときは finding_events にも resolved を記録する (run_id 空)。
 	// act.Name が空でなければ、同じトランザクションで finding_actions に操作を 1 行追記する (ADR 0068)。
 	SetFindingStatus(ctx context.Context, id, status string, snoozeUntil, at time.Time, act Action) error
+	// SetFindingStatuses は SetFindingStatus を複数の finding に、1 つのトランザクションで行う (全部か無しか)。同じ ID を 2 回含めない。
+	SetFindingStatuses(ctx context.Context, ups []StatusUpdate) error
 	MarkReported(ctx context.Context, ids []string, at time.Time) error
 	// ReplaceSnapshot は (kind, source) のスナップショットを items で丸ごと置き換える (空なら空にする)。
 	// 置き換えたら raw に印 (record.SnapshotReplaced) を追記する (rebuild 用。ADR 0033)。項目そのものの raw への追記は呼び出し側 (AppendRaw)。

@@ -7,9 +7,9 @@
 
 ## 新規 (3)
 
-- 2026-10-22T09:00:00Z **[medium]** 新規の主体 arn:aws:iam::123456789012:user/mallory (user) `new_principal` (daily、id id-003)
-- 2026-10-22T09:00:00Z **[critical]** ルートアカウント arn:aws:iam::123456789012:root が 198.51.100.8 から 1 件の操作 `root_usage` (daily、id id-004)
-- 2026-10-22T09:00:00Z **[high]** 既知リストに無い自アカウントの user/mallory が自アカウントのロール Admin を 1 回引き受け (内部、MFA 不明) `unknown_assume_role` (daily、id id-005)
+- 2026-10-22T09:00:00Z **[medium]** 新規の主体 arn:aws:iam::123456789012:user/mallory (user) `new_principal` (daily、id f00000000003)
+- 2026-10-22T09:00:00Z **[critical]** ルートアカウント arn:aws:iam::123456789012:root が 198.51.100.8 から 1 件の操作 `root_usage` (daily、id f00000000004)
+- 2026-10-22T09:00:00Z **[high]** 既知リストに無い自アカウントの user/mallory が自アカウントのロール Admin を 1 回引き受け (内部、MFA 不明) `unknown_assume_role` (daily、id f00000000005)
 
 ## 再発 (0)
 
@@ -21,7 +21,7 @@
 
 ## 解消 (1)
 
-- 2026-10-22T10:00:00Z **[critical]** ルートアカウント arn:aws:iam::123456789012:root が 198.51.100.8 から 1 件の操作 `root_usage` (人の操作 / allowlist、id id-004)
+- 2026-10-22T10:00:00Z **[critical]** ルートアカウント arn:aws:iam::123456789012:root が 198.51.100.8 から 1 件の操作 `root_usage` (人の操作 / allowlist、id f00000000004)
 
 ## 新規の主体 (2)
 
@@ -32,8 +32,8 @@
 
 ## 未対応の残存 (2)
 
-- **[high]** 既知リストに無い自アカウントの user/mallory が自アカウントのロール Admin を 1 回引き受け (内部、MFA 不明) `unknown_assume_role` (open、初出 2026-10-22T09:00:00Z、id id-005)
-- **[medium]** 新規の主体 arn:aws:iam::123456789012:user/mallory (user) `new_principal` (open、初出 2026-10-22T09:00:00Z、id id-003)
+- **[high]** 既知リストに無い自アカウントの user/mallory が自アカウントのロール Admin を 1 回引き受け (内部、MFA 不明) `unknown_assume_role` (open、初出 2026-10-22T09:00:00Z、id f00000000005)
+- **[medium]** 新規の主体 arn:aws:iam::123456789012:user/mallory (user) `new_principal` (open、初出 2026-10-22T09:00:00Z、id f00000000003)
 
 ## アプリ層の日次推移 (UTC)
 

@@ -588,3 +588,188 @@ func TestReportCarriesTriage(t *testing.T) {
 		}
 	}
 }
+
+// ack / snooze / resolve は複数の finding ID を取る (ADR 0080)。同じ status・reason・until・force・by を全部に当て、ストアへの確定は 1 回。
+// 検査 (形・finding の有無・片付けの表・期日) は書く前に全部済ませ、1 件でも通らなければ何も書かずに止め、止めた ID と理由を全部出す。
+func TestTriageManyIDs(t *testing.T) {
+	c := newCLI(t)
+	items := seedFindings(t, c)
+	root := items["root_usage|arn:aws:iam::"+acct+":root|198.51.100.8"]                                      // critical。ack は止まる
+	uar := items["unknown_assume_role|arn:aws:iam::"+acct+":user/mallory->arn:aws:iam::"+acct+":role/Admin"] // high。ack は止まる
+	np := items["new_principal|arn:aws:iam::"+acct+":user/mallory"]                                          // medium。ack は止まる
+	ext := items["new_principal|arn:aws:iam::"+saas+":root"]
+	missing := "0000000000ff"
+	statuses := func() map[string]string {
+		out := map[string]string{}
+		for _, it := range review(t, c, "--status", "open,acked,snoozed,resolved") {
+			out[it.ID] = it.Status
+		}
+		return out
+	}
+	unchanged := func(what string) {
+		t.Helper()
+		for id, s := range statuses() {
+			if s != "open" {
+				t.Fatalf("%s must not write anything: %s is %s", what, id, s)
+			}
+		}
+		if code := c.run("review", "-c", c.cfg, "--format", "json"); code != 0 || strings.Contains(c.stdout.String(), `"last_action"`) {
+			t.Fatalf("%s must not record an action:\n%s", what, c.stdout)
+		}
+	}
+
+	// 形・重複・件数は、ストアを開く前に止める。通らない値を全部挙げる
+	for _, tc := range []struct {
+		args, want []string
+	}{
+		{[]string{np.ID, root.ID + "," + np.ID}, []string{np.ID + `\" appears twice`}},
+		{[]string{np.ID, "0123456789AB", "--", "zz"}, []string{`\"0123456789AB\"`, `\"zz\"`}},
+	} {
+		if code := c.run(append([]string{"resolve", "-c", c.cfg, "--reason", "x"}, tc.args...)...); code != 2 || strings.Join(c.codes(), ",") != "CONFIG_INVALID" {
+			t.Fatalf("%v: exit %d %v", tc.args, code, c.codes())
+		}
+		for _, w := range tc.want {
+			if !strings.Contains(c.stderr.String(), w) {
+				t.Errorf("every bad value must be named (%q):\n%s", w, c.stderr)
+			}
+		}
+	}
+	unchanged("a bad list")
+
+	// 1 件が見つからない・1 件が既に resolved → 何も書かない。止めた ID を全部出す
+	if code := c.run("snooze", "-c", c.cfg, "--until", "2026-11-01", np.ID, missing, root.ID); code != 2 || strings.Join(c.codes(), ",") != "CONFIG_INVALID" {
+		t.Fatalf("snooze with a missing id: exit %d %v\n%s", code, c.codes(), c.stdout)
+	}
+	for _, w := range []string{missing, "見つかりません", "何も変えていません", "1 件"} {
+		if !strings.Contains(c.stdout.String(), w) {
+			t.Errorf("stdout lacks %q:\n%s", w, c.stdout)
+		}
+	}
+	unchanged("a list with a missing id")
+
+	// ack の守りは ID ごとに効き、止めた ID を全部出す (ACK_REFUSED を ID ごとに 1 行)
+	if code := c.run("ack", "-c", c.cfg, "--reason", "known", np.ID, uar.ID, root.ID, missing); code != 2 {
+		t.Fatalf("ack of guarded findings: exit %d", code)
+	}
+	if got := strings.Join(c.codes(), ","); got != "ACK_REFUSED,ACK_REFUSED,ACK_REFUSED,CONFIG_INVALID" {
+		t.Fatalf("one code per stopped id: %s", got)
+	}
+	for _, w := range []string{np.ID, uar.ID, root.ID, missing, "4 件", "snooze", "resolve", "approve", "arata help ai playbook <check>", "--force"} {
+		if !strings.Contains(c.stdout.String(), w) {
+			t.Errorf("ack guidance lacks %q:\n%s", w, c.stdout)
+		}
+	}
+	unchanged("refused acks")
+
+	// 試しも複数を取り、ID ごとに何がどう変わるかを出す
+	if code := c.run("ack", "-c", c.cfg, "--dry-run", "--force", "--reason", "kept", np.ID, root.ID); code != 0 {
+		t.Fatalf("ack --dry-run: exit %d %s%s", code, c.stdout, c.stderr)
+	}
+	for _, w := range []string{"試し", np.ID, "new_principal", root.ID, "root_usage", "open から acked", "force", "2 件", "ストアは変えていません"} {
+		if !strings.Contains(c.stdout.String(), w) {
+			t.Errorf("dry-run lacks %q:\n%s", w, c.stdout)
+		}
+	}
+	unchanged("a dry run")
+
+	// 通れば、全部を同じ記録で 1 回に書く
+	if code := c.run("ack", "-c", c.cfg, "--force", "--reason", "setup work", "--by", "alice", np.ID+","+root.ID); code != 0 {
+		t.Fatalf("ack --force: exit %d %s%s", code, c.stdout, c.stderr)
+	}
+	if !strings.Contains(c.stdout.String(), "2 件を acked にしました") {
+		t.Errorf("stdout:\n%s", c.stdout)
+	}
+	if code := c.run("resolve", "-c", c.cfg, "--reason", "fixed", uar.ID, ext.ID); code != 0 {
+		t.Fatalf("resolve: exit %d %s%s", code, c.stdout, c.stderr)
+	}
+	got := statuses()
+	if got[np.ID] != "acked" || got[root.ID] != "acked" || got[uar.ID] != "resolved" || got[ext.ID] != "resolved" {
+		t.Fatalf("statuses: %v", got)
+	}
+	if code := c.run("review", "-c", c.cfg, "--format", "json", "--status", "acked"); code != 0 {
+		t.Fatal(c.stderr.String())
+	}
+	var acked []engine.ReviewItem
+	if err := json.Unmarshal(c.stdout.Bytes(), &acked); err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range acked {
+		if a := it.LastAction; a == nil || a.By != "alice" || a.Reason != "setup work" || !a.Forced {
+			t.Fatalf("%s: the same record for every id: %+v", it.ID, a)
+		}
+	}
+	c.assertCodesInVocabulary()
+}
+
+// --format json は ID ごとの結果を出す (ワークフローの Summary が読む。ADR 0054・0080)。止めたときも、止めた ID と code を出す。
+func TestTriageManyIDsJSON(t *testing.T) {
+	c := newCLI(t)
+	items := seedFindings(t, c)
+	root := items["root_usage|arn:aws:iam::"+acct+":root|198.51.100.8"]
+	np := items["new_principal|arn:aws:iam::"+acct+":user/mallory"]
+	ext := items["new_principal|arn:aws:iam::"+saas+":root"]
+	missing := "0000000000ff"
+	read := func() engine.TriageResult {
+		t.Helper()
+		schematest.Conforms(t, engine.TriageResultSchema, c.stdout.Bytes(), &engine.TriageResult{})
+		var r engine.TriageResult
+		if err := json.Unmarshal(c.stdout.Bytes(), &r); err != nil {
+			t.Fatalf("%v\n%s", err, c.stdout)
+		}
+		return r
+	}
+	type row struct{ result, before, after, code string }
+	rows := func(r engine.TriageResult) map[string]row {
+		out := map[string]row{}
+		for _, it := range r.Items {
+			out[it.ID] = row{it.Result, it.Before, it.After, it.Code}
+		}
+		return out
+	}
+
+	if code := c.run("ack", "-c", c.cfg, "--format", "json", "--reason", "known", np.ID, root.ID, missing); code != 2 {
+		t.Fatalf("exit %d", code)
+	}
+	r := read()
+	if r.Action != "ack" || r.Written || r.DryRun || len(r.Items) != 3 {
+		t.Fatalf("refused: %+v", r)
+	}
+	want := map[string]row{np.ID: {"refused", "open", "", "ACK_REFUSED"}, root.ID: {"refused", "open", "", "ACK_REFUSED"}, missing: {"refused", "", "", "CONFIG_INVALID"}}
+	if got := rows(r); !reflect.DeepEqual(got, want) {
+		t.Fatalf("items: %+v", got)
+	}
+
+	// 通らない 1 件があれば、通った ID は not_written
+	if code := c.run("resolve", "-c", c.cfg, "--format", "json", "--reason", "x", ext.ID, missing); code != 2 {
+		t.Fatalf("exit %d", code)
+	}
+	if got := rows(read()); got[ext.ID] != (row{"not_written", "open", "resolved", ""}) || got[missing].result != "refused" {
+		t.Fatalf("items: %+v", got)
+	}
+
+	if code := c.run("snooze", "-c", c.cfg, "--format", "json", "--dry-run", "--until", "2026-11-01", ext.ID, np.ID); code != 0 {
+		t.Fatalf("exit %d %s", code, c.stderr)
+	}
+	r = read()
+	if r.Written || !r.DryRun || r.SnoozeUntil != "2026-11-01" {
+		t.Fatalf("dry run: %+v", r)
+	}
+	if got := rows(r); got[ext.ID] != (row{"would_change", "open", "snoozed", ""}) || got[np.ID] != (row{"would_change", "open", "snoozed", ""}) {
+		t.Fatalf("items: %+v", got)
+	}
+
+	if code := c.run("resolve", "-c", c.cfg, "--format", "json", "--reason", "fixed", ext.ID, np.ID); code != 0 {
+		t.Fatalf("exit %d %s", code, c.stderr)
+	}
+	r = read()
+	if !r.Written || r.Action != "resolve" {
+		t.Fatalf("written: %+v", r)
+	}
+	if got := rows(r); got[ext.ID] != (row{"changed", "open", "resolved", ""}) || got[np.ID] != (row{"changed", "open", "resolved", ""}) {
+		t.Fatalf("items: %+v", got)
+	}
+	if code := c.run("resolve", "-c", c.cfg, "--format", "yaml", ext.ID); code != 2 {
+		t.Fatalf("unknown format: exit %d", code)
+	}
+	c.assertCodesInVocabulary()
+}

@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:arata:schema:triage-result:1",
+  "title": "triage-result",
+  "description": "arata ack / snooze / resolve --format json の出力。渡した finding ID ごとの結果 (書いた・試しで通った・止めた・書いていない)。止めた ID の理由は code (ADR 0080)",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "triage-result"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "action": {
+      "type": "string",
+      "enum": [
+        "ack",
+        "snooze",
+        "resolve"
+      ]
+    },
+    "dry_run": {
+      "type": "boolean"
+    },
+    "written": {
+      "type": "boolean"
+    },
+    "snooze_until": {
+      "type": "string"
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/TriageResultItem"
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "schema_version",
+    "action",
+    "dry_run",
+    "written",
+    "items"
+  ],
+  "$defs": {
+    "TriageResultItem": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "result": {
+          "type": "string",
+          "enum": [
+            "changed",
+            "would_change",
+            "refused",
+            "not_written"
+          ]
+        },
+        "check": {
+          "type": "string"
+        },
+        "severity": {
+          "type": "string"
+        },
+        "before": {
+          "type": "string"
+        },
+        "after": {
+          "type": "string"
+        },
+        "forced": {
+          "type": "boolean"
+        },
+        "code": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "result",
+        "forced"
+      ]
+    }
+  }
+}
