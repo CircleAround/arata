@@ -16,7 +16,7 @@
 
 - finding 1 件: `id`, `check`, `key`, `severity`, `summary`, `status`, `first_seen`, `last_seen`, `data` (根拠。件数・IP・日付など)
 - `summary.max_severity`: new / changed / recurred の最大。still_open は含まない
-- `already_reported`: 別の周期 (hourly など) で報告済みの事象。二重に騒がない。`info`: 重大度 info (既知デプロイ主体の IAM 変更など)。記録のみ。各 finding の `triage` (run の報告だけ。以前の版には無い): `arata review --format json` と同じ、許す操作 (`allowed`)・同じ Key で重大度が上がりうるか (`escalates`)・根拠 (`doc` の `section`)。片付けの案は `allowed` に無い操作を出さない
+- `already_reported`: 別の周期 (hourly など) で報告済みの事象。二重に騒がない。`info`: 重大度 info (既知デプロイ主体の IAM 変更など)。記録のみ。各 finding の `triage` (run の報告だけ。以前の版には無い): `arata review --format json` と同じ、許す操作 (`allowed`)・同じ Key で重大度が上がりうるか (`escalates`)・根拠 (`doc` の `section`)。片付けの案は `allowed` に無い操作を出さない。`min_severity` (重大度の下限を書いたプロファイルの報告だけ。雛形では hourly の `high`): この報告は下限以上だけを見ている。下限より下の観測は記録しておらず、次の下限なしの run (daily) が新規として報告する。`summary.deferred` は、この回に下限より下で次へ回した観測の数 (中身は無い)。「medium 以下は無かった」と書かない (見ていない)。通知では、下限より下は次の daily で届くと伝える
 - `coverage.sources_failed`: 取れなかったソースと `code`、不足した `action`。`covered_from` / `covered_until` は取れた期間。`partial: true` は一部の項目だけ取れなかった (取れた項目で評価済み。取れなかった項目は前回の状態のまま)
 - `coverage.checks_skipped`: 走らなかったチェックと理由 (必要なソースが無い / 失敗)
 - `coverage.formats`: アプリログの解釈率 (`match_rate`、`code` が FORMAT_MISMATCH / FORMAT_DRIFT のこともある)。`truncated` は結果の行の上限に当たった集計 (件数は少なめ)。`yields` はその run でソースが出した記録の種類 (`http_access`・`http_user`・`waf_action`。取れなかった種類は入らない)。`request_lines` のソースには `requests` が付く (`complete_rate` = まとめられた割合、`request_id_reused` = 同じ ID の使い回しの数、`starts_untagged` = request_id が無く集計に入らなかった最初の行の数。ユーザー ID を読む設定なら `users` (`user_rate` = ID の付いたリクエストの割合、`with_user` が 0 の run ではユーザー ID の要るチェックは skip、`user_id_invalid` = 形に合わず捨てた数)、auth の行を読む設定なら `auth` (ログインの成功・失敗の数) も付く。`arata help ai user_id`)

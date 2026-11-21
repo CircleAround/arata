@@ -94,3 +94,25 @@ func TestMarkdownDryRun(t *testing.T) {
 		t.Fatalf("lines: got %d want %d", got, want)
 	}
 }
+
+// 重大度の下限 (ADR 0082) を書いたプロファイルの報告は、下限と、次へ回した数を冒頭に 1 行で出す。中身 (主体・Key) は出さない。
+func TestMarkdownMinSeverity(t *testing.T) {
+	r := &Report{Name: "acme", Profile: "hourly"}
+	plain := r.Markdown()
+	if strings.Contains(plain, "下限") {
+		t.Fatalf("no floor, no line:\n%s", plain)
+	}
+	r.MinSeverity = "high"
+	md := r.Markdown()
+	if !strings.Contains(md, "- 重大度の下限: high 以上だけを見ています。下限より下は記録せず、次の下限なしの run (daily) で報告します\n") {
+		t.Fatalf("%s", md)
+	}
+	r.Summary.Deferred = 2
+	md = r.Markdown()
+	if !strings.Contains(md, "次の下限なしの run (daily) で報告します (この回は 2 件)\n") {
+		t.Fatalf("%s", md)
+	}
+	if got, want := strings.Count(md, "\n"), strings.Count(plain, "\n")+1; got != want {
+		t.Fatalf("lines: got %d want %d", got, want)
+	}
+}

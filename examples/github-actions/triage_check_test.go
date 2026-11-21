@@ -666,7 +666,7 @@ func copyTree(t *testing.T, src string) string {
 func TestCheckRunsRepoCheckOnTheSet(t *testing.T) {
 	w, text := load(t, checkFile)
 	s := stepByID(t, w, "repo-check")
-	want := "arata repo check --owner example-org --repo security-audit --accounts prod,staging --audit-account 111122223333 --store-bucket example-arata-store --region ap-northeast-1 --alert-channel C0123456782 --schedule --collect-every 1h --out . </dev/null 2>/dev/null"
+	want := "arata repo check --owner example-org --repo security-audit --accounts prod,staging --audit-account 111122223333 --store-bucket example-arata-store --region ap-northeast-1 --alert-channel C0123456782 --schedule --collect-every 1h --flash --out . </dev/null 2>/dev/null"
 	if s.Run != want {
 		t.Fatalf("repo-check runs:\n%s\nwant:\n%s", s.Run, want)
 	}
@@ -712,6 +712,22 @@ func TestCheckRunsRepoCheckOnTheSet(t *testing.T) {
 		}
 		out, code, _ := runStepIn(t, dir, s.Run, bin)
 		if code != 2 || !strings.Contains(out, "REPO_NOTIFY_MISMATCH") || !strings.Contains(out, "notify staging の直し方:") || !strings.Contains(out, "bot_token_env: ARATAM_SLACK_BOT_TOKEN") {
+			t.Fatalf("exit %d\n%s", code, out)
+		}
+	})
+	// --flash の一式で、hourly の重大度の下限が無い arata.yaml は止まり、足す行が出る (ADR 0082 の 5 節)
+	t.Run("an hourly profile without min_severity stops", func(t *testing.T) {
+		dir := copyTree(t, exampleRepo)
+		p := filepath.Join(dir, "aws/prod/arata.yaml")
+		b, _ := os.ReadFile(p)
+		if !strings.Contains(string(b), "\n    min_severity: high ") {
+			t.Fatal("the example must write min_severity: high in the hourly profile")
+		}
+		if err := os.WriteFile(p, []byte(strings.Replace(string(b), "\n    min_severity: high ", "\n    # min_severity: high ", 1)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		out, code, _ := runStepIn(t, dir, s.Run, bin)
+		if code != 2 || !strings.Contains(out, "REPO_FLASH_PROFILE") || !strings.Contains(out, "    min_severity: high") {
 			t.Fatalf("exit %d\n%s", code, out)
 		}
 	})

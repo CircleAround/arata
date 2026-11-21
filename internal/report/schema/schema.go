@@ -48,6 +48,10 @@ type Report struct {
 	// Silenced は「黙らせているもの」(ADR 0068 の 3 節)。プロファイルに silenced: true を書いたときだけ出す (雛形では weekly)。
 	// 出さない報告では項目が無い (omitempty)。読む側は、無い節を「出していない」と扱う (0 件とは違う)。
 	Silenced *Silenced `json:"silenced,omitempty"`
+	// MinSeverity はプロファイルの重大度の下限 (ADR 0082)。書いたプロファイルの報告にだけ付く (omitempty)。
+	// この報告は下限以上だけを見ている。下限より下の観測は記録しておらず、次の下限なしの run (ふつうは daily) が新規として報告する。
+	// aratam はこの項目がある報告を、静かなら送らず、取れなかったソースだけでは送らない (docs/aratam.md 2 章)。
+	MinSeverity string `json:"min_severity,omitempty" jsonschema:"enum=critical|high|medium|low"`
 }
 
 // Proposal は WAF の修正提案の候補 1 件。arata が決まった規則で作り、根拠の数字を Evidence に持つ。適用は人が判断する。
@@ -97,6 +101,9 @@ type Summary struct {
 	StillOpen     int            `json:"still_open"`
 	MaxSeverity   string         `json:"max_severity" jsonschema:"enum=|critical|high|medium|low"`
 	CollectErrors []CollectError `json:"collect_errors"`
+	// Deferred は下限 (min_severity) より下で、この run では記録せずに次へ回した観測の数 (ADR 0082)。下限を書いたプロファイルの報告にだけ付く。
+	// 中身 (主体・Key) は出さない。
+	Deferred int `json:"deferred,omitempty"`
 }
 
 // CollectError は収集失敗 1 件。covered_from / covered_until は失敗するまでに取得できた期間 (取れていなければ空)。

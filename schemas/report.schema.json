@@ -60,6 +60,15 @@
     },
     "silenced": {
       "$ref": "#/$defs/Silenced"
+    },
+    "min_severity": {
+      "type": "string",
+      "enum": [
+        "critical",
+        "high",
+        "medium",
+        "low"
+      ]
     }
   },
   "required": [
@@ -727,6 +736,9 @@
           "items": {
             "$ref": "#/$defs/CollectError"
           }
+        },
+        "deferred": {
+          "type": "integer"
         }
       },
       "required": [

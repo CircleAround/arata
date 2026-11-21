@@ -50,6 +50,7 @@ const (
 	ItemSecret               = "secret"
 	ItemSecretUnused         = "secret_unused"
 	ItemRepositorySecret     = "repository_secret"
+	ItemFlash                = "flash"
 )
 
 // CheckOutput は repo check --format json の出力。
@@ -65,7 +66,7 @@ type CheckOutput struct {
 // CheckRow は検査 1 項目。
 type CheckRow struct {
 	Scope  string   `json:"scope" jsonschema:"enum=files|github" desc:"files = 手元のファイルの検査、github = GitHub の設定の検査 (--github)"`
-	Item   string   `json:"item" desc:"検査した項目 (files / terraform / workflow_secrets / notify / accounts / github / environment / deployment_branches / environment_protection / secret / secret_unused / repository_secret)。開いた語彙"`
+	Item   string   `json:"item" desc:"検査した項目 (files / terraform / workflow_secrets / notify / accounts / flash / github / environment / deployment_branches / environment_protection / secret / secret_unused / repository_secret)。開いた語彙"`
 	Target string   `json:"target,omitempty" desc:"対象 (ファイルのパス、アカウントの名前、秘密の名前)。項目の全体についての行には無い"`
 	Status string   `json:"status" jsonschema:"enum=ok|warn|ng|skip" desc:"ng が 1 つでもあれば終了コード 2。skip = 検査していない (--github を付けていない)"`
 	Code   string   `json:"code,omitempty" desc:"ログと同じ固定語彙の code (warn・ng の行)"`
@@ -255,6 +256,11 @@ func checkAccounts(o *CheckOutput, dir string, p Params) error {
 		if present {
 			o.add(ScopeFiles, ItemAccounts, a, CheckOK, "", "aws/"+a+"/ に arata.yaml と aratam.yaml がある")
 		}
+		if p.Flash {
+			if err := checkFlashProfile(o, dir, a); err != nil {
+				return err
+			}
+		}
 		if aratam == nil {
 			continue
 		}
@@ -279,6 +285,44 @@ func checkAccounts(o *CheckOutput, dir string, p Params) error {
 		o.add(ScopeFiles, ItemNotify, a, CheckNG, codes.RepoNotifyMismatch,
 			rel+" が、bot トークンの方式 ("+botTokenSecret+") でない。この一式のワークフローは、bot トークンだけを渡す。slack の節を、次の行にする",
 			`webhook_env: ""`, `urgent_webhook_env: ""`, "bot_token_env: "+botTokenSecret, `channel: "`+channel+`"`)
+	}
+	return nil
+}
+
+// flashFix は、--flash の一式で arata.yaml に足す行 (ADR 0082 の 5 節)。値は雛形 (config init) と同じ high。
+var flashFix = []string{"profiles:", "  hourly:", "    min_severity: high"}
+
+// checkFlashProfile は、--flash の一式で、arata.yaml の profiles.hourly に重大度の下限 (min_severity) があるかを確かめる (ADR 0082 の 5 節)。
+// 無いまま流すと、1 時間ごとの判定が medium 以下も記録して毎時に知らせ、daily では本日報告済みに回る。値 (high / critical など) は利用者の判断で、
+// 形と、event 型のチェックだけであることは config check が確かめる。利用者のファイルなので、読めなくても中身は外へ出さない。
+func checkFlashProfile(o *CheckOutput, dir, account string) error {
+	rel := "aws/" + account + "/arata.yaml"
+	body, exists, err := readTarget(dir, rel)
+	if err != nil || !exists {
+		return err // 無いことは accounts の行が出す
+	}
+	var doc struct {
+		Profiles map[string]struct {
+			MinSeverity *string `yaml:"min_severity"`
+		} `yaml:"profiles"`
+	}
+	switch {
+	case body == nil || len(body) > maxExisting:
+		o.add(ScopeFiles, ItemFlash, account, CheckNG, codes.RepoFlashProfile, rel+" が大きすぎて読めない")
+	case yaml.Unmarshal(body, &doc) != nil:
+		o.add(ScopeFiles, ItemFlash, account, CheckNG, codes.RepoFlashProfile, rel+" を YAML として読めない (arata config check の出力を見る)")
+	default:
+		h, ok := doc.Profiles["hourly"]
+		switch {
+		case !ok:
+			o.add(ScopeFiles, ItemFlash, account, CheckNG, codes.RepoFlashProfile,
+				rel+" に profiles.hourly が無い (--flash は hourly のプロファイルを 1 時間ごとに判定する。雛形の hourly を写し、次の行を足す。arata config init --diff でも見える)", flashFix...)
+		case h.MinSeverity == nil || *h.MinSeverity == "":
+			o.add(ScopeFiles, ItemFlash, account, CheckNG, codes.RepoFlashProfile,
+				rel+" の profiles.hourly に min_severity が無い (無いと、medium 以下も 1 時間ごとに記録・通知し、daily では本日報告済みに回る)。次の行を足す", flashFix...)
+		default:
+			o.add(ScopeFiles, ItemFlash, account, CheckOK, "", rel+" の profiles.hourly に min_severity がある (値の形は config check が見る)")
+		}
 	}
 	return nil
 }

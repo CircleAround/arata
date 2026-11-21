@@ -4,7 +4,7 @@ AWS のログを [arata](https://github.com/CircleAround/arata) で定時に監�
 この一式は `arata repo init` (arata v0.15.0) が書き出しました。
 
 ```sh
-arata repo init --owner example-org --repo security-audit --accounts prod,staging --audit-account 111122223333 --store-bucket example-arata-store --region ap-northeast-1 --alert-channel C0123456782 --schedule --collect-every 1h --out .
+arata repo init --owner example-org --repo security-audit --accounts prod,staging --audit-account 111122223333 --store-bucket example-arata-store --region ap-northeast-1 --alert-channel C0123456782 --schedule --collect-every 1h --flash --out .
 ```
 
 - 手順の理由と、設定の点検のしかたは、arata のリポジトリの [examples/github-actions/README.md](https://github.com/CircleAround/arata/blob/v0.15.0/examples/github-actions/README.md) (以下「説明書」) にあります
@@ -24,10 +24,10 @@ arata repo init --owner example-org --repo security-audit --accounts prod,stagin
 
 ```sh
 # ファイルだけを見る (PR の検査と同じ)
-arata repo check --owner example-org --repo security-audit --accounts prod,staging --audit-account 111122223333 --store-bucket example-arata-store --region ap-northeast-1 --alert-channel C0123456782 --schedule --collect-every 1h --out .
+arata repo check --owner example-org --repo security-audit --accounts prod,staging --audit-account 111122223333 --store-bucket example-arata-store --region ap-northeast-1 --alert-channel C0123456782 --schedule --collect-every 1h --flash --out .
 
 # GitHub の environment と、秘密の名前も見る
-GITHUB_TOKEN="$(gh auth token)" arata repo check --owner example-org --repo security-audit --accounts prod,staging --audit-account 111122223333 --store-bucket example-arata-store --region ap-northeast-1 --alert-channel C0123456782 --schedule --collect-every 1h --out . --github
+GITHUB_TOKEN="$(gh auth token)" arata repo check --owner example-org --repo security-audit --accounts prod,staging --audit-account 111122223333 --store-bucket example-arata-store --region ap-northeast-1 --alert-channel C0123456782 --schedule --collect-every 1h --flash --out . --github
 ```
 
 ## 置く順番
@@ -138,7 +138,7 @@ terraform -chdir=github apply
 最初は、秘密は 1 つも登録されていません。`arata repo check` に `--github` を付けて流すと、足りない秘密の名前と、そのまま打てる登録のコマンドが出ます。
 
 ```sh
-GITHUB_TOKEN="$(gh auth token)" arata repo check --owner example-org --repo security-audit --accounts prod,staging --audit-account 111122223333 --store-bucket example-arata-store --region ap-northeast-1 --alert-channel C0123456782 --schedule --collect-every 1h --out . --github
+GITHUB_TOKEN="$(gh auth token)" arata repo check --owner example-org --repo security-audit --accounts prod,staging --audit-account 111122223333 --store-bucket example-arata-store --region ap-northeast-1 --alert-channel C0123456782 --schedule --collect-every 1h --flash --out . --github
 ```
 
 出たコマンド (`gh secret set <名前> --env audit -R example-org/security-audit`) を、名前ごとに打ちます。`gh` が値を端末で聞くので、貼り付けます (値はシェルの履歴に残りません)。
@@ -180,7 +180,7 @@ Actions の画面から手動で実行します (どちらも main で)。
 
 ### 9. 取得だけを短い間隔で回す (任意)
 
-この一式は、取得だけを `1h` ごとに回しています (`.github/workflows/arata-collect.yml`。cron `25 * * * *`)。
+この一式は、取得だけを `1h` ごとに回しています (`.github/workflows/arata-collect.yml`。cron `25 * * * *`)。取得の前に `hourly` のプロファイルを判定し、重大度の下限 (`min_severity`) 以上だけを知らせます (`--flash`)。
 
 取得 (`arata collect --incremental`) を daily と別に短い間隔で回すと、毎朝の daily は読み直さずに判定だけに近づき、
 1 回の収集が上限 (`max_collect`) に当たって一部だけになることも減ります。入れるときは、同じ引数に `--collect-every 1h` (`1h`・`2h`・`3h`・`4h`・`6h`・`8h`・`12h`) を足し、
@@ -192,6 +192,10 @@ Actions の画面から手動で実行します (どちらも main で)。
 - 取得は Slack に何も送りません。失敗しても集めるはずだったものは失われず、daily が続きを自分で集めます。失敗が続くと Actions の画面で赤になり、
   daily の時間が戻って `max_collect` に当たれば、daily の通知に「一部だけ」と出ます
 - GitHub Actions の時間が増えます。1 回ごとに分へ切り上げるので、`1h` ならアカウントごとに 30 日で少なくとも 720 分です。抑えたいときは間隔を長くします
+- `--flash` も足すと、取得の前に `hourly` のプロファイルを判定し、`aws/<アカウント>/arata.yaml` の `profiles.hourly` の `min_severity` (雛形では `high`) 以上だけを、
+  次の朝を待たずに通知します (ルートの利用・知らない主体の ECS Exec・allowlist に無い呼び出し元の AssumeRole など)。下限より下 (既知の主体の ECS Exec、
+  知らない主体の失敗した ECS Exec など) は、その回では記録せず、これまでどおり daily が新規として知らせます。新規が無い回は何も送りません。
+  `min_severity` が無い `arata.yaml` は、PR の検査 (`arata repo check --flash`) が止めて、足す行を出します
 
 ## チャンネルを変える
 

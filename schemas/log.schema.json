@@ -65,6 +65,7 @@
             "ROLE_POLICY_LARGE",
             "REPO_SET_DIFFERS",
             "REPO_NOTIFY_MISMATCH",
+            "REPO_FLASH_PROFILE",
             "REPO_ENVIRONMENT_MISSING",
             "REPO_ENVIRONMENT_OPEN",
             "REPO_ENVIRONMENT_PROTECTED",

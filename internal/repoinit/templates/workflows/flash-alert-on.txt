@@ -1,0 +1,26 @@
+
+      # 1 時間ごとの判定で知らせるべき指摘があったのに、通知が届かなかったときに、知らせのチャンネルへ 1 行を送る (ADR 0082 の 6 節)。
+      # その指摘は arata が報告済みにしているので、daily では「本日報告済み」に回るだけになる。だから知らせる。
+      # 判定・取得の失敗では送らない (確定していないので、次の回か daily が報告する。毎時の一時的な失敗で鳴らさない)。
+      # 静かな回の通知の失敗 (設定の誤りなど) でも送らない。数は report.json の summary を数として読む (機械が読む値)。
+      # 送るのは「監査対象の名前・プロファイル・この実行の URL」だけ。指摘の中身・件数・ログの文は送らない。手動実行 (workflow_dispatch) では送らない。
+      - id: alert
+        name: 1 時間ごとの通知が送れなかったことを知らせる
+        if: failure() && github.event_name == 'schedule' && steps.notify.outcome == 'failure' && steps.notify.outputs.delivered != 'true'
+        timeout-minutes: 3
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.ARATAM_SLACK_BOT_TOKEN }}
+          ALERT_CHANNEL: @@ALERT_CHANNEL@@   # 知らせのチャンネル ID (arata repo init --alert-channel)
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          file="$RUNNER_TEMP/arata-out/report.json"
+          n="$(jq -r '[.summary.new, .summary.changed, .summary.recurred] | map(if type == "number" then . else 0 end) | add' "$file" 2>/dev/null)" || n=0
+          case "$n" in
+            '' | *[!0-9]*) n=0 ;;
+          esac
+          if [ "$n" = 0 ]; then
+            echo "この回に知らせるべき指摘は無かったので、知らせません"
+            exit 0
+          fi
+          text="arata の 1 時間ごとの通知を送れていません (知らせるべき指摘があります)。対象: $ACCOUNT / プロファイル: hourly / $RUN_URL"
+@@ALERT_SEND@@

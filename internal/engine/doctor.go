@@ -621,7 +621,7 @@ func (d *doctor) checks() {
 		profiles = append(profiles, p)
 	}
 	sort.Strings(profiles)
-	for _, u := range UnknownChecks(d.cfg, d.deps.Registry) {
+	for _, u := range append(UnknownChecks(d.cfg, d.deps.Registry), MinSeverityStateChecks(d.cfg, d.deps.Registry)...) {
 		d.res.Rows = append(d.res.Rows, DoctorRow{Source: "-", Kind: "-", Item: "check", Status: DoctorNG, Code: CodeConfigInvalid, Detail: u})
 	}
 	for _, pname := range profiles {
@@ -742,6 +742,29 @@ func UnknownChecks(cfg *config.Config, reg *checks.Registry) []string {
 		for _, name := range cfg.Profiles[pname].ExpandChecks(reg.Defaults()) {
 			if _, ok := reg.Get(name); !ok {
 				out = append(out, fmt.Sprintf("profile %s: unknown check %q", pname, name))
+			}
+		}
+	}
+	return out
+}
+
+// MinSeverityStateChecks は、重大度の下限 (min_severity) を書いたプロファイルに入っている state 型のチェック (ADR 0082)。
+// 「profile hourly: min_severity: state check "x"」の形。doctor と config check が同じ規則で使う (run は実行するプロファイルについて CONFIG_INVALID で止まる)。
+func MinSeverityStateChecks(cfg *config.Config, reg *checks.Registry) []string {
+	profiles := make([]string, 0, len(cfg.Profiles))
+	for p := range cfg.Profiles {
+		profiles = append(profiles, p)
+	}
+	sort.Strings(profiles)
+	var out []string
+	for _, pname := range profiles {
+		p := cfg.Profiles[pname]
+		if p.MinSeverity == "" {
+			continue
+		}
+		for _, name := range p.ExpandChecks(reg.Defaults()) {
+			if c, ok := reg.Get(name); ok && c.Mode() != checks.ModeEvent {
+				out = append(out, fmt.Sprintf("profile %s: min_severity: state check %q (only event checks can be used with min_severity)", pname, name))
 			}
 		}
 	}

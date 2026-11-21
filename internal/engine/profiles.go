@@ -24,10 +24,12 @@ type ProfileCheck struct {
 
 // ProfileView は profile で実際に効いているチェックとパラメータ (`arata profiles`)。
 type ProfileView struct {
-	Name       string         `json:"name"`
-	Window     string         `json:"window"`
-	MaxCatchup string         `json:"max_catchup"`
-	Checks     []ProfileCheck `json:"checks"`
+	Name       string `json:"name"`
+	Window     string `json:"window"`
+	MaxCatchup string `json:"max_catchup"`
+	// MinSeverity は重大度の下限 (ADR 0082)。書いたプロファイルにだけ付く。
+	MinSeverity string         `json:"min_severity,omitempty" jsonschema:"enum=critical|high|medium|low"`
+	Checks      []ProfileCheck `json:"checks"`
 	// Params はこの profile のチェックのパラメータ (overrides を重ねた値) と由来 (overrides / checks / default)。
 	Params []config.Param `json:"params"`
 }
@@ -59,7 +61,7 @@ func Profiles(cfg *config.Config, reg *checks.Registry) ProfilesView {
 		for _, n := range p.Checks {
 			explicit[n] = true
 		}
-		v := ProfileView{Name: name, Window: p.WindowRaw, MaxCatchup: p.MaxCatchupRaw, Checks: []ProfileCheck{}, Params: []config.Param{}}
+		v := ProfileView{Name: name, Window: p.WindowRaw, MaxCatchup: p.MaxCatchupRaw, MinSeverity: p.MinSeverity, Checks: []ProfileCheck{}, Params: []config.Param{}}
 		if v.MaxCatchup == "" {
 			v.MaxCatchup = "7d"
 		}
@@ -94,7 +96,11 @@ func (v ProfilesView) WriteTable(w io.Writer) error {
 		if i > 0 {
 			fmt.Fprintln(w)
 		}
-		fmt.Fprintf(w, "profile %s (window %s, max_catchup %s)\n", p.Name, p.Window, p.MaxCatchup)
+		if p.MinSeverity != "" {
+			fmt.Fprintf(w, "profile %s (window %s, max_catchup %s, min_severity %s)\n", p.Name, p.Window, p.MaxCatchup, p.MinSeverity)
+		} else {
+			fmt.Fprintf(w, "profile %s (window %s, max_catchup %s)\n", p.Name, p.Window, p.MaxCatchup)
+		}
 		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(tw, "  CHECK\tCADENCE\tMODE\tVIA")
 		for _, c := range p.Checks {

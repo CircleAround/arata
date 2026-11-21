@@ -87,6 +87,8 @@ func FuzzLoad(f *testing.F) {
 		"name: acme\nstore: dir:///tmp/x\n", "name: acme\nstore: s3://example-bucket/p\nsources: [{id: a, kind: cloudtrail-lookup}]\nprofiles: {daily: {checks: [default-daily]}}\n",
 		"sources: [{id: web, kind: cloudwatch-logs, log_group: prod-nginx-access, format: nginx_access, yields: http_access, ingest_delay: 0d}]\n",
 		"name: a\nstore: dir:///tmp/x\nsources: [{id: app, kind: cloudwatch-logs, log_group: prod-app, region: ap-northeast-1, format: request_lines, yields: http_user, request: {id: '\\[(?P<request_id>\\w+)\\]', lines: [{name: s, regex: 'Started (?P<path>\\S+) for (?P<ip>\\S+)'}], user_id: {from: app_line, regex: 'actor kind=(?P<user_kind>[a-z]+) id=(?P<user_id>\\d+)$'}}}]\nprofiles: {daily: {window: 24h, checks: [probe_paths], records: [http_user]}}\n",
+		"name: a\nstore: dir:///tmp/x\nsources: [{id: t, kind: cloudtrail-lookup}]\nprofiles: {hourly: {window: 1h, min_severity: high, checks: [root_usage, ecs_exec]}}\n",
+		"name: a\nstore: dir:///tmp/x\nsources: [{id: t, kind: cloudtrail-lookup}]\nprofiles: {hourly: {window: 1h, min_severity: info, checks: [root_usage]}}\n",
 		"sources: [null]\nprofiles: {x: null}\nchecks: null\n", "profiles: {a: {window: 9223372036854775807d}}\n", "name: [1]\n", "- x\n", "a: &a [*a]\n", "",
 	} {
 		f.Add([]byte(s))
@@ -156,6 +158,10 @@ func FuzzLoad(f *testing.F) {
 					t.Fatalf("profile %s の records を検証せずに受け入れた: %v", name, p.Records)
 				}
 				seen[r] = true
+			}
+			// 重大度の下限は、決まった値か空 (下限なし) だけ (ADR 0082)
+			if p.MinSeverity != "" && !contains(MinSeverities, p.MinSeverity) {
+				t.Fatalf("profile %s の min_severity を検証せずに受け入れた: %q", name, p.MinSeverity)
 			}
 		}
 		cfg.MaxIngestDelay()

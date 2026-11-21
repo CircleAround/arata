@@ -57,6 +57,7 @@ func (f *repoFlags) register(cmd *subcmd.Command, outUsage string) {
 	cmd.StringVar(&f.out, "out", "", outUsage)
 	cmd.BoolVar(&f.p.Schedule, "schedule", false, "監査のワークフローに定時 (schedule) を入れる")
 	cmd.StringVar(&f.p.CollectEvery, "collect-every", "", "取得だけ (arata collect --incremental) を回すワークフローを、この間隔で書き出す (1h・2h・3h・4h・6h・8h・12h。--schedule と一緒にだけ。書かなければ書き出さない。ADR 0078)")
+	cmd.BoolVar(&f.p.Flash, "flash", false, "取得のワークフローで、取得の前に hourly のプロファイルを判定し、重大度の下限 (arata.yaml の min_severity) 以上を aratam で知らせる (--collect-every と一緒にだけ。ADR 0082)")
 	cmd.StringVar(&f.arataVersion, "arata-version", "", "ワークフローに入れる arata の版 (vX.Y.Z)。版の付かないビルド (開発・テスト) のときだけ要る。リリース版では、そのバイナリの版と違う値を指定できない")
 }
 
@@ -124,6 +125,9 @@ Slack へは bot トークンで送る (ADR 0061)。決めるのはチャンネ�
   --collect-every <間隔>
              取得だけ (arata collect --incremental) を、この間隔で回すワークフロー (.github/workflows/arata-collect.yml) を足す
              (1h・2h・3h・4h・6h・8h・12h。--schedule と一緒にだけ。判定と通知は daily のまま。ADR 0078)
+  --flash    取得のワークフローで、取得の前に hourly のプロファイルを判定し、重大度の下限 (min_severity) 以上だけを知らせる
+             (--collect-every と一緒にだけ。下限より下は記録せず、daily が新規として知らせる。ADR 0082)。
+             各アカウントの arata.yaml の profiles.hourly に min_severity: high を書く (repo check --flash が確かめる)
 
 秘密は書き出さないし、登録もしない。足りない秘密の名前と、そのまま打てる登録のコマンドは arata repo check --github が出す。
 GitHub にも AWS にも繋がない。Terraform を当てるのは人 (書き出す README.md の手順)。`,

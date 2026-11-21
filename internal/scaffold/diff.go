@@ -42,8 +42,9 @@ type DiffItem struct {
 // rawConfig は差分を取るために緩く読む設定 (未知のキーがあっても読める)。
 type rawConfig struct {
 	Profiles map[string]struct {
-		Checks   []string `yaml:"checks"`
-		Silenced *bool    `yaml:"silenced"`
+		Checks      []string `yaml:"checks"`
+		Silenced    *bool    `yaml:"silenced"`
+		MinSeverity *string  `yaml:"min_severity"`
 	} `yaml:"profiles"`
 	Checks       map[string]map[string]any `yaml:"checks"`
 	AuditAccount yaml.Node                 `yaml:"audit_account"`
@@ -103,6 +104,13 @@ func Diff(current []byte, reg *checks.Registry) ([]DiffItem, error) {
 		if cp, ok := cur.Profiles[p.Name]; ok && p.Silenced && cp.Silenced == nil {
 			out = append(out, DiffItem{Kind: DiffMissingKey, Path: "profiles." + p.Name + ".silenced", Template: "true",
 				Detail: "雛形は silenced: true を書く。" + silencedComment + "。出したくなければ silenced: false を書く"})
+		}
+	}
+	// 決定 (ADR 0082): 雛形が min_severity を書くプロファイルで、設定に min_severity が無ければ足す行を出す (書いた値は比べない)
+	for _, p := range Profiles {
+		if cp, ok := cur.Profiles[p.Name]; ok && p.MinSeverity != "" && cp.MinSeverity == nil {
+			out = append(out, DiffItem{Kind: DiffMissingKey, Path: "profiles." + p.Name + ".min_severity", Template: p.MinSeverity,
+				Detail: "雛形は min_severity: " + p.MinSeverity + " を書く。" + minSeverityComment + "。書かなければ下限なし (medium 以下もこの run で記録・報告し、daily では本日報告済みに回る)"})
 		}
 	}
 	for _, p := range config.DefaultChecks().Params() {

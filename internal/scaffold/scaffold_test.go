@@ -416,3 +416,32 @@ ip_list: {}
 		}
 	}
 }
+
+// 雛形の hourly は重大度の下限 (min_severity: high) を書く (ADR 0082)。書いていない既存の設定は、差分に出て足す行が読める。
+func TestDiffMinSeverity(t *testing.T) {
+	reg := checks.NewRegistry()
+	b := Generate(reg, config.AuditAccountNone)
+	if n := strings.Count(string(b), "\n    min_severity: high "); n != 1 {
+		t.Fatalf("the template must write min_severity: high once (hourly): %d", n)
+	}
+	p := filepath.Join(t.TempDir(), "arata.yaml")
+	if err := os.WriteFile(p, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(p)
+	if err != nil || cfg.Profiles["hourly"].MinSeverity != "high" || cfg.Profiles["daily"].MinSeverity != "" {
+		t.Fatalf("hourly only: %v %+v", err, cfg.Profiles)
+	}
+	old := strings.Replace(string(b), "\n    min_severity: high ", "\n    # min_severity: high ", 1)
+	items, err := Diff([]byte(old), reg)
+	if err != nil || len(items) != 1 || items[0].Kind != DiffMissingKey || items[0].Path != "profiles.hourly.min_severity" || items[0].Template != "high" {
+		t.Fatalf("%v %+v", err, items)
+	}
+	if !strings.Contains(items[0].Detail, "daily") {
+		t.Errorf("detail: %s", items[0].Detail)
+	}
+	// 書いた値は利用者の判断 (critical に上げても差分にしない)
+	if items, err := Diff([]byte(strings.Replace(string(b), "\n    min_severity: high ", "\n    min_severity: critical ", 1)), reg); err != nil || len(items) != 0 {
+		t.Fatalf("%v %+v", err, items)
+	}
+}

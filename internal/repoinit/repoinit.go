@@ -75,7 +75,10 @@ type Params struct {
 	// CollectEvery は、取得だけ (arata collect --incremental) を回す間隔 (CollectIntervals のどれか)。空なら取得のワークフローを書き出さない (ADR 0078)。
 	// Schedule と一緒にだけ使える (導入の流れの arata init より前に、取得がストアへ書かないように)。
 	CollectEvery string
-	Version      string // arata の版 (vX.Y.Z)
+	// Flash は、取得の回に hourly のプロファイルを判定し、high 以上 (arata.yaml の min_severity) を aratam で知らせる (ADR 0082)。
+	// CollectEvery と一緒にだけ使える。false なら取得のワークフローは今のまま (1 バイトも変わらない)。
+	Flash   bool
+	Version string // arata の版 (vX.Y.Z)
 
 	// AlertChannel は、定時の通知が送れなかったことを知らせるチャンネル ID か、NoAlert (知らせない)。ワークフローに入る (生成物)。
 	AlertChannel string
@@ -201,6 +204,9 @@ func (p Params) ValidateBase() error {
 			return errors.New("--collect-every can be used only with --schedule (the collection is scheduled; enable it after the onboarding, with the schedule)")
 		}
 	}
+	if p.Flash && p.CollectEvery == "" {
+		return errors.New("--flash can be used only with --collect-every (the hourly judgement runs in the collection workflow. ADR 0082)")
+	}
 	return nil
 }
 
@@ -282,6 +288,9 @@ func (p Params) args() string {
 	if p.CollectEvery != "" {
 		s += " --collect-every " + p.CollectEvery
 	}
+	if p.Flash {
+		s += " --flash"
+	}
 	return s + " --out ."
 }
 
@@ -340,6 +349,28 @@ func Files(p Params, reg *checks.Registry, today time.Time) ([]File, error) {
 	if p.CollectEvery != "" {
 		collectReadme = "この一式は、取得だけを `" + p.CollectEvery + "` ごとに回しています (`.github/workflows/arata-collect.yml`。cron `" + CollectCron(p.CollectEvery) + "`)"
 	}
+	// --flash (ADR 0082): 取得のワークフローに、hourly の判定と通知を足す。付けなければ、どの印も今の文のまま (出力は 1 バイトも変わらない)
+	collectTitle := "# 取得だけ (arata collect --incremental) を短い間隔で回す (アカウントごとに 1 つのジョブ。matrix)。判定・報告・通知はしない (ADR 0078)。"
+	collectSlack := "# Slack には何も送らない。取得が失敗しても集めるはずだったものは失われず、daily がソースの位置から続きを自分で集める (説明書「取得だけを短い間隔で回す」)。"
+	secretsNote := "取得は Slack に送らないので、Slack のトークンは渡さない。"
+	flashSteps, collectIf, collectTimeout, flashAlert, flashReadme := "", "", "50", "", ""
+	if p.Flash {
+		collectReadme += "。取得の前に `hourly` のプロファイルを判定し、重大度の下限 (`min_severity`) 以上だけを知らせます (`--flash`)"
+		collectTitle = "# 取得 (arata collect --incremental) を短い間隔で回し、その前に hourly のプロファイルを判定して、high 以上だけを知らせる (アカウントごとに 1 つのジョブ。matrix。ADR 0078・0082)。"
+		collectSlack = "# Slack に送るのは、hourly の判定で重大度の下限 (min_severity) 以上の指摘があったときと、それが届かなかったときだけ。判定・取得の失敗では送らない (説明書「取得の回に high 以上を知らせる」)。"
+		secretsNote = "Slack のトークンは、通知と知らせの step にだけ渡す。未登録なら aratam が CONFIG_INVALID で止まる。"
+		b, err := templates.ReadFile("templates/workflows/flash-steps.txt")
+		if err != nil {
+			return nil, err
+		}
+		flashSteps = string(b)
+		collectIf = "        # 判定・通知が失敗しても、取得は止めない (それぞれ自分の分を確定する。ADR 0082 の 6 節)\n        if: always() && steps.aws-config.outcome == 'success'\n"
+		collectTimeout = "35"
+		flashReadme = "- `--flash` も足すと、取得の前に `hourly` のプロファイルを判定し、`aws/<アカウント>/arata.yaml` の `profiles.hourly` の `min_severity` (雛形では `high`) 以上だけを、\n  次の朝を待たずに通知します (ルートの利用・知らない主体の ECS Exec・allowlist に無い呼び出し元の AssumeRole など)。下限より下 (既知の主体の ECS Exec、\n  知らない主体の失敗した ECS Exec など) は、その回では記録せず、これまでどおり daily が新規として知らせます。新規が無い回は何も送りません。\n  `min_severity` が無い `arata.yaml` は、PR の検査 (`arata repo check --flash`) が止めて、足す行を出します\n"
+		if flashAlert, err = fragment("flash-alert-on.txt"); err != nil {
+			return nil, err
+		}
+	}
 	quoted := make([]string, len(p.Accounts))
 	for i, a := range p.Accounts {
 		quoted[i] = "`" + a + "`"
@@ -367,6 +398,14 @@ func Files(p Params, reg *checks.Registry, today time.Time) ([]File, error) {
 		"@@COLLECT_CRON@@", CollectCron(p.CollectEvery),
 		"@@COLLECT_EVERY@@", p.CollectEvery,
 		"@@COLLECT_README@@", collectReadme,
+		"@@COLLECT_TITLE@@", collectTitle,
+		"@@COLLECT_SLACK@@", collectSlack,
+		"@@SECRETS_NOTE@@", secretsNote,
+		"@@FLASH_STEPS@@", flashSteps,
+		"@@COLLECT_IF@@", collectIf,
+		"@@COLLECT_TIMEOUT@@", collectTimeout,
+		"@@FLASH_ALERT@@", flashAlert,
+		"@@FLASH_README@@", flashReadme,
 	)
 	gen := generated
 	if p.CollectEvery != "" {
