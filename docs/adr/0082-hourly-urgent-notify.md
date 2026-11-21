@@ -1,7 +1,7 @@
 # 0082. 取得の回に `hourly` のプロファイルを重大度の下限 (`min_severity: high`) 付きで判定し、high 以上だけを通知する (`arata repo init --flash`)。下限より下の観測は記録せず daily に残す
 
 - 日付: 2026-11-21
-- 状態: 提案
+- 状態: 採用 (2026-11-21、開発リードのレビュー。実装はまだ)
 - 関係する判断: ADR 0078 (取得だけのワークフロー。4 節の「秘密は認証の 2 つだけ」を、この引数を付けたときに限り置き換える)、0072 (`ecs_exec` の重大度)、
   0066 (量の急変の速報。`flash: true` のプロファイル)、0038 (報告済みの印は出力の準備の後)、0005 (event 型と state 型)、0014 (暗黙の既定を持たない)、
   0054 (機械が読む出力)、0060・0061 (bot トークン、知らせのチャンネル)、0018 (arata と aratam は出力だけで連携)
@@ -115,6 +115,15 @@ profiles:
   間隔を別に選ぶ引数は持たない (cron が 2 本になり、group の待ちも増える)
 - cron・concurrency (監査と同じ group、`queue: max`)・`workflow_dispatch` は ADR 0078 のまま。手で流したとき (`workflow_dispatch`) も判定と通知をする (止まった後の追いつきで、溜まった high を知らせるため)
 
+#### 定時の遅れ・飛びと追いつき
+
+- GitHub の定時は遅れ、まれに飛ぶ (2026-11-21 の実測で 3〜19 分の遅れ)。hourly の判定の窓は、今の規則 (設計書 3 章) のまま **From = min(now − window, 前回の window_to)** で、
+  前の回の終わりから続ける。遅れても飛んでも、間の出来事は次の回の窓に入り、取りこぼさない。窓の境目の出来事を 2 回評価もしない
+- **`max_catchup` を超えた遅れ** (既定 7d。GitHub の定時が長く止まったときなど): 超えた分の hourly の評価は諦め、`RUN_MISSED` (`truncated: true`) を出す (今の規則のまま)。
+  超えた分の出来事は、hourly が記録していないので、daily (自分の窓で追いつく) が新規として報告する。hourly の判定が早く届かなくなるだけで、知らされないことは無い
+- 実装の PR で、テストで固定する: 定時が 3〜19 分遅れた回・1 回飛んだ回で、窓が前の回の window_to から始まり、境目の high の出来事がちょうど 1 回報告されること。
+  `max_catchup` を超えたときに `RUN_MISSED` が出て、超えた分の出来事が hourly で記録されず、次の daily で新規になること
+
 #### Slack の秘密がワークフローに渡ること (ADR 0078 の 4 節との関係)
 
 - ADR 0078 の 4 節は「取得は Slack に送らない。秘密は認証の 2 つだけ」とした。理由は 2 つ: 取得の回に通知の step を持たない (毎時の一時的な失敗で鳴らさない)、要らない秘密を渡さない
@@ -131,7 +140,8 @@ profiles:
   今は `hourly` のプロファイルだけを回す
 - README のコマンドと `arata-check.yml` の `repo check` の引数に載る (生成物を決める引数なので。ADR 0078 の 1 節と同じ)
 - **`repo check --flash` は、各アカウントの `aws/<アカウント>/arata.yaml` に `profiles.hourly` があり、`min_severity` を書いていることを確かめる** (オフライン。PR の検査で落とす)。
-  書いていない (古い雛形から作った) 設定のまま流すと、hourly が medium も記録して毎時に知らせる。利用者は `config init --diff` で 1 行を足す。
+  書いていない (古い雛形から作った) 設定のまま流すと、hourly が medium も記録して毎時に知らせる。
+  落ちたときの案内には、足す行をそのまま出す (`profiles.hourly` の下に `min_severity: high`。`config init --diff` でも見える)。
   値 (high か critical か) は利用者が選べる。event 型だけであることは `config check` が確かめる (1 節)
 
 ### 6. 失敗の扱い
@@ -195,7 +205,8 @@ report.json に `min_severity` があるとき (1 節)、aratam は**送り方�
   - 判定 → 通知 → 取得の順。判定が 2 のとき aratam が呼ばれず、取得は動くこと。判定が 3 で警告・成功、aratam が呼ばれること
   - aratam が 5 で、report.json の new が 1 以上なら知らせが動き、0 なら動かないこと
   - `--flash` 無しの出力が今と同じであること、`--collect-every` 無しの `--flash` がエラーになること
-- 説明書 (`examples/github-actions/README.md`): 「取得の回に high 以上を知らせる」の節 (有効にする手順 `--schedule --collect-every 1h --flash --force` の PR、`arata.yaml` の `min_severity`、知らせる範囲、daily との関係、失敗の扱い、時間)
+- 説明書 (`examples/github-actions/README.md`): 「取得の回に high 以上を知らせる」の節 (有効にする手順 `--schedule --collect-every 1h --flash --force` の PR、`arata.yaml` の `min_severity`、知らせる範囲、daily との関係、失敗の扱い、時間)。
+  知らない主体の、すべて失敗した ECS Exec (medium) は 1 時間ごとには届かず、daily で届くことも 1 行書く (3 節)
 - `docs/design.md` (プロファイルの項目と「決定:」)、`docs/aratam.md` (2 章の振り分けに 7 節)、`arata help ai` (`config`・`runtime`・`report` の該当箇所。ゴールデンも変わる)
 - 攻撃の対応表 (ADR 0058): チェックと重大度を変えないので直さない (3 節で重大度を変えない案を採るため)
 
