@@ -1,7 +1,7 @@
 # 0081. OIDC で入ったセッションから先の引き受けと操作の finding に、1 段目の GitHub の実行の手がかりを、発行されたキーのハッシュの突き合わせで付ける
 
 - 日付: 2026-11-21
-- 状態: 提案
+- 状態: 採用
 
 ## 背景
 
@@ -32,9 +32,15 @@ ADR 0076 は、ECS の `AssumeRole` の `responseElements.credentials.accessKeyI
    <https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html>)
 4. 1 段目の記録の `userIdentity` (`WebIdentityUser`) には `accessKeyId` が無い。1 段目と 2 段目を結べる値は、1 段目の**応答**の `accessKeyId` と、2 段目の**呼び出し側**の `accessKeyId` だけ
 
-**実際の記録では確かめていない** (開発では顧客の環境に触れない)。実装の前に、開発リードに、GitHub の OIDC から 2 段目を引き受けた実際の記録で、
-1 段目の応答の `accessKeyId` と 2 段目の `userIdentity.accessKeyId` が一致すること、空でないことを確かめてもらう (0076 の背景の 3 と同じ確かめ方)。
-一致しなければ、この ADR は採用しない。
+### 実際の記録で確かめたこと (2026-11-21)
+
+出典: 本番の環境の CloudTrail (LookupEvents、2026-11-20〜21) を、2026-11-21 に開発リードが読んだ形。アカウント・ロール・リポジトリの名前と値は書かない。
+
+1. GitHub の OIDC の 1 段目 (`AssumeRoleWithWebIdentity`) は 4 件。全件に `responseElements.credentials.accessKeyId` があった
+2. GitHub の OIDC のロールのセッションが呼んだ 2 段目の `AssumeRole` (呼び出し側が `AssumedRole`) は 11 件。全件で `userIdentity.accessKeyId` が空でなく、
+   1 段目の発行のどれかと一致した (合わなかったものは 0 件)
+3. 1 段目の発行から 2 段目の呼び出しまでは 36 秒〜23 分 (2 節の範囲の内)
+4. 2 段目の行き先は、CDK の deploy-role と file-publishing-role だった
 
 ## 決定
 
@@ -164,7 +170,7 @@ cloudtrail collector (`normalizeRaw`。LookupEvents と trail の S3 の共通) 
 ファズで次の規則を固定する。
 
 - `normalizeRaw`: 出力の `data` に `ASIA` で始まる認証情報の形の文字列が現れない。`issued_key_hash` は 1 節の 3 つの発行の記録にだけ、`session_key_hash` は `userIdentity.type` が
-  `AssumedRole` の記録にだけ現れ、どちらも 16 進 32 桁 (0076 の 7 節の「`session_key_hash` は秘匿値の読み取りにだけ」を、この規則で置き換える)
+  `AssumedRole` の記録にだけ現れ、どちらも 16 進 32 桁 (**0076 の 7 節の「`session_key_hash` は秘匿値の読み取りにだけ現れる」の規則を、この規則で置き換える**。1 節で `session_key_hash` を残す記録を広げるため。0076 のほかの節は変えない)
 - 鎖をたどる関数 (任意のハッシュ・時刻・種類の発行と記録の組): 必ず止まる。`chain_depth` は 1〜4。付く要素は `AssumeRoleWithWebIdentity` の発行の値だけで、
   どの段も発行の時刻が 2 節の範囲に入る。付く値は 3 節の形に合う。たどれた記録とたどれなかった記録の数の和は、finding の記録の数と一致する
 - 付ける finding の Key・Fingerprint・重大度・見出しが、`oidc_origins` の有無で変わらない (チェックごとのテスト。値を書き換えた記録で同じ結果になる)
