@@ -27,7 +27,8 @@ func TestProfileMinSeverity(t *testing.T) {
 		}
 	}
 	// info は下限にできない (下限より下は info だけになり、意味が無い)。大文字・知らない値・空白は誤記
-	for _, v := range []string{"info", "High", "urgent", "' high'"} {
+	// 空文字も誤り (書いたのに下限なし、を受け取らない。repo check --flash と config init --diff の見え方を 1 つにする)
+	for _, v := range []string{"info", "High", "urgent", "' high'", "''", `""`, "~", "null"} {
 		_, err := Load(write(t, with(v)))
 		if err == nil || !strings.Contains(err.Error(), "min_severity") {
 			t.Errorf("%s: %v", v, err)
