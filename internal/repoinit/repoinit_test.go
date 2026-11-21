@@ -27,6 +27,8 @@ func exampleParams() Params {
 		Schedule: true, Version: "v0.15.0",
 		// 取得だけを 1 時間ごとに回す (ADR 0078)。見本は取得のワークフローも持つ
 		CollectEvery: "1h",
+		// 取得の回に hourly を判定し、high 以上を知らせる (ADR 0082)。見本は判定と通知の step も持つ
+		Flash: true,
 		// 緊急用を分けるアカウント (prod) と分けないアカウント (staging)、知らせのチャンネルあり (ADR 0060 の見本の形)
 		AlertChannel:   "C0123456782",
 		Channels:       map[string]string{"prod": "C0123456789", "staging": "C0123456781"},
@@ -117,6 +119,7 @@ func TestValidateRejectsValuesOutsideTheShapes(t *testing.T) {
 		"collect every 01h":      func(p *Params) { p.CollectEvery = "01h" },
 		"collect every newline":  func(p *Params) { p.CollectEvery = "1h\n  evil: 1" },
 		"collect no schedule":    func(p *Params) { p.Schedule = false },
+		"flash no collect":       func(p *Params) { p.CollectEvery = "" },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -139,9 +142,10 @@ func TestValidateRejectsValuesOutsideTheShapes(t *testing.T) {
 		func(p *Params) { p.Channels, p.UrgentChannels = nil, nil }, // aratam.yaml が既にあるアカウントには要らない
 		func(p *Params) { p.UrgentChannels = map[string]string{"prod": SameChannel} },
 		func(p *Params) { p.AlertChannel = "G0123456789ABCDEF" },
-		func(p *Params) { p.CollectEvery = "" },
-		func(p *Params) { p.CollectEvery, p.Schedule = "", false },
+		func(p *Params) { p.CollectEvery, p.Flash = "", false },
+		func(p *Params) { p.CollectEvery, p.Schedule, p.Flash = "", false, false },
 		func(p *Params) { p.CollectEvery = "12h" },
+		func(p *Params) { p.Flash = false },
 	} {
 		p := exampleParams()
 		ok(&p)
@@ -246,7 +250,7 @@ func TestFilesFillInTheArguments(t *testing.T) {
 		}
 	}
 	readme := string(byPath(t, files, "README.md").Body)
-	if !strings.Contains(readme, "arata repo init --owner example-org --repo security-audit --accounts prod,staging --audit-account 111122223333 --store-bucket example-arata-store --region ap-northeast-1 --alert-channel C0123456782 --schedule --collect-every 1h --out .\n") {
+	if !strings.Contains(readme, "arata repo init --owner example-org --repo security-audit --accounts prod,staging --audit-account 111122223333 --store-bucket example-arata-store --region ap-northeast-1 --alert-channel C0123456782 --schedule --collect-every 1h --flash --out .\n") {
 		t.Errorf("README must show the command that reproduces this set:\n%s", readme[:600])
 	}
 	// 通知のチャンネル ID は aratam.yaml だけが持つ (README のコマンドにも、ワークフローにも入れない。ADR 0060)
@@ -270,7 +274,7 @@ func TestFilesFillInTheArguments(t *testing.T) {
 // TestScheduleIsOptIn は、--schedule を付けないと定時が入らないことを確かめる (導入の流れが済んでから PR で入れる)。
 func TestScheduleIsOptIn(t *testing.T) {
 	p := exampleParams()
-	p.CollectEvery = "" // 取得 (ADR 0078) は定時と一緒にだけ使える。ここでは定時だけを比べる
+	p.CollectEvery, p.Flash = "", false // 取得 (ADR 0078) は定時と一緒にだけ使える。ここでは定時だけを比べる
 	base := p
 	on := parseWorkflow(t, byPath(t, mustFiles(t, p), workflowPaths[0]))
 	if len(on.On.Schedule) != 2 {
@@ -303,7 +307,7 @@ const collectPath = ".github/workflows/arata-collect.yml"
 // 変わるのは取得のワークフロー・PR の検査 (repo check の引数)・README だけであることを確かめる (ADR 0078)。
 func TestCollectIsOptIn(t *testing.T) {
 	p := exampleParams()
-	p.CollectEvery = ""
+	p.CollectEvery, p.Flash = "", false // --flash (ADR 0082) は --collect-every と一緒にだけ。取得のワークフローの有無だけを比べる
 	off := mustFiles(t, p)
 	for _, f := range off {
 		if f.Path == collectPath {
@@ -320,7 +324,7 @@ func TestCollectIsOptIn(t *testing.T) {
 	} {
 		t.Run(every, func(t *testing.T) {
 			p := exampleParams()
-			p.CollectEvery = every
+			p.CollectEvery, p.Flash = every, false
 			files := mustFiles(t, p)
 			f := byPath(t, files, collectPath)
 			if f.Kind != Generated || f.Mode != 0o644 {
@@ -432,7 +436,7 @@ func TestWorkflowsUseOnlyTheThreeSecrets(t *testing.T) {
 	}
 	withAlert, noAlert, noSchedule := exampleParams(), exampleParams(), exampleParams()
 	noAlert.AlertChannel = NoAlert
-	noSchedule.Schedule, noSchedule.CollectEvery = false, ""
+	noSchedule.Schedule, noSchedule.CollectEvery, noSchedule.Flash = false, "", false
 	for name, p := range map[string]Params{"alert": withAlert, "no alert": noAlert, "no schedule": noSchedule} {
 		files := mustFiles(t, p)
 		if got := usedSecrets(t, files); strings.Join(got, ",") != strings.Join(SecretNames, ",") {

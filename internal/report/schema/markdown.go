@@ -15,6 +15,14 @@ func (r *Report) Markdown() string {
 		b.WriteString("- **試しの実行 (--dry-run)**: ストアに何も書いていません。ここに出た指摘は報告済みになっておらず、次の定時の実行でも出ます。新規の指摘の id は定時の実行で変わります\n")
 	}
 	fmt.Fprintf(&b, "- 期間: %s 〜 %s\n", r.Window.From, r.Window.To)
+	if r.MinSeverity != "" {
+		// 決定 (ADR 0082): 下限より下の数だけを出す (中身は記録していない)
+		fmt.Fprintf(&b, "- 重大度の下限: %s 以上だけを見ています。下限より下は記録せず、次の下限なしの run (daily) で報告します", inline(r.MinSeverity))
+		if r.Summary.Deferred > 0 {
+			fmt.Fprintf(&b, " (この回は %d 件)", r.Summary.Deferred)
+		}
+		b.WriteString("\n")
+	}
 	fmt.Fprintf(&b, "- 新規 %d / 変化 %d / 再発 %d / 解消 %d / 未対応 %d", r.Summary.New, r.Summary.Changed, r.Summary.Recurred, r.Summary.Resolved, r.Summary.StillOpen)
 	if r.Summary.MaxSeverity != "" {
 		fmt.Fprintf(&b, " / 最大重大度 **%s**", r.Summary.MaxSeverity)

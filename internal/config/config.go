@@ -141,6 +141,11 @@ type Profile struct {
 	// Silenced は報告に「黙らせているもの」の節 (ack・snooze 中の finding、期日の近い snooze、期限の近い allowlist の項目) を出す (ADR 0068)。
 	// 暗黙の既定は持たない (ADR 0014)。雛形では weekly に書く。
 	Silenced bool `yaml:"silenced"`
+	// MinSeverity は重大度の下限 (ADR 0082)。この重大度より下の観測は、この run では差分判定に渡さず、記録も報告もしない
+	// (次の下限なしのプロファイル、ふつうは daily が新規として報告する)。書かなければ下限なし。暗黙の既定は持たない (ADR 0014)。雛形では hourly に書く。
+	// 決定: 入れられるのは event 型のチェックだけ (state 型は観測を捨てると既存の finding を解消してしまう)。チェックの型はこのパッケージから見えないので、
+	// engine (run・config check・doctor) が確かめる。
+	MinSeverity string `yaml:"min_severity"`
 	// Overrides はこのプロファイルでだけ変える判定パラメータ (書かなければ全体の checks: の値)。
 	// 決定: 集計条件 (CollectionParams) は書けない (params.go)。
 	Overrides Checks `yaml:"overrides"`
@@ -475,9 +480,15 @@ func (c *Config) Validate() error {
 		if err := c.validateRecords(p.Records); err != nil {
 			return fmt.Errorf("config: profile %s: %w", name, err)
 		}
+		if p.MinSeverity != "" && !contains(MinSeverities, p.MinSeverity) {
+			return fmt.Errorf("config: profile %s: min_severity: %q: want %s", name, p.MinSeverity, strings.Join(MinSeverities, ", "))
+		}
 	}
 	return nil
 }
+
+// MinSeverities はプロファイルの min_severity に書ける値 (ADR 0082)。info は書けない (下限より下が info だけになり、意味が無い)。
+var MinSeverities = []string{"critical", "high", "medium", "low"}
 
 // ProfileRecords はプロファイルの records に書ける種類 (ADR 0075)。
 // 決定: 今は http_user だけ。ほかの種類は、チェック無しで引く理由が出てから足す

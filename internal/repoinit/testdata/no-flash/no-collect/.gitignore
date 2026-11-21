@@ -1,0 +1,8 @@
+# arata repo init が書き出したファイル (ADR 0059)。
+# Terraform の state と作業ディレクトリは git に入れない (state は当てた人の手元に置く)。
+# .terraform.lock.hcl は入れる (provider の版とハッシュの固定)。
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log

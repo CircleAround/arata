@@ -151,7 +151,7 @@ func TestCheckFilesReportsDifferences(t *testing.T) {
 	// aws/ の中身を育てても、差にしない
 	dir2, _, run2 := checkSet(t)
 	edit(t, filepath.Join(dir2, "aws/prod/aratam.yaml"), `channel: "C0123456789"`, `channel: "C0999999999"`)
-	mustWrite(t, filepath.Join(dir2, "aws/prod/arata.yaml"), "name: grown\n")
+	mustWrite(t, filepath.Join(dir2, "aws/prod/arata.yaml"), "name: grown\nprofiles:\n  hourly: {min_severity: high}\n") // --flash の見本は hourly の下限を見る (ADR 0082)
 	if o := run2(); !o.OK {
 		t.Fatalf("growing aws/ (and changing the channel) must pass: %+v", o.Rows)
 	}
@@ -190,6 +190,9 @@ jobs:
 	edit(t, filepath.Join(dir, workflowPaths[0]), "${{ secrets.ARATAM_SLACK_BOT_TOKEN }}", "''")
 	edit(t, filepath.Join(dir, workflowPaths[2]), "${{ secrets.ARATAM_SLACK_BOT_TOKEN }}", "''")
 	edit(t, filepath.Join(dir, workflowPaths[2]), "${{ secrets.ARATAM_SLACK_BOT_TOKEN }}", "''")
+	// --flash の取得のワークフローも、通知と知らせの step で参照する (ADR 0082)
+	edit(t, filepath.Join(dir, collectPath), "${{ secrets.ARATAM_SLACK_BOT_TOKEN }}", "''")
+	edit(t, filepath.Join(dir, collectPath), "${{ secrets.ARATAM_SLACK_BOT_TOKEN }}", "''")
 	rows := rowsOf(run(), ItemWorkflowSecrets, CheckNG)
 	if len(rows) != 1 || rows[0].Target != "ARATAM_SLACK_BOT_TOKEN" {
 		t.Fatalf("%+v", rows)

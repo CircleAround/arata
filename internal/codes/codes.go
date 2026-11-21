@@ -59,6 +59,7 @@ const (
 	// arata repo check (監査を回すリポジトリの一式と、GitHub の設定。ADR 0060)
 	RepoSetDiffers               = "REPO_SET_DIFFERS"
 	RepoNotifyMismatch           = "REPO_NOTIFY_MISMATCH"
+	RepoFlashProfile             = "REPO_FLASH_PROFILE"
 	RepoEnvironmentMissing       = "REPO_ENVIRONMENT_MISSING"
 	RepoEnvironmentOpen          = "REPO_ENVIRONMENT_OPEN"
 	RepoEnvironmentProtected     = "REPO_ENVIRONMENT_PROTECTED"
@@ -163,6 +164,7 @@ var All = []Code{
 	{RolePolicyLarge, arataOnly, "config role-params の一覧で、読み取り専用ロールのインラインポリシーが IAM の上限に近い・超える見込み (警告。値は出す)"},
 	{RepoSetDiffers, arataOnly, "監査を回すリポジトリの一式が、この版の一式と揃っていない (生成物の違い・残りもの・ワークフローの使う秘密・アカウントの設定が無い。repo check)"},
 	{RepoNotifyMismatch, arataOnly, "aratam.yaml が、一式のワークフローの渡す秘密 (bot トークン) で送る設定でない (repo check)"},
+	{RepoFlashProfile, arataOnly, "--flash の一式なのに、arata.yaml の profiles.hourly に重大度の下限 (min_severity) が無い (repo check。ADR 0082)"},
 	{RepoEnvironmentMissing, arataOnly, "GitHub の environment が無い (repo check --github)"},
 	{RepoEnvironmentOpen, arataOnly, "environment のデプロイできるブランチが、既定のブランチだけになっていない (repo check --github)"},
 	{RepoEnvironmentProtected, arataOnly, "environment にレビュー担当か待ち時間が付いている (定時の実行が止まる。repo check --github。警告)"},

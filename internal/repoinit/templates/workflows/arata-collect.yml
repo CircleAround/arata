@@ -1,11 +1,11 @@
-# 取得だけ (arata collect --incremental) を短い間隔で回す (アカウントごとに 1 つのジョブ。matrix)。判定・報告・通知はしない (ADR 0078)。
+@@COLLECT_TITLE@@
 # arata repo init --collect-every が書き出したファイル (ADR 0059・0078)。手で直さない: 間隔を変える・やめるときは、
 # README.md のコマンドの --collect-every を直して (やめるなら外して) arata repo init --force を流し、PR の差分で確かめる。
 # コメントの「説明書」は、arata のリポジトリの examples/github-actions/README.md。
 #
 # 取得を先に済ませておくと、毎朝の daily は読み直さずに判定だけに近づき、1 回の収集が max_collect に当たって partial になることも減る。
 # 集めるのは、CloudTrail の種類と collect: hourly の cloudwatch-logs のソースだけ (ADR 0064・0065)。日の頭から読み直すソースは daily が読む。
-# Slack には何も送らない。取得が失敗しても集めるはずだったものは失われず、daily がソースの位置から続きを自分で集める (説明書「取得だけを短い間隔で回す」)。
+@@COLLECT_SLACK@@
 name: arata-collect
 
 on:
@@ -89,7 +89,7 @@ jobs:
 
       # 認証に使う 2 つの秘密が未登録 (空) なら、ここで秘密の名前を出して止める (ADR 0060)。秘密は、最初は 1 つも登録されていない。
       # 足りない名前と、そのまま打てる登録のコマンドは、手元の arata repo check --github が出す (このリポジトリの README.md の 4)。
-      # 渡すのは空かどうかを見るためだけで、値は出さない。取得は Slack に送らないので、Slack のトークンは渡さない。
+      # 渡すのは空かどうかを見るためだけで、値は出さない。@@SECRETS_NOTE@@
       - id: secrets
         name: 秘密が登録されていることを確かめる
         timeout-minutes: 2
@@ -147,14 +147,14 @@ jobs:
           CONFIG
           echo "AWS_CONFIG_FILE=$cfg" >>"$GITHUB_ENV"
 
-      # ログの方針は監査と同じ: 出力は実行環境の一時ファイルに書き、Actions には INFO 以外の level / code / source だけを出す。
+@@FLASH_STEPS@@      # ログの方針は監査と同じ: 出力は実行環境の一時ファイルに書き、Actions には INFO 以外の level / code / source だけを出す。
       # 時間切れは認証の期限 (1 時間) より短くする。切れたら確定せず、次の回が続きから集める。
       # 終了コード 3 (一部のソースが取れなかった、または 1 回の上限 max_collect に当たった) は警告にして、ジョブを成功にする。
       # 追いつきの途中では毎回 max_collect に当たり、次の回が続きから集める。赤にすると追いつきの間ずっと赤になり、本当の失敗が埋もれる。
       # 取れないソースが続けば、daily がそのソースを自分で読み、取れなければ daily の coverage と通知に出る。
       - id: collect
         name: arata collect --incremental
-        timeout-minutes: 50
+@@COLLECT_IF@@        timeout-minutes: @@COLLECT_TIMEOUT@@
         run: |
           log="$RUNNER_TEMP/arata.log"
           status=0
@@ -166,3 +166,4 @@ jobs:
             exit 0
           fi
           exit "$status"
+@@FLASH_ALERT@@

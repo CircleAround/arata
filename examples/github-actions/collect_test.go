@@ -12,7 +12,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// collectFile は、取得だけ (arata collect --incremental) を短い間隔で回す見本 (ADR 0078)。見本の引数は --collect-every 1h。
+// collectFile は、取得 (arata collect --incremental) を短い間隔で回す見本 (ADR 0078)。見本の引数は --collect-every 1h --flash で、
+// 取得の前に hourly のプロファイルを判定し、high 以上を知らせる step も持つ (ADR 0082)。--flash を付けない形は internal/repoinit のテストが固定する。
 const collectFile = "arata-collect.yml"
 
 // 取得のワークフローは監査と同じストアへ書くので、監査と同じ group で順番に待つ。別の group だと、取得と daily が同時に確定し、
@@ -66,24 +67,41 @@ func TestCollectSharesStepsWithAudit(t *testing.T) {
 	for _, s := range steps(t, w) {
 		ids = append(ids, s.ID)
 	}
-	if strings.Join(ids, ",") != "checkout,install,secrets,aws,aws-config,collect" {
-		t.Errorf("steps: %v (the collection does not evaluate, report nor notify)", ids)
+	if strings.Join(ids, ",") != "checkout,install,secrets,aws,aws-config,hourly,notify,collect,alert" {
+		t.Errorf("steps: %v (judge the hourly profile, notify, then collect. ADR 0082)", ids)
+	}
+	// 通知の本体と、届いたかの印の付け方は監査と同じ
+	if x, y := stepByID(t, audit, "notify").Run, stepByID(t, w, "notify").Run; x != y {
+		t.Errorf("notify run differs from %s:\n%s\n---\n%s", multiFile, y, x)
 	}
 }
 
-// 取得は Slack に送らないので、秘密は認証の 2 つだけ (Slack のトークンを渡さない)。
-func TestCollectUsesOnlyTheAWSSecrets(t *testing.T) {
-	_, text := load(t, collectFile)
+// --flash の取得のワークフローは、Slack のトークンを通知と知らせの step にだけ渡す (ADR 0082 の 4 節。ADR 0078 の 4 節の置き換え)。
+// arata の step (判定・取得) とジョブの env には渡らない。
+func TestCollectGivesTheSlackTokenOnlyToNotifyAndAlert(t *testing.T) {
+	w, text := load(t, collectFile)
 	got := map[string]bool{}
 	for _, m := range regexp.MustCompile(`secrets\.(\w+)`).FindAllStringSubmatch(text, -1) {
 		got[m[1]] = true
 	}
-	if len(got) != 2 || !got["ARATA_RUNNER_ROLE_ARN"] || !got["ARATA_AUDIT_ROLE_ARNS"] {
+	if len(got) != 3 || !got["ARATA_RUNNER_ROLE_ARN"] || !got["ARATA_AUDIT_ROLE_ARNS"] || !got["ARATAM_SLACK_BOT_TOKEN"] {
 		t.Errorf("secrets: %v", got)
 	}
-	for _, bad := range []string{"aratam notify", "chat.postMessage", "SLACK", "--profile", "arata run"} {
-		if strings.Contains(text, bad) {
-			t.Errorf("the collect workflow must not mention %q", bad)
+	for k, v := range w.Jobs["collect"].Env {
+		if strings.Contains(v, "secrets.") {
+			t.Errorf("job env %s must not take a secret", k)
+		}
+	}
+	for _, s := range steps(t, w) {
+		for k, v := range s.Env {
+			if strings.Contains(v, "ARATAM_SLACK_BOT_TOKEN") && s.ID != "notify" && s.ID != "alert" {
+				t.Errorf("step %s must not take the Slack token (%s)", s.ID, k)
+			}
+		}
+	}
+	for _, id := range []string{"hourly", "collect"} {
+		if strings.Contains(stepByID(t, w, id).Run, "SLACK") {
+			t.Errorf("step %s must not touch Slack", id)
 		}
 	}
 }
@@ -133,7 +151,8 @@ func TestCollectSchedule(t *testing.T) {
 func TestCollectStepLogsOnlyCodesAndTreatsPartialAsWarning(t *testing.T) {
 	w, _ := load(t, collectFile)
 	s := stepByID(t, w, "collect")
-	if s.TimeoutMinutes == 0 || s.TimeoutMinutes >= 60 || s.ContinueOnErr != nil || s.If != "" {
+	// 判定・通知が失敗しても取得は動く (ADR 0082 の 6 節)。準備 (監査ロールのプロファイル) が済んでいなければ動かない
+	if s.TimeoutMinutes == 0 || s.TimeoutMinutes >= 60 || s.ContinueOnErr != nil || s.If != "always() && steps.aws-config.outcome == 'success'" {
 		t.Errorf("the collect step needs a timeout within the credentials (1h), and must fail the job: %+v", s)
 	}
 	for exit, want := range map[int]int{0: 0, 1: 1, 2: 2, 3: 0, 130: 130} {

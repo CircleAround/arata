@@ -88,6 +88,15 @@
         "max_catchup": {
           "type": "string"
         },
+        "min_severity": {
+          "type": "string",
+          "enum": [
+            "critical",
+            "high",
+            "medium",
+            "low"
+          ]
+        },
         "checks": {
           "type": "array",
           "items": {

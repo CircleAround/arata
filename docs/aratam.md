@@ -41,6 +41,10 @@ aratam notify --in /var/lib/arata/out/daily
    - 新規・変化・再発が 0 件で、取れなかったものも無い → `on_quiet` に従う (`short` = 「新規なし」と 1 行、`silent` = 送らない)。
    - 決定 (ADR 0068 の 3 節): report.json に `silenced` (黙らせているもの) があり 0 件でなければ、件数の 1 行を警告の行として規則で足す (どの書式にも出る)。
      high 以上の ack が 1 件でもあれば、`on_quiet: silent` でも送る。理由と操作した人は通知に出さず、`silenced` は LLM の入力 (`report.json`) から除く
+   - 決定 (ADR 0082 の 7 節): report.json に `min_severity` (arata のプロファイルの重大度の下限。1 時間ごとの hourly) があれば、送り方だけを変える (判定はしない)。
+     静かなら `on_quiet` に依らず送らない (毎時の「新規なし」を作らない。`.aratam-notified` は書く)。`coverage.sources_failed` だけでは静かでなくせず、緊急用にもしない
+     (送り先は指摘の重大度だけ。取れなかったことは daily が知らせる)。送るときは冒頭に「この回は high 以上だけを見ています。high より下は次の daily で知らせます」の 1 行を足す
+     (値は決まった語彙のときだけ載せる)。LLM は送る回だけ呼ぶ (今の順のまま)。aratam.yaml を hourly のために分けずに済む
 3. **LLM による要約** (`llm.provider` が `none` 以外のとき)
    - 入力は `report.json` だけ。system には `docs/ai/report.md` (arata が `arata help ai report` で出すのと同じ文書) を埋め込んで渡す。
    - system には、その run に出たチェックの対処手順 (playbook。3-3 章) も入れる。

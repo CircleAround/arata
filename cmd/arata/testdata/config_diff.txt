@@ -1,5 +1,6 @@
-この版の雛形との差分: 11 件
+この版の雛形との差分: 12 件
   [missing_key] profiles.weekly.silenced (雛形では true) — 雛形は silenced: true を書く。報告に「黙らせているもの」(ack・snooze 中の finding、7 日以内に期日の snooze、30 日以内に期限の allowlist の項目) の節を出す。aratam の通知にも件数の 1 行が出る (ADR 0068)。出したくなければ silenced: false を書く
+  [missing_key] profiles.hourly.min_severity (雛形では high) — 雛形は min_severity: high を書く。この重大度より下の観測は、この run では記録も報告もしない (次の daily が新規として報告する。ADR 0082)。event 型のチェックだけを入れられる。書かなければ下限なし (medium 以下もこの run で記録・報告し、daily では本日報告済みに回る)
   [param_changed] checks.probe_paths.min_count: 設定 3 / 雛形 10 — この版の既定値と違う
   [missing_param] checks.probe_paths.paths (雛形では [/.env, /.git/, /.aws/, /.ssh/, /wp-login.php, /wp-admin, /xmlrpc.php, /phpmyadmin, /pma, /server-status, /actuator, /config.json, /backup, /.DS_Store]) — 設定のこのチェックの節に無い (雛形の値が、この版の既定値として黙って効いている)。値を確かめて書く。機密パスの接頭辞。集計条件なので overrides では変えられない
   [missing_param] checks.probe_paths.exclude_paths (雛形では []) — 設定のこのチェックの節に無い (雛形の値が、この版の既定値として黙って効いている)。値を確かめて書く。対象から外す接頭辞 (正規の管理画面など)

@@ -44,6 +44,15 @@ const FallbackNotice = "要約に失敗したため原文を送ります"
 // DryRunReportNotice は、arata の試しの実行の報告を aratam notify --dry-run で表示するときに冒頭へ書く注記。
 const DryRunReportNotice = "arata の試しの実行 (run --dry-run) の報告です。実際の通知では送りません"
 
+// ScopeNotice は重大度の下限 (min_severity) を書いたプロファイルの報告の冒頭に足す規則の 1 行 (ADR 0082 の 7 節)。
+// min は report.json の値で、arata は決まった語彙 (critical / high / medium / low) だけを書く。決定 (ADR 0037): 語彙に無い値は通知に載せない。
+func ScopeNotice(min string) string {
+	if _, ok := severityRank[min]; !ok || min == "info" {
+		return "この回は重大度の下限より上だけを見ています。下限より下は次の daily で知らせます"
+	}
+	return "この回は " + min + " 以上だけを見ています。" + min + " より下は次の daily で知らせます"
+}
+
 // Route は送り先。
 type Route string
 
@@ -119,6 +128,11 @@ func Decide(in *Input, r Rules) Decision {
 	}
 	s := in.Run.Summary
 	failed := len(in.Run.Coverage.SourcesFailed) > 0
+	if in.Run.MinSeverity != "" {
+		// 決定 (ADR 0082 の 7 節): 重大度の下限を書いた (1 時間ごとの) 報告では、取れなかったソースだけでは送らず、緊急用にもしない。
+		// 送り先は指摘の重大度だけで決める。取れなかったことは daily が今の規則で知らせる
+		failed = false
+	}
 	d := Decision{Route: RouteNormal, Quiet: s.New+s.Changed+s.Recurred == 0 && !failed}
 	if failed || (s.MaxSeverity != "" && severityRank[s.MaxSeverity] >= severityRank[r.UrgentSeverity]) {
 		d.Route = RouteUrgent
@@ -179,6 +193,12 @@ func Run(ctx context.Context, o Options) Result {
 		silencedHigh = high
 	}
 	d := Decide(in, o.Rules)
+	// 決定 (ADR 0082 の 7 節): 重大度の下限を書いた報告は、静かなら on_quiet に依らず送らない (毎時の「新規なし」を作らない)。
+	// 送るときは、下限より下を見ていないことを冒頭の 1 行で伝える
+	scoped := in.Run != nil && in.Run.MinSeverity != ""
+	if scoped && !d.Quiet {
+		warnings = append([]string{ScopeNotice(in.Run.MinSeverity)}, warnings...)
+	}
 	exit := ExitOK
 	// 決定 (ADR 0024): WAF の改善提案 (proposals) は 2 通目として常に通常用に送る。on_quiet: silent でも提案は送る (週 1 回の改善提案のまとめ)
 	hasProposals := in.Run != nil && len(in.Run.Proposals) > 0
@@ -186,7 +206,7 @@ func Run(ctx context.Context, o Options) Result {
 	blocks := o.Format == FormatBlocks
 	var msg Message
 	switch {
-	case d.Quiet && o.Rules.OnQuiet == "silent" && !silencedHigh:
+	case d.Quiet && (scoped || o.Rules.OnQuiet == "silent" && !silencedHigh):
 		if !hasProposals {
 			mark(o, log, key)
 			return Result{Exit: ExitOK, Route: d.Route}

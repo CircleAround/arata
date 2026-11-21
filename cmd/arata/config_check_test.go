@@ -95,6 +95,10 @@ func TestConfigCheckRules(t *testing.T) {
 		{"unknown check name (the rule of doctor and run)", func(c *cli) {
 			c.writeConfig(strings.Replace(cfgOf(c), "checks: [root_usage, ecs_exec, unknown_assume_role, oidc_assume_role]", "checks: [root_usage, root_usege]", 1))
 		}, 2, []string{`profile hourly: unknown check "root_usege"`}},
+		// 重大度の下限を書いたプロファイルには event 型だけ (ADR 0082)
+		{"state check under min_severity", func(c *cli) {
+			c.writeConfig(strings.Replace(cfgOf(c), "checks: [root_usage, ecs_exec, unknown_assume_role, oidc_assume_role]", "min_severity: high\n    checks: [root_usage, new_principal]", 1))
+		}, 2, []string{`profile hourly: min_severity: state check "new_principal"`}},
 		// 設定が読めなければ allowlist の場所が決まらないので、allowlist は見ない
 		{"allowlist is skipped when the config is broken", func(c *cli) {
 			c.writeConfig("name: [\n")

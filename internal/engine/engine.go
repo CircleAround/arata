@@ -906,6 +906,8 @@ type EvalResult struct {
 	CoverageNotes []string
 	ChecksRun     []string
 	ChecksSkipped []report.SkippedCheck
+	// Deferred はプロファイルの重大度の下限 (min_severity) より下で、差分判定に渡さずに捨てた観測の数 (ADR 0082)。
+	Deferred int
 }
 
 // Evaluate はプロファイルのチェックを走らせ、差分判定の結果を返す。
@@ -939,6 +941,10 @@ func (e *Engine) Evaluate(ctx context.Context, profileName string, w collect.Win
 			res.ChecksSkipped = append(res.ChecksSkipped, report.SkippedCheck{Check: name, Reason: d.Disabled()})
 			continue
 		}
+		// 決定 (ADR 0082): 下限を書いたプロファイルには event 型だけを入れる。state 型は観測を捨てると既存の finding を解消してしまう
+		if prof.MinSeverity != "" && c.Mode() != checks.ModeEvent {
+			return EvalResult{}, e.configErr(fmt.Errorf("profile %q: min_severity: check %q is a state check (only event checks can be used with min_severity)", profileName, name))
+		}
 		if reason := skipReason(c, available, failedKinds, unavailableOf(cr)); reason != "" {
 			res.ChecksSkipped = append(res.ChecksSkipped, report.SkippedCheck{Check: name, Reason: reason})
 			continue
@@ -963,6 +969,11 @@ func (e *Engine) Evaluate(ctx context.Context, profileName string, w collect.Win
 		if err != nil {
 			return EvalResult{}, fmt.Errorf("check %s: %w", name, err)
 		}
+		// 決定 (ADR 0082): 下限より下の観測は差分判定に渡さない。findings に書かず (first_seen も reported_at も付かない)、報告にも出さない。
+		// 次の下限なしの run (daily) が同じ観測を新規として報告する。ack / snooze の状態も触らない
+		var deferred int
+		obs, deferred = belowMinSeverity(obs, prof.MinSeverity)
+		res.Deferred += deferred
 		dw := w
 		if !e.diffFrom.IsZero() {
 			dw.From = e.diffFrom
@@ -985,6 +996,21 @@ func (e *Engine) Evaluate(ctx context.Context, profileName string, w collect.Win
 		}
 	}
 	return res, nil
+}
+
+// belowMinSeverity は min (空なら下限なし) より下の観測を除いた観測と、除いた数を返す (ADR 0082)。
+func belowMinSeverity(obs []checks.Observation, min string) ([]checks.Observation, int) {
+	if min == "" {
+		return obs, 0
+	}
+	floor := checks.Severity(min).Rank()
+	kept := obs[:0:0]
+	for _, o := range obs {
+		if o.Severity.Rank() >= floor {
+			kept = append(kept, o)
+		}
+	}
+	return kept, len(obs) - len(kept)
 }
 
 // queryFor はチェックに渡す Query。決定 (ADR 0032): ふだん使わないリージョンのイベント (cloudtrail-unused-regions のソース) は
@@ -1574,7 +1600,8 @@ func (e *Engine) buildReport(profileName, runID string, w collect.Window, now ti
 		Profile: profileName, Name: e.cfg.Name, RunID: runID, Window: w, Now: now, DiffFrom: e.diffFrom,
 		Results: ev.Results, CollectErrors: cr.Errors, SourcesOK: cr.SourcesOK, Formats: cr.Formats,
 		ChecksRun: ev.ChecksRun, ChecksSkipped: ev.ChecksSkipped, Proposals: ev.Proposals,
-		Triage: triageOf, // review と同じ許す操作 (ADR 0068 の 4 節)
+		Triage:      triageOf, // review と同じ許す操作 (ADR 0068 の 4 節)
+		MinSeverity: e.cfg.Profiles[profileName].MinSeverity, Deferred: ev.Deferred,
 	})
 	// 決定 (ADR 0055): チェックが判定しなかった記録 (以前の版で集めた記録など) は、黙って捨てずに coverage.notes に出す
 	rep.Coverage.Notes = append(rep.Coverage.Notes, ev.CoverageNotes...)

@@ -1,0 +1,320 @@
+# arata と aratam を GitHub Actions で定期実行する (アカウントごとに 1 つのジョブ。matrix)。
+# arata repo init が書き出したファイル (ADR 0059・0060)。手で直さない: 版を上げる・アカウントを足すときは、
+# 同じ引数で arata repo init --force を流して書き直し、PR の差分で確かめる (このリポジトリの README.md)。
+# コメントの「説明書」は、arata のリポジトリの examples/github-actions/README.md。
+#
+# このリポジトリに置くもの (アカウントごとに 1 つのディレクトリ。名前は matrix の account と同じ):
+#   aws/<アカウント>/arata.yaml         store: s3://example-arata-store/<アカウント> と aws.profile: arata-audit
+#   aws/<アカウント>/aratam.yaml        name: (通知に出す監査対象の名前) はアカウントごとに違う
+#   aws/<アカウント>/allowlist.yaml
+#   aws/<アカウント>/aratam-context.md  (任意。llm.context_file)
+name: arata-audit
+
+on:
+  schedule:
+    # 時刻は UTC。毎時ちょうどは GitHub の定時実行が混み、遅れたり落ちたりするので避ける。
+    # daily を UTC 0 時台の後半にするのは、Logs Insights のスキャンの範囲が半分ほどになるため (arata doctor の cost の行の案内)。
+    # 「UTC 0 時 + 窓 (24h) + ingest_delay (15m) + 余裕 15 分」= 00:30 より後ならよい。遅れは費用を増やさない。
+    - cron: '40 0 * * *'   # daily (JST 09:40)
+    - cron: '10 1 * * 1'   # weekly (月曜 JST 10:10)。下の PROFILE の文字列と揃える
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: 実行するプロファイル
+        type: choice
+        options: [daily, weekly]
+        default: daily
+      # 試しの実行 (arata run --dry-run)。定時の前に、いま流したら何が出るかだけを見る。
+      # ストアに何も書かないので、出た指摘は報告済みにならず、次の定時の実行でも通知される。通知はしない。
+      # ARATA_VERSION が v0.11.0 より後の版であること (それより前は --dry-run を知らず、終了コード 2 で止まる。何も書かれない)。
+      dry_run:
+        description: 試しの実行 (ストアに書かず、通知もしない。結果は件数だけをログに出す)
+        type: boolean
+        default: false
+      window:
+        description: 試しの実行で見る期間 (例 1h。空ならプロファイルの window。dry_run のときだけ使う)
+        type: string
+        default: ''
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash     # -eo pipefail で動く
+
+env:
+  ARATA_VERSION: v0.15.0       # この一式を書き出した arata の版。上げるときは、新しい版の arata repo init --force で書き直す
+  AWS_REGION: ap-northeast-1
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    # 秘密は environment の secrets に置き、environment のデプロイできるブランチを main だけにする (説明書「実行するリポジトリと環境を堅くする」の 5)。
+    # ほかのブランチのジョブには秘密が渡らない。OIDC の sub は repo:…:environment:audit になる (runner.yaml の GitHubEnvironment=audit と組)。
+    environment: audit
+    # アカウントごとに 1 つのジョブ。1 つが失敗してもほかは続ける。
+    # 名前は小文字の英数字とハイフンだけにする (設定のディレクトリ・ストアの prefix・排他の名前に使う)。
+    strategy:
+      fail-fast: false
+      matrix:
+        account: [prod, staging]
+    # 同じストアへの同時実行を止める。走っている run は中断しない (中断すると収集を捨てることになる)。
+    # 止めきれなくても、後から終わったほうが STORE_CONFLICT で失敗するだけで、ストアは壊れない (ADR 0034)。
+    # ストアはアカウントごとなので、group もアカウントごとにする。
+    concurrency:
+      # 試しの実行はストアに書かないので group を分ける (同じ group だと、待っている定時の実行を取り消し得る)。
+      group: arata-audit-${{ matrix.account }}${{ inputs.dry_run && '-dry-run' || '' }}
+      cancel-in-progress: false
+      # 待てる数を 1 つ (既定の queue: single) にすると、後から入った実行 (片付けなど) が、待っていた定時の監査を取り消す。
+      # 取り消された監査は aratam の step も走らないので、「実行されていない」の知らせも届かない。最大 100 件を、待ち始めた順に待たせる (ADR 0068 の 7 節)
+      queue: max
+    permissions:
+      id-token: write   # OIDC で実行用ロールを引き受ける
+      contents: read    # 設定ファイルの checkout
+    env:
+      ACCOUNT: ${{ matrix.account }}
+      ARATA_CONFIG_DIR: aws/${{ matrix.account }}
+      ARATA_TARGET: ${{ matrix.account }}   # 監査対象の名前。最後の alert の連絡に出す
+      ARATA_STORE_URL: s3://example-arata-store/${{ matrix.account }}   # aws/<account>/arata.yaml の store: と同じ値
+      PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.profile || (github.event.schedule == '10 1 * * 1' && 'weekly' || 'daily') }}
+    steps:
+      - id: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # バイナリは認証より先に取る。OIDC が失敗しても aratam で「実行されていない」と知らせるため。
+      # 照合の SHA256SUMS は同じリリースのものなので、壊れた取得は防げるがリリース自体のすり替えは防げない。
+      # 公開リポジトリのリリースなら gh attestation verify で来歴も確かめられる (arata の 説明書「来歴の検証」)。
+      - id: install
+        name: arata と aratam を取得する
+        env:
+          # arata のリポジトリは公開なので、Release は github.token で読める (ほかのトークンは要らない)
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          dir="$RUNNER_TEMP/arata-bin"
+          mkdir -p "$dir"
+          # Release の取得は、一時的な失敗 (公開した直後の release not found など) があるので、5・10・15 秒の間を空けて 4 回まで試す。
+          # 照合 (SHA256SUMS) は取得の後に 1 回だけ行うので、再試行で弱めない。途中まで落ちたファイルは --clobber で上書きする
+          for attempt in 1 2 3 4; do
+            if gh release download "$ARATA_VERSION" -R CircleAround/arata -D "$dir" --clobber \
+              -p arata-linux-amd64 -p aratam-linux-amd64 -p SHA256SUMS; then
+              break
+            fi
+            if [ "$attempt" = 4 ]; then
+              echo "::error::arata の Release ($ARATA_VERSION) を 4 回とも取得できませんでした"
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
+          cd "$dir"
+          for name in arata aratam; do
+            grep " ${name}-linux-amd64\$" SHA256SUMS | sha256sum --check --strict --quiet -
+            install -m 0755 "${name}-linux-amd64" "$name"
+          done
+          echo "$dir" >>"$GITHUB_PATH"
+
+      # 認証に使う 2 つの秘密が未登録 (空) なら、ここで秘密の名前を出して止める (ADR 0060)。秘密は、最初は 1 つも登録されていない。
+      # 足りない名前と、そのまま打てる登録のコマンドは、手元の arata repo check --github が出す (このリポジトリの README.md の 4)。
+      # 渡すのは空かどうかを見るためだけで、値は出さない。Slack のトークンが未登録のときは、notify で aratam が CONFIG_INVALID で止まる。
+      - id: secrets
+        name: 秘密が登録されていることを確かめる
+        timeout-minutes: 2
+        env:
+          ARATA_RUNNER_ROLE_ARN: ${{ secrets.ARATA_RUNNER_ROLE_ARN }}
+          ARATA_AUDIT_ROLE_ARNS: ${{ secrets.ARATA_AUDIT_ROLE_ARNS }}
+        run: |
+          status=0
+          for name in ARATA_RUNNER_ROLE_ARN ARATA_AUDIT_ROLE_ARNS; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::秘密 $name が未登録。手元で arata repo check --github を流し、出たコマンドで登録する (README.md の 4)"
+              status=1
+            fi
+          done
+          exit "$status"
+
+      # 実行用ロール。権限は監査ロールの引き受けとストアのバケットの読み書きだけにする。
+      # ロールの ARN はアカウント ID を含むので secrets に置く (secrets はログで自動的に隠される)。
+      - id: aws
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.ARATA_RUNNER_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: arata-audit
+          role-duration-seconds: 3600
+          mask-aws-account-id: true
+
+      # 2 つの認証を分ける:
+      #   監査対象: arata.yaml の aws.profile: arata-audit → 実行用ロールから、そのアカウントの読み取り専用ロールへ連鎖する
+      #   ストア:   arata.yaml の store_profile は書かない → SDK の標準の連鎖で実行用ロールのまま書く
+      # 監査ロールの ARN は 1 つの secret に JSON でまとめ ({"<アカウント>": "arn:...", ...})、ここで名前から取り出す。
+      # secrets[...] の動的な参照は使わない (ジョブにすべての secrets が渡ってしまう)。
+      # 取り出した ARN は secret の一部で、自動では隠れないので ::add-mask:: で隠す。jq の出力とエラーはログに出さない。
+      - id: aws-config
+        name: 監査ロールのプロファイルを書く
+        env:
+          AUDIT_ROLE_ARNS: ${{ secrets.ARATA_AUDIT_ROLE_ARNS }}
+        run: |
+          arn="$(jq -r --arg a "$ACCOUNT" '.[$a] | strings' <<<"$AUDIT_ROLE_ARNS" 2>/dev/null)" || arn=""
+          case "$arn" in
+            arn:aws*:iam::*:role/*) ;;
+            *)
+              echo "ARATA_AUDIT_ROLE_ARNS に $ACCOUNT の監査ロールの ARN が無い"
+              exit 1
+              ;;
+          esac
+          echo "::add-mask::$arn"
+          cfg="$RUNNER_TEMP/aws-config"
+          umask 077
+          cat >"$cfg" <<CONFIG
+          [profile arata-audit]
+          role_arn = $arn
+          credential_source = Environment
+          role_session_name = arata-audit
+          CONFIG
+          echo "AWS_CONFIG_FILE=$cfg" >>"$GITHUB_ENV"
+
+      # ログの方針: 出力は実行環境の一時ファイルに書き、Actions には INFO 以外の level / code / source だけを出す。
+      # msg と error には ARN・アカウント ID などが入り得る。Actions のログはリポジトリを読める人に見えるので、
+      # 値を ::add-mask:: で列挙して隠すのではなく、そもそも出さない (監査の結果に何が出るかは列挙できない)。
+      # 原因を詳しく見るときは手元で同じコマンドを実行する。
+      # 時間切れは認証の期限 (1 時間) より短くする。切れたら確定せず、次の run がやり直す。
+      - id: audit
+        name: arata run
+        timeout-minutes: 50
+        env:
+          # 手動実行の入力。定時の実行では空。値は引数として渡すだけで、妥当かは arata が確かめる
+          DRY_RUN: ${{ inputs.dry_run }}
+          DRY_RUN_WINDOW: ${{ inputs.window }}
+        run: |
+          log="$RUNNER_TEMP/arata.log"
+          status=0
+          args=(run -c "$ARATA_CONFIG_DIR/arata.yaml" --profile "$PROFILE" --out "$RUNNER_TEMP/arata-out")
+          if [ "${DRY_RUN:-}" = "true" ]; then
+            args+=(--dry-run)
+            if [ -n "${DRY_RUN_WINDOW:-}" ]; then
+              args+=(--window "$DRY_RUN_WINDOW")
+            fi
+          fi
+          arata "${args[@]}" >"$log" 2>&1 || status=$?
+          jq -Rc 'fromjson? | objects | select(.level != "INFO") | {level, code, source}' "$log" || true
+          echo "arata exit=$status"
+          exit "$status"
+
+      # 試しの実行 (手動実行の dry_run) の結果。通知はしないので、件数と重大度だけをここに出す。
+      # ログの方針は上と同じ: 個々の指摘の中身 (主体・IP・要約) と注記の文は出さない。
+      # 数と、決まった語彙の値 (重大度) と、時刻の形の値だけを選んで出す。中身を読むときは、手元で同じ arata run --dry-run を流す。
+      - id: dry-run-summary
+        name: 試しの実行の結果 (件数だけ)
+        if: always() && inputs.dry_run
+        timeout-minutes: 5
+        run: |
+          file="$RUNNER_TEMP/arata-out/report.json"
+          if [ ! -f "$file" ]; then
+            echo "試しの実行の報告がありません (arata run の終了コードと code を見てください)"
+            exit 0
+          fi
+          jq -c '
+            def sev: ["critical", "high", "medium", "low"];
+            def count: if type == "number" then . else null end;
+            def stamp: if type == "string" and test("^[0-9T:Z.+-]{1,40}$") then . else null end;
+            {
+              dry_run: (.dry_run == true),
+              window: {from: (.window.from | stamp), to: (.window.to | stamp)},
+              summary: {
+                new: (.summary.new | count), changed: (.summary.changed | count), recurred: (.summary.recurred | count),
+                resolved: (.summary.resolved | count), still_open: (.summary.still_open | count),
+                max_severity: (.summary.max_severity as $s | if (sev | index($s)) then $s else null end)
+              },
+              by_severity: ([.findings.new[]?, .findings.changed[]?, .findings.recurred[]?]
+                | map(.severity as $s | select(sev | index($s)) | $s) | group_by(.) | map({key: .[0], value: length}) | from_entries),
+              sources_failed: (.coverage.sources_failed | length),
+              checks_skipped: (.coverage.checks_skipped | length),
+              notes: (.coverage.notes | length)
+            }' "$file" 2>/dev/null || echo "試しの実行の報告を読めませんでした"
+
+      # arata が失敗しても aratam は必ず動かす (バイナリが取れていれば)。
+      # 実行環境は毎回消えるので、STORE_CONFLICT・INTERRUPTED・設定の誤り・OIDC の失敗のどれでも report.json が無く、
+      # aratam は max_age を待たずに「arata の出力が無いか古い」を緊急用に送る (終了コード 4)。
+      # max_age が効くのは --out が残る環境だけなので、ここでは daily と weekly で同じ aratam.yaml を使える。
+      # 一部のソースが取れなかったとき (arata の終了コード 3) は report.json があるので、通常の通知が緊急用に届く。
+      # どちらもジョブは失敗 (赤) のままにする。
+      - id: notify
+        name: aratam notify
+        # 試しの実行では通知しない (aratam も dry_run の報告は送らない。ここで呼ばないのは、arata が失敗したときに「実行されていない」を送らないため)
+        if: always() && steps.install.outcome == 'success' && !inputs.dry_run
+        timeout-minutes: 5
+        env:
+          # Slack の秘密は bot トークンの 1 つだけ (ADR 0060・0061)。送り先のチャンネル ID は aratam.yaml に書く (秘密ではない)。
+          # aratam.yaml が bot トークンの方式であることは、PR の検査 (arata-check.yml の arata repo check) が確かめる。
+          # トークンが未登録 (空) なら、aratam は CONFIG_INVALID (終了コード 2) で止まる。
+          ARATAM_SLACK_BOT_TOKEN: ${{ secrets.ARATAM_SLACK_BOT_TOKEN }}
+        run: |
+          log="$RUNNER_TEMP/aratam.log"
+          status=0
+          aratam notify -c "$ARATA_CONFIG_DIR/aratam.yaml" --in "$RUNNER_TEMP/arata-out" >"$log" 2>&1 || status=$?
+          jq -Rc 'fromjson? | objects | select(.level != "INFO") | {level, code, source}' "$log" || true
+          echo "aratam exit=$status"
+          # Slack に何かが届いた終了コード: 0 = 送った (送る必要が無かった)、3 = LLM が使えず原文で送った、4 = 入力が無い・古いと送った。
+          # 2 (設定・secret の誤り) と 5 (送信の失敗) は、何も届いていない。最後の alert はこの印を見る
+          case "$status" in
+            0 | 3 | 4) echo "delivered=true" >>"$GITHUB_OUTPUT" ;;
+          esac
+          exit "$status"
+
+      # WAF の提案の全文は --in のディレクトリにしか書かれず、実行環境と一緒に消えるのでストアのバケットに残す。
+      # report の本文は arata が reports/<profile>.md として既に置いている。
+      # Actions の artifacts はリポジトリを読める人に見えるので使わない。
+      - id: save-proposals
+        name: WAF の提案の全文をストアへ置く
+        if: always() && steps.aws.outcome == 'success' && !inputs.dry_run
+        timeout-minutes: 5
+        run: |
+          file="$RUNNER_TEMP/arata-out/waf-proposals.md"
+          if [ -f "$file" ]; then
+            aws s3 cp "$file" "$ARATA_STORE_URL/reports/waf-proposals.md" --only-show-errors >/dev/null 2>&1
+          fi
+
+      # 定時の実行で、Slack に何も届かなかったときに、知らせのチャンネルへ 1 行を送る (説明書「定時の通知が送れなかったとき」。ADR 0060)。
+      # 通知そのものが壊れると (設定の誤り、バイナリが取れない、認証の失敗、aratam の異常終了)、aratam は知らせられない。
+      # aratam を通さず、同じ bot トークンで chat.postMessage を直接呼ぶ。送り先は、このファイルに書いたチャンネル ID (秘密ではない)。
+      # 送るのは「監査対象の名前・プロファイル・失敗した段階の id・この実行の URL」だけ。指摘の中身・件数・ログの文は送らない。
+      # 失敗した段階は toJSON(steps) の outcome から拾う (id は、このファイルに書いた名前。値は見ない)。
+      # 手動実行 (workflow_dispatch) では送らない (実行した人が結果を見ている)。
+      # aratam が「実行されていない」「一部が取れなかった」を Slack に送れたとき (上の delivered) も送らない。
+      # トークンそのものが使えないとき (未登録・失効) は、ここも送れない。ジョブは赤のままで、下のエラーが出る。
+      # 定時の前に、arata repo check --github (未登録) と arata-notify-test の alert (失効・bot がチャンネルにいない) で確かめておく。
+      - id: alert
+        name: 定時の通知が送れなかったことを知らせる
+        if: failure() && github.event_name == 'schedule' && steps.notify.outputs.delivered != 'true'
+        timeout-minutes: 3
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.ARATAM_SLACK_BOT_TOKEN }}
+          ALERT_CHANNEL: C0123456782   # 知らせのチャンネル ID (arata repo init --alert-channel)
+          STEPS: ${{ toJSON(steps) }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # id は英小文字・数字・ハイフンのものだけを拾う (このファイルの id の形)。outcome のほかの値・outputs は読まない
+          failed="$(jq -r '[to_entries[] | select(.value.outcome == "failure") | .key | select(test("^[a-z0-9-]{1,40}$"))] | join(", ")' <<<"$STEPS" 2>/dev/null)" || failed=""
+          echo "failed steps: ${failed:-unknown}"
+          text="arata の定時の通知を送れていません。対象: $ARATA_TARGET / プロファイル: $PROFILE / 失敗した段階: ${failed:-不明} / $RUN_URL"
+          # ここから下は、arata-audit.yml の alert と arata-notify-test.yml の alert で同じ (同じ送り方で確かめて、初めて確認になる)。
+          # トークンは秘密なので、ヘッダーは標準入力で渡し (引数に書かない)、curl の出力もエラーも出さない。前後の空白 (secret の末尾の改行) は除く。
+          token="$(printf '%s' "${SLACK_BOT_TOKEN:-}" | tr -d '[:space:]')"
+          if [ -z "$token" ]; then
+            echo "::error::ARATAM_SLACK_BOT_TOKEN が未登録なので、知らせを送れない (手元で arata repo check --github)"
+            exit 1
+          fi
+          body="$RUNNER_TEMP/arata-alert.json"
+          jq -n --arg channel "$ALERT_CHANNEL" --arg text "$text" '{channel: $channel, text: $text, unfurl_links: false, unfurl_media: false}' >"$body"
+          resp="$(printf 'Authorization: Bearer %s\n' "$token" |
+            curl --silent --fail --max-time 20 --retry 2 -H @- -H 'Content-Type: application/json; charset=utf-8' \
+              --data-binary "@$body" https://slack.com/api/chat.postMessage 2>/dev/null)" || resp=""
+          # Slack は失敗でも HTTP 200 を返す。応答の ok が true のときだけ、届いたとみなす
+          if [ "$(jq -r '.ok == true' <<<"$resp" 2>/dev/null)" != true ]; then
+            # error は、決まった形 (英小文字・数字・_) のときだけ出す (not_in_channel = bot を知らせのチャンネルに招待する、など)。応答の本文は出さない
+            err="$(jq -r '.error | strings | select(test("^[a-z0-9_]{1,64}$"))' <<<"$resp" 2>/dev/null)" || err=""
+            echo "::error::知らせを送れなかった (slack error=${err:-unknown})"
+            exit 1
+          fi

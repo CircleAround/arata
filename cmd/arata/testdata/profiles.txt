@@ -80,7 +80,7 @@ profile daily (window 24h, max_catchup 7d)
   cost_anomaly.medium_impact_ratio             既定値     0.5
   cost_anomaly.high_impact_ratio               既定値     1
 
-profile hourly (window 1h, max_catchup 7d)
+profile hourly (window 1h, max_catchup 7d, min_severity high)
   CHECK                CADENCE  MODE   VIA
   ecs_exec             hourly   event  explicit
   oidc_assume_role     hourly   event  explicit

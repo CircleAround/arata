@@ -138,6 +138,42 @@ func TestRepoInitCollectEvery(t *testing.T) {
 	}
 }
 
+// TestRepoInitFlash は、--flash が --collect-every と一緒にだけ使え、取得のワークフローに hourly の判定と通知を足すこと、
+// repo check --flash が arata.yaml の min_severity を確かめることを確かめる (ADR 0082)。
+func TestRepoInitFlash(t *testing.T) {
+	withVersion(t, "v0.15.0")
+	c := newCLI(t)
+	out := filepath.Join(c.dir, "repo")
+	collect := filepath.Join(out, ".github/workflows/arata-collect.yml")
+	if code := c.repo("--out", out, "--schedule", "--flash"); code != 2 || !strings.Contains(c.stderr.String(), "--collect-every") {
+		t.Fatalf("without --collect-every: exit %d: %s", code, c.stderr)
+	}
+	if _, err := os.Stat(out); !os.IsNotExist(err) {
+		t.Fatalf("nothing must be written: %v", err)
+	}
+	if code := c.repo("--out", out, "--schedule", "--collect-every", "1h", "--flash"); code != 0 {
+		t.Fatalf("exit %d: %s%s", code, c.stdout, c.stderr)
+	}
+	if b, err := os.ReadFile(collect); err != nil || !strings.Contains(string(b), "--profile hourly") {
+		t.Fatalf("collect workflow: %v\n%s", err, b)
+	}
+	check := append([]string{"repo", "check"}, repoArgs[2:]...)
+	flash := append(check, "--out", out, "--schedule", "--collect-every", "1h", "--flash")
+	if code := c.run(flash...); code != 0 {
+		t.Fatalf("repo check exit %d: %s", code, c.stdout)
+	}
+	// 古い雛形の arata.yaml (min_severity が無い) は落ち、足す行が出る
+	for _, a := range []string{"prod", "staging"} {
+		p := filepath.Join(out, "aws", a, "arata.yaml")
+		if b, err := os.ReadFile(p); err == nil {
+			_ = os.WriteFile(p, []byte(strings.Replace(string(b), "\n    min_severity: high ", "\n    # min_severity: high ", 1)), 0o644)
+		}
+	}
+	if code := c.run(flash...); code != 2 || !strings.Contains(c.stdout.String(), "REPO_FLASH_PROFILE") || !strings.Contains(c.stdout.String(), "    min_severity: high") {
+		t.Fatalf("repo check exit %d: %s", code, c.stdout)
+	}
+}
+
 // TestRepoInitDiffJSON は、--diff --format json の形と終了コードを固定する (機械が読む出力。ADR 0054)。
 func TestRepoInitDiffJSON(t *testing.T) {
 	withVersion(t, "v0.15.0")

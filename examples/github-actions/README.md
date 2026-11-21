@@ -18,7 +18,7 @@ Slack へは bot トークンで送ります (arata の ADR 0061)。決めるの
 | `--channel <アカウント>=<ID>,…` | アカウントごとの通常用のチャンネル。`aratam.yaml` を新しく作るアカウントに要ります |
 | `--urgent-channel <アカウント>=<ID>\|same,…` | アカウントごとの緊急用のチャンネル。分けないなら `same` (通常用に、メンション付きで送ります)。`aratam.yaml` を新しく作るアカウントに要ります |
 
-書き出される一式の見本が [examples/audit-repo](../audit-repo) です (上の引数に `--schedule --collect-every 1h` を足した出力そのもの。緊急用を分けるアカウントと分けないアカウントが 1 つずつ、知らせのチャンネルあり、の形です。arata のテストが、雛形と 1 バイトも違わないことを固定しています)。
+書き出される一式の見本が [examples/audit-repo](../audit-repo) です (上の引数に `--schedule --collect-every 1h --flash` を足した出力そのもの。緊急用を分けるアカウントと分けないアカウントが 1 つずつ、知らせのチャンネルあり、の形です。arata のテストが、雛形と 1 バイトも違わないことを固定しています)。
 置く順番は、書き出される [README.md](../audit-repo/README.md) にあります。
 
 | 書き出すもの | 中身 |
@@ -27,7 +27,7 @@ Slack へは bot トークンで送ります (arata の ADR 0061)。決めるの
 | [arata-triage.yml](../audit-repo/.github/workflows/arata-triage.yml) | 手動 (Actions の画面) で、finding を ack / snooze / resolve する (下の「finding を片付ける」) |
 | [arata-check.yml](../audit-repo/.github/workflows/arata-check.yml) | PR で、設定と allowlist.yaml の形と、この一式が揃っていること (`arata repo check`) を検査する (下の「PR で設定を検査する」) |
 | [arata-notify-test.yml](../audit-repo/.github/workflows/arata-notify-test.yml) | 手動で、監査をせずに Slack へ試験メッセージを 1 通送る (通常用・緊急用・知らせ。下の「Slack への送信だけを確かめる」) |
-| [arata-collect.yml](../audit-repo/.github/workflows/arata-collect.yml) | `--collect-every` を付けたときだけ。取得だけ (`arata collect --incremental`) を短い間隔で回す。判定も通知もしない (下の「取得だけを短い間隔で回す」) |
+| [arata-collect.yml](../audit-repo/.github/workflows/arata-collect.yml) | `--collect-every` を付けたときだけ。取得 (`arata collect --incremental`) を短い間隔で回す (下の「取得だけを短い間隔で回す」)。`--flash` も付けると、取得の前に hourly を判定し、high 以上だけを知らせる (下の「取得の回に high 以上を知らせる」) |
 | [github/](../audit-repo/github) | GitHub の設定の Terraform (非公開、fork の禁止、main の保護、Actions の許可、environment `audit`)。秘密には触れない。下の「GitHub の設定を Terraform で当てる」 |
 | [aws/<アカウント>/](../audit-repo/aws) | アカウントごとの `arata.yaml`・`allowlist.yaml`・`aratam.yaml` の雛形 (`arata config init`・`aratam config init` と同じ。`aratam.yaml` には、引数のチャンネル ID を書き入れる) |
 
@@ -939,6 +939,45 @@ daily がソースの位置から続きを自分で集めます。失うのは�
 
 **時間**: 1 回あたり、準備とストアの読み書きの数十秒に、取得の時間が乗ります。課金は 1 回ごとに分へ切り上げるので、`1h` ならアカウントごとに 1 日 24 回、30 日で少なくとも 720 分です
 (daily の時間は減りますが、切り上げと準備の分だけ、合計は増えます)。抑えたいときは間隔を長くします (`6h` なら 1 日 4 回)。
+
+## 取得の回に high 以上を知らせる (`--flash`)
+
+取得の回に、`hourly` のプロファイルを判定し、重大度の下限 (`min_severity`) 以上の指摘だけを、次の朝の daily を待たずに知らせます (arata の ADR 0082)。
+
+```sh
+arata repo init <README.md のコマンドの引数> --schedule --collect-every 1h --flash --force
+```
+
+- `--collect-every` と一緒にだけ使えます。判定は取得と同じ間隔で回ります (勧めるのは `1h`)
+- 各アカウントの `aws/<アカウント>/arata.yaml` の `profiles.hourly` に `min_severity: high` を書きます (今の `config init` の雛形には入っています。古い設定は `arata config init --diff` で 1 行が見えます)。
+  無いままだと、PR の検査 (`arata repo check --flash`) が `REPO_FLASH_PROFILE` で止め、足す行を出します
+
+**知らせる範囲** (雛形の `hourly` と `min_severity: high` のとき):
+
+| 1 時間ごとに知らせる | daily で知らせる (これまでどおり) |
+|---|---|
+| ルートの利用 (critical)、知らない主体の ECS Exec (high)、allowlist に無い呼び出し元の AssumeRole (high)、既知の OIDC のロールへの知らない入り口からの引き受け (high) | 既知の主体の ECS Exec (medium)、**知らない主体の、すべて失敗した ECS Exec (medium)**、知らない OIDC のロール (medium)、そのほかの daily のチェック |
+
+下限より下の指摘は、1 時間ごとの回では**記録しません** (報告済みにしません)。だから daily が新規として知らせます。
+1 時間ごとの回で知らせた指摘は、daily の通知では「本日報告済み N 件」に回り、二度は鳴りません (同じ日に新しい記録が加われば、daily が「変化」として出し直します)。
+
+**送り方**: 新規が無い回は何も送りません (`aratam.yaml` の `on_quiet` に依りません。毎時の「新規なし」は届きません)。
+送るときは、冒頭に「この回は high 以上だけを見ています。high より下は次の daily で知らせます」の 1 行が付きます。送り先は重大度で決まります (`urgent_severity` 以上なら緊急用)。
+一部のソースが取れなかったことだけでは送りません (daily が知らせます)。LLM を呼ぶのは送る回だけです。`aratam.yaml` を直す必要はありません。
+
+**順番と失敗の扱い**: 1 つのジョブの中で、判定 (`arata run --profile hourly`、15 分まで) → 通知 (`aratam notify`、5 分まで) → 取得 (35 分まで) の順に動きます。
+判定を先にするのは、取得が追いつきで長引いても知らせを遅らせないためです。
+
+- 判定が失敗したら、通知は呼びません。判定はストアに確定していないので、次の回か daily が報告します (毎時の「実行されていない」は送りません)。ジョブは赤になります
+- 判定の終了コード 3 (一部のソースが取れなかった) は警告にして、取れた分の指摘を知らせます
+- 通知が失敗したら (設定の誤り、Slack の失敗)、その回に知らせるべき指摘があったときだけ、知らせのチャンネルへ 1 行を送ります。その指摘は報告済みになっているので、daily では「本日報告済み」にしか出ないためです
+- 判定・通知が失敗しても、取得は動きます (それぞれ自分の分を確定します)
+- GitHub の定時が遅れても飛んでも、次の判定は前の回の終わりから続けるので、取りこぼしません。遅れが `max_catchup` (既定 7 日) を超えた分は 1 時間ごとには評価しませんが、記録もしないので daily が新規として知らせます
+
+**Slack の秘密**: bot トークンは、通知と知らせの step にだけ渡ります (判定と取得の step、ジョブの env には渡りません)。`--flash` を付けなければ、取得のワークフローは Slack のトークンを参照しません。
+
+**時間**: 判定と通知の分 (1 回あたり数十秒。ストアの取り出しと確定がもう 1 回ある) が、取得の回に足されます。取得だけの回が 1 分に収まっていれば、多くの回は 1 分のまま、越えれば 2 分になります。
+`1h` で 1 アカウントあたり 30 日で最大 720 分の増加です。実測は `gh run list -w arata-collect.yml` の時間で見ます。抑えたいときは `--flash` を外すか、間隔を長くします。
 
 ## Slack への送信だけを確かめる
 

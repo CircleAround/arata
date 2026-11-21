@@ -300,7 +300,7 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
 | `MATCH_RATE_HISTORY_UNAVAILABLE` | 決定 (ADR 0054): 直近の解釈率を読めず、急落 (`FORMAT_DRIFT`) の判定をしていない (警告)。続くと「見ていない」状態が隠れるので、INFO にしない |
 | `INIT_INCOMPLETE` / `ALLOWLIST_MISSING` | 決定 (ADR 0054): init が途中で止まった・前の init が終わっていない (警告) / allowlist のファイルが無く、空として扱った (警告) |
 | `REBUILD_WARNING` / `REBUILT_FROM_SCRATCH` | 決定 (ADR 0054): rebuild の警告 (読み飛ばした行など) / raw だけから作り直した。次の run で未解決の指摘がすべて new として再報告される (影響が別なので code を分ける。警告) |
-| `REPO_SET_DIFFERS` / `REPO_NOTIFY_MISMATCH` | 決定 (ADR 0060): `repo check` のファイルの検査。一式がこの版の一式と揃っていない (生成物の違い・残りもの・ワークフローの使う秘密・アカウントの設定が無い) / `aratam.yaml` が、ワークフローの渡す秘密 (bot トークン) で送る設定でない |
+| `REPO_SET_DIFFERS` / `REPO_NOTIFY_MISMATCH` / `REPO_FLASH_PROFILE` | 決定 (ADR 0060): `repo check` のファイルの検査。一式がこの版の一式と揃っていない (生成物の違い・残りもの・ワークフローの使う秘密・アカウントの設定が無い) / `aratam.yaml` が、ワークフローの渡す秘密 (bot トークン) で送る設定でない / 決定 (ADR 0082): `--flash` の一式なのに、`arata.yaml` の `profiles.hourly` に `min_severity` が無い |
 | `REPO_ENVIRONMENT_MISSING` / `REPO_ENVIRONMENT_OPEN` / `REPO_ENVIRONMENT_PROTECTED` | 決定 (ADR 0060): `repo check --github`。environment が無い / デプロイできるブランチが既定のブランチだけでない / レビュー担当か待ち時間が付いている (警告) |
 | `REPO_SECRET_MISSING` / `REPO_SECRET_UNUSED` / `REPO_SECRET_OUTSIDE_ENVIRONMENT` | 決定 (ADR 0060): `repo check --github`。使う秘密が environment に無い / 使わない秘密が残っている (警告) / リポジトリの (environment でない) 秘密が残っている (この一式の名前なら ng、ほかは警告) |
 | `GITHUB_API_FAILED` | 決定 (ADR 0060): `repo check --github` が GitHub の API を読めなかった (応答の本文は出さない) |
@@ -1501,7 +1501,7 @@ arata config init --audit-account <12 桁の ID>|none [--by NAME] [--out FILE|-]
                                # 推奨設定の雛形を書き出す (既定 ./arata.yaml。監査する側のアカウントは必須。ID なら既知リストにも書く。ADR 0045) / 雛形との差分 (3 章、ADR 0014)
 arata repo init --owner O --repo R --accounts a,b --audit-account <12 桁の ID>|none --store-bucket B --region REGION
                 --alert-channel <チャンネル ID>|none [--channel a=<ID>,…] [--urgent-channel a=<ID>|same,…] --out DIR
-                [--schedule [--collect-every 1h|2h|3h|4h|6h|8h|12h]] [--force] | --diff [--format text|json]
+                [--schedule [--collect-every 1h|2h|3h|4h|6h|8h|12h [--flash]]] [--force] | --diff [--format text|json]
                                # 監査を回すリポジトリの一式を書き出す / 今ある一式とこの版の一式を比べる (9 章、ADR 0059・0060)。違いがあれば終了コード 1。
                                # チャンネル ID は、端末から打って足りないときだけ聞く。端末でなければ CONFIG_INVALID
 arata repo check <repo init と同じ引数> [--github] [--format table|json]
@@ -1636,6 +1636,11 @@ arata rebuild   [--from-scratch [--baseline]] [--format text|json]   # raw JSONL
   high 以上は今の重大度と黙らせたときの重大度の重いほうで決め、並びはその重大度の高い順 → 黙らせた時刻の古い順。各 finding に最後の片付けの操作 (`last_action`: 理由・人・日時・forced)。
   Key・要約・理由・allowlist の対象は findings と同じく個人を特定できる値を伏せる。7 日・30 日は固定値 (設定は足さない)。状態は変えない。
   report.md には「黙らせているもの」の節を出し、理由はコードの中に入れる (Markdown として解釈させない)。`silenced` が無い報告は今までと 1 バイトも変わらない
+- 決定 (ADR 0082): プロファイルに `min_severity` (`critical | high | medium | low`。雛形では hourly に `high`) を書いたときだけ、下限より下の観測を差分判定に渡す前に捨てる。
+  findings に書かず (first_seen も reported_at も付かない)、報告にも出さない。次の下限なしの run (daily) が同じ観測を新規として報告する。ack / snooze の状態も触らない。
+  入れられるのは event 型のチェックだけ (state 型は観測を捨てると既存の finding を解消してしまう。`run` は `CONFIG_INVALID`、`config check` と `doctor` は ng)。
+  報告には `min_severity` と `summary.deferred` (捨てた観測の数) を足し、report.md の冒頭に 1 行を出す (中身は出さない)。書かない報告は今までと 1 バイトも変わらない。
+  窓の追いつき (遅れ・飛び・`max_catchup`) は今の規則のまま。`max_catchup` を超えた分は hourly で評価しないが、記録もしないので daily が新規として報告する
 - `coverage.checks_run` を追加し、実際に走ったチェック名を出す。
 - 決定 (Step 3): `coverage.sources_failed` / `summary.collect_errors` に `action` (不足した IAM action) と `partial` (一部の項目だけ取れず、取れた項目で評価した) を足す。
 - 決定 (ADR 0023): `proposals` (WAF の修正提案の候補と observation。waf_review が走った run だけ。無ければ節ごと出さない) を足す。1 件は `kind` / `stage` / `web_acl` / `scope` / `region` /
@@ -1711,6 +1716,12 @@ Actions のログには arata / aratam の `level`・`code`・`source` と終了
   concurrency は監査と同じ group (`arata-audit-<アカウント>`、`cancel-in-progress: false`、`queue: max`) で、同じストアへの書き込みを順番にする (別の group だと STORE_CONFLICT で後の方を失う)。
   準備の step は監査と同じ (テストで一致を固定)。秘密は認証の 2 つだけ。Slack には送らない (失敗しても daily が位置から追いつく)。
   終了コード 3 (一部・`max_collect`) は警告にして成功、ほかの失敗は赤。`repo check` は同じ引数を取るだけで、項目は足さない
+- 決定 (取得の回の hourly の判定と通知。ADR 0082): `--flash` (`--collect-every` と一緒にだけ) を付けたときだけ、`arata-collect.yml` の取得の前に
+  `arata run --profile hourly` (15 分) と `aratam notify` (5 分) を足し、取得 (35 分) は `always()` で続ける。付けなければ出力は 1 バイトも変わらない (テストが前の版の出力と比べる)。
+  Slack のトークンは aratam と知らせの step の `env` にだけ渡す (ADR 0078 の「秘密は認証の 2 つだけ」を、この場合に限り置き換え)。
+  判定が 0・3 のときだけ aratam を呼ぶ (ほかは確定していないので、次の回か daily が報告する。「実行されていない」を毎時に送らない)。
+  知らせ (`--alert-channel` があるとき) は、通知が失敗し、report.json の new・changed・recurred が 1 以上の回だけ送る (その指摘は報告済みなので)。
+  `repo check --flash` は各アカウントの `arata.yaml` の `profiles.hourly.min_severity` を確かめ、無ければ `REPO_FLASH_PROFILE` の ng にして足す行を出す (項目 `flash`)
 - 決定 (`arata repo check`。ADR 0060): 引数は `repo init` と同じ。何も書かない。出力は doctor と同じ ok / warn / ng / skip の行で、`--format json` のスキーマは `repo-check`
   (`missing_secrets` に、足りない秘密のコマンド・値の形・取得元)。ng があれば終了コード 2、warn だけなら 0。ng と warn の行は、標準エラーにも code 付きで出す
   - ファイルの検査 (いつも): この版の一式との差 (`--diff` と同じ比べ方。`github/` の下は `terraform` の項目)、ワークフローが参照する秘密 (YAML として読み、式 `${{ }}` の中の

@@ -52,7 +52,7 @@
           ]
         },
         "item": {
-          "description": "検査した項目 (files / terraform / workflow_secrets / notify / accounts / github / environment / deployment_branches / environment_protection / secret / secret_unused / repository_secret)。開いた語彙",
+          "description": "検査した項目 (files / terraform / workflow_secrets / notify / accounts / flash / github / environment / deployment_branches / environment_protection / secret / secret_unused / repository_secret)。開いた語彙",
           "type": "string"
         },
         "target": {

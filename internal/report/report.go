@@ -50,6 +50,9 @@ type Input struct {
 	Triage func(store.Finding) schema.TriageInfo
 	// DiffFrom は差分判定の境界 (ゼロなら Window.From)。試しの実行が定時の実行の境界に合わせるのに使う (ADR 0049)。
 	DiffFrom time.Time
+	// MinSeverity と Deferred はプロファイルの重大度の下限と、下限より下で次へ回した観測の数 (ADR 0082)。
+	MinSeverity string
+	Deferred    int
 }
 
 // Build は差分判定の結果からレポートを組み立てる。
@@ -81,9 +84,11 @@ func Build(in Input) *Report {
 			ChecksSkipped: nonNil(in.ChecksSkipped),
 			Formats:       nonNil(in.Formats),
 		},
-		Proposals: in.Proposals,
-		Silenced:  in.Silenced,
+		Proposals:   in.Proposals,
+		Silenced:    in.Silenced,
+		MinSeverity: in.MinSeverity,
 	}
+	r.Summary.Deferred = in.Deferred
 	var sevs []checks.Severity
 	for _, res := range in.Results {
 		f := toFinding(res.Finding)

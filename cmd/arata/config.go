@@ -268,7 +268,9 @@ text の出力は人向けで、文言と並びは版をまたいで変わるの
 				row("skip", "allowlist", "", 0, "設定を読めないので検査していません (設定を直してからもう一度)")
 				return finish()
 			}
-			if unknown := engine.UnknownChecks(cfg, checks.NewRegistryFor(cfg.Checks)); len(unknown) > 0 {
+			reg := checks.NewRegistryFor(cfg.Checks)
+			// 決定 (ADR 0082): 重大度の下限を書いたプロファイルの state 型のチェックも、run が止まる誤りなので同じ行で出す
+			if unknown := append(engine.UnknownChecks(cfg, reg), engine.MinSeverityStateChecks(cfg, reg)...); len(unknown) > 0 {
 				for _, u := range unknown {
 					row("ng", "config", abs, 0, u)
 				}

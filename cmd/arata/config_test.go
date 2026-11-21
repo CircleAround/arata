@@ -109,7 +109,7 @@ func TestConfigInitDiff(t *testing.T) {
 	}
 	schematest.Conforms(t, scaffold.DiffSchema, c.stdout.Bytes(), &[]scaffold.DiffItem{})
 	var items []struct{ Kind, Path string }
-	if err := json.Unmarshal(c.stdout.Bytes(), &items); err != nil || len(items) != 11 || !hasDiffPath(items, "profiles.weekly.silenced") || !hasDiffPath(items, "checks.probe_paths.statuses") || !hasDiffPath(items, "ip_list") {
+	if err := json.Unmarshal(c.stdout.Bytes(), &items); err != nil || len(items) != 12 || !hasDiffPath(items, "profiles.weekly.silenced") || !hasDiffPath(items, "profiles.hourly.min_severity") || !hasDiffPath(items, "checks.probe_paths.statuses") || !hasDiffPath(items, "ip_list") {
 		t.Fatalf("json: %v %s", err, c.stdout)
 	}
 	t.Chdir(t.TempDir()) // ./arata.yaml も無い
@@ -123,6 +123,8 @@ func TestProfilesCmd(t *testing.T) {
 	b, _ := os.ReadFile(c.cfg)
 	body := strings.Replace(string(b), "    checks: [default-daily, root_usage, ecs_exec, unknown_assume_role, oidc_assume_role]\n",
 		"    checks: [default-daily, root_usage, ecs_exec, unknown_assume_role, oidc_assume_role]\n    overrides:\n      login_bruteforce: { factor: 5 }\n", 1)
+	// 重大度の下限 (ADR 0082) も表示に出る
+	body = strings.Replace(body, "    checks: [root_usage, ecs_exec, unknown_assume_role, oidc_assume_role]\n", "    min_severity: high\n    checks: [root_usage, ecs_exec, unknown_assume_role, oidc_assume_role]\n", 1)
 	c.writeConfig(body + "checks:\n  login_bruteforce:\n    min_count: 30\n")
 	if code := c.run("profiles", "-c", c.cfg); code != 0 {
 		t.Fatalf("exit %d: %s", code, c.stderr)
@@ -134,9 +136,10 @@ func TestProfilesCmd(t *testing.T) {
 	schematest.Conforms(t, engine.ProfilesSchema, c.stdout.Bytes(), &engine.ProfilesView{})
 	var v struct {
 		Profiles []struct {
-			Name   string
-			Checks []struct{ Name, Via string }
-			Params []struct {
+			Name        string
+			MinSeverity string `json:"min_severity"`
+			Checks      []struct{ Name, Via string }
+			Params      []struct {
 				Check, Key, Origin string
 				Value              any
 			}
@@ -152,6 +155,9 @@ func TestProfilesCmd(t *testing.T) {
 	}
 	if v.Profiles[0].Name != "daily" || origins["login_bruteforce.factor"] != "overrides" || origins["login_bruteforce.min_count"] != "checks" || origins["login_bruteforce.baseline_days"] != "default" {
 		t.Fatalf("origins: %v", origins)
+	}
+	if v.Profiles[0].MinSeverity != "" || v.Profiles[1].MinSeverity != "high" {
+		t.Fatalf("min_severity: %+v", v.Profiles)
 	}
 	if v.Profiles[1].Name != "hourly" || len(v.Profiles[1].Params) != 5 || len(v.Unused) != 0 || v.Profiles[2].Name != "weekly" || len(v.Profiles[2].Params) != 2+17+3 {
 		t.Fatalf("hourly: %+v", v)

@@ -136,6 +136,7 @@ profiles:
   hourly:                                        # 発生そのものが異常な事象の早期検知。Logs Insights を使うチェックは入れない (費用)
     window: 1h
     # max_catchup: 7d                            # cron が遅れた時に前回の窓の終わりから追いつく上限
+    min_severity: high                           # この重大度より下の観測は、この run では記録も報告もしない (次の daily が新規として報告する。ADR 0082)。event 型のチェックだけを入れられる
     checks:
       - root_usage              # ルートユーザーの利用 (critical)
       - ecs_exec                # 本番のコンテナでシェルを開く操作 (ECS Exec の ExecuteCommand) を、誰が・どこに・何を、で毎回報告する。知らない主体 (high)、既知の主体 (medium)、失敗した試行は 1 段下げる (low / medium)

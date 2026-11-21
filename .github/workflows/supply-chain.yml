@@ -45,7 +45,7 @@ jobs:
           go run ./cmd/arata repo init --owner example-org --repo security-audit --accounts prod,staging --audit-account 111122223333 \
             --store-bucket example-arata-store --region ap-northeast-1 --alert-channel none \
             --channel prod=C0123456789,staging=C0123456781 --urgent-channel prod=C0123456780,staging=same \
-            --schedule --arata-version v0.15.0 --out "$RUNNER_TEMP/no-alert"
+            --schedule --collect-every 1h --flash --arata-version v0.15.0 --out "$RUNNER_TEMP/no-alert"
       # 決定 (ADR 0068 の 7 節): concurrency の queue (GitHub の文書にある設定) を、この版の actionlint は知らない。その 1 件だけを無視する。
       # queue を知る版が 7 日の待機を過ぎたら、版を上げてこの -ignore を外す
       - name: actionlint
@@ -81,7 +81,7 @@ jobs:
           go run ./cmd/arata repo init --owner example-org --repo security-audit --accounts prod,staging --audit-account 111122223333 \
             --store-bucket example-arata-store --region ap-northeast-1 --alert-channel none \
             --channel prod=C0123456789,staging=C0123456781 --urgent-channel prod=C0123456780,staging=same \
-            --schedule --arata-version v0.15.0 --out "$RUNNER_TEMP/no-alert"
+            --schedule --collect-every 1h --flash --arata-version v0.15.0 --out "$RUNNER_TEMP/no-alert"
       - name: zizmor を取得する
         run: |
           cd "$RUNNER_TEMP"

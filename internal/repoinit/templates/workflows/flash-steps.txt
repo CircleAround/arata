@@ -1,0 +1,50 @@
+      # 取得の前に、hourly のプロファイルを判定し、重大度の下限 (arata.yaml の profiles.hourly.min_severity。雛形では high) 以上を知らせる (ADR 0082)。
+      # 下限より下の指摘は、この回では記録しない (報告済みにしない) ので、次の daily が新規として知らせる。
+      # min_severity が書いてあることは、PR の検査 (arata-check.yml の arata repo check --flash) が確かめる。
+      # 判定を取得より先にするのは、取得が追いつきで長引いても知らせを遅らせないため (判定は自分の要る CloudTrail の続きだけを読む)。
+      # ログの方針は監査と同じ (INFO 以外の level / code / source だけ)。
+      # 終了コード 3 (一部のソースが取れなかった) は警告にして、取れた分の指摘を知らせる。取れなかった分は次の回か daily が読む。
+      # ほかの失敗では aratam を呼ばない: 判定は確定していない (ストアに書いていない) ので、次の回か daily が報告する。
+      # 呼ぶと、report.json が無いので「arata の出力が無いか古い」を毎時に緊急用へ送ってしまう。
+      - id: hourly
+        name: arata run --profile hourly
+        timeout-minutes: 15
+        run: |
+          log="$RUNNER_TEMP/arata-hourly.log"
+          status=0
+          arata run -c "$ARATA_CONFIG_DIR/arata.yaml" --profile hourly --out "$RUNNER_TEMP/arata-out" >"$log" 2>&1 || status=$?
+          jq -Rc 'fromjson? | objects | select(.level != "INFO") | {level, code, source}' "$log" || true
+          echo "arata exit=$status"
+          case "$status" in
+            0) echo "reported=true" >>"$GITHUB_OUTPUT" ;;
+            3)
+              echo "reported=true" >>"$GITHUB_OUTPUT"
+              echo "::warning::一部のソースが取れませんでした。取れた分で判定し、取れなかった分は次の回か daily が読みます (終了コード 3)"
+              exit 0
+              ;;
+          esac
+          exit "$status"
+
+      # aratam は、report.json の min_severity を見て、静かな回は送らない (aratam.yaml の on_quiet に依らない)。
+      # 取れなかったソースがあるだけでは送らず、緊急用にもしない (送り先は指摘の重大度だけで決める)。LLM を呼ぶのは送る回だけ。
+      # 通知の冒頭に「この回は high 以上だけを見ています」の 1 行が付く。
+      - id: notify
+        name: aratam notify
+        if: always() && steps.hourly.outputs.reported == 'true'
+        timeout-minutes: 5
+        env:
+          # Slack の秘密は bot トークンの 1 つだけ。この step と、下の知らせの step にだけ渡す (arata の step には渡さない。ADR 0082 の 4 節)
+          ARATAM_SLACK_BOT_TOKEN: ${{ secrets.ARATAM_SLACK_BOT_TOKEN }}
+        run: |
+          log="$RUNNER_TEMP/aratam.log"
+          status=0
+          aratam notify -c "$ARATA_CONFIG_DIR/aratam.yaml" --in "$RUNNER_TEMP/arata-out" >"$log" 2>&1 || status=$?
+          jq -Rc 'fromjson? | objects | select(.level != "INFO") | {level, code, source}' "$log" || true
+          echo "aratam exit=$status"
+          # Slack に何かが届いた終了コード: 0 = 送った (送る必要が無かった)、3 = LLM が使えず原文で送った、4 = 入力が無い・古いと送った。
+          # 2 (設定・secret の誤り) と 5 (送信の失敗) は、何も届いていない。最後の alert はこの印を見る
+          case "$status" in
+            0 | 3 | 4) echo "delivered=true" >>"$GITHUB_OUTPUT" ;;
+          esac
+          exit "$status"
+
