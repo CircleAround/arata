@@ -112,7 +112,7 @@ source_ips:
     note: 本社
 secrets_access:                   # 主体 × 読んでよい秘匿値 (名前・パスの glob)。secret_access の初出に数えない
   - { principal: "arn:aws:iam::123456789012:role/example-app-task", secrets: ["prod/app/*"] }
-  - { principal: "arn:aws:iam::123456789012:role/example-app-exec", secrets: ["/example-app/prod/secrets/*"], bulk: exempt, note: 起動時に ECS が読む }   # 一括読み出しの数からも外す (サービスのロールだけ。広い glob はエラー。ADR 0073。ECS が発行した認証情報の直後の読み取りだけ。ADR 0076)
+  - { principal: "arn:aws:iam::123456789012:role/example-app-exec", secrets: ["/example-app/prod/secrets/*"], bulk: exempt, note: 起動時に ECS が読む }   # 一括読み出しの数からも外す (サービスのロールだけ。広い glob はエラー。ADR 0073。ECS が発行した認証情報の直後の読み取りだけ。ADR 0076。作り直すと末尾の乱数が変わるロールは principal の代わりに principal_pattern: "arn:aws:iam::123456789012:role/<スタック>-<論理 ID>-*"。* は英数字だけに一致。ADR 0079)
 assume_destinations:              # 外向きの引き受けで、行き先として既知のアカウント。そこへの MFA ありの引き受けは unknown_assume_role が報告しない
   - { account: "111122223333", note: 運用を受託しているアカウント, expires: 2027-03-31 }   # principals の account: とは別 (主体は承認されない)。note 必須。roles: ["ReadOnly"] でロールに絞れる
 oidc_subjects:                    # OIDC でのロールの引き受け (GitHub Actions など) の既知の入り口。oidc_assume_role が比べる。approve は書かない (人が書く。arata help ai playbook oidc_assume_role)

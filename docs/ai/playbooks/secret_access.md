@@ -9,14 +9,14 @@
 - 一括読み出し: 窓 (1 日) に読んだ異なる秘匿値の数が `max(min_distinct, その主体の日ごとの中央値 × factor)` を超えた → high (持ち出しの兆候)。
   `GetParametersByPath` はパス単位で 1 と数える (再帰的に読むと 1 回で多数が読める。`paths` に `(recursive)` が付く)
 - allowlist の `secrets_access` に書いた「主体 × 秘匿値」は初出に数えない (一括読み出しの数には数える)。
-  `bulk: exempt` を書いた項目の組は、一括読み出しの数からも外す (下の「起動時の読み取り」)
+  `bulk: exempt` を書いた項目の組は、一括読み出しの数からも外す (下の「起動時の読み取り」)。項目の主体は `principal` (完全一致) か `principal_pattern` (末尾の乱数だけを `-*`)
   導入直後 (CloudTrail を収集し終えた過去日が `min_baseline_days` 未満) は初出を報告しない (一括読み出しは報告する)
 - 秘匿値の値は CloudTrail に入らないので arata も持たない。名前 / ARN だけ
 - Key は主体の ARN。data: `principal`、`principal_kind`、`allowlist_status`、`distinct_secrets`、`secrets` (最大 20。`secretsmanager:<名前か ARN>` / `ssm:<名前>` / `ssm-path:<パス>`)、
   `paths`、`bulk`、`threshold`、`baseline_median_distinct`、`new_secrets` (最大 20)、`new_secret_count`、`first_reader`、`secrets_access_matched`、`count`、`ips`、`event_names`。
   `bulk: exempt` に一致した秘匿値があれば `bulk_counted` (閾値と比べた数)、外したなら `bulk_exempted` (外した数)・`bulk_exempt_patterns` (一致した glob)、
   外さなかったなら `bulk_exempt_ignored: not_service_role` (サービスに引き受けられたロールでない)。
-  ECS が発行した認証情報の直後でない読み取りがあれば `bulk_exempt_ignored: session_unmatched` と、下の medium の行と同じ項目。`distinct_secrets` は外す前の数
+  ECS が発行した認証情報の直後でない読み取りがあれば `bulk_exempt_ignored: session_unmatched` と、下の medium の行と同じ項目。`distinct_secrets` は外す前の数。`principal_pattern` が一致した主体は、どの行 (finding・medium・info) にも `secrets_access_principal_patterns` (一致した pattern) と、同じ pattern に一致して窓に読んだ主体が 2 つ以上なら `principal_pattern_principals` (その数。自分を含む。下の 9)
 - medium の行 (Key は `bulk-exempt-unmatched:<主体の ARN>`): `bulk: exempt` の組を、ECS が発行した認証情報の直後でない読み取りで読んだ (閾値を超えなくても出す。high のときは high の data に載る)。
   起動の外での利用 (盗まれた認証情報) の疑い。data は `principal`、`bulk_exempt_unmatched` (外せなかった読み取りの数の理由ごとの内訳: `no_key`・`no_issuance`・`outside_window`。下の 8)、
   `unmatched_secrets`、`bulk_exempt_max_delay_seconds` (`outside_window` の発行からの最大の遅れ)、`bulk_exempted`、`bulk_counted`、`bulk_exempt_patterns`、外せなかった読み取りの `count`・`ips`・`event_names`
@@ -39,6 +39,7 @@
      (大きなイメージ・EC2 の起動タイプ) なら `checks.secret_access.bulk_exempt_within` を延ばす (上限 15m)。そうでなければ 3〜5 と「封じ込め」
    - `no_issuance`: 対になる ECS の発行の記録が無い。ECS 以外がこのロールで読んだか、発行の記録を集めていない (別のリージョンの STS など)。CloudTrail で呼び出し側を見る
    - `no_key`: 読み取りにキーの印が無い。版を上げる前に集めた記録 (上げた直後の 1 回) なら resolve。そうでなければ要対応
+9. `principal_pattern_principals` があれば、同じ pattern に一致した主体を並べる。その日にスタックを作り直した前後のロールなら何もしない。そうでなければ glob が別のロールにも一致している (下の「名前が切られていないか」)。glob を狭めるか `principal` に戻す
 
 ## 判断の分かれ目
 
@@ -60,8 +61,7 @@
 
 ### 起動時の読み取り (`bulk: exempt`。ADR 0073)
 
-ECS のタスクの起動のたびに、ECS のエージェントがタスクの実行用のロールで、タスク定義の `secrets` に書いた秘匿値をまとめて読む (`GetParameters` の 1〜数回)。
-デプロイが数日〜週に 1 回だと、日ごとの数の中央値が 0 のままなので、閾値は `min_distinct` になり、デプロイの日は毎回 high になる。
+ECS のタスクの起動のたびに、ECS のエージェントがタスクの実行用のロールで、タスク定義の `secrets` に書いた秘匿値をまとめて読む (`GetParameters` の 1〜数回)。デプロイが数日〜週に 1 回だと、日ごとの数の中央値が 0 のままなので、閾値は `min_distinct` になり、デプロイの日は毎回 high になる。
 毎日読む主体 (毎日動く定時のジョブなど) が high にならないのは、中央値がその数になり、閾値が `中央値 × factor` に上がるため。間隔が 2 日以上のジョブは、起動時の読み取りと同じく中央値が 0 になる。
 
 正規の起動時の読み取りと確かめたら、人が allowlist.yaml の `secrets_access` に、その組だけを `bulk: exempt` で書く。
@@ -77,13 +77,13 @@ secrets_access:
 - 確かめること: 主体がタスクの**実行用のロール** (信頼ポリシーの主体が `ecs-tasks.amazonaws.com`。タスクのロールには書かない。下の見逃し)、読んだ名前がタスク定義の `secrets` と一致、時刻がタスクの起動 (デプロイ) と合う、送信元がいつもの出口
 - 書けないもの (読み込みエラー): ロールでない主体、`note` の無い項目、`arn:` の形、広い glob (ワイルドカードより前に `/` で閉じた区切りが 2 つ未満: `*`・`/*`・`prod/*`・`/example-app/*`・`/example-app/prod*`)
 - 外すのは、その主体が AWS のサービスに引き受けられたロールのときだけ (保存済みの AssumeRole の呼び出し元がサービス)。人の SSO のロールなどに書いても外れない (`bulk_exempt_ignored: not_service_role`)
-- さらに外すのは、ECS (`ecs-tasks.amazonaws.com`) の `AssumeRole` が発行した認証情報で、発行から `bulk_exempt_within` (既定 2 分) の内に読んだものだけ (ADR 0076。平常帯の側は突き合わせによらず外す)。
-  外せない読み取りは数え、medium で報告する。Lambda・EC2 のロールは外れない。arata が残すのはキーのハッシュだけ (キーそのもの・セッション名は残さない)
+- さらに外すのは、ECS (`ecs-tasks.amazonaws.com`) の `AssumeRole` が発行した認証情報で、発行から `bulk_exempt_within` (既定 2 分) の内に読んだものだけ (ADR 0076。平常帯の側は突き合わせによらず外す)。外せない読み取りは数え、medium で報告する。Lambda・EC2 のロールは外れない。arata が残すのはキーのハッシュだけ (キーそのもの・セッション名は残さない)
 - 組の外の読み取りは今どおり数える。外した組の外を読めば初出 (low)、組の外が閾値を超えれば high
 - `arata config check` で形を確かめる。書いた後の起動では、finding の代わりに info の行 (`bulk-exempt:`) が出る
+- **スタックを作り直すロール (ADR 0079)**: CDK の既定の名前 (`<スタック名>-<論理 ID>-<乱数>`) は作り直すと乱数が変わり、`principal` が一致しなくなる。名前を固定できるなら `principal` が最も狭い。固定できなければ `principal` の代わりに `principal_pattern: arn:aws:iam::123456789012:role/example-app-prod-AppTaskDefExecutionRole1A2B3C4D-*` (乱数の前まで全部を書き、末尾だけ `-*`。`bulk` の有無によらず書ける)。書ける形: `arn:<パーティション>:iam::<12 桁>:role/` で始まり、ワイルドカードは末尾の `-*` だけ、名前の固定の部分は `-` で区切って 2 つ以上。`*` は英数字だけに一致し `-` を越えないので、論理 ID まで書かないと一致しない (同じスタックのタスクのロールに当てないため)。外すかの判定は読んだ実際のロールごと
+  - **名前が切られていないか**: 名前が 64 文字を超えると論理 ID が途中で切られる (`-` と乱数 12 文字は残る)。固定の部分 (`role/` の後から `-*` の前) が 51 文字に届いていたら、前の部分が同じに切られる似た名前のロールが同じスタックに無いかを確かめ、あれば `principal` にする。作り直した後のロールの new_principal は `principals` の `arn_pattern` で受ける
 
-見逃しとして引き受けること: エージェントに発行された認証情報を盗まれ、**発行から `bulk_exempt_within` の内に**外した組だけを読まれると info の行しか出ない (窓の外は medium)。
-**タスクのロール**には書かない: コンテナの中の攻撃者が認証情報の更新の直後に読めば外れる (arata は実行用とタスクのロールを区別できない)。arata の外の守りとして (人が判断する):
+見逃しとして引き受けること: エージェントに発行された認証情報を盗まれ、**発行から `bulk_exempt_within` の内に**外した組だけを読まれると info の行しか出ない (窓の外は medium)。`principal_pattern` では、名前が合うロールを作って渡せる者の起動時の読み取りも外れる (iam_changes の `CreateRole` が手がかり)。**タスクのロール**には書かない: コンテナの中の攻撃者が認証情報の更新の直後に読めば外れる (arata は実行用とタスクのロールを区別できない)。arata の外の守りとして (人が判断する):
 
 - 実行用のロールの権限を、その組の秘匿値だけに絞る (`Resource` に ARN を書く)。組の外を読もうとすれば access_denied に出る
 - 可能なら、IAM の条件 (VPC エンドポイント経由なら `aws:SourceVpce` など) で、実行環境の外からの読み取りを止める

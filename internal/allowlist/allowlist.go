@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -175,12 +176,15 @@ type SourceIPEntry struct {
 	net *net.IPNet
 }
 
-// SecretsAccessEntry は secrets_access の 1 件。主体 (ARN の完全一致) が読んでよい秘匿値 (名前・パスの glob)。
+// SecretsAccessEntry は secrets_access の 1 件。主体 (ARN の完全一致か principal_pattern) が読んでよい秘匿値 (名前・パスの glob)。
 // 決定 (ADR 0027): secret_access は、一致する秘匿値を「初めて読む秘匿値」に数えない (一括読み出しの数には数える)。
 // 決定 (ADR 0073): bulk: exempt の項目に一致する秘匿値は、一括読み出しの数からも外す (明示の opt-in。外すかの最後の判定は secret_access)。
+// 決定 (ADR 0079): 主体は principal (完全一致) か principal_pattern (CheckPrincipalPattern の形) のどちらか 1 つ。
 type SecretsAccessEntry struct {
-	Principal string   `yaml:"principal"`
-	Secrets   []string `yaml:"secrets"`
+	Principal string `yaml:"principal"`
+	// PrincipalPattern は、CloudFormation が付ける末尾の乱数だけを `-*` にしたロールの ARN (ADR 0079)
+	PrincipalPattern string   `yaml:"principal_pattern"`
+	Secrets          []string `yaml:"secrets"`
 	// Bulk は一括読み出しの数の扱い。空 (今までどおり数える) か BulkExempt だけ
 	Bulk string `yaml:"bulk"`
 	// Note は理由。bulk: exempt の項目では必須
@@ -294,8 +298,16 @@ func Parse(b []byte) (*List, error) {
 	}
 	for i := range l.SecretsAccess {
 		e := &l.SecretsAccess[i]
-		if e.Principal == "" || len(e.Secrets) == 0 {
+		if (e.Principal == "") == (e.PrincipalPattern == "") {
+			return nil, entryErr("secrets_access", i, "exactly one of principal, principal_pattern is required")
+		}
+		if len(e.Secrets) == 0 {
 			return nil, entryErr("secrets_access", i, "principal and secrets are required")
+		}
+		if e.PrincipalPattern != "" {
+			if err := CheckPrincipalPattern(e.PrincipalPattern); err != nil {
+				return nil, entryErr("secrets_access", i, "%w", err)
+			}
 		}
 		for j, g := range e.Secrets {
 			if strings.TrimSpace(g) == "" {
@@ -423,7 +435,7 @@ func (l *List) SecretExpected(arn, secret string) bool {
 	}
 	for i := range l.SecretsAccess {
 		e := &l.SecretsAccess[i]
-		if e.Principal != arn {
+		if !e.matchesPrincipal(arn) {
 			continue
 		}
 		for _, re := range e.secrets {
@@ -455,7 +467,8 @@ func checkBulk(e *SecretsAccessEntry) error {
 	if strings.TrimSpace(e.Note) == "" {
 		return fmt.Errorf("bulk: %s requires note (why these secrets may be read in bulk)", BulkExempt)
 	}
-	if !strings.HasPrefix(e.Principal, "arn:") || !strings.Contains(e.Principal, ":role/") {
+	// principal_pattern は CheckPrincipalPattern でロールに限っている
+	if e.PrincipalPattern == "" && (!strings.HasPrefix(e.Principal, "arn:") || !strings.Contains(e.Principal, ":role/")) {
 		return fmt.Errorf("bulk: %s is only for roles (principal must be a role ARN): %q", BulkExempt, e.Principal)
 	}
 	for j, g := range e.Secrets {
@@ -513,7 +526,7 @@ func (l *List) SecretBulkExempt(arn, secret string) (string, bool) {
 	}
 	for i := range l.SecretsAccess {
 		e := &l.SecretsAccess[i]
-		if e.Principal != arn || e.Bulk != BulkExempt {
+		if e.Bulk != BulkExempt || !e.matchesPrincipal(arn) {
 			continue
 		}
 		for k, re := range e.secrets {
@@ -525,6 +538,94 @@ func (l *List) SecretBulkExempt(arn, secret string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// SecretPrincipalPatterns は arn に一致した secrets_access の principal_pattern の値 (書いたままの値。重複なし・整列済み)。
+// principal (完全一致) の項目は入れない。finding の data に出す (ADR 0079 の 4 節)。
+func (l *List) SecretPrincipalPatterns(arn string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for i := range l.SecretsAccess {
+		e := &l.SecretsAccess[i]
+		if e.PrincipalPattern != "" && !seen[e.PrincipalPattern] && e.matchesPrincipal(arn) {
+			seen[e.PrincipalPattern] = true
+			out = append(out, e.PrincipalPattern)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// matchesPrincipal は項目の主体が arn か。principal は完全一致、principal_pattern は MatchPrincipalPattern。
+func (e *SecretsAccessEntry) matchesPrincipal(arn string) bool {
+	if e.PrincipalPattern != "" {
+		// Parse が CheckPrincipalPattern で確かめた値なので、固定の部分との照合だけをする
+		return matchPrincipalFixed(strings.TrimSuffix(e.PrincipalPattern, "*"), arn)
+	}
+	return e.Principal == arn
+}
+
+// principalPatternPrefixRe は principal_pattern の先頭 (IAM のロールで、アカウントは 12 桁)。
+var principalPatternPrefixRe = regexp.MustCompile(`^arn:[a-z][a-z0-9-]*:iam::\d{12}:role/`)
+
+// roleNameCharsRe はロールの ARN の、:role/ より後ろ (パスと名前) に書ける文字 (IAM のロール名・パスの文字)。
+var roleNameCharsRe = regexp.MustCompile(`^[A-Za-z0-9+=,.@_/-]+$`)
+
+// CheckPrincipalPattern は secrets_access の principal_pattern に書ける形か (ADR 0079 の 2 節)。
+//
+// 決定: principals の arn_pattern より狭くする。秘匿値の読み取りの finding を消すので、CloudFormation が付ける末尾の乱数の分だけを許す。
+//   - (a) arn:<パーティション>:iam::<12 桁>:role/ で始まる
+//   - (b) ワイルドカードは末尾の * の 1 つだけ (? と途中の * は書けない)
+//   - (c) * の直前は - (論理 ID と乱数の区切り)
+//   - (d) 固定の部分の、最後の / より後ろ (ロールの名前) が、- で区切った空でない部分を 2 つ以上持つ (スタック名と論理 ID)
+//
+// 照合 (MatchPrincipalPattern) では * は英数字の 1 文字以上にだけ一致する ((e)。/・:・- を越えない)。
+func CheckPrincipalPattern(p string) error {
+	if !principalPatternPrefixRe.MatchString(p) {
+		return fmt.Errorf("principal_pattern %q must be a role ARN with a 12-digit account (arn:aws:iam::123456789012:role/<stack>-<logical id>-*)", p)
+	}
+	if strings.ContainsRune(p, '?') || strings.Count(p, "*") != 1 || !strings.HasSuffix(p, "-*") {
+		return fmt.Errorf("principal_pattern %q: the only wildcard must be a trailing \"-*\" (the random suffix CloudFormation adds)", p)
+	}
+	rest := p[strings.Index(p, ":role/")+len(":role/") : len(p)-len("-*")]
+	if !roleNameCharsRe.MatchString(rest) {
+		return fmt.Errorf("principal_pattern %q: invalid characters in the role name", p)
+	}
+	name := rest[strings.LastIndex(rest, "/")+1:]
+	parts := strings.Split(name, "-")
+	if len(parts) < 2 {
+		return fmt.Errorf("principal_pattern %q is too broad (the role name before \"-*\" needs at least two parts separated by \"-\": <stack>-<logical id>)", p)
+	}
+	for _, s := range parts {
+		if s == "" {
+			return fmt.Errorf("principal_pattern %q has an empty part in the role name", p)
+		}
+	}
+	return nil
+}
+
+// MatchPrincipalPattern は principal_pattern が arn に一致するか (ADR 0079 の 2 節の (e))。
+// 固定の部分 (末尾の * の前) で始まり、残りが英数字 (ASCII) の 1 文字以上のときだけ一致する。CheckPrincipalPattern を通らない値は何にも一致しない。
+func MatchPrincipalPattern(pattern, arn string) bool {
+	if CheckPrincipalPattern(pattern) != nil {
+		return false
+	}
+	return matchPrincipalFixed(strings.TrimSuffix(pattern, "*"), arn)
+}
+
+// matchPrincipalFixed は arn が fixed で始まり、残りが英数字 (ASCII) の 1 文字以上か。
+func matchPrincipalFixed(fixed, arn string) bool {
+	suffix, ok := strings.CutPrefix(arn, fixed)
+	if !ok || suffix == "" {
+		return false
+	}
+	for i := 0; i < len(suffix); i++ {
+		c := suffix[i]
+		if !('A' <= c && c <= 'Z' || 'a' <= c && c <= 'z' || '0' <= c && c <= '9') {
+			return false
+		}
+	}
+	return true
 }
 
 // SourceIPAllowed は IP が source_ips のいずれかに含まれるか。

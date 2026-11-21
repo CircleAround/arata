@@ -529,3 +529,94 @@ func TestSecretAccessBulkExemptSession(t *testing.T) {
 		t.Errorf("bulk_exempt_within: 10m で外れない: %+v", m[BulkExemptUnmatchedKeyPrefix+late])
 	}
 }
+
+// principal_pattern (ADR 0079): CDK でスタックを作り直して末尾の乱数が変わったロールも、同じ項目で外れる。
+// 照合 (0073 の 4 節・0076 の発行の突き合わせ) は実際の主体の ARN ごと。一致した pattern と、同じ pattern に一致した主体の数を data に出す。
+func TestSecretAccessPrincipalPattern(t *testing.T) {
+	const (
+		set     = "/example-app/prod/secrets/S"
+		stack   = "arn:aws:iam::123456789012:role/example-app-prod-AppTaskDefExecutionRole1A2B3C4D-"
+		pat     = stack + "*"
+		solo    = "arn:aws:iam::123456789012:role/example-batch-prod-JobExecutionRole5E6F7A8B-"
+		soloPat = solo + "*"
+	)
+	var (
+		before = stack + "AbcDef123Ghi" // 作り直しの前
+		after  = stack + "XyZ789uvWxyz" // 作り直しの後 (同じ日に両方が読んだ)
+		cross  = stack + "Cross0000000" // 同じ pattern の別のロールに発行されたキーで読む → 外さない (medium)
+		alone  = solo + "Alone1234567"  // 1 つだけ。組の外の秘匿値も 1 つ読む → 初出の low
+	)
+	st := newStore(t)
+	s := &secretSeed{st: st, t: t}
+	coverage(t, st, 14)
+	in := now.Add(-3 * time.Hour)
+	for _, r := range []string{before, after, cross, alone} {
+		s.serviceAssume(r, time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC))
+	}
+	s.issue(before, in.Add(-time.Second), testKey(1))
+	s.startupRead(before, in, set, 0, 17, testKey(1))
+	s.issue(after, in.Add(time.Hour-time.Second), testKey(2))
+	s.startupRead(after, in.Add(time.Hour), set, 0, 17, testKey(2))
+	s.startupRead(cross, in, set, 0, 3, testKey(2))
+	s.issue(alone, in.Add(-time.Second), testKey(3))
+	s.startupRead(alone, in, set, 0, 17, testKey(3))
+	s.secret(alone, record.PrincipalAssumedRole, in, "prod/unlisted/db")
+
+	al, err := allowlist.Parse([]byte(`
+secrets_access:
+  - principal_pattern: ` + pat + `
+    secrets: ["/example-app/prod/secrets/*"]
+    bulk: exempt
+    note: 起動時に ECS が読む。作り直すと末尾の乱数が変わる
+  - principal_pattern: ` + soloPat + `
+    secrets: ["/example-app/prod/secrets/*"]
+    bulk: exempt
+    note: 起動時に ECS が読む
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	obs, err := secretCheck().Evaluate(context.Background(), st, appWindow, al)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := obsByKey(obs)
+	for _, r := range []string{before, after} {
+		line, has := m[BulkExemptKeyPrefix+r]
+		if !has || line.Severity != Info || line.Data["bulk_exempted"] != 17 || line.Data["principal"] != r ||
+			fmt.Sprint(line.Data["secrets_access_principal_patterns"]) != "["+pat+"]" || line.Data["principal_pattern_principals"] != 3 {
+			t.Errorf("%s: 作り直しの前後のどちらも外れて info: %+v", r, line)
+		}
+		if line.Fingerprint != fingerprint(Info, nil, "bulk-exempt") {
+			t.Errorf("%s: Fingerprint に pattern を入れた: %s", r, line.Fingerprint)
+		}
+	}
+	// 発行の突き合わせは実際の ARN で行う (同じ pattern に一致する別のロールの発行とは組まない)
+	if o := m[BulkExemptUnmatchedKeyPrefix+cross]; o.Severity != Medium || fmt.Sprint(o.Data["bulk_exempt_unmatched"]) != "map[no_issuance:1]" ||
+		fmt.Sprint(o.Data["secrets_access_principal_patterns"]) != "["+pat+"]" || o.Data["principal_pattern_principals"] != 3 {
+		t.Errorf("cross: %+v", o)
+	}
+	if o := m[alone]; o.Severity != Low || o.Data["new_secret_count"] != 1 || fmt.Sprint(o.Data["secrets_access_principal_patterns"]) != "["+soloPat+"]" {
+		t.Errorf("alone: 組の外の初出: %+v", o)
+	} else if _, has := o.Data["principal_pattern_principals"]; has {
+		t.Errorf("alone: 1 つだけなのに principal_pattern_principals を書いた: %+v", o.Data)
+	}
+
+	// principal (完全一致) の項目だけなら、data に pattern の項目を書かない
+	al, err = allowlist.Parse([]byte("secrets_access:\n  - principal: " + before + "\n    secrets: [\"/example-app/prod/secrets/*\"]\n    bulk: exempt\n    note: n\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	obs, err = secretCheck().Evaluate(context.Background(), st, appWindow, al)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = obsByKey(obs)
+	if line := m[BulkExemptKeyPrefix+before]; line.Severity != Info || line.Data["secrets_access_principal_patterns"] != nil || line.Data["principal_pattern_principals"] != nil {
+		t.Errorf("principal の項目: %+v", line)
+	}
+	// 作り直しの後のロールは、完全一致の項目では外れない (今までどおり)
+	if _, has := m[BulkExemptKeyPrefix+after]; has {
+		t.Errorf("完全一致の項目が作り直しの後のロールに効いた")
+	}
+}
