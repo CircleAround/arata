@@ -23,7 +23,8 @@ OIDC のトークンでのロールの引き受け (`AssumeRoleWithWebIdentity`)
 - `sub_form: not_read` は GitHub 以外のプロバイダ (EKS のサービスアカウント、Cognito など)。sub は読まず、(プロバイダ, ロール) の組で見る
 - ID 入りの sub (`repo:example-org@1234567/example-repo@7654321:…`) は ID を外して比べる。ID は `owner_id` / `repo_id` (複数あれば `owner_ids` / `repo_ids`)。
   同じ名前で ID が複数あるなら、組織・リポジトリの名前の付け替えか取り直しがあった
-- `run_ids` は userAgent にあった GitHub Actions の実行の ID。**呼ぶ側が書ける値**なので、証拠ではなく手がかりとして使う
+- `run_ids` は userAgent にあった GitHub Actions の実行の ID。**呼ぶ側が書ける値**なので、証拠ではなく手がかりとして使う。
+  **ふつうは無い**: 今の configure-aws-credentials の userAgent (`aws-sdk-js/3.x … configure-aws-credentials-for-github-actions` の形) には実行の ID が入らない (実際の記録で確かめた)。無いことは異常ではない
 - 引き受けた後のロールの活動は別のチェック (new_principal・principal_new_source・iam_changes・secret_access など) が見る。主体はロールの ARN
 
 - Key は `<プロバイダ>|<sub。読めなければ unparsed、GitHub 以外は ->|<ロールの ARN。失敗の記録で無ければ ->`
@@ -37,7 +38,7 @@ OIDC のトークンでのロールの引き受け (`AssumeRoleWithWebIdentity`)
 
 - `oidc_origins`: 1 段目の 1 回ごとの要素 (古い順、上限 10。全部の数は `oidc_origins_total`)。`repo`・`sub_kind`・`ref` / `environment`・`run_id`・`assumed_at` (1 段目の時刻)・`role_arn`・`provider`・`chain_depth` (1 段目のセッションが直接呼んだ記録が 1)
 - `oidc_origin_unmatched`: たどれなかった記録の理由ごとの数 (`no_key`・`no_issuance`・`not_oidc` 鎖の根が ECS・`too_deep`)。一部だけたどれたとき (同じロールが GitHub の実行とそれ以外から使われた手がかり) と、OIDC の入り口のロールなのに 1 段目が見つからないときだけ出る
-- 証拠ではない。`run_id` は呼ぶ側が書け、既知のリポジトリの既存のワークフローを書き換えられた場合も `repo`・`ref` は正規の値のまま。合わない・実行が無いなら `run_id` を偽った疑い
+- 証拠ではない。`run_id` はふつう無く (上の `run_ids` と同じ)、あっても呼ぶ側が書ける。実行は `repo`・`environment` / `ref`・`assumed_at` で探す。既知のリポジトリの既存のワークフローを書き換えられた場合も `repo`・`ref` は正規の値のまま。合わない・実行が無いなら `run_id` を偽った疑い
 - CloudFormation が引き受けた実行のロール (`cfn-exec-role` など) の操作には付かない (キーで deploy-role に戻れない)。付かないことは「GitHub から来ていない」を意味しない
 
 ## まず確かめること
@@ -50,7 +51,8 @@ OIDC のトークンでのロールの引き受け (`AssumeRoleWithWebIdentity`)
 4. CloudTrail の記録: `aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=AssumeRoleWithWebIdentity --start-time <first_time> --end-time <last_time>`。
    `userIdentity.userName` が sub、`responseElements.credentials.accessKeyId` が一時キー
 5. 引き受けた後の操作: `aws cloudtrail lookup-events --lookup-attributes AttributeKey=AccessKeyId,AttributeValue=<一時キー>`
-6. GitHub の側: `run_ids` があれば `https://github.com/<repo>/actions/runs/<run_id>` の実行と、そのコミット・ワークフローの変更履歴を人に見てもらう
+6. GitHub の側: リポジトリ (`repo`) の Actions の実行の一覧から、`environment` / `ref` と時刻 (`first_time`〜`last_time`。2 段目以降の finding なら `assumed_at`) で実行を人に探してもらい、
+   そのコミット・ワークフローの変更履歴を見てもらう。`run_ids` があれば `https://github.com/<repo>/actions/runs/<run_id>` で直接開けるが、ふつうは無い
 7. `denied: true` なら引き受けは成功していない。同じ入り口の成功が別の時間帯に無いかを 4 で確かめる。ロールが記録に無いときは、6 のワークフローの実行で、どのロールを指定していたかを見る
 
 ## 判断の分かれ目

@@ -34,7 +34,7 @@ AWS のサービス主体 (EC2・Lambda などのインスタンスロール) �
   `has_errors` (失敗した引き受けを含む)、`invoked_by` (送信元の IP が無く、AWS のサービス経由のとき。コンソールのスイッチロールなど)
 - `ips` が無いのは、記録の送信元が AWS のサービス名で IP が無いとき (収集で落としているのではない)
 - GitHub の OIDC から来たセッション (`oidc_origins`。ADR 0081): 呼び出し側のセッションを 1 段目の `AssumeRoleWithWebIdentity` までキーの一致でたどれたら、1 段目の `repo`・`ref` / `environment`・`run_id`・`assumed_at`・`chain_depth` が付く (たどれない理由は `oidc_origin_unmatched`)。
-  **手がかりであって証拠ではない** (`run_id` は呼ぶ側が書ける)。`https://github.com/<repo>/actions/runs/<run_id>` の実行と時刻を人に見てもらう。読み方は `arata help ai playbook oidc_assume_role`
+  **手がかりであって証拠ではない**。`run_id` はふつう無い (今の configure-aws-credentials は userAgent に入れない)。実行は `repo` の Actions の一覧から `environment` / `ref` と `assumed_at` で人に探してもらう。読み方は `arata help ai playbook oidc_assume_role`
 
 ## まず確かめること
 

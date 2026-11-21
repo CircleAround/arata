@@ -1029,7 +1029,9 @@ oidc_subjects:                   # OIDC でのロールの引き受けの、既�
     ID 入りの形は ID を外した形で比べる (ID は別の項目)。ref は `refs/` で始まり英数字と `._/@+=-` だけ、environment は英数字と `._-` と途中の空白だけ
     (通知にそのまま出る値なので、git や GitHub が許す文字より狭くする)。外れたら `oidc_sub_form: unparsed` (値は残さない。sub の形をカスタマイズしたリポジトリを含む)
   - GitHub 以外のプロバイダは `oidc_sub_form: not_read` (sub は読まず、残さない。利用者ごとの ID が入るプロバイダがある)
-  - `gha_run_id`: `userAgent` が `exec-env/GitHubActions` を名乗るときの `md/run_id#<数字>`。呼ぶ側が書ける値なので判定に使わない (調べる手がかり)
+  - `gha_run_id`: `userAgent` が `exec-env/GitHubActions` を名乗るときの `md/run_id#<数字>`。呼ぶ側が書ける値なので判定に使わない (調べる手がかり)。
+    実際の記録 (2026-11-21) では付かなかった: 今の configure-aws-credentials の userAgent (`aws-sdk-js/3.x … configure-aws-credentials-for-github-actions` の形) には実行の ID が入らない。
+    実行を探す手がかりは、`repo`・`environment` / `ref`・引き受けの時刻が主になる (ADR 0081 の追記)
   - `roleSessionName` は残さない。**`job_workflow_ref` は CloudTrail に記録されない**ので、どのワークフローのファイルからかは残せない
 - 決定 (信頼ポリシーの記録。ADR 0056): `UpdateAssumeRolePolicy` (`requestParameters.policyDocument`) と `CreateRole` (`assumeRolePolicyDocument`) の信頼ポリシーを collector が読み、
   判定に使う値だけを data に残す (文書そのものは残さない): `trust_policy` (ok / unreadable。必ず付ける)・`trust_wildcard`・`trust_accounts` (AWS / Federated の主体のアカウント)・
