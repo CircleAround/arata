@@ -39,7 +39,7 @@
      (大きなイメージ・EC2 の起動タイプ) なら `checks.secret_access.bulk_exempt_within` を延ばす (上限 15m)。そうでなければ 3〜5 と「封じ込め」
    - `no_issuance`: 対になる ECS の発行の記録が無い。ECS 以外がこのロールで読んだか、発行の記録を集めていない (別のリージョンの STS など)。CloudTrail で呼び出し側を見る
    - `no_key`: 読み取りにキーの印が無い。版を上げる前に集めた記録 (上げた直後の 1 回) なら resolve。そうでなければ要対応
-9. `principal_pattern_principals` があれば、同じ pattern に一致した主体を並べる。その日にスタックを作り直した前後のロールなら何もしない。そうでなければ glob が別のロールにも一致している (下の「名前が切られていないか」)。glob を狭めるか `principal` に戻す
+9. `principal_pattern_principals` があれば、同じ pattern に一致した主体を並べる (`arata review` で同じ pattern の行を全部見る。この項目は新しく出た方の行にだけ付き、前の run から続く行には付かない・前の値が残る)。その日にスタックを作り直した前後のロールなら何もしない。そうでなければ glob が別のロールにも一致している (下の「名前が切られていないか」)。glob を狭めるか `principal` に戻す
 
 ## 判断の分かれ目
 
