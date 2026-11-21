@@ -112,3 +112,14 @@ func TestConfigCheckRejectsUnknownFormat(t *testing.T) {
 		t.Fatalf("exit %d\n%s%s", code, c.stdout, c.stderr)
 	}
 }
+
+// config check のヘルプは、secrets_access の主体の書き方 (principal / principal_pattern。ADR 0079) と bulk: exempt の規則 (ADR 0073) にも触れる
+func TestConfigCheckHelpSecretsAccess(t *testing.T) {
+	c := newCLI(t)
+	c.run("config", "check", "--help")
+	for _, want := range []string{"secrets_access の主体 (principal / principal_pattern のどれか 1 つ", "末尾の -* だけ", "bulk: exempt"} {
+		if !strings.Contains(c.stdout.String(), want) {
+			t.Errorf("config check help lacks %q:\n%s", want, c.stdout)
+		}
+	}
+}
