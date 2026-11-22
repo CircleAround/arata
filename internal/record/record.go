@@ -210,9 +210,22 @@ const (
 	MetricPrincipalSource = "principal_source"
 	// MetricPrincipalSourceWrites はそのうち成功した書き込み (readOnly=false) の件数。0 なら出さない。
 	MetricPrincipalSourceWrites = "principal_source_writes"
+	// MetricPrincipalSourceRuntimeWrites は MetricPrincipalSourceWrites のうち、実行環境の下回りの書き込み (RuntimeWrite) の件数。0 なら出さない。
+	// 決定 (ADR 0083): principal_new_source が、サービスが引き受けるロールのときだけ書き込みから差し引く。足す前の版で集めた日には無く、0 として扱う。
+	MetricPrincipalSourceRuntimeWrites = "principal_source_runtime_writes"
 	// MetricPrincipalWriteRegion は主体 × リージョンの、成功した書き込みの件数。
 	MetricPrincipalWriteRegion = "principal_write_region"
 )
+
+// runtimeWrites は実行環境 (Lambda など) が関数の代わりに必ず行う書き込みの一覧 (eventSource → eventName)。
+// 決定 (ADR 0083): 固定の一覧にし、設定では足せない。足すのは「その操作だけをされても、資格を持ち出した側が得るものが無い」ものに限る
+// (ログの置き場所を作るだけで、読み出し・権限・設定は変えない)。user agent や invokedBy では見分けない (名乗れる・付かない)。
+var runtimeWrites = map[string]map[string]bool{
+	"logs.amazonaws.com": {"CreateLogGroup": true, "CreateLogStream": true},
+}
+
+// RuntimeWrite は eventSource・eventName の書き込みが、実行環境の下回りの書き込みかを返す。
+func RuntimeWrite(eventSource, name string) bool { return runtimeWrites[eventSource][name] }
 
 // ActivityKey は活動の日次集計の Key (主体 ARN と値を "|" でつなぐ。ARN には "|" が入らない)。
 func ActivityKey(arn, v string) string { return arn + "|" + v }

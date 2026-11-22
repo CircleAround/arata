@@ -310,3 +310,94 @@ func TestActivityDoesNotAffectExistingChecks(t *testing.T) {
 		}
 	}
 }
+
+// サービスが引き受けるロールでは、実行環境の下回りの書き込み (logs:CreateLogGroup・logs:CreateLogStream) を新しい送信元の書き込みに数えない (ADR 0083)。
+// ほかの書き込み・新しいリージョン・access_denied との相関、IAM ユーザーとサービスが引き受けないロールの判定は変えない。
+// 下回りの件数の metric の無い日 (足す前の版で集めた日) は 0 として扱う (今までと同じ判定)。
+func TestPrincipalNewSourceRuntimeWrites(t *testing.T) {
+	st := newStore(t)
+	a := activitySeed{st: st, t: t}
+	old := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	const (
+		fnLogs   = "arn:aws:iam::123456789012:role/example-fn-logs"
+		fnMixed  = "arn:aws:iam::123456789012:role/example-fn-mixed"
+		fnOld    = "arn:aws:iam::123456789012:role/example-fn-old"
+		fnRegion = "arn:aws:iam::123456789012:role/example-fn-region"
+		fnDenied = "arn:aws:iam::123456789012:role/example-fn-denied"
+		user     = "arn:aws:iam::123456789012:user/alice"
+		role     = "arn:aws:iam::123456789012:role/example-deploy"
+	)
+	const home, newPrefix, day1, day2 = "203.0.113.0/24", "198.51.100.0/24", "2026-10-20", "2026-10-21"
+	coverage(t, st, 30)
+	runtime := func(date, arn, prefix string, n float64) {
+		a.put(date, record.MetricPrincipalSourceRuntimeWrites, arn, prefix, n)
+	}
+	for i, r := range []string{fnLogs, fnMixed, fnOld, fnRegion, fnDenied} {
+		a.principal(r, record.PrincipalAssumedRole, old, store.PrincipalBaseline)
+		a.history(r, home, "ap-northeast-1", 30)
+		if err := st.InsertEvent(context.Background(), record.TrailEvent{EventID: fmt.Sprintf("svc-assume-rt-%d", i), Time: now.Add(-10 * 24 * time.Hour), Source: "trail",
+			Name: "AssumeRole", EventSource: "sts.amazonaws.com", PrincipalARN: "lambda.amazonaws.com", PrincipalKind: record.PrincipalService, ReadOnly: true,
+			Data: map[string]any{"role_arn": r}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// fnLogs: 新しい送信元からの書き込みは下回りの 22 件だけ → 数えると 0 件で low。サービスのロールの low は出さない
+	a.source(day1, fnLogs, newPrefix, 77, 11)
+	runtime(day1, fnLogs, newPrefix, 11)
+	a.source(day2, fnLogs, newPrefix, 77, 11)
+	runtime(day2, fnLogs, newPrefix, 11)
+	// fnMixed: 下回り 22 件 + ほかの書き込み 8 件 → 8 件 (min_writes 5 以上) で medium
+	a.source(day2, fnMixed, newPrefix, 100, 30)
+	runtime(day2, fnMixed, newPrefix, 22)
+	// fnOld: 下回りの件数の metric が無い日 (足す前の版で集めた日) は 0 として扱う → 今までどおり medium
+	a.source(day2, fnOld, newPrefix, 154, 22)
+	// fnRegion: 下回りの書き込みでも、初めてのリージョンでの書き込みは medium (new_region は変えない)
+	a.source(day2, fnRegion, newPrefix, 10, 2)
+	runtime(day2, fnRegion, newPrefix, 2)
+	a.put(day2, record.MetricPrincipalWriteRegion, fnRegion, "us-west-2", 2)
+	// fnDenied: 下回りの書き込みだけでも、同じ窓で拒否の急増があれば high (相関は変えない)
+	a.source(day2, fnDenied, newPrefix, 30, 22)
+	runtime(day2, fnDenied, newPrefix, 22)
+	d := &deniedSeed{st: st, t: t}
+	d.put(fnDenied, record.PrincipalAssumedRole, now.Add(-2*time.Hour), "AccessDenied", "198.51.100.9", apis("iam", 6)...)
+	// user / role: IAM ユーザーとサービスが引き受けないロールは差し引かない → medium
+	for _, p := range []struct {
+		arn  string
+		kind record.PrincipalKind
+	}{{user, record.PrincipalUser}, {role, record.PrincipalAssumedRole}} {
+		a.principal(p.arn, p.kind, old, store.PrincipalBaseline)
+		a.history(p.arn, home, "ap-northeast-1", 30)
+		a.source(day2, p.arn, newPrefix, 154, 22)
+		runtime(day2, p.arn, newPrefix, 22)
+	}
+
+	obs, err := newSourceCheck().Evaluate(context.Background(), st, appWindow, &allowlist.List{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]Severity{fnMixed: Medium, fnOld: Medium, fnRegion: Medium, fnDenied: High, user: Medium, role: Medium}
+	if fmt.Sprint(bySev(obs)) != fmt.Sprint(want) {
+		t.Fatalf("severities:\n got  %v\n want %v", bySev(obs), want)
+	}
+	got := obsByKey(obs)
+	for arn, w := range map[string]struct {
+		reasons  string
+		writes   float64
+		excluded any
+	}{
+		fnMixed:  {"[new_source new_source_writes]", 30, 22.0},
+		fnOld:    {"[new_source new_source_writes]", 22, nil},
+		fnRegion: {"[new_source new_region]", 2, 2.0},
+		fnDenied: {"[new_source access_denied]", 22, 22.0},
+		user:     {"[new_source new_source_writes]", 22, nil},
+		role:     {"[new_source new_source_writes]", 22, nil},
+	} {
+		o := got[arn]
+		if fmt.Sprint(o.Data["reasons"]) != w.reasons || o.Data["writes_from_new_sources"] != w.writes || o.Data["runtime_writes_excluded"] != w.excluded {
+			t.Errorf("%s: %+v", arn, o.Data)
+		}
+	}
+	if !strings.Contains(got[fnMixed].Summary, "書き込み 30 件") || !strings.Contains(got[fnMixed].Summary, "22 件") {
+		t.Errorf("fnMixed summary: %s", got[fnMixed].Summary)
+	}
+}

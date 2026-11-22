@@ -502,6 +502,44 @@ func TestCollectActivityMetrics(t *testing.T) {
 	}
 }
 
+// 実行環境の下回りの書き込み (logs:CreateLogGroup・logs:CreateLogStream。ADR 0083) は、principal_source_writes に加えて
+// principal_source_runtime_writes にも数える (差し引くかはチェックが主体の種類で決める)。名前が同じでもほかのサービスの操作・失敗・読み取りは数えない。
+func TestCollectRuntimeWriteMetrics(t *testing.T) {
+	const fn = `{"type":"AssumedRole","arn":"arn:aws:sts::123456789012:assumed-role/example-fn/s","accountId":"123456789012","sessionContext":{"sessionIssuer":{"arn":"arn:aws:iam::123456789012:role/example-fn"}}}`
+	body := func(id, source, name, code string, readOnly bool) string {
+		return fmt.Sprintf(`{"userIdentity":%s,"eventTime":"2026-10-21T01:00:00Z","eventSource":%q,"eventName":%q,
+	  "awsRegion":"ap-northeast-1","sourceIPAddress":"198.51.100.7","userAgent":"example-agent/1.0","errorCode":%q,"readOnly":%v,"eventID":%q}`, fn, source, name, code, readOnly, id)
+	}
+	day := time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)
+	fake := &Fake{Pages: [][]types.Event{{
+		ev("r1", day.Add(time.Hour), body("r1", "logs.amazonaws.com", "CreateLogStream", "", false)),
+		ev("r2", day.Add(time.Hour), body("r2", "logs.amazonaws.com", "CreateLogGroup", "", false)),
+		ev("r3", day.Add(time.Hour), body("r3", "logs.amazonaws.com", "CreateLogStream", "ResourceAlreadyExistsException", false)), // 失敗は書き込みに数えない
+		ev("r4", day.Add(time.Hour), body("r4", "logs.amazonaws.com", "PutRetentionPolicy", "", false)),                            // 一覧の外の書き込み
+		ev("r5", day.Add(time.Hour), body("r5", "example.amazonaws.com", "CreateLogStream", "", false)),                            // 名前が同じでもほかのサービス
+		ev("r6", day.Add(time.Hour), body("r6", "kms.amazonaws.com", "Decrypt", "", true)),
+	}}}
+	c, _, _ := testCollector("trail", RegionClient{Region: "ap-northeast-1", API: fake})
+	sink := &captured{}
+	if err := c.Collect(context.Background(), collect.Window{From: day, To: day.Add(24 * time.Hour)}, sink); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]float64{}
+	for _, m := range sink.metrics {
+		got[m.Metric+" "+m.Key] = m.Value
+	}
+	const k = "arn:aws:iam::123456789012:role/example-fn|"
+	want := map[string]float64{
+		"principal_source " + k + "198.51.100.0/24":                6,
+		"principal_source_writes " + k + "198.51.100.0/24":         4,
+		"principal_source_runtime_writes " + k + "198.51.100.0/24": 2,
+		"principal_write_region " + k + "ap-northeast-1":           4, // 新しいリージョンの判定は変えない
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("metrics:\n got  %v\n want %v", got, want)
+	}
+}
+
 // AWS のサービスが主体の代わりに呼んだ記録は、sourceIPAddress がサービス名になる。IP には入れず、data.invoked_by に残す。
 // 決まった形 (record.ServiceName) でない値は残さない (ログ由来の値を見出しに出さない)。サービスの主体の記録は主体がその名前なので足さない。
 func TestNormalizeInvokedBy(t *testing.T) {

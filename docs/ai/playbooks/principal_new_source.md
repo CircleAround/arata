@@ -9,17 +9,22 @@
   新しい送信元 + 同じ窓で access_denied (拒否の急増) も出ている → high
 - allowlist の主体の項目に `dynamic_source: true` があれば (CI のランナーなど) low は出ない (medium 以上は出る)。
   AWS のサービスが引き受けるロール (Lambda・ECS のタスク・EC2 のインスタンスプロファイル。`service_assumed: true`) も同じ扱い。
+  さらにサービスが引き受けるロールでは、実行環境がログの置き場所を作る書き込み (`logs:CreateLogGroup`・`logs:CreateLogStream`) を `min_writes` と比べる書き込みに数えない
+  (差し引いた件数は `runtime_writes_excluded`。新しいリージョンの書き込みと access_denied との相関には効かない。IAM ユーザーとほかのロールでは数える)。
   allowlist の `source_ips` の内の送信元は新しい送信元にしない。導入直後 (CloudTrail を収集し終えた過去日が `min_baseline_days` 未満) は報告しない
 - 材料は日ごとの「主体 × 送信元」「主体 × 書き込みのリージョン」の有無と件数。件数は時ごとの集計の和でその日の全件 (以前の版で集めた日は一部しか数えていないことがある)。国の判定はしない
 - Key は主体の ARN。data: `principal`、`principal_kind`、`allowlist_status`、`reasons` (`new_source` / `new_source_writes` / `new_region` / `access_denied`)、
   `new_sources` (`prefix`・`events`・`writes`・`ips` (窓で観測した IP))、`new_regions` (`region`・`writes`)、`writes_from_new_sources`、
-  `access_denied`、`active_in_baseline` (false なら過去 `baseline_days` は使われていなかった = 休眠していたキー)、`dynamic_source`、`service_assumed`、`baseline_days_with_data`
+  `access_denied`、`active_in_baseline` (false なら過去 `baseline_days` は使われていなかった = 休眠していたキー)、`dynamic_source`、`service_assumed`、
+  `runtime_writes_excluded` (差し引いた下回りの書き込みの件数。`writes_from_new_sources` と `writes` は差し引く前の件数)、`baseline_days_with_data`
 
 ## まず確かめること
 
 1. `new_sources` の `ips` と `prefix` を、利用者の業務の場所 (オフィス・VPN・自宅回線・CI・SaaS) と照らす。
    `whois <IP>` で事業者を見る (クラウド事業者・VPS・Tor の出口などは要注意)。送信元の国は arata では判定しないので、必要なら人が調べる
-2. `reasons` と `writes_from_new_sources`・`new_regions` を見る。ふだん使わないリージョンでの書き込み (インスタンスの作成など) は採掘の典型
+2. `reasons` と `writes_from_new_sources`・`new_regions` を見る。ふだん使わないリージョンでの書き込み (インスタンスの作成など) は採掘の典型。
+   `service_assumed: true` で `new_source_writes` が出たら、`writes_from_new_sources` から `runtime_writes_excluded` を引いた残りが、ログの置き場所を作る以外の書き込み。
+   その中身を 4 の手順で並べる (関数のふだんの書き込みか、ふだん無い操作か)。以前の版で集めた日は下回りの書き込みも数えている (`runtime_writes_excluded` が無い)
 3. `active_in_baseline: false` なら休眠していたキーの再利用。キーの持ち主・用途がまだ有効かを確かめる。
    `service_assumed: true` のロールが AWS の外 (利用者のオフィス・VPS など) の送信元から使われていれば、インスタンスメタデータなどから持ち出したセッションの疑い
    (GuardDuty の `UnauthorizedAccess:IAMUser/InstanceCredentialExfiltration` も確かめる)

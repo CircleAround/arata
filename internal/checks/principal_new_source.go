@@ -35,6 +35,12 @@ import (
 //   - allowlist の主体の dynamic_source: true (CI のランナーなど送信元が毎回変わる主体) は low を出さない (medium 以上は出す)。
 //     AWS のサービスが引き受けるロール (保存済みの AssumeRole の呼び出し元がサービス主体。Lambda・ECS のタスク・EC2 のインスタンスプロファイル) も同じ扱い
 //     (送信元が AWS の管理する NAT などで毎回変わるため。持ち出したセッションの悪用は、書き込み・新しいリージョン・拒否で medium 以上として拾う)
+//   - 決定 (ADR 0083): サービスが引き受けるロールでは、実行環境の下回りの書き込み (record.RuntimeWrite の固定の一覧。今は logs:CreateLogGroup・
+//     logs:CreateLogStream) を、新しい送信元からの書き込み (min_writes と比べる数) から差し引く。Lambda の実行環境は呼び出しのたびに別の送信元から
+//     ログの置き場所を作るので、その書き込みだけで medium になっていた。一覧の操作だけでは持ち出した側に得るものが無い。差し引いた件数は
+//     data の runtime_writes_excluded (writes_from_new_sources と new_sources の writes は差し引く前の件数のまま)。新しいリージョン・access_denied との
+//     相関、IAM ユーザーとサービスが引き受けないロールは差し引かない。user agent・invokedBy では見分けない (名乗れる・ロールのセッションには付かない)。
+//     下回りの件数の metric の無い日 (足す前の版で集めた日) は 0 として扱う
 //   - CloudTrail を収集し終えた過去日 (collectedDays。活動の有無ではない) が min_baseline_days 未満の間 (導入直後) は報告しない。
 //     収集済みで日次集計の無い日は「活動なし」(操作の少ないアカウントでも判定する)
 //   - 国の判定はしない (未決)。new_sources の要素は map なので、将来 country を足せる
@@ -61,7 +67,7 @@ const (
 )
 
 type newSource struct {
-	events, writes float64
+	events, writes, runtime float64
 }
 
 func (c PrincipalNewSource) Evaluate(ctx context.Context, q store.Query, w collect.Window, al *allowlist.List) ([]Observation, error) {
@@ -85,6 +91,11 @@ func (c PrincipalNewSource) Evaluate(ctx context.Context, q store.Query, w colle
 		return nil, err
 	}
 	srcW, err := loadSeries(ctx, q, record.MetricPrincipalSourceWrites, from, to)
+	if err != nil {
+		return nil, err
+	}
+	// 足す前の版で集めた日には行が無く、0 として扱う (今までと同じ判定。ADR 0083)
+	srcRT, err := loadSeries(ctx, q, record.MetricPrincipalSourceRuntimeWrites, from, to)
 	if err != nil {
 		return nil, err
 	}
@@ -134,6 +145,7 @@ func (c PrincipalNewSource) Evaluate(ctx context.Context, q store.Query, w colle
 			}
 			ns.events += v
 			ns.writes += srcW[d][k]
+			ns.runtime += srcRT[d][k]
 		}
 		for k, v := range reg[d] {
 			arn, region, ok := record.SplitActivityKey(k)
@@ -213,13 +225,16 @@ func (c PrincipalNewSource) Evaluate(ctx context.Context, q store.Query, w colle
 		}
 		var sources []map[string]any
 		var prefixes []string
-		var writes float64
+		var writes, excluded float64
 		for prefix, ns := range newSrc[arn] {
 			if allowedSource(al, prefix, recent[prefix]) {
 				continue
 			}
 			prefixes = append(prefixes, prefix)
 			writes += ns.writes
+			if serviceRoles[arn] {
+				excluded += min(ns.runtime, ns.writes)
+			}
 		}
 		sort.Strings(prefixes)
 		for _, prefix := range prefixes {
@@ -242,7 +257,7 @@ func (c PrincipalNewSource) Evaluate(ctx context.Context, q store.Query, w colle
 		if len(prefixes) > 0 {
 			sev = Low
 			reasons = append(reasons, reasonNewSource)
-			if writes >= float64(b.MinWrites) {
+			if writes-excluded >= float64(b.MinWrites) {
 				sev = Medium
 				reasons = append(reasons, reasonNewSourceWrites)
 			}
@@ -278,6 +293,9 @@ func (c PrincipalNewSource) Evaluate(ctx context.Context, q store.Query, w colle
 		if serviceRoles[arn] {
 			data["service_assumed"] = true
 		}
+		if excluded > 0 {
+			data["runtime_writes_excluded"] = excluded
+		}
 		if len(sources) > 0 {
 			data["new_sources"] = sources
 		}
@@ -291,7 +309,11 @@ func (c PrincipalNewSource) Evaluate(ctx context.Context, q store.Query, w colle
 		markAccountOnly(data, "principal_identity", arn, p.Kind)
 		var parts []string
 		if len(prefixes) > 0 {
-			parts = append(parts, fmt.Sprintf("初めての送信元 %s から使われた (書き込み %.0f 件)", strings.Join(prefixes, ", "), writes))
+			if excluded > 0 {
+				parts = append(parts, fmt.Sprintf("初めての送信元 %s から使われた (書き込み %.0f 件。うち実行環境の下回りの %.0f 件は数えない)", strings.Join(prefixes, ", "), writes, excluded))
+			} else {
+				parts = append(parts, fmt.Sprintf("初めての送信元 %s から使われた (書き込み %.0f 件)", strings.Join(prefixes, ", "), writes))
+			}
 		}
 		if len(regions) > 0 {
 			parts = append(parts, fmt.Sprintf("初めてのリージョン %s で書き込み", strings.Join(regions, ", ")))

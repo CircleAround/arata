@@ -105,3 +105,4 @@
 | [0080](0080-triage-many-ids.md) | ack / snooze / resolve に複数の finding ID (100 件まで) を渡し、全部を確かめてから 1 回で書く (1 件でも通らなければ何も書かない) | 採用 |
 | [0081](0081-oidc-chained-assume-origin.md) | OIDC で入ったセッションから先の引き受けと操作の finding に、1 段目の GitHub の実行の手がかりを、発行されたキーのハッシュの突き合わせで付ける (判定には使わない) | 採用 |
 | [0082](0082-hourly-urgent-notify.md) | 取得の回に `hourly` を重大度の下限 (`min_severity: high`) 付きで判定し、high 以上だけを通知する (`arata repo init --flash`。下限より下は記録せず daily に残す) | 採用 |
+| [0083](0083-service-role-runtime-writes.md) | サービスが引き受けるロールでは、実行環境の下回りの書き込み (`logs:CreateLogGroup`・`logs:CreateLogStream` の固定の一覧) を `principal_new_source` の新しい送信元の書き込みに数えない | 採用 |
