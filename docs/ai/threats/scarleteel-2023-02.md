@@ -18,7 +18,7 @@
 |---|---|---|---|---|
 | 初期の侵入: 公開されたサービスからコンテナに入り、採掘を動かす | 観測 | — | 無し | 見えない (コンテナの中) |
 | 認証情報の入手: インスタンスメタデータからロールの一時的な認証情報を取る | 観測 | — | 無し | 見えない (メタデータへのアクセスは CloudTrail に残らない) |
-| AWS での利用: 盗んだロールの認証情報で、Lambda と S3 を列挙する | 観測 | `principal_new_source`, `guardduty_findings` | CloudTrail: そのロールの API 呼び出し。GuardDuty の検出 | インスタンスのロールは新しい送信元だけ (low) では出ない。新しい送信元からの書き込みで medium、拒否の急増が重なれば high。GuardDuty が検出を出していれば weekly に拾う (7 以上は high。検出が出たかは出典に無い) |
+| AWS での利用: 盗んだロールの認証情報で、Lambda と S3 を列挙する | 観測 | `principal_new_source`, `guardduty_findings` | CloudTrail: そのロールの API 呼び出し。GuardDuty の検出 | インスタンスのロールは新しい送信元だけ (low) では出ない。新しい送信元からの書き込みで medium (ログの置き場所を作る `logs:CreateLogGroup`・`CreateLogStream` は数えない)、拒否の急増が重なれば high。GuardDuty が検出を出していれば weekly に拾う (7 以上は high。検出が出たかは出典に無い) |
 | 永続化の試行: ユーザーとグループを作る、既存のユーザーにアクセスキーを作る (すべて拒否) | 観測 | `iam_changes`, `access_denied` | CloudTrail: 拒否された `CreateUser`・`CreateAccessKey` | iam_changes が「IAM 変更の試行 (拒否)」として medium。拒否の種類が平常帯を超えれば access_denied が medium か high |
 | 認証情報の入手: Lambda 関数のコードと環境変数から IAM ユーザーのキーを見つけて使う | 観測 | `principal_new_source` | CloudTrail: その IAM ユーザーの API 呼び出し | 既知の IAM ユーザーが新しい送信元から使われて low、書き込みがあれば medium |
 | 検知の無効化: CloudTrail の記録を止める (一部が成功) | 観測 | `defense_evasion` | CloudTrail: `StopLogging` | critical |
@@ -30,7 +30,8 @@
 - **コンテナと Kubernetes の中** (侵入、採掘、メタデータへのアクセス): arata はホストやコンテナの記録を読まない
 - **S3 のオブジェクトの読み出し**: データイベントは arata の読む記録に無い。1 TB の読み出しも、状態ファイルの取得も出ない
 - **読み取りだけの列挙が成功している間**: Lambda のコードや環境変数の取得は管理イベントに残るが、読み取りを指摘するチェックは無い。
-  盗まれたロールがインスタンスのロールなら、新しい送信元だけでは出ない (AWS のサービスが引き受けるロールは送信元が変わるため)
+  盗まれたロールがインスタンスのロールなら、新しい送信元だけでは出ない (AWS のサービスが引き受けるロールは送信元が変わるため)。
+  ログの置き場所を作る書き込み (`logs:CreateLogGroup`・`CreateLogStream`) も、そのロールでは書き込みに数えない
 - **CloudTrail を止めた後の操作**: `StopLogging` は出るが、止まっていた間の操作は記録が無い
 - 監査していないアカウントでの動き (別アカウントへの移動は、そのアカウントの記録にしか無い)
 

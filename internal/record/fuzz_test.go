@@ -189,3 +189,21 @@ func sessionKeyShape(s string) bool {
 	}
 	return true
 }
+
+// RuntimeWrite はログ由来の eventSource・eventName を読む。規則: 真になるのは固定の一覧 (ADR 0083) の組と完全に一致するときだけ
+// (大文字小文字・前後の空白・接頭辞や接尾辞の違い、ほかのサービスの同じ名前は真にしない)。資格を持ち出した側が書き込みを下回りに見せかけられないため。
+func FuzzRuntimeWrite(f *testing.F) {
+	for _, s := range [][2]string{
+		{"logs.amazonaws.com", "CreateLogStream"}, {"logs.amazonaws.com", "CreateLogGroup"}, {"logs.amazonaws.com", "createlogstream"},
+		{"logs.amazonaws.com ", "CreateLogStream"}, {"logs.amazonaws.com", "CreateLogStreamX"}, {"example.amazonaws.com", "CreateLogStream"},
+		{"logs.amazonaws.com", "PutLogEvents"}, {"", ""}, {"logs.amazonaws.com", "DeleteLogGroup"},
+	} {
+		f.Add(s[0], s[1])
+	}
+	want := map[[2]string]bool{{"logs.amazonaws.com", "CreateLogGroup"}: true, {"logs.amazonaws.com", "CreateLogStream"}: true}
+	f.Fuzz(func(t *testing.T, source, name string) {
+		if got := RuntimeWrite(source, name); got != want[[2]string{source, name}] {
+			t.Fatalf("RuntimeWrite(%q, %q) = %v", source, name, got)
+		}
+	})
+}

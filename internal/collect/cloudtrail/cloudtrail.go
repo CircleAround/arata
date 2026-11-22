@@ -193,6 +193,9 @@ func (a activity) add(e record.TrailEvent) {
 		a[[3]string{date, record.MetricPrincipalSource, k}]++
 		if write {
 			a[[3]string{date, record.MetricPrincipalSourceWrites, k}]++
+			if record.RuntimeWrite(e.EventSource, e.Name) {
+				a[[3]string{date, record.MetricPrincipalSourceRuntimeWrites, k}]++
+			}
 		}
 	}
 	if write && e.Region != "" {
