@@ -5,17 +5,17 @@ AWS のログと設定を定期的に改め、**前回から新しく発生し�
 
 - 収集 → 保存 → 差分判定 → レポート生成までを担う。通知・起動・LLM による要約は組み込み側の仕事
   (標準品として、出力を要約して Slack に通知する別コマンド `aratam` を同梱する。[下記](#通知-aratam))
-- Go 製の単一バイナリ。オンプレの cron でも AWS Lambda でも同じバイナリで動く
+- Go 製の単一バイナリ。cron や GitHub Actions から定期的に起動する (Lambda 用の入口は設計書にあるが、まだ実装していない)
 - 顧客ごとの差は設定ファイル (ロググループと形式プロファイルの紐付け、既知リスト、閾値) に閉じ込める
 
 設計は [docs/design.md](docs/design.md)、判断の経緯は [docs/adr](docs/adr/README.md) を参照。
 
-## 現在の実装範囲 (設計書 10 章の Step 1〜3)
+## 現在の実装範囲
 
 - ソース: `cloudtrail-lookup` (CloudTrail LookupEvents)、`cloudtrail-s3` (trail の S3 への配信。記録の多いアカウント向け。ADR 0063)、`cloudwatch-logs` (Logs Insights の集計クエリ。形式プロファイル `nginx_access` / `alb_access` / `wafv2` / `json` / `regex` / `request_lines`、行を解釈しない `text`)、
   アカウント単位の状態 `iam-credential-report` / `guardduty` / `access-analyzer` / `posture` / `waf-config` (WAFv2 の WebACL の設定)、
   `cloudtrail-unused-regions` (ふだん使わないリージョンの書き込み)、`cost-anomaly` (AWS Cost Anomaly Detection の異常)
-- チェック: `root_usage`, `unknown_assume_role`, `oidc_assume_role`, `new_principal`, `iam_changes`, `access_denied`, `defense_evasion`, `public_exposure`, `principal_new_source`, `secret_access`, `unused_region_activity`, `cost_anomaly`, `login_bruteforce`, `probe_paths`, `endpoint_abuse`, `waf_block_trend`, `ai_path_usage` (daily)、
+- チェック: `root_usage`, `unknown_assume_role`, `oidc_assume_role`, `ecs_exec`, `new_principal`, `iam_changes`, `access_denied`, `defense_evasion`, `public_exposure`, `principal_new_source`, `secret_access`, `unused_region_activity`, `cost_anomaly`, `login_bruteforce`, `probe_paths`, `endpoint_abuse`, `waf_block_trend`, `ai_path_usage` (daily)、
   `credential_hygiene`, `guardduty_findings`, `posture`, `access_analyzer`, `waf_review` (weekly。WAF の修正提案の候補を report.json の `proposals` に)、
   `log_hygiene` (weekly。アプリのログに残った秘密の値・署名付き URL・隠されていない送信項目・本番の debug を、種類ごとの行数だけで報告する。値は取り出さない。設定を書くまで何も読まない)
 - ストア: `dir://` (JSONL 原本 + SQLite)、`s3://` (毎回消える実行環境向けのオプション。「S3 ストア」の節)
@@ -24,6 +24,8 @@ AWS のログと設定を定期的に改め、**前回から新しく発生し�
   `assume_destinations[]` (外向きの引き受けで行き先として既知のアカウント。そこへの MFA ありの引き受けを unknown_assume_role が報告しない。ADR 0047)、
   `oidc_subjects[]` (OIDC でのロールの引き受けの既知の入り口。GitHub Actions はリポジトリとブランチ・environment まで。oidc_assume_role が比べる。ADR 0055)
 - ack / snooze 中の finding も、重大度が上がれば changed として再報告する (ADR 0022)
+- 1 時間ごとの速報: プロファイルに `min_severity` (雛形では hourly に `high`) を書くと、下限より下の観測を記録せずに捨て、次の daily が新規として報告する。
+  aratam は `min_severity` のある報告を、静かな回には送らない。GitHub Actions の一式は `arata repo init --collect-every 1h --flash` で書き出す (ADR 0082)
 
 ## AI (LLM) から使う
 
@@ -482,7 +484,7 @@ internal/report/        report.json / report.md (型は schema/ に置き、arat
 internal/notify/        aratam の設定・入力の検査・振り分け・LLM 出力の検証と組み立て
 internal/llm/           aratam の LLM プロバイダ (claude-cli / bedrock)
 internal/slack/         Slack への送信 (bot トークンの chat.postMessage。非推奨の Incoming Webhook)
-internal/engine/        collect → evaluate → report の束ねと doctor (CLI と Lambda が共用)
+internal/engine/        collect → evaluate → report の束ねと doctor
 docs/ai/                arata help ai の文書 (embed でバイナリに入る)
 docs/threats.md         実際に起きた攻撃と、arata で見えるもの・見えないものの対応表の入口 (本文は docs/ai/threats/)
 examples/               設定サンプル
