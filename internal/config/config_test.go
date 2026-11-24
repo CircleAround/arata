@@ -419,7 +419,7 @@ func TestWAFReviewConfig(t *testing.T) {
 	}
 	wr := cfg.Checks.WAFReview
 	if wr.TopPaths != 50 || strings.Join(wr.RatePathGroups, ",") != "/login,/api/" || wr.Days != 7 || wr.MinDistinctIPs != 10 ||
-		wr.UnusedDays != 30 || len(wr.TrustedCIDRs) != 0 || cfg.Sources[1].Regions[0] != "ap-northeast-1" {
+		wr.UnusedDays != 30 || len(wr.TrustedCIDRs) != 0 || len(wr.IntendedBlockRules) != 0 || cfg.Sources[1].Regions[0] != "ap-northeast-1" {
 		t.Fatalf("defaults: %+v %v", wr, cfg.Sources[1].Regions)
 	}
 	for _, bad := range []string{
@@ -427,12 +427,23 @@ func TestWAFReviewConfig(t *testing.T) {
 		"  waf_review:\n    rate_path_groups: [login]\n",
 		"  waf_review:\n    unused_days: -1\n",
 		"  waf_review:\n    min_distinct_ips: 60\n",
+		// 意図して止めるルールの名前 (ADR 0084): 空・重複・ルール名に使えない文字・区切りの多すぎるものは誤り
+		"  waf_review:\n    intended_block_rules: [\"\"]\n",
+		"  waf_review:\n    intended_block_rules: [block-geo-example, block-geo-example]\n",
+		"  waf_review:\n    intended_block_rules: [\"block geo\"]\n",
+		"  waf_review:\n    intended_block_rules: [a/b/c]\n",
+		"  waf_review:\n    intended_block_rules: [/inner]\n",
+		"  waf_review:\n    intended_block_rules: [\"prod-waf|block-geo-example\"]\n",
 	} {
 		if _, err := Load(write(t, minimal+"checks:\n"+bad)); err == nil || !strings.Contains(err.Error(), "waf_review") {
 			t.Fatalf("%q: %v", bad, err)
 		}
 	}
 	if _, err := Load(write(t, minimal+"checks:\n  waf_review:\n    trusted_cidrs: [203.0.113.0/24, 2001:db8::/32]\n")); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := Load(write(t, minimal+"checks:\n  waf_review:\n    intended_block_rules: [block-geo-example, AWS-AWSManagedRulesCommonRuleSet/SizeRestrictions_BODY]\n")); err != nil ||
+		strings.Join(c.Checks.WAFReview.IntendedBlockRules, ",") != "block-geo-example,AWS-AWSManagedRulesCommonRuleSet/SizeRestrictions_BODY" {
 		t.Fatal(err)
 	}
 	// 集計条件は overrides で変えられない

@@ -115,7 +115,7 @@ arata が決まった規則で作った、WAF の設定を変える候補。find
   **COUNT → BLOCK の切り替えは arata は勧めない** (運用で計画して行う作業)
 - **observation** (`kind: observation`、`stage: none`): 規則が提案に至らなかったが、WAF の設定の観点で不審な観測。`about` は関わる候補の種類、`reason` は提案しなかった理由:
   `below_threshold` (閾値未満)、`undetermined` (設定と突き合わせられない・scope-down を解釈できないなど、判断できない)、`excluded_by_config` (除外設定に一致。決済のパスなど)、
-  `excluded_by_rule` (決まった除外に一致。レートベースのルール・IP 評判のグループ・sign-in のパス)、`position_limit` (ログの配列の位置の上限を超え、数え漏れの可能性)
+  `excluded_by_rule` (決まった除外に一致。レートベースのルール・IP 評判のグループ・sign-in のパス・前提で止める自作のルール)、`position_limit` (ログの配列の位置の上限を超え、数え漏れの可能性)。`excluded_by_config` には設定 `intended_block_rules` (意図して止めるルール) も入る。`false_positive` の evidence の `block_basis` は自作のルールが何を根拠に止めるか (ADR 0084): `premise` (国・IP セット・Host 名の照合を必ず含む。意図した BLOCK)、`premise_partial` (Or の一部だけが前提。見分けられない)、`path` (パスの照合だけ。提案は review で finding にしない)、`other`、`unknown` (文を読めない)。`statement_kinds` は文の種類
 - **COUNT のルールの状況** (`kind: observation`、`about: count_rule_status`、`reason: informational`): COUNT で動いているルールごとに毎回 1 件。提案ではなく、COUNT → BLOCK を計画するときの材料。
   `matches` (一致件数)、`suspect_ratio` (怪しい通信の割合 = 探索パスへの一致か、レート制限・既定の action・sign-in のパス以外で BLOCK されたリクエストでの一致)、`matching_days` / `days` (一致した日数 / 集計の日数)。後ろのルールが使うラベルを付けるための COUNT (目印のルール) は `about: label_rule` で別に出る (`labels`・`consumers`。BLOCK の候補ではない)。見分けられなかったものは evidence に `label_rule: undetermined`
 - **Challenge / CAPTCHA の状況** (`kind: observation`、`about: challenge_impact`、`reason: informational`): 出した数の多いルールごとに毎回 1 件。`issued` (出した件数)、

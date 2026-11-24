@@ -80,6 +80,8 @@ type StoredNeeder interface {
 //   - 「迷ったら提案しない」: 設定と突き合わせられない (WebACL が見つからない・同じ名前が複数ある・ルールが設定に無い・scope-down を解釈できない) ときは提案しない。
 //     ただし不審な観測は observation (提案なし) として、提案しなかった理由と根拠の数字を添えて残す (不審な事実は必ず伝える)
 //   - 異なり IP 数は日ごとの値の最大 (日をまたいで足せないので下限の見積もり)
+//   - 前提で止めるルール (国・IP セット・Host 名・レートベース・IP の評判) と intended_block_rules に書いたルールの BLOCK は誤検知の候補にしない。
+//     パスの照合だけで止める自作のルールは review に下げ、finding にしない (ADR 0084)
 //   - 攻撃そのものの検知は waf_block_trend・probe_paths・login_bruteforce の finding が担う。ここは WAF の設定の観点に限る
 type WAFReview struct {
 	Config config.WAFReview
@@ -253,6 +255,14 @@ func isIPSourceGroup(rule record.SnapshotItem) bool {
 	return strings.Contains(m, "IpReputation") || strings.Contains(m, "AnonymousIp")
 }
 
+// blockBasis は自作のルールが何を根拠に止めるか (account.WAFBasis*)。グループ・レートベースのルールと、前の版の snapshot (項目が無い) は ""。
+func blockBasis(rule record.SnapshotItem) string {
+	if rule.String("type") != account.WAFRuleRegular {
+		return ""
+	}
+	return rule.String("block_basis")
+}
+
 // falsePositives は「誤検知の疑い」: 探索パスではない正規化パスで、ルールの BLOCK が多数の異なる IP から来ている。
 func (r *reviewer) falsePositives(ctx context.Context) error {
 	cfg := r.c.Config
@@ -316,6 +326,10 @@ func (r *reviewer) falsePositives(ctx context.Context) error {
 		if a != nil {
 			rc, ok = a.rules[group]
 		}
+		basis := blockBasis(rc)
+		if basis != "" {
+			p.Evidence["block_basis"], p.Evidence["statement_kinds"] = basis, rc.String("statement_kinds")
+		}
 		switch {
 		case hasPrefixAny(path, r.c.ProbePaths):
 			continue
@@ -323,10 +337,18 @@ func (r *reviewer) falsePositives(ctx context.Context) error {
 			note(ReasonUndetermined, "WebACL の設定と突き合わせられない (waf-config に無いか、同じ名前が複数ある)")
 		case !ok:
 			note(ReasonUndetermined, "ルールが WebACL の設定に無い")
+		case contains(cfg.IntendedBlockRules, group) || inner != "" && contains(cfg.IntendedBlockRules, group+"/"+inner):
+			note(ReasonExcludedByConfig, "intended_block_rules に書いたルール (多数の IP を止めるのが意図)")
 		case rc.String("type") == account.WAFRuleRateBased:
 			note(ReasonExcludedByRule, "レートベースのルールの BLOCK は多数の IP からでも正常なことがある (レート制限の候補で扱う)")
 		case isIPSourceGroup(rc):
 			note(ReasonExcludedByRule, "送信元の評判で止めるグループは多数の IP を止めるのが正常")
+		case basis == account.WAFBasisPremise:
+			note(ReasonExcludedByRule, "前提で止めるルール (国・IP セット・Host 名の照合。文の種類 "+rc.String("statement_kinds")+") で、多数の IP を止めるのが意図")
+		case basis == account.WAFBasisPremisePartial:
+			note(ReasonUndetermined, "Or の一部だけが前提の条件 (国・IP セット・Host 名) のルールで、パスなどの照合で止めたのか前提で止めたのかを見分けられない (文の種類 "+rc.String("statement_kinds")+")")
+		case basis == account.WAFBasisUnknown:
+			note(ReasonUndetermined, "ルールの文を読めない (文の種類 "+rc.String("statement_kinds")+")")
 		case contains(r.c.SignInPaths, path):
 			note(ReasonExcludedByRule, "sign-in のパスへの多数の IP からの BLOCK はクレデンシャルスタッフィングかもしれない")
 		case maxIPs < cfg.MinDistinctIPs:
@@ -337,6 +359,14 @@ func (r *reviewer) falsePositives(ctx context.Context) error {
 				o.Summary = fmt.Sprintf("%s: %s が %s %s を %.0f 件 BLOCK。異なり IP (日ごとの最大 %.0f) が min_distinct_ips %.0f 未満のため提案しない", acl, label, method, path, n, maxIPs, cfg.MinDistinctIPs)
 				notes = append(notes, o)
 			}
+		case basis == account.WAFBasisPath:
+			// 決定 (ADR 0084): パスの照合だけで止める自作のルールは、そのパスを止めるのが狙いのことが多い (管理画面など)。
+			// COUNT を勧めず見直しにとどめ (review)、finding にもしない
+			p.Stage = StageReview
+			p.Summary = fmt.Sprintf("%s: パスで止める自作のルール %s が %s %s を直近 %d 日で %.0f 件 BLOCK (日ごとの異なり IP 最大 %.0f)。"+
+				"このパスを止めるのが意図かを見直す (意図なら intended_block_rules に書く。正規の画面ならルールのパスの条件を見直す)",
+				acl, label, method, path, cfg.Days, n, maxIPs)
+			props = append(props, p)
 		default:
 			how := "このパスだけ COUNT にする (scope-down でパスを外すか、ルールの除外)"
 			if inner != "" {

@@ -159,7 +159,7 @@ func TestProfilesCmd(t *testing.T) {
 	if v.Profiles[0].MinSeverity != "" || v.Profiles[1].MinSeverity != "high" {
 		t.Fatalf("min_severity: %+v", v.Profiles)
 	}
-	if v.Profiles[1].Name != "hourly" || len(v.Profiles[1].Params) != 5 || len(v.Unused) != 0 || v.Profiles[2].Name != "weekly" || len(v.Profiles[2].Params) != 2+17+3 {
+	if v.Profiles[1].Name != "hourly" || len(v.Profiles[1].Params) != 5 || len(v.Unused) != 0 || v.Profiles[2].Name != "weekly" || len(v.Profiles[2].Params) != 2+18+3 {
 		t.Fatalf("hourly: %+v", v)
 	}
 }
