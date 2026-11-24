@@ -164,6 +164,10 @@ Rails / unicorn / delayed_job は顧客差が大きいので `regex` で対応�
   Statement の全体は保存せず、action (BLOCK / ALLOW / COUNT など、グループは OverrideAction の NONE / COUNT)・種類 (`managed_group` / `rule_group` / `rate_based` / `regular`)・
   マネージドの名前・グループの中で COUNT にしたルール (`RuleActionOverrides` と古い `ExcludedRules`)・レート制限の値・評価窓・集約・scope-down の URI 条件だけを持つ。
   scope-down は UriPath の ByteMatch (STARTS_WITH / EXACTLY) とその And だけを解釈し、他を含めば `rate_scope_parsed: false`。WebACL が 1 つも無ければ Unavailable (waf_review は skip)
+  決定 (ADR 0084): 自作のルール (`type: regular`) には、何を根拠に止めるか (`block_basis`: `premise` / `premise_partial` / `path` / `other` / `unknown`) と
+  葉の文の種類 (`statement_kinds`。`geo_match,uri_path_match` のように重複なく並べる) を残す。前提の条件は GeoMatch・IPSetReference・SingleHeader の host への照合、
+  パスは UriPath への ByteMatch / RegexMatch / RegexPatternSetReference。And は子のどれかが前提なら前提、Or は全部が前提なら前提で一部なら `premise_partial`、Not は And と Or を入れ替えて見る。
+  知らない文・欠けた文・20 段より深い入れ子は `unknown`。前の版の snapshot には項目が無い
 - wafv2 の日次集計に足すもの (`cloudwatch-logs` の wafv2 ソース。daily で回る):
 
 | metric | key | 値 |
@@ -1374,7 +1378,7 @@ arata は LLM を使わず候補だけを作り、aratam の LLM は候補を文
 
 | 候補 (`kind`) | 段階 (`stage`) | 条件 (閾値はすべて `checks.waf_review`) |
 |---|---|---|
-| `false_positive` (誤検知の疑い) | count_first | 探索パスではない正規化パスで、ルールの BLOCK の異なり IP (日ごとの最大) が `min_distinct_ips` (10) 以上。`finding_distinct_ips` (50) 以上は low の finding にも (key `false_positive\|<WebACL>\|<ルール>\|<method> <path>`、state 型) |
+| `false_positive` (誤検知の疑い) | count_first (パスだけで止める自作のルールは review。ADR 0084) | 探索パスではない正規化パスで、ルールの BLOCK の異なり IP (日ごとの最大) が `min_distinct_ips` (10) 以上。`finding_distinct_ips` (50) 以上は low の finding にも (key `false_positive\|<WebACL>\|<ルール>\|<method> <path>`、state 型。review のものは finding にしない) |
 | `probe_allowed` (すり抜けている探索) | count_first | 探索パスへの ALLOW が直近 `days` (7) 日で `min_count` (10) 件以上 (WebACL ごとに 1 件、パスは上位 10) |
 | `rate_limit_missing` (レート制限の不足) | count_first | パスの群を受け持つレートベースのルールが無く、5 分あたりの最大が p99 の `rate_factor` (10) 倍超え、かつ提案する limit より大きい。limit = max(p99 × `rate_margin` (3), `rate_floor` (100)) |
 | `rate_limit_loose` / `rate_limit_tight` | review | 受け持つルールが 1 つで解釈できるとき、limit (5 分あたりに換算) が観測の最大の `rate_loose_factor` (10) 倍より高い / 観測の p99 より低い |
@@ -1402,6 +1406,11 @@ arata は LLM を使わず候補だけを作り、aratam の LLM は候補を文
   IP 以外の集約のレートベースのルール、複数の条件の scope-down、群の一部だけを受け持つルール、データの日数が足りない、のどれでも提案しない
 - 決定: 誤検知の候補から外すもの: 探索パス、sign-in のパス (`login_bruteforce.paths`。多数の IP からの BLOCK はクレデンシャルスタッフィングかもしれない)、
   レートベースのルール (レート制限の候補で扱う)、送信元の評判で止めるグループ (`IpReputation` / `AnonymousIp`)、既定の action (`Default_Action`)
+- 決定 (ADR 0084): 前提で止める自作のルール (waf-config の `block_basis: premise`。国・IP セット・Host 名の照合を、止める条件に必ず含む) も外し、observation (`excluded_by_rule`) に残す。
+  Or の一部だけが前提のもの (`premise_partial`) と文を読めないもの (`unknown`) は、どの条件で止めたか分からないので提案せず observation (`undetermined`)。
+  `checks.waf_review.intended_block_rules` (ルール名か `<グループ>/<中のルール>`。既定は空) に書いたルールも外し、observation (`excluded_by_config`)。
+  パスの照合だけで止める自作のルール (`block_basis: path`) は提案を `review` に下げ (「止めるのが意図かを見直す」。COUNT は勧めない)、low の finding にしない。
+  evidence に `block_basis`・`statement_kinds` を添える。前の版の snapshot (項目が無い) は今までどおり。2xx / 3xx を返したパスだけを正規らしいとする案は別の ADR で扱う
 - 決定 (不審な事実は必ず伝える): 規則が提案に至らなかったが不審な観測があれば、`kind: observation` で理由 (`below_threshold` 閾値未満 / `undetermined` 判断できない /
   `excluded_by_config` 除外設定に一致 / `excluded_by_rule` 決まった除外に一致 / `position_limit` 数え漏れの可能性) と根拠の数字を添えて残す。
   対象は、異なり IP が足りない BLOCK (2 IP 以上・`min_count` 件以上)、除外に当たった多数の IP の BLOCK、閾値未満の許可された探索、日数が足りないが不審な一致ばかりのカウントルール、

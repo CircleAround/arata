@@ -34,6 +34,7 @@ const (
 //     レート制限の値と評価窓・scope-down の URI パスの条件) だけを持つ。IP セットや正規表現の中身は持たない
 //   - scope-down は UriPath の ByteMatch (STARTS_WITH / EXACTLY) とその And だけを解釈する。それ以外を含めば rate_scope_parsed=false
 //     (waf_review は「どのパスを受け持つか分からない」として、レート制限が無いという候補を出さない)
+//   - 自作のルールは、何を根拠に止めるか (block_basis) と葉の文の種類 (statement_kinds) を残す (WAFStatementBasis。ADR 0084)
 //   - ListResourcesForWebACL は CloudFront に使えないので REGIONAL だけ、資源の種類ごとに呼ぶ。サービス側の権限が無い種類は不明 (resources_unknown)
 //   - WebACL が 1 つも無ければ Unavailable を返し、waf_review は skip される
 type WAFConfig struct {
@@ -297,6 +298,10 @@ func ruleData(r waftypes.Rule) map[string]any {
 		return d
 	}
 	switch {
+	case st.ManagedRuleGroupStatement == nil && st.RuleGroupReferenceStatement == nil && st.RateBasedStatement == nil:
+		// 決定 (ADR 0084): 自作のルールは、何を根拠に止めるか (前提・パス・他・不明) と葉の文の種類を残す。前の版の snapshot には無い
+		basis, kinds := WAFStatementBasis(st)
+		d["block_basis"], d["statement_kinds"] = basis, strings.Join(kinds, ",")
 	case st.ManagedRuleGroupStatement != nil:
 		m := st.ManagedRuleGroupStatement
 		d["type"], d["managed"] = WAFRuleManagedGroup, aws.ToString(m.VendorName)+"/"+aws.ToString(m.Name)

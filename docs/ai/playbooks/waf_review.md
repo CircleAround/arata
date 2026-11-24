@@ -7,7 +7,11 @@ finding になるのは、正規の画面で多数の IP が BLOCK された誤�
 
 - 提案 (`kind`): `false_positive` (誤検知の疑い)、`challenge_on_app_path` (正規の画面に Challenge / CAPTCHA を出し、人が解いている疑い)、`probe_allowed` (すり抜けている探索)、`rate_limit_missing` (レート制限の不足)、`rate_limit_loose` / `rate_limit_tight` (値の見直し)、`unused_rule` (使われていないルール)
 - `stage`: `count_first` = まず COUNT で様子を見てから確定する、`review` = 人が見直す (変更を勧めるものではない)
+  - パスの照合だけで止める自作のルール (`evidence.block_basis: path`) の `false_positive` は `review` で、finding にならない。そのパスを止めるのが意図かを見直す材料 (ADR 0084)
 - `observation` (`stage: none`): 提案に至らなかったが不審な観測。`about` (関わる候補の種類) と `reason` (提案しなかった理由: `below_threshold`・`undetermined`・`excluded_by_config`・`excluded_by_rule`・`position_limit`)
+  - `about: false_positive` で `reason: excluded_by_rule` かつ `evidence.block_basis: premise` は、前提で止めるルール (国・IP セット・Host 名の照合。`statement_kinds` に種類)。多数の IP を止めるのが意図で、誤検知ではない (ADR 0084)
+  - `evidence.block_basis: premise_partial` (Or の一部だけが前提) と `unknown` (文を読めない) は `undetermined`。どの条件で止めたか分からない
+  - `reason: excluded_by_config` は、設定 `intended_block_rules` に書いた、意図して止めるルール
 - `about: label_rule` (`reason: informational`): 目印のルール。後ろのルール (`consumers`) が使うラベル (`labels`) を付けるための COUNT で、BLOCK にする候補ではない。COUNT のままが正しい (ADR 0070)
 - `about: count_rule_status` (`reason: informational`): COUNT で動いているルールの状況 (`matches`・`suspect_ratio`・`matching_days` / `days`。`suspect_ratio` は探索パスへの一致と、BLOCK されたリクエストでの一致の割合)。提案ではなく、COUNT → BLOCK を計画する材料
   - 設定に `ip_list.count_suspect` があれば、`suspect_ratio` は怪しい IP の一覧 (直近の BLOCK・探索・sign-in の失敗の多い IP) からの、BLOCK されなかったリクエストでの一致も含む (`listed_matches`。ADR 0069)。一覧は上位の IP だけで数えるので、`listed_is_lower_bound: true` なら下限。`listed_min_block_share` (渡した IP が占める BLOCK の割合の最も低い日) が低い・`listed_coverage: low` なら、下限の意味が弱いと添える。一覧は大学・会社・携帯の回線などの共有の IP を含み得るので、割合が高くても、正規の利用者の一致が混ざっている可能性を書き添える。費用を抑えたい利用者は `max_ips: 500`・`max_queries: 1` にできる (1 本ごとに 1 日分を読む)。listed は定時の run ごとに直近 2 日の確定した日だけを流すので、`LISTED_QUERY_FAILED` (警告) が 2 日より長く続いた日は listed が抜ける (`listed_days` が日数より少ない)。直った後に `arata collect --source <wafv2 のソース> --window <抜けた日の 0 時まで遡る長さ>` で、その日の listed を後から足せる (流した日は流し直さない)
@@ -33,6 +37,7 @@ finding になるのは、正規の画面で多数の IP が BLOCK された誤�
 
 - **候補どおり進めてよい**: 根拠の数字が十分で、利用者の事情 (正規の送信元・リクエストの多い画面) と矛盾しない。`count_first` はまず COUNT で様子を見る
 - **見送る・事情を確かめる**: リクエストが多いのが仕様の画面 (決済など)、正規の送信元 (監視・開発会社) が混ざる。設定 `trusted_cidrs`・`expected_high_rate_paths` に書くよう人に提案する
+- **意図した BLOCK**: `false_positive` のルールが、止めるのが狙いのもの (国・ASN・使っていない入口・管理画面など) だと人が確かめたら、設定 `checks.waf_review.intended_block_rules` にルール名 (グループの中は `<グループ>/<中のルール>`) を書くよう人に提案する。以後は observation (`excluded_by_config`) にだけ出る
 - `challenge_on_app_path` は緩める提案。進めるならまず対象のパスを scope-down で外すか条件を絞り、Challenge / CAPTCHA の数と、BLOCK・不審な通信が増えないかを 1〜2 週間見る
 - `observation` は事実として伝えるだけ。提案に格上げしない。`count_rule_status` の `suspect_ratio` が高くても「BLOCK に上げるべき」とは書かない
 
@@ -54,7 +59,7 @@ finding になるのは、正規の画面で多数の IP が BLOCK された誤�
 
 上がる余地は、同じ Key のまま、より重い重大度で観測されうるか。ack を許すのは余地のある行だけ (ack 中に出直すのは重大度が上がったときだけ)。このチェックは state 型 (観測されなくなれば解消になる)。
 
-- `false_positive` の finding は、直す予定の日まで snooze。意図した BLOCK なら、見直す日を決めて snooze
+- `false_positive` の finding は、直す予定の日まで snooze。意図した BLOCK なら、`intended_block_rules` に書けば次の weekly で解消になる。書くまでの間は見直す日を決めて snooze
 - resolve: 直したとき。proposals 自体は状態を持たないので操作は無い
 - 表で許さない ack は arata が止める (`ACK_REFUSED`)。終わった出来事だと確かめたうえでどうしても ack するなら、人が `--force --reason "<理由>"` を付ける (記録に force が残り、週次の報告に出る)。LLM は `--force` を提案しない
 

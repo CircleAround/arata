@@ -84,8 +84,15 @@ func TestWAFConfig(t *testing.T) {
 	if rg := m["rule|REGIONAL|ap-northeast-1|prod-waf|rate-geo"]; rg.Bool("rate_scope_parsed") || rg.String("rate_scope_paths") != "" || rg.Number("rate_window_sec") != 60 {
 		t.Fatalf("rate-geo: %+v", rg.Data)
 	}
-	if ba := m["rule|REGIONAL|ap-northeast-1|prod-waf|block-admin"]; ba.String("type") != account.WAFRuleRegular || ba.String("action") != "BLOCK" {
+	if ba := m["rule|REGIONAL|ap-northeast-1|prod-waf|block-admin"]; ba.String("type") != account.WAFRuleRegular || ba.String("action") != "BLOCK" ||
+		ba.String("block_basis") != account.WAFBasisPath || ba.String("statement_kinds") != "uri_path_match" {
 		t.Fatalf("block-admin: %+v", ba.Data)
+	}
+	// 決定 (ADR 0084): 文の種類は自作のルール (regular) にだけ残す。レートベース・グループは種類 (type) で分かる
+	for _, k := range []string{"rate-login", "AWS-AWSManagedRulesCommonRuleSet"} {
+		if it := m["rule|REGIONAL|ap-northeast-1|prod-waf|"+k]; it.Data["block_basis"] != nil || it.Data["statement_kinds"] != nil {
+			t.Fatalf("%s: %+v", k, it.Data)
+		}
 	}
 	// CLOUDFRONT は ListResourcesForWebACL を呼ばない (CloudFront は対象外の API)。REGIONAL は資源の種類ごと
 	if n := f.Called(account.ActionListResourcesForWebACL); n != 2*len(waftypes.ResourceType("").Values()) {

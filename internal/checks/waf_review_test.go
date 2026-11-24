@@ -2,6 +2,7 @@ package checks
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"testing"
 
@@ -451,5 +452,111 @@ func TestCountRuleStatusListed(t *testing.T) {
 				t.Fatalf("without listed: %+v", p)
 			}
 		}
+	}
+}
+
+// 前提で止めるルール (ADR 0084): 国・IP セット・Host 名で止めるルールの BLOCK は、多数の IP からでも誤検知の提案にも finding にもしない。
+// パスだけで止めるルールは review に下げて finding にしない。Or の一部だけが前提のもの・文を読めないものは判断できないとして提案しない。
+// intended_block_rules に書いたルールは excluded_by_config。前の版の snapshot (block_basis が無い) は今までどおり。
+func TestWAFReviewIntendedBlock(t *testing.T) {
+	st := newStore(t)
+	regular := func(name, basis, kinds string) record.SnapshotItem {
+		return wafRule("prod-waf", name, account.WAFRuleRegular, "BLOCK", "block_basis", basis, "statement_kinds", kinds)
+	}
+	snapshot(t, st, record.KindWAFConfig, wafACL("prod-waf"),
+		regular("block-geo-example", account.WAFBasisPremise, "geo_match"),
+		regular("block-ipset-example", account.WAFBasisPremise, "ip_set"),
+		regular("block-host-example", account.WAFBasisPremise, "host_match"),
+		regular("block-geo-path-and", account.WAFBasisPremise, "geo_match,uri_path_match"),
+		regular("block-geo-path-or", account.WAFBasisPremisePartial, "geo_match,uri_path_match"),
+		regular("block-unknown-example", account.WAFBasisUnknown, "unknown"),
+		regular("block-path-example", account.WAFBasisPath, "uri_path_match"),
+		regular("block-query-example", account.WAFBasisOther, "byte_match"),
+		regular("block-config-example", account.WAFBasisOther, "byte_match"),
+		// 前の版の snapshot (block_basis が無い) は今までどおり
+		wafRule("prod-waf", "block-old-example", account.WAFRuleRegular, "BLOCK"),
+		wafRule("prod-waf", "AWS-AWSManagedRulesSQLiRuleSet", account.WAFRuleManagedGroup, "NONE", "managed", "AWS/AWSManagedRulesSQLiRuleSet"),
+		wafRule("prod-waf", "AWS-AWSManagedRulesCommonRuleSet", account.WAFRuleManagedGroup, "NONE", "managed", "AWS/AWSManagedRulesCommonRuleSet"),
+		wafRule("prod-waf", "AWS-AWSManagedRulesKnownBadInputsRuleSet", account.WAFRuleManagedGroup, "NONE", "managed", "AWS/AWSManagedRulesKnownBadInputsRuleSet"),
+	)
+	m := metricSeed{st: st, t: t}
+	rules := []string{"block-geo-example", "block-ipset-example", "block-host-example", "block-geo-path-and", "block-geo-path-or", "block-unknown-example",
+		"block-path-example", "block-query-example", "block-config-example", "block-old-example",
+		"AWS-AWSManagedRulesSQLiRuleSet/SQLi_BODY", "AWS-AWSManagedRulesSQLiRuleSet/SQLi_QUERYARGUMENTS",
+		"AWS-AWSManagedRulesCommonRuleSet/SizeRestrictions_BODY", "AWS-AWSManagedRulesKnownBadInputsRuleSet/JavaDeserializationRCE_BODY"}
+	for _, r := range rules {
+		m.put("2026-10-21", "waf", cwlogs.MetricWAFBlockPath, "prod-waf|"+r+"|POST|/posts/:id", 300)
+		m.put("2026-10-21", "waf", cwlogs.MetricWAFBlockPathIPs, "prod-waf|"+r+"|POST|/posts/:id", 60)
+	}
+	cfg := config.DefaultChecks()
+	cfg.WAFReview.IntendedBlockRules = []string{"block-config-example", "AWS-AWSManagedRulesSQLiRuleSet/SQLi_QUERYARGUMENTS", "AWS-AWSManagedRulesKnownBadInputsRuleSet"}
+	c := WAFReview{Config: cfg.WAFReview, SignInPaths: cfg.LoginBruteforce.Paths, ProbePaths: cfg.ProbePaths.Paths}
+	props, obs, err := c.Propose(context.Background(), st, weekly())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	byRule := map[string]schema.Proposal{}
+	for _, p := range props {
+		if p.Kind != ProposalFalsePositive && p.About != ProposalFalsePositive {
+			continue
+		}
+		k := p.Rule
+		if p.RuleInGroup != "" {
+			k += "/" + p.RuleInGroup
+		}
+		got[k] = p.Kind + " " + p.Stage + " " + p.Reason
+		if p.FindingKey != "" {
+			got[k] += " finding"
+		}
+		byRule[k] = p
+	}
+	want := map[string]string{
+		"block-geo-example":                                      "observation none excluded_by_rule",
+		"block-ipset-example":                                    "observation none excluded_by_rule",
+		"block-host-example":                                     "observation none excluded_by_rule",
+		"block-geo-path-and":                                     "observation none excluded_by_rule",
+		"block-geo-path-or":                                      "observation none undetermined",
+		"block-unknown-example":                                  "observation none undetermined",
+		"block-path-example":                                     "false_positive review ",
+		"block-query-example":                                    "false_positive count_first  finding",
+		"block-config-example":                                   "observation none excluded_by_config",
+		"block-old-example":                                      "false_positive count_first  finding",
+		"AWS-AWSManagedRulesSQLiRuleSet/SQLi_BODY":               "false_positive count_first  finding",
+		"AWS-AWSManagedRulesSQLiRuleSet/SQLi_QUERYARGUMENTS":     "observation none excluded_by_config",
+		"AWS-AWSManagedRulesCommonRuleSet/SizeRestrictions_BODY": "false_positive count_first  finding",
+		"AWS-AWSManagedRulesKnownBadInputsRuleSet/JavaDeserializationRCE_BODY": "observation none excluded_by_config",
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s: got %q, want %q", k, got[k], v)
+		}
+	}
+	if len(got) != len(want) {
+		t.Errorf("got %v", got)
+	}
+	var findings []string
+	for _, o := range obs {
+		findings = append(findings, o.Key)
+	}
+	sort.Strings(findings)
+	if strings.Join(findings, ",") != "false_positive|prod-waf|AWS-AWSManagedRulesCommonRuleSet/SizeRestrictions_BODY|POST /posts/:id,"+
+		"false_positive|prod-waf|AWS-AWSManagedRulesSQLiRuleSet/SQLi_BODY|POST /posts/:id,"+
+		"false_positive|prod-waf|block-old-example|POST /posts/:id,false_positive|prod-waf|block-query-example|POST /posts/:id" {
+		t.Fatalf("findings: %v", findings)
+	}
+	// 根拠に文の種類を添える (前の版の snapshot には無い)
+	if g := byRule["block-geo-example"]; g.Evidence["statement_kinds"] != "geo_match" || g.Evidence["block_basis"] != account.WAFBasisPremise ||
+		!strings.Contains(g.Summary, "前提で止めるルール") {
+		t.Fatalf("geo: %+v", g)
+	}
+	if p := byRule["block-path-example"]; !strings.Contains(p.Summary, "パスで止める") || strings.Contains(p.Summary, "COUNT にする") {
+		t.Fatalf("path: %+v", p)
+	}
+	if o := byRule["block-old-example"]; o.Evidence["block_basis"] != nil {
+		t.Fatalf("old: %+v", o)
+	}
+	if o := byRule["block-config-example"]; !strings.Contains(o.Summary, "intended_block_rules") {
+		t.Fatalf("config: %+v", o)
 	}
 }

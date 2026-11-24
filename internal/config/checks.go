@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/netip"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -115,6 +116,9 @@ type WAFReview struct {
 	TrustedCIDRs []string `yaml:"trusted_cidrs"`
 	// ExpectedHighRatePaths はリクエストが多いのが仕様のパスの接頭辞 (決済など)。レート制限の候補から外す。
 	ExpectedHighRatePaths []string `yaml:"expected_high_rate_paths"`
+	// IntendedBlockRules は、多数の IP を止めるのが意図のルールの名前 (ADR 0084)。WebACL のルール名 (グループなら中のルール全部) か、
+	// `<グループのルール名>/<グループの中のルール名>`。誤検知の候補と finding にせず、observation (excluded_by_config) に残す。既定は空。
+	IntendedBlockRules []string `yaml:"intended_block_rules"`
 	// Days は候補を作るのに見る直近の日数 (保存済みの metrics を読む)。
 	Days int `yaml:"days"`
 	// MinDistinctIPs は「誤検知の疑い」に要る異なり IP 数 (日ごとの値の最大。下限の見積もり)。
@@ -686,10 +690,40 @@ func (w WAFReview) validate() error {
 			return fmt.Errorf("path %q must start with /", p)
 		}
 	}
+	seen := map[string]bool{}
+	for _, r := range w.IntendedBlockRules {
+		if !validWAFRuleRef(r) {
+			return fmt.Errorf("intended_block_rules: %q must be a rule name or <rule group>/<rule in the group> (letters, digits, _ and -)", r)
+		}
+		if seen[r] {
+			return fmt.Errorf("intended_block_rules: %q is listed twice", r)
+		}
+		seen[r] = true
+	}
 	for _, c := range w.TrustedCIDRs {
 		if _, err := netip.ParsePrefix(c); err != nil {
 			return fmt.Errorf("trusted_cidrs: %q is not a CIDR (e.g. 203.0.113.0/24)", c)
 		}
 	}
 	return nil
+}
+
+// validWAFRuleRef は intended_block_rules の 1 件の形。WAF のルール名は 1〜128 文字の英数字・_・- (公式の API の Rule.Name の pattern `^[\w\-]+$`)。
+// グループの中のルールは `/` で 1 つだけ区切る (ログの key と同じ書き方)。
+func validWAFRuleRef(r string) bool {
+	parts := strings.Split(r, "/")
+	if len(parts) > 2 {
+		return false
+	}
+	for _, p := range parts {
+		if len(p) == 0 || len(p) > 128 {
+			return false
+		}
+		for _, c := range p {
+			if !(c == '_' || c == '-' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z') {
+				return false
+			}
+		}
+	}
+	return true
 }

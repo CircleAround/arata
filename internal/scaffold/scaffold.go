@@ -117,6 +117,7 @@ var paramComments = map[string]string{ // #nosec G101 -- 設定の説明文の�
 	"waf_review.rate_path_groups":                 "1 IP あたりの件数を分けて測るパスの接頭辞 (どれにも当たらなければ「その他」)。集計条件",
 	"waf_review.trusted_cidrs":                    "監視・開発会社などの正規の送信元 (例 [203.0.113.0/24])。wafv2 の新しい集計と候補から外す。集計条件",
 	"waf_review.expected_high_rate_paths":         "リクエストが多いのが仕様のパスの接頭辞 (決済など)。レート制限の候補から外す (observation には残る)",
+	"waf_review.intended_block_rules":             "多数の IP を止めるのが意図のルール名 (グループの中は <グループ>/<中のルール>)。誤検知の候補にしない (observation には残る)",
 	"waf_review.days":                             "候補を作るのに見る直近の日数 (daily が貯めた日次集計を読む。weekly は wafv2 を引かない)",
 	"waf_review.min_distinct_ips":                 "誤検知の疑いに要る異なり IP 数 (日ごとの最大。下限の見積もり)",
 	"waf_review.finding_distinct_ips":             "誤検知の疑いを low の finding にもする異なり IP 数",
