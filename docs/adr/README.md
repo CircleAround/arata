@@ -108,3 +108,4 @@
 | [0083](0083-service-role-runtime-writes.md) | サービスが引き受けるロールでは、実行環境の下回りの書き込み (`logs:CreateLogGroup`・`logs:CreateLogStream` の固定の一覧) を `principal_new_source` の新しい送信元の書き込みに数えない | 採用 |
 | [0084](0084-waf-intended-block-rules.md) | 前提で止めるルール (国・IP セット・Host 名・レートベース・IP の評判) の BLOCK を誤検知の候補から外し、意図して止めるルールを `intended_block_rules` で書けるようにする。パスだけで止める自作のルールは review | 採用 |
 | [0085](0085-ecs-workload-changes.md) | ECS の負荷を変える操作 (タスク定義の登録・タスクの起動・サービスの更新) を、デプロイする主体の外からのものと、ロール・秘匿値の参照の変化で報告する (`ecs_workload_changes`) | 提案 |
+| [0086](0086-public-access-block-prior-state.md) | Public Access Block の変更を前の状態 (posture の snapshot か前の Put / Delete の記録) と比べ、開けた (high)・締めた (info)・前が分からない (medium) に分ける。何も変わらない変更は報告しない | 採用 |
