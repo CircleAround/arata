@@ -53,6 +53,10 @@ func (c PublicExposure) Evaluate(ctx context.Context, q store.Query, w collect.W
 	sev := map[string]Severity{}
 	principals := map[string]map[string]bool{}
 	tr := &originTracer{}
+	hist, err := loadPABHistory(ctx, q, w, evs)
+	if err != nil {
+		return nil, err
+	}
 	for _, e := range evs {
 		if e.ErrorCode != "" {
 			continue
@@ -61,7 +65,7 @@ func (c PublicExposure) Evaluate(ctx context.Context, q store.Query, w collect.W
 		if !ok {
 			continue
 		}
-		x := exposureOf(api, e, sensitive)
+		x := exposureOf(api, e, sensitive, hist)
 		if x.sev == "" {
 			continue
 		}
@@ -118,7 +122,7 @@ type exposure struct {
 	data   map[string]any
 }
 
-func exposureOf(api API, e record.TrailEvent, sensitive map[int]bool) exposure {
+func exposureOf(api API, e record.TrailEvent, sensitive map[int]bool, hist *pabHistory) exposure {
 	d := e.Data
 	x := exposure{data: map[string]any{}}
 	switch {
@@ -157,10 +161,7 @@ func exposureOf(api API, e record.TrailEvent, sensitive map[int]bool) exposure {
 		}
 		x.sev, x.what = High, "all"
 	case api.Source == srcS3:
-		x.target = dataStr(d, "bucket")
-		if strings.Contains(api.Name, "Account") {
-			x.target = "account"
-		}
+		x.target = pabTarget(api.Name, d)
 		switch api.Name {
 		case "PutBucketPolicy":
 			if v, _ := dataBool(d, "policy_public"); !v {
@@ -176,17 +177,16 @@ func exposureOf(api API, e record.TrailEvent, sensitive map[int]bool) exposure {
 				return exposure{}
 			}
 			x.sev, x.what = High, strings.Join(g, ",")
-		case "PutBucketPublicAccessBlock", "PutPublicAccessBlock", "PutAccountPublicAccessBlock":
-			off := dataStrings(d, "pab_disabled")
-			if len(off) == 0 {
+		default: // Put*PublicAccessBlock / Delete*PublicAccessBlock (ADR 0086)
+			deleted := strings.HasPrefix(api.Name, "Delete")
+			cur, readable := pabRequestOf(d)
+			prior := hist.prior(x.target, e.Time)
+			j := pabJudge(prior, deleted, cur, readable)
+			if j.sev == "" {
 				return exposure{}
 			}
-			for i := range off {
-				off[i] += "=false"
-			}
-			x.sev, x.what = High, strings.Join(off, ",")
-		default: // Delete*PublicAccessBlock
-			x.sev, x.what = High, "deleted"
+			x.sev, x.what = j.sev, j.exposure()
+			j.putData(x.data, prior)
 		}
 	case api.Source == srcRDS:
 		if v, _ := dataBool(d, "publicly_accessible"); !v {
@@ -266,6 +266,16 @@ func protoName(p string) string {
 
 func describeExposure(d map[string]any) string {
 	what, _ := d["exposure"].(string)
+	if _, ok := strings.CutPrefix(what, pabTightened+":"); ok {
+		s := strings.Join(withSuffix(dataStrings(d, "newly_enabled"), "=true"), ",") + " で締めた"
+		if still := dataStrings(d, "still_disabled"); len(still) > 0 {
+			s += " (無効のまま: " + strings.Join(still, ",") + ")"
+		}
+		return s
+	}
+	if rest, ok := strings.CutPrefix(what, pabPriorUnknown+":"); ok {
+		return "変更 (前の状態が分からない。今は " + rest + ")"
+	}
 	switch what {
 	case "public_policy":
 		return "誰でも読めるバケットポリシーに"

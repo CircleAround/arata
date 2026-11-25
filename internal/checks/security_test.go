@@ -201,20 +201,20 @@ func TestPublicExposure(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]Severity{
-		"ec2:AuthorizeSecurityGroupIngress|sg-1|tcp/22 0.0.0.0/0":        High,
-		"ec2:AuthorizeSecurityGroupIngress|sg-2|tcp/443 0.0.0.0/0":       Low,
-		"ec2:AuthorizeSecurityGroupIngress|sg-3|all ::/0":                High,
-		"ec2:AuthorizeSecurityGroupIngress|sg-4|tcp/3000-3400 0.0.0.0/0": High,
-		"ec2:AuthorizeSecurityGroupIngress|sg-6|tcp/22 0.0.0.0/0":        High,
-		"ec2:ModifySecurityGroupRules|sg-8|tcp/22 0.0.0.0/0":             Medium, // 向き (ingress / egress) が記録に無いので 1 段下げる
-		"ec2:AuthorizeSecurityGroupIngress|sg-9|icmp 0.0.0.0/0":          Low,
-		"s3:PutBucketPolicy|b1|public_policy":                            High,
-		"s3:PutBucketAcl|b3|AllUsers:READ":                               High,
-		"s3:PutBucketPublicAccessBlock|b5|BlockPublicPolicy=false":       High,
-		"s3:DeleteAccountPublicAccessBlock|account|deleted":              High,
-		"rds:ModifyDBInstance|db1|publicly_accessible":                   High,
-		"rds:ModifyDBSnapshotAttribute|s1|all":                           High,
-		"lambda:AddPermission|fn1|principal=* auth=NONE":                 Medium,
+		"ec2:AuthorizeSecurityGroupIngress|sg-1|tcp/22 0.0.0.0/0":                High,
+		"ec2:AuthorizeSecurityGroupIngress|sg-2|tcp/443 0.0.0.0/0":               Low,
+		"ec2:AuthorizeSecurityGroupIngress|sg-3|all ::/0":                        High,
+		"ec2:AuthorizeSecurityGroupIngress|sg-4|tcp/3000-3400 0.0.0.0/0":         High,
+		"ec2:AuthorizeSecurityGroupIngress|sg-6|tcp/22 0.0.0.0/0":                High,
+		"ec2:ModifySecurityGroupRules|sg-8|tcp/22 0.0.0.0/0":                     Medium, // 向き (ingress / egress) が記録に無いので 1 段下げる
+		"ec2:AuthorizeSecurityGroupIngress|sg-9|icmp 0.0.0.0/0":                  Low,
+		"s3:PutBucketPolicy|b1|public_policy":                                    High,
+		"s3:PutBucketAcl|b3|AllUsers:READ":                                       High,
+		"s3:PutBucketPublicAccessBlock|b5|prior_unknown:BlockPublicPolicy=false": Medium, // 前の記録が無い (ADR 0086)
+		"s3:DeleteAccountPublicAccessBlock|account|deleted":                      High,
+		"rds:ModifyDBInstance|db1|publicly_accessible":                           High,
+		"rds:ModifyDBSnapshotAttribute|s1|all":                                   High,
+		"lambda:AddPermission|fn1|principal=* auth=NONE":                         Medium,
 	}
 	got := bySev(obs)
 	for k, s := range want {

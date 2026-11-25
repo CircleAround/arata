@@ -135,9 +135,14 @@ func TestNormalizeDetail(t *testing.T) {
 			map[string]any{"acl_public_grants": []any{"AuthenticatedUsers:READ"}}, nil},
 		{"s3.amazonaws.com", "PutBucketAcl", `{"bucketName":"b1","x-amz-acl":["private"]}`, map[string]any{"bucket": "b1"}, []string{"acl_public_grants"}},
 		{"s3.amazonaws.com", "PutBucketPublicAccessBlock", `{"bucketName":"b1","PublicAccessBlockConfiguration":{"BlockPublicAcls":true,"IgnorePublicAcls":true,"BlockPublicPolicy":false,"RestrictPublicBuckets":false}}`,
-			map[string]any{"bucket": "b1", "pab_disabled": []any{"BlockPublicPolicy", "RestrictPublicBuckets"}}, nil},
+			map[string]any{"bucket": "b1", "pab_parsed": true, "pab_enabled": []any{"BlockPublicAcls", "IgnorePublicAcls"}, "pab_disabled": []any{"BlockPublicPolicy", "RestrictPublicBuckets"}}, nil},
 		{"s3.amazonaws.com", "PutAccountPublicAccessBlock", `{"PublicAccessBlockConfiguration":{"BlockPublicAcls":false,"IgnorePublicAcls":true,"BlockPublicPolicy":true,"RestrictPublicBuckets":true}}`,
-			map[string]any{"pab_disabled": []any{"BlockPublicAcls"}}, nil},
+			map[string]any{"pab_parsed": true, "pab_enabled": []any{"IgnorePublicAcls", "BlockPublicPolicy", "RestrictPublicBuckets"}, "pab_disabled": []any{"BlockPublicAcls"}}, nil},
+		// 4 項目すべて true (ADR 0086 の 3 節): pab_disabled は無いが、pab_parsed で「読めた」と分かる
+		{"s3.amazonaws.com", "PutBucketPublicAccessBlock", `{"bucketName":"b1","PublicAccessBlockConfiguration":{"BlockPublicAcls":true,"IgnorePublicAcls":true,"BlockPublicPolicy":true,"RestrictPublicBuckets":true}}`,
+			map[string]any{"pab_parsed": true, "pab_enabled": []any{"BlockPublicAcls", "IgnorePublicAcls", "BlockPublicPolicy", "RestrictPublicBuckets"}}, []string{"pab_disabled"}},
+		// 設定の形が無い: 何も残さない (前の状態として「分からない」)
+		{"s3.amazonaws.com", "PutBucketPublicAccessBlock", `{"bucketName":"b1"}`, map[string]any{"bucket": "b1"}, []string{"pab_parsed", "pab_enabled", "pab_disabled"}},
 		{"rds.amazonaws.com", "ModifyDBInstance", `{"dBInstanceIdentifier":"db1","publiclyAccessible":true}`, map[string]any{"db_instance": "db1", "publicly_accessible": true}, nil},
 		{"rds.amazonaws.com", "ModifyDBCluster", `{"dBClusterIdentifier":"c1","publiclyAccessible":true}`, map[string]any{"db_cluster": "c1", "publicly_accessible": true}, nil},
 		{"ec2.amazonaws.com", "ModifySnapshotAttribute", `{"snapshotId":"snap-1","attributeType":"CREATE_VOLUME_PERMISSION","createVolumePermission":{"add":{"items":[{"group":"all"}]}}}`,

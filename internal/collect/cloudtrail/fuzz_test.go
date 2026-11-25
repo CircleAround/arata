@@ -34,6 +34,9 @@ func FuzzNormalizeEvent(f *testing.F) {
 		`{"eventSource":"s3.amazonaws.com","eventName":"PutBucketPolicy","requestParameters":{"bucketName":"example-bucket","bucketPolicy":"{\"Statement\":{\"Effect\":\"Allow\",\"Principal\":{\"AWS\":[\"*\"]},\"Action\":\"s3:*\"}}"}}`,
 		`{"eventSource":"s3.amazonaws.com","eventName":"PutBucketAcl","requestParameters":{"x-amz-acl":["public-read"],"x-amz-grant-read":"uri=http://acs.amazonaws.com/groups/global/AllUsers","AccessControlPolicy":{"AccessControlList":{"Grant":{"Grantee":{"URI":"http://acs.amazonaws.com/groups/global/AuthenticatedUsers"},"Permission":"READ"}}}}}`,
 		`{"eventSource":"s3.amazonaws.com","eventName":"PutBucketPublicAccessBlock","requestParameters":{"PublicAccessBlockConfiguration":{"BlockPublicAcls":true,"IgnorePublicAcls":"x"}}}`,
+		`{"eventSource":"s3.amazonaws.com","eventName":"PutAccountPublicAccessBlock","requestParameters":{"PublicAccessBlockConfiguration":{"BlockPublicAcls":true,"IgnorePublicAcls":true,"BlockPublicPolicy":true,"RestrictPublicBuckets":true}}}`,
+		`{"eventSource":"s3.amazonaws.com","eventName":"PutPublicAccessBlock","requestParameters":{"bucketName":"example-bucket","PublicAccessBlockConfiguration":{"BlockPublicAcls":1,"BlockPublicPolicy":null,"RestrictPublicBuckets":"true","Extra":true}}}`,
+		`{"eventSource":"s3.amazonaws.com","eventName":"PutBucketPublicAccessBlock","requestParameters":{"bucketName":"example-bucket","PublicAccessBlockConfiguration":[true]}}`,
 		`{"eventSource":"s3.amazonaws.com","eventName":"PutBucketLifecycle","requestParameters":{"LifecycleConfiguration":{"Rule":[{"Expiration":{"Days":1}},{"Expiration":{"Days":-3}},{"Expiration":"x"}]}}}`,
 		`{"eventSource":"guardduty.amazonaws.com","eventName":"UpdateDetector","requestParameters":{"detectorId":"d","enable":false,"features":[{"name":"S3_DATA_EVENTS","status":"DISABLED"},7]}}`,
 		`{"eventSource":"cloudtrail.amazonaws.com","eventName":"PutEventSelectors","requestParameters":{"trailName":"main","eventSelectors":[{"readWriteType":"WriteOnly","includeManagementEvents":true,"excludeManagementEventSources":["kms.amazonaws.com"]}],"advancedEventSelectors":[{"fieldSelectors":[{"field":"eventCategory","equals":["Management"]}]}]}}`,
@@ -170,6 +173,30 @@ func FuzzNormalizeEvent(f *testing.F) {
 			}
 			if e.PrincipalARN != "" && r0(body).UserIdentity.ARN == "" && r0(body).UserIdentity.SessionContext.SessionIssuer.ARN == "" && r0(body).UserIdentity.Type == "WebIdentityUser" {
 				t.Fatalf("OIDC の引き受けの sub を主体にした: %q", e.PrincipalARN)
+			}
+		}
+		// Public Access Block の要求から読んだ値 (ADR 0086 の 3 節): Put*PublicAccessBlock にだけ付く。pab_parsed は true だけで、
+		// あれば pab_enabled と pab_disabled は重ならず、合わせて 4 項目ちょうど。無ければどちらの一覧も無い
+		isPABPut := e.EventSource == "s3.amazonaws.com" && pabPutNames[e.Name]
+		enabled, _ := e.Data["pab_enabled"].([]string)
+		disabled, _ := e.Data["pab_disabled"].([]string)
+		parsed, hasParsed := e.Data["pab_parsed"]
+		if (hasParsed || enabled != nil || disabled != nil) && !isPABPut {
+			t.Fatalf("data.pab_* が Put*PublicAccessBlock でない記録にある (%s %s)", e.EventSource, e.Name)
+		}
+		if hasParsed && parsed != true || !hasParsed && (enabled != nil || disabled != nil) {
+			t.Fatalf("data.pab_parsed が規則に合わない: %v (%v / %v)", parsed, enabled, disabled)
+		}
+		if hasParsed {
+			seen := map[string]bool{}
+			for _, n := range append(append([]string(nil), enabled...), disabled...) {
+				if !pabNames[n] || seen[n] {
+					t.Fatalf("pab_enabled %v と pab_disabled %v が重なるか、知らない名前がある", enabled, disabled)
+				}
+				seen[n] = true
+			}
+			if len(seen) != len(pabNames) {
+				t.Fatalf("pab_enabled %v と pab_disabled %v が 4 項目にならない", enabled, disabled)
 			}
 		}
 		if _, err := json.Marshal(e); err != nil {
@@ -460,3 +487,8 @@ func FuzzReadTrailFile(f *testing.F) {
 		}
 	})
 }
+
+var (
+	pabPutNames = map[string]bool{"PutBucketPublicAccessBlock": true, "PutPublicAccessBlock": true, "PutAccountPublicAccessBlock": true}
+	pabNames    = map[string]bool{"BlockPublicAcls": true, "IgnorePublicAcls": true, "BlockPublicPolicy": true, "RestrictPublicBuckets": true}
+)
