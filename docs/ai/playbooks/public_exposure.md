@@ -12,14 +12,27 @@
 | `ModifySecurityGroupRules` (記録に ingress / egress の向きが無い) | 上の 1 段下 (high → medium) |
 | S3 のバケットポリシーで誰でも (Principal `*`) に条件なしで Allow。`aws:SecureTransport` だけの条件は公開とみなす | high |
 | S3 の ACL で AllUsers / AuthenticatedUsers に付与、公開の既定 ACL (`public-read` など) | high |
-| S3 の Public Access Block の削除・無効化 (バケット単位・アカウント単位) | high |
+| S3 の Public Access Block の削除 (バケット単位・アカウント単位) | high (`transition: opened`) |
+| S3 の Public Access Block の Put で、前に true だった項目を false にした (開けた) | high (`transition: opened`) |
+| 同上で、true → false は無く、false → true がある (締めた) | info (`transition: tightened`) |
+| 同上で、前の状態が分からず、false の項目がある | medium (`transition: prior_unknown`) |
+| 同上で、何も変わらない・4 項目すべて true | 報告しない |
 | RDS の `PubliclyAccessible=true` (インスタンス・クラスター) | high |
 | EBS スナップショット・AMI・RDS スナップショットの全員への共有 (`all`) | high |
 | Lambda の AddPermission で Principal `*` (関数 URL の AuthType NONE、または送信元の条件なし) | medium |
 
 - Key は `<サービス>:<操作>|<資源>|<開いた中身>` (例 `ec2:AuthorizeSecurityGroupIngress|sg-0abc|tcp/22 0.0.0.0/0`)。同じ資源を同じように開いた呼び出しは主体をまとめて 1 件
+- Public Access Block の Put は、前の状態と比べて分ける (ADR 0086)。前の状態は、操作の時刻より前のうち最も新しい材料 1 つ:
+  weekly の posture の snapshot (アカウント単位だけ。取得が操作より前のとき) か、同じ対象への成功した前の Put / Delete の記録 (同じ時刻なら記録)。
+  最も新しい材料が読めなければ、古い材料には戻らず「分からない」。バケット単位は記録だけで比べる。
+  Key の開いた中身は、開けた `BlockPublicAcls=false,...`・削除 `deleted`・締めた `tightened:<有効にした項目>=true,...`・分からない `prior_unknown:<false の項目>=false,...`
 - data: `api`、`target`、`exposure`、`principal` / `principals`、`sensitive`、`direction_unknown`、`public_statements` (`Sid: action,...`)、
   `known_deploy_principal`、`count`、`ips`、`first_time`、`last_time`。ポリシー全文は残していない
+- Public Access Block の data (ADR 0086 の 4 節): `transition` (`opened` / `tightened` / `prior_unknown`)、
+  `prior_source` (`snapshot` / `event` / `none` 材料が無い / `unreadable` 最も新しい材料が読めない)、`prior_time` (比べた材料の時刻)、
+  `prior_api` (前の記録の操作)、`prior_configured` (前に設定があったか。false は設定なし・削除の後)、`prior_enabled` (前に true だった項目)、
+  `enabled` (今回 true にした項目)、`newly_enabled` (false → true)、`newly_disabled` (true → false)、`still_disabled` (前も今も false)。
+  同じ Key にまとめた複数の呼び出しでは、`prior_*` は最初の呼び出しのもの
 - GitHub の OIDC から来たセッション (`oidc_origins`。ADR 0081): 呼び出し側のセッションを 1 段目の `AssumeRoleWithWebIdentity` までキーの一致でたどれたら、1 段目の `repo`・`ref` / `environment`・`run_id`・`assumed_at`・`chain_depth` が付く (たどれない理由は `oidc_origin_unmatched`)。
   **手がかりであって証拠ではない**。`run_id` はふつう無い (今の configure-aws-credentials は userAgent に入れない)。実行は `repo` の Actions の一覧から `environment` / `ref` と `assumed_at` で人に探してもらう。読み方は `arata help ai playbook oidc_assume_role`
 
@@ -43,6 +56,14 @@
 - **要対応**: SSH / RDP / DB などの機微なポートの公開、DB・スナップショットの公開、中身の分からないバケットの公開、作業の記録が無い、
   人の主体・既知外の主体による変更、他の指摘と同じ主体・同じ時間帯。すぐ閉じた (開けて閉じた) 場合も、開いていた間の利用を確かめる
 
+- **Public Access Block の `prior_unknown` (medium)**: 開けたのか締めたのかが記録から決まらない。今の設定を読み
+  (`aws s3api get-public-access-block --bucket <b>`、アカウント単位は `aws s3control get-public-access-block --account-id <自アカウント>`)、
+  arata の保存の範囲より前の CloudTrail (`aws cloudtrail lookup-events` は 90 日、証跡のバケット) で、同じ対象への前の Put / Delete を探す。
+  前に true だった項目が今 false なら、開けた (high) として扱う。版を上げた直後と、バケット単位の Put には多い (前の記録が貯まっていない)
+- **Public Access Block の `tightened` (info)**: 公開を許す範囲を狭めた変更。ただし判定は材料に頼る。
+  `prior_source` と `prior_time` を確かめてから読む (その時刻から操作までの間の記録が欠けていれば、開けた操作を締めたと見誤り得る)。
+  無効のまま残った項目 (`still_disabled`) は、アカウント単位なら weekly の posture が状態として報告する
+
 ## 対処の選択肢
 
 緊急度の順。封じ込めと設定の修正は**人が判断して実行する**。LLM は提案まで。
@@ -60,11 +81,13 @@
 
 | 重大度 | 上がる余地 | 許す操作 |
 |---|---|---|
-| high・medium・low | なし | snooze・resolve |
+| high・medium・low・info | なし | snooze・resolve |
 
 上がる余地は、同じ Key のまま、より重い重大度で観測されうるか。ack を許すのは余地のある行だけ (ack 中に出直すのは重大度が上がったときだけ)。このチェックは event 型 (観測されなくても解消にならない)。
 
 - resolve: 意図した公開と確かめた変更。同じ資源を別の形で開けば別の Key で報告される
+- info は Public Access Block を締めた操作 (`tightened`)。前の状態の出どころと時刻 (`prior_source`・`prior_time`) を確かめたら resolve。
+  同じ要求でも判定が違えば別の Key (`tightened:`・`prior_unknown:`) なので、同じ Key の重大度は上がらない
 - snooze: 閉じる予定の日まで
 - 表で許さない ack は arata が止める (`ACK_REFUSED`)。終わった出来事だと確かめたうえでどうしても ack するなら、人が `--force --reason "<理由>"` を付ける (記録に force が残り、週次の報告に出る)。LLM は `--force` を提案しない
 

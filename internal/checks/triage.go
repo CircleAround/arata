@@ -71,7 +71,7 @@ var triageTable = map[string][]TriageRow{
 	"principal_new_source":   {row(false, noAck, High), row(true, withAck, Medium, Low)},
 	"unused_region_activity": {row(false, noAck, Critical, High), row(true, withAck, Medium)},
 	"cost_anomaly":           {row(false, noAck, High, Medium)},
-	"public_exposure":        {row(false, noAck, High, Medium, Low)},
+	"public_exposure":        {row(false, noAck, High, Medium, Low, Info)}, // info は Public Access Block を締めた操作 (ADR 0086)
 	"login_bruteforce":       {row(false, noAck, Medium)},
 	"probe_paths":            {row(false, noAck, Low)},
 	"endpoint_abuse":         {row(false, noAck, Medium), row(true, withAck, Low)},

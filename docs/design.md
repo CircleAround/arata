@@ -1182,7 +1182,7 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 | principal_new_source (決定: 当初の new_source_ip を置き換え。国の判定はしない) | daily | trail_event, principal_seen (+ 主体の活動の日次集計) | 既知の主体の初めての送信元 (/24・/48)・書き込みのリージョン。決定: ADR 0027 | low / medium / high |
 | unused_region_activity (決定: 当初の foreign_region を置き換え) | daily | unused_region_event (`cloudtrail-unused-regions`) | ふだん使わないリージョン (有効なリージョン − cloudtrail-lookup の regions) での書き込み。決定: ADR 0032 | critical / high / medium |
 | cost_anomaly | daily | cost_anomaly (`cost-anomaly`) | AWS Cost Anomaly Detection の異常を予想に対する増加の割合で。決定: ADR 0032 | high / medium |
-| public_exposure (決定: 当初の network_exposure を置き換え) | daily | trail_event | SG の 0.0.0.0/0・::/0 開放、S3 の公開 (ポリシー・ACL・Public Access Block)、RDS PubliclyAccessible、スナップショット / AMI の公開共有、Lambda の Principal `*`。決定: ADR 0026 | high / medium / low (deploy タグでも下げない) |
+| public_exposure (決定: 当初の network_exposure を置き換え) | daily | trail_event | SG の 0.0.0.0/0・::/0 開放、S3 の公開 (ポリシー・ACL・Public Access Block)、RDS PubliclyAccessible、スナップショット / AMI の公開共有、Lambda の Principal `*`。決定: ADR 0026。Public Access Block は前の状態と比べる (ADR 0086。posture の snapshot はあれば使う) | high / medium / low / info (deploy タグでも下げない) |
 | ecs_exec | hourly | trail_event | 本番のコンテナでシェルを開く操作 (ECS Exec の `ExecuteCommand`) を、主体 × クラスター × コンテナ × UTC の日でまとめて毎回報告する。決定: ADR 0072 | high (知らない主体。root・承認の期限切れを含む) / medium (既知の主体。知らない主体の全部失敗した試行) / low (既知の主体の全部失敗した試行)。deploy タグでも下げない |
 | ssm_session (未実装。決定 (ADR 0072): ecs_exec と同じ形で別に作る。`invokedBy: ecs.amazonaws.com` の StartSession (ECS Exec の一部) は除き、人が直接 `ecs:` の target に入ったものを ECS Exec の迂回の印にする) | daily | trail_event | StartSession の主体が allowlist 外、または深夜帯 | medium |
 | login_bruteforce | daily | http_access | sign-in 失敗の IP 別件数が平常帯 (14 日中央値 × 係数) 超え、Top IP 初出 | medium |
@@ -1291,13 +1291,21 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 | ec2: ModifySecurityGroupRules | 同上。記録に向き (ingress / egress) が無いので 1 段下げ、Data に `direction_unknown` (既定の egress の編集を high にしないため) | medium / low |
 | s3: PutBucketPolicy | Principal `*` / AWS `*` の Allow で、送信元・組織・アカウントで絞る条件キー (aws:SourceIp・SourceVpce・SourceVpc・PrincipalOrgID・PrincipalOrgPaths・PrincipalAccount・PrincipalArn・SourceAccount・SourceArn・SourceOrgID・SourceOrgPaths) が無い。aws:SecureTransport だけの条件は公開とみなす | high |
 | s3: PutBucketAcl | AllUsers / AuthenticatedUsers への付与 (ACL の本文・x-amz-grant-* のヘッダー)、既定 ACL の public-read / public-read-write / authenticated-read | high |
-| s3: Put(Account)PublicAccessBlock / Delete(Account)PublicAccessBlock | いずれかの項目が false (省略は false) / 削除 | high |
+| s3: Delete(Account)PublicAccessBlock | 削除 (前の状態を問わない。`transition: opened`) | high |
+| s3: Put(Account)PublicAccessBlock | 前の状態 (posture の snapshot か前の Put / Delete の記録。ADR 0086) と比べて、前に true だった項目が false になった (`opened`) | high |
+| 同上 | true → false は無く、false → true がある (`tightened`。Key の中身は `tightened:<項目>=true,...`) | info |
+| 同上 | 前の状態が分からず、false の項目がある (`prior_unknown`。Key の中身は `prior_unknown:<項目>=false,...`) | medium |
+| 同上 | 何も変わらない・4 項目すべて true・要求が読めない | 報告しない |
 | rds: ModifyDBInstance / CreateDBInstance / ModifyDBCluster | publiclyAccessible=true | high |
 | ec2: ModifySnapshotAttribute / ModifyImageAttribute、rds: ModifyDBSnapshotAttribute / ModifyDBClusterSnapshotAttribute | `all` (全員) の追加。特定アカウントへの共有は対象外 | high |
 | lambda: AddPermission* (eventName に API の版が付く) | principal `*` で、functionUrlAuthType=NONE か送信元の条件 (sourceArn・sourceAccount・principalOrgID) が無い | medium |
 
 - 決定: deploy タグでも下げない (公開は意図していても毎回見るべき)。止めたいときは ack (重大度が上がれば再報告される)
 - 決定: 2 つとも成功した呼び出しだけを見る (失敗は access_denied)。注目イベントの追加で既存のチェック・principal_seen の結果が変わらないことをテストで固定する
+- 決定 (ADR 0086): Put*PublicAccessBlock の要求から、collector は `pab_parsed` (4 項目を読めた)・`pab_enabled` (true の項目)・`pab_disabled` (false の項目) を残す。
+  前の版で集めた記録 (`pab_parsed` が無い) は、`pab_disabled` があれば残りを true とみなし、無ければ前の状態として「分からない」にする。
+  前の状態の材料は、窓に該当の操作があるときだけ、チェックの中で 1 回引く (posture の snapshot と、操作の名前で絞った保存済みのイベント)。
+  posture の `s3_public_access_block` が複数のソースにあれば、どれが同じアカウントか決められないので「読めない」にする (medium の側)
 
 決定 (principal_new_source / secret_access。ADR 0027):
 

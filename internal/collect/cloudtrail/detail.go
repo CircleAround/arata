@@ -286,12 +286,18 @@ func s3Detail(name string, rp map[string]any, d map[string]any) {
 		if !ok {
 			return
 		}
-		var off []string
+		// 決定 (ADR 0086 の 3 節): 読めたこと (pab_parsed) と true の項目 (pab_enabled) も残す。前の状態として後の Put と比べるため
+		// (false の項目だけでは、4 項目すべて true と読めなかったものとを見分けられない)
+		var on, off []string
 		for _, k := range []string{"BlockPublicAcls", "IgnorePublicAcls", "BlockPublicPolicy", "RestrictPublicBuckets"} {
-			if v, _ := cfg[k].(bool); !v { // 省略は false (API の既定)
+			if v, _ := cfg[k].(bool); v {
+				on = append(on, k)
+			} else { // 省略は false (API の既定)
 				off = append(off, k)
 			}
 		}
+		d["pab_parsed"] = true
+		putList(d, "pab_enabled", on)
 		putList(d, "pab_disabled", off)
 	case "PutBucketLifecycle":
 		lc := objectOf(rp["LifecycleConfiguration"])
