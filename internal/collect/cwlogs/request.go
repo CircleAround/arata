@@ -194,6 +194,15 @@ func classEnd(expr string, i int) int {
 	return len(expr)
 }
 
+// pathCols は head が作るパスの型の列。
+type pathCols int
+
+const (
+	noPaths           pathCols = iota
+	withTemplate               // 型だけ
+	withTemplateAndID          // 型と対象 ID
+)
+
 // mark は集計が使うパスの印 (parse の名前付きキャプチャ)。re は印の名前から正規表現を作る。
 type mark struct {
 	name string
@@ -203,8 +212,9 @@ type mark struct {
 // head は集計の stats の手前までを組み立てる。cond はリクエスト単位の条件 (空なら絞らない)。
 // 1 行 = 1 リクエストの形式では、前処理 → filter → 印。request_lines では 1 段目を挟む (bin は最初の行の時刻の区切り。lines は解釈率のクエリか)。
 // users なら、1 段目の結果にユーザー ID と auth の列 (user_kind・user_id・by_kind・by_id・auth_result … 形に合った最後の値) を足す (user.go)。
-// paths なら、パスの型 (path_ids。paths.go) を作る。1 行 = 1 リクエストの形式では pathids.TemplateField、request_lines では 1 段目の列 tpl (最初の行のパスの型)。
-func (p Profile) head(bin, binName, cond string, marks []mark, lines, first, users, paths bool) string {
+// pc が noPaths でなければ、パスの型 (path_ids。paths.go) を作る。1 行 = 1 リクエストの形式では pathids.TemplateField、request_lines では 1 段目の列 tpl (最初の行のパスの型)。
+// withTemplateAndID なら、request_lines の 1 段目に対象 ID の列 tid も足す (Insights の中で数えるだけに使い、結果には出さない。userprobe.go)。
+func (p Profile) head(bin, binName, cond string, marks []mark, lines, first, users bool, pc pathCols) string {
 	var b strings.Builder
 	b.WriteString(p.Prelude)
 	if p.req == nil {
@@ -214,7 +224,7 @@ func (p Profile) head(bin, binName, cond string, marks []mark, lines, first, use
 		for _, m := range marks {
 			b.WriteString("\n| parse path /" + m.re(m.name) + "/")
 		}
-		if paths && p.paths != nil {
+		if pc != noPaths && p.paths != nil {
 			b.WriteString("\n| " + p.paths.Query("path"))
 		}
 		return b.String()
@@ -227,7 +237,7 @@ func (p Profile) head(bin, binName, cond string, marks []mark, lines, first, use
 	for _, m := range marks {
 		b.WriteString("\n| parse " + rlPrefix + "path /" + m.re(rlMark+m.name) + "/")
 	}
-	paths = paths && p.paths != nil
+	paths := pc != noPaths && p.paths != nil
 	if paths {
 		b.WriteString("\n| " + p.paths.Query(rlPrefix+"path"))
 	}
@@ -265,6 +275,9 @@ func (p Profile) head(bin, binName, cond string, marks []mark, lines, first, use
 	}
 	if paths {
 		aggs = append(aggs, "earliest("+pathids.TemplateField+") as "+rlTemplate)
+		if pc == withTemplateAndID {
+			aggs = append(aggs, "earliest("+pathids.IDField+") as "+rlTargetID)
+		}
 	}
 	if users {
 		aggs = append(aggs, p.req.userAggs()...)

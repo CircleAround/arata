@@ -196,6 +196,11 @@ func (c *Collector) queries() []MergedQuery {
 }
 
 func (c *Collector) dayQueries() []MergedQuery {
+	return append(c.formatQueries(), c.userQueries()...)
+}
+
+// formatQueries はソースの形式の集計 (解釈率が先頭)。
+func (c *Collector) formatQueries() []MergedQuery {
 	switch c.prof.Yields {
 	case record.KindWAFAction:
 		return WAFQueries(c.prof, c.checks)
@@ -403,6 +408,9 @@ func (c *Collector) collectFormat(ctx context.Context, w collect.Window, sink co
 	case record.KindHTTPAccess:
 		err = c.collectHTTP(ctx, qs, linesRows, from, to, sink)
 	}
+	if err == nil {
+		err = c.collectUsers(ctx, from, to, sink)
+	}
 	if err == nil && c.hourly() {
 		c.coveredTo = to
 	}
@@ -455,8 +463,10 @@ func (c *Collector) collectHTTP(ctx context.Context, qs []MergedQuery, linesRows
 			return err
 		}
 	}
-	if len(qs) > 2 {
-		return c.collectEndpoints(ctx, qs[2], from, to, sink)
+	for _, q := range qs {
+		if q.Name == endpointAbuse {
+			return c.collectEndpoints(ctx, q, from, to, sink)
+		}
 	}
 	return nil
 }
