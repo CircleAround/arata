@@ -68,6 +68,7 @@
 | public_exposure | 対応する公開の事例はまだ無い |
 | root_usage | 対応する公開の事例はまだ無い |
 | secret_access | lucr-3-2023-09 |
+| signin_session | 対応する公開の事例はまだ無い |
 | unknown_assume_role | wfx-loot-2026-11 |
 | unused_region_activity | ghostaction-2026-10, env-extortion-2024-08 |
 | user_denied | artex-2026-10 |

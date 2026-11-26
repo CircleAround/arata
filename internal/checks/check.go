@@ -96,7 +96,7 @@ func NewRegistryFor(c config.Checks) *Registry {
 	for _, ch := range []Check{RootUsage{}, ECSExec{}, UnknownAssumeRole{}, OIDCAssumeRole{Config: c.OIDCAssumeRole}, NewPrincipal{}, IAMChanges{}, AccessDenied{Config: c.AccessDenied},
 		DefenseEvasion{Config: c.DefenseEvasion, LogBaselineDays: max(c.LoginBruteforce.Baseline.BaselineDays, c.ProbePaths.Baseline.BaselineDays)},
 		PublicExposure{Config: c.PublicExposure},
-		PrincipalNewSource{Config: c.PrincipalNewSource, AccessDenied: c.AccessDenied}, SecretAccess{Config: c.SecretAccess},
+		PrincipalNewSource{Config: c.PrincipalNewSource, AccessDenied: c.AccessDenied}, SecretAccess{Config: c.SecretAccess}, SigninSession{Config: c.SigninSession},
 		LoginBruteforce{Config: c.LoginBruteforce}, ProbePaths{Config: c.ProbePaths}, EndpointAbuse{Config: c.EndpointAbuse},
 		UnusedRegionActivity{Config: c.UnusedRegionActivity}, CostAnomaly{Config: c.CostAnomaly}, WAFBlockTrend{Config: c.WAFBlockTrend}, AIPathUsage{},
 		CredentialHygiene{Config: c.CredentialHygiene}, GuardDutyFindings{}, Posture{Config: c.Posture}, AccessAnalyzer{},

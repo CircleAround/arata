@@ -57,7 +57,10 @@ func FuzzNormalizeEvent(f *testing.F) {
 		oidcBody(ghProvider, "repo:example-org@1234567/example-repo@7654321:ref:refs/heads/main", "arn:aws:iam::123456789012:role/gha-deploy", ghAgent),
 		oidcBody("cognito-identity.amazonaws.com", "ap-northeast-1:00000000-0000-0000-0000-000000000000", "arn:aws:iam::123456789012:role/app", ""),
 		`{"userIdentity":{"type":"WebIdentityUser","userName":["x"],"identityProvider":{"a":1}},"eventSource":"sts.amazonaws.com","eventName":"AssumeRoleWithWebIdentity","userAgent":"exec-env/GitHubActions md/run_id#1\n<!here>"}`,
-		ecsExecOK, ecsTaskAssume, ecsStartupRead, ghaAssume, ghaChainedAssume,
+		ecsExecOK, ecsTaskAssume, ecsStartupRead, ghaAssume, ghaChainedAssume, signinRefresh,
+		`{"userIdentity":{"type":"IAMUser","sessionContext":{"signInSessionArn":["x"]}},"eventSource":"signin.amazonaws.com","eventName":"CreateOAuth2Token","userAgent":"aws-cli/2.31.4\n<!here>","requestParameters":{"client_id":{"a":1}},"additionalEventData":{"signInSessionArn":"arn:aws:signin:x:123456789012:session/11111111-2222-3333-4444-555555555555\n","grant_type":7,"success":"TRUE","SignInSessionExtended":"false"}}`,
+		`{"userIdentity":{"type":"AssumedRole","sessionContext":{"signInSessionArn":"arn:aws:signin:us-east-1:123456789012:session/11111111-2222-3333-4444-555555555555"}},"eventSource":"iam.amazonaws.com","eventName":"UpdateLoginProfile","requestParameters":{"userName":"bob","maxSigninSessionDuration":-0.5}}`,
+		`{"eventSource":"iam.amazonaws.com","eventName":"UpdateLoginProfile","requestParameters":{"maxSigninSessionDuration":43200}}`,
 		`{"userIdentity":{"type":"AWSService","invokedBy":"ecs-tasks.amazonaws.com"},"eventSource":"sts.amazonaws.com","eventName":"AssumeRole","requestParameters":{"roleArn":"ASIAEXAMPLE000000001"},"responseElements":{"credentials":{"accessKeyId":["ASIAEXAMPLE000000001"]}}}`,
 		`{"userIdentity":{"type":"AssumedRole","accessKeyId":7,"arn":"arn:aws:sts::123456789012:assumed-role/r/s"},"eventSource":"secretsmanager.amazonaws.com","eventName":"GetSecretValue","requestParameters":{"secretId":"ASIAEXAMPLE00000000"}}`,
 		`{"eventSource":"ecs.amazonaws.com","eventName":"ExecuteCommand","requestParameters":{"cluster":"arn:aws:ecs:x:1:cluster/a|b","task":["t"],"container":"","command":"sh\u0000\u202e-c x","interactive":"true"},"responseElements":{"session":{"sessionId":"ecs-execute-command-AB","tokenValue":"not-a-real-token","streamUrl":"wss://example.invalid/s?x=1"},"clusterArn":1}}`,
@@ -278,6 +281,49 @@ func FuzzNormalizeEvent(f *testing.F) {
 					if s, ok := v.(string); ok && strings.Contains(s, secret) && k != "ecs_command" {
 						t.Fatalf("session.%s が data.%s に残った: %q", sk, k, s)
 					}
+				}
+			}
+		}
+		// aws login のログインのセッション (ADR 0092): signin_session は形の合う ARN だけ。出し直しの値は signin の CreateOAuth2Token にだけ、決まった値だけ。
+		// サインインの長さは iam の UpdateLoginProfile にだけ、0 以上の整数だけ (あれば signin_duration_changed も)
+		isSignin := e.EventSource == "signin.amazonaws.com" && e.Name == "CreateOAuth2Token"
+		isLoginProfile := e.EventSource == "iam.amazonaws.com" && e.Name == "UpdateLoginProfile"
+		for k, v := range e.Data {
+			switch k {
+			case "signin_session":
+				if s, _ := v.(string); !record.ValidSigninSession(s) {
+					t.Fatalf("data.signin_session が決まった形でない: %q", v)
+				}
+			case "grant_type", "signin_client", "signin_success", "signin_extended", "cli_version":
+				if !isSignin {
+					t.Fatalf("data.%s が CreateOAuth2Token でない記録にある (%s %s)", k, e.EventSource, e.Name)
+				}
+				s, _ := v.(string)
+				switch k {
+				case "grant_type":
+					if s != record.GrantAuthorizationCode && s != record.GrantRefreshToken && s != record.SigninOther {
+						t.Fatalf("data.grant_type: %q", v)
+					}
+				case "signin_client":
+					if s != record.SigninCrossDevice && s != record.SigninSameDevice && s != record.SigninOther {
+						t.Fatalf("data.signin_client: %q", v)
+					}
+				case "cli_version":
+					if got, ok := record.CLIVersion(s); !ok || got != s {
+						t.Fatalf("data.cli_version が決まった形でない: %q", v)
+					}
+				default:
+					if _, ok := v.(bool); !ok {
+						t.Fatalf("data.%s が真偽でない: %#v", k, v)
+					}
+				}
+			case "max_signin_session_duration":
+				if n, ok := v.(int); !ok || n < 0 || n > maxSigninDuration || !isLoginProfile || e.Data["signin_duration_changed"] != true {
+					t.Fatalf("data.max_signin_session_duration が規則に合わない: %#v (%s)", v, e.Name)
+				}
+			case "signin_duration_changed":
+				if v != true || !isLoginProfile {
+					t.Fatalf("data.signin_duration_changed が規則に合わない: %#v (%s)", v, e.Name)
 				}
 			}
 		}

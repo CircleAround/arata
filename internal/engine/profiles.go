@@ -119,7 +119,11 @@ func (v ProfilesView) WriteTable(w io.Writer) error {
 		}
 		fmt.Fprintf(w, "  %s  %s  VALUE\n", pad("PARAM", pw), pad("ORIGIN", ow))
 		for _, prm := range p.Params {
-			fmt.Fprintf(w, "  %s  %s  %s\n", pad(prm.Check+"."+prm.Key, pw), pad(originLabel[prm.Origin], ow), formatValue(prm.Value))
+			val := formatValue(prm.Value)
+			if s, ok := prm.Value.(string); ok && s == "" {
+				val = "(書いていない。既定は無い)" // signin_session.session_lookback など (ADR 0014)
+			}
+			fmt.Fprintf(w, "  %s  %s  %s\n", pad(prm.Check+"."+prm.Key, pw), pad(originLabel[prm.Origin], ow), val)
 		}
 	}
 	if len(v.Unused) > 0 {

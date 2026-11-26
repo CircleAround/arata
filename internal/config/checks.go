@@ -23,6 +23,8 @@ type Checks struct {
 	// PrincipalNewSource と SecretAccess は CloudTrail の主体の活動・秘匿値の読み取りを見る daily のチェック (ADR 0027)。
 	PrincipalNewSource PrincipalNewSource `yaml:"principal_new_source"`
 	SecretAccess       SecretAccess       `yaml:"secret_access"`
+	// SigninSession は aws login のログインのセッションの出し直しを見る daily のチェック (ADR 0092)。
+	SigninSession SigninSession `yaml:"signin_session"`
 	// OIDCAssumeRole は OIDC でのロールの引き受けを見る hourly のチェックの、平常帯の設定 (ADR 0055)。
 	OIDCAssumeRole OIDCAssumeRole `yaml:"oidc_assume_role"`
 	// EndpointAbuse は画面 (会員登録・メッセージ送信など) への多数の IP からの集中と「A のあと B」の連鎖を見る daily のチェック (ADR 0030)。
@@ -192,6 +194,45 @@ type PrincipalNewSource struct {
 	MinBaselineDays int `yaml:"min_baseline_days"`
 	// MinWrites は新しい送信元からの書き込みがこれ以上なら medium (それ未満は low)。
 	MinWrites int `yaml:"min_writes"`
+}
+
+// SigninSession は signin_session (aws login のログインのセッションの出し直し) の設定 (ADR 0092 の 5 節)。
+type SigninSession struct {
+	// BaselineDays は主体の平常帯 (送信元の /24・/48 と、1 日のセッションの数) に使う過去の日数 (窓の始まりの日の前日から)。
+	BaselineDays int `yaml:"baseline_days"`
+	// MinBaselineDays は平常帯を使うのに要る、CloudTrail を収集し終えた過去日数 (ADR 0090)。足りない間は high を medium に下げ、セッションの数は判定しない。
+	MinBaselineDays int `yaml:"min_baseline_days"`
+	// SessionLookback は、そのセッションの過去の出し直しの送信元を見る長さ (窓の始まりから遡る)。サインインの長さの上限に合わせる。
+	// 決定 (ADR 0092 の 2 節): 既定を持たない (ADR 0014)。書かなければチェックは skip する (雛形には書く)。上限 MaxSessionLookback
+	SessionLookback string `yaml:"session_lookback"`
+	// MinFailures は、主体 × 日の失敗した出し直しがこれ以上なら low。
+	MinFailures int `yaml:"min_failures"`
+	// MinSessions は、主体の 1 日のセッションの数が平常帯の最大より多く、これ以上なら low。
+	MinSessions int `yaml:"min_sessions"`
+}
+
+// MaxSessionLookback は session_lookback の上限 (events の既定の保持と同じ 90 日。それより前の出し直しの記録は残っていない)。
+const MaxSessionLookback = 90 * 24 * time.Hour
+
+// Lookback は session_lookback の長さ。書いていなければ false。
+func (s SigninSession) Lookback() (time.Duration, bool) {
+	if s.SessionLookback == "" {
+		return 0, false
+	}
+	d, err := ParseDuration(s.SessionLookback)
+	return d, err == nil && d > 0
+}
+
+func (s SigninSession) validate() error {
+	if s.BaselineDays < 1 || s.MinBaselineDays < 1 || s.MinBaselineDays > s.BaselineDays || s.MinFailures < 1 || s.MinSessions < 1 {
+		return fmt.Errorf("baseline_days >= 1, 1 <= min_baseline_days <= baseline_days, min_failures >= 1, min_sessions >= 1")
+	}
+	if s.SessionLookback != "" {
+		if d, err := ParseDuration(s.SessionLookback); err != nil || d <= 0 || d > MaxSessionLookback {
+			return fmt.Errorf("session_lookback %q must be longer than 0 and at most 90d (e.g. 3d; match the longest sign-in session duration)", s.SessionLookback)
+		}
+	}
+	return nil
 }
 
 // SecretAccess は secret_access (秘匿値の読み取りの異常) の設定 (ADR 0027)。
@@ -519,6 +560,11 @@ func (c *Checks) applyDefaults() {
 	setInt(&ns.BaselineDays, 30)
 	setInt(&ns.MinBaselineDays, (ns.BaselineDays+1)/2)
 	setInt(&ns.MinWrites, 5)
+	si := &c.SigninSession
+	setInt(&si.BaselineDays, 14)
+	setInt(&si.MinBaselineDays, min(7, si.BaselineDays))
+	setInt(&si.MinFailures, 3)
+	setInt(&si.MinSessions, 3)
 	c.OIDCAssumeRole.Baseline.applyDefaults(20)
 	setFloat(&c.OIDCAssumeRole.MediumRatio, 3)
 	c.EndpointAbuse.applyDefaults()
@@ -627,6 +673,9 @@ func (c *Checks) validate() error {
 	}
 	if ns := c.PrincipalNewSource; ns.BaselineDays < 1 || ns.MinBaselineDays < 1 || ns.MinBaselineDays > ns.BaselineDays || ns.MinWrites < 1 {
 		return fmt.Errorf("principal_new_source: baseline_days >= 1, 1 <= min_baseline_days <= baseline_days, min_writes >= 1")
+	}
+	if err := c.SigninSession.validate(); err != nil {
+		return fmt.Errorf("signin_session: %w", err)
 	}
 	if err := c.OIDCAssumeRole.Baseline.validate(); err != nil {
 		return fmt.Errorf("oidc_assume_role: %w", err)

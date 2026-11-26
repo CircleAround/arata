@@ -38,6 +38,7 @@ LLM はこの手順に沿って、根拠 (finding の `data`) と利用者の事
 | public_exposure | 資源を外部に開く設定変更 | `arata help ai playbook public_exposure` |
 | root_usage | ルートユーザーの利用 | `arata help ai playbook root_usage` |
 | secret_access | 秘匿値の読み取りの異常 | `arata help ai playbook secret_access` |
+| signin_session | aws login のログインのセッションの出し直し | `arata help ai playbook signin_session` |
 | unknown_assume_role | 既知リストに無い主体の AssumeRole | `arata help ai playbook unknown_assume_role` |
 | unused_region_activity | ふだん使わないリージョンでの書き込み | `arata help ai playbook unused_region_activity` |
 | user_denied | ログインした利用者の拒否の急増 | `arata help ai playbook user_denied` |

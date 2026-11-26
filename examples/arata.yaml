@@ -94,7 +94,7 @@ sources:
 # 周期ごとの窓と有効チェック。実行されるのはここに書いたチェックだけ (arata profiles で確かめる)。
 # `default-<cadence>` はその周期のチェック全部に展開される (版が上がって増えたチェックも黙って入る。雛形では使わない)。
 # チェック: root_usage (hourly), unknown_assume_role (hourly), oidc_assume_role (hourly), new_principal (daily), iam_changes (daily), access_denied (daily),
-#           defense_evasion / public_exposure (daily), principal_new_source / secret_access (daily),
+#           defense_evasion / public_exposure (daily), principal_new_source / secret_access / signin_session (daily),
 #           unused_region_activity / cost_anomaly (daily),
 #           ai_path_usage (daily), login_bruteforce / probe_paths / endpoint_abuse (daily, http_access), waf_block_trend (daily, waf_action),
 #           credential_hygiene / guardduty_findings / posture / access_analyzer / waf_review (weekly),
@@ -172,6 +172,10 @@ checks:
     min_baseline_days: 7                       # 初出の判定に要る、収集し終えた過去日数
     factor: 3                                  # 一括読み出しの平常帯の倍率
     min_distinct: 10                           # 1 日に読んだ異なる秘匿値の数がこれを超えたら high
+  signin_session:                              # aws login のログインのセッションの出し直し (ADR 0092)
+    session_lookback: 3d                       # 既定は無い (書かなければ skip)。IAM ユーザーのサインインの長さの上限に合わせる
+    baseline_days: 14                          # 主体の平常帯 (送信元・1 日のセッションの数) の日数
+    min_baseline_days: 7                       # 足りない間は high を medium に下げる
   log_hygiene:                                 # アプリのログに残った「載せるべきでない値」の行数 (ADR 0050)。既定は 3 つとも空 (書いたものだけを見る)
     sources: [app_prod]                        # 見る cloudwatch-logs のソース
     kinds: [secret_aws_access_key, secret_slack_token, secret_private_key, presigned_url_long_term_key, presigned_url, unfiltered_param, debug_sql]

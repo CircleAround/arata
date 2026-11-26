@@ -201,6 +201,12 @@ func (a activity) add(e record.TrailEvent) {
 	if write && e.Region != "" {
 		a[[3]string{date, record.MetricPrincipalWriteRegion, record.ActivityKey(e.PrincipalARN, e.Region)}]++
 	}
+	// 決定 (ADR 0092 の 1 節): ログインのセッションは送信元に依らず数える (サービス経由の呼び出しにも載る)
+	if s, _ := e.Data["signin_session"].(string); s != "" {
+		if id, ok := record.SigninSessionUUID(s); ok {
+			a[[3]string{date, record.MetricPrincipalSigninSession, record.ActivityKey(e.PrincipalARN, id)}]++
+		}
+	}
 }
 
 // flush は時ごとの集計を出す。決定 (ADR 0064): 収集の始まり start が途中にある時は出さない (一部だけの値で、前の収集が数えたその時の全件を
@@ -327,6 +333,8 @@ type rawEvent struct {
 			Attributes struct {
 				MFAAuthenticated string `json:"mfaAuthenticated"`
 			} `json:"attributes"`
+			// SignInSessionArn は aws login のログインのセッション (ADR 0092)。文字列でない値でも記録ごと捨てないように any で受ける
+			SignInSessionArn any `json:"signInSessionArn"`
 		} `json:"sessionContext"`
 	} `json:"userIdentity"`
 	EventTime       string `json:"eventTime"`
@@ -447,6 +455,7 @@ func normalizeRaw(source string, r rawEvent, id string, t *time.Time) (record.Tr
 	oidcDetail(r, e.Data)
 	ecsExecDetail(r, e.Data)
 	sessionKeyDetail(r, e.Data)
+	signinDetail(r, e.Data)
 	return e, true
 }
 
@@ -626,6 +635,9 @@ var notableAPIs = map[string]map[string]bool{
 	"rds.amazonaws.com":         {"ModifyDBCluster": true, "ModifyDBSnapshotAttribute": true, "ModifyDBClusterSnapshotAttribute": true},
 	// 決定 (ADR 0072): 本番のコンテナでシェルを開く操作 (ecs_exec)。失敗した呼び出しも残す (拒否のコードでないもの (TargetNotConnectedException など) も)
 	"ecs.amazonaws.com": {"ExecuteCommand": true},
+	// 決定 (ADR 0092 の 1 節): aws login のログインと出し直し (signin_session)。readOnly だが残す。件数は CLI の利用の回数に比例する。
+	// ADR は notableNames に足すと書いたが、同じ名前のほかのサービスの記録を残さないよう eventSource で絞る
+	"signin.amazonaws.com": {"CreateOAuth2Token": true},
 }
 
 // DefaultNotable は events テーブルに残す「注目イベント」の判定 (設計書 5-2)。拒否のコードは既定 (config.DefaultDeniedErrorCodes)。

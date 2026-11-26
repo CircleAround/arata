@@ -44,7 +44,7 @@ type PeriodInput struct {
 // 期間レポートの推移表に出さない指標 (他の指標の内訳・解釈率の分子・主体の活動の日次集計 (判定の材料で、値は下限。ADR 0027))。
 var periodHiddenMetrics = map[string]bool{"lines_matched": true, "probe_paths": true, "waf_block_ip": true,
 	record.MetricPrincipalSource: true, record.MetricPrincipalSourceWrites: true,
-	record.MetricPrincipalSourceRuntimeWrites: true, record.MetricPrincipalWriteRegion: true}
+	record.MetricPrincipalSourceRuntimeWrites: true, record.MetricPrincipalWriteRegion: true, record.MetricPrincipalSigninSession: true}
 
 // BuildPeriod は期間レポートを組み立てる。
 func BuildPeriod(in PeriodInput) *PeriodReport {
