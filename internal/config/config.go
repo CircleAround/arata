@@ -466,6 +466,9 @@ func (c *Config) Validate() error {
 	if err := c.Checks.validate(); err != nil {
 		return fmt.Errorf("config: checks: %w", err)
 	}
+	if err := c.validateUserSources(); err != nil {
+		return fmt.Errorf("config: checks: %w", err)
+	}
 	if err := c.validateEndpointSources(); err != nil {
 		return fmt.Errorf("config: checks: endpoint_abuse: %w", err)
 	}

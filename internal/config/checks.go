@@ -30,6 +30,10 @@ type Checks struct {
 	// UnusedRegionActivity と CostAnomaly はふだん使わないリージョンでの書き込みと費用の急増を見る daily のチェック (ADR 0032)。
 	UnusedRegionActivity UnusedRegionActivity `yaml:"unused_region_activity"`
 	CostAnomaly          CostAnomaly          `yaml:"cost_anomaly"`
+	// UserDenied・UserIDEnumeration・UserPathBreadth はログインした利用者の総当たりを見る daily のチェックの、日の値の集計の条件 (ADR 0071・0087。userchecks.go)。
+	UserDenied        UserDenied        `yaml:"user_denied"`
+	UserIDEnumeration UserIDEnumeration `yaml:"user_id_enumeration"`
+	UserPathBreadth   UserPathBreadth   `yaml:"user_path_breadth"`
 	// 以下は週次チェック (Step 3)。
 	CredentialHygiene CredentialHygiene `yaml:"credential_hygiene"`
 	Posture           Posture           `yaml:"posture"`
@@ -517,6 +521,7 @@ func (c *Checks) applyDefaults() {
 	c.OIDCAssumeRole.Baseline.applyDefaults(20)
 	setFloat(&c.OIDCAssumeRole.MediumRatio, 3)
 	c.EndpointAbuse.applyDefaults()
+	c.applyUserDefaults()
 	if len(c.UnusedRegionActivity.ComputeAPIs) == 0 {
 		c.UnusedRegionActivity.ComputeAPIs = DefaultComputeAPIs
 	}
@@ -636,6 +641,9 @@ func (c *Checks) validate() error {
 	}
 	if err := c.EndpointAbuse.validate(); err != nil {
 		return fmt.Errorf("endpoint_abuse: %w", err)
+	}
+	if err := c.validateUser(); err != nil {
+		return err
 	}
 	if err := c.UnusedRegionActivity.validate(); err != nil {
 		return fmt.Errorf("unused_region_activity: %w", err)
