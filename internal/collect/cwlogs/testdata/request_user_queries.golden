@@ -8,6 +8,10 @@ parse @message /(?:^| -- : )\[(?<rl_request_id>[A-Za-z0-9_@-]{1,255})\] /
 | parse rl_user_id /^(?<rl_v_user_id>[A-Za-z0-9_-]{1,64})$/
 | parse rl_by_kind /^(?<rl_v_by_kind>[a-z_]{1,32})$/
 | parse rl_by_id /^(?<rl_v_by_id>[A-Za-z0-9_-]{1,64})$/
+| fields concat(coalesce(rl_v_user_kind, ""), " ", coalesce(rl_v_user_id, "")) as rl_up
+| parse rl_up /^(?<rl_v_user>[a-z_]{1,32} [A-Za-z0-9_-]{1,64})$/
+| fields concat(coalesce(rl_v_by_kind, ""), " ", coalesce(rl_v_by_id, "")) as rl_bp
+| parse rl_bp /^(?<rl_v_by>[a-z_]{1,32} [A-Za-z0-9_-]{1,64})$/
 | parse @message /(?<rl_ka> -- : \[[A-Za-z0-9_@-]{1,255}\] auth result=(?<rl_auth_result>success|failure|impersonate) kind=(?<rl_auth_kind>[a-z_]{1,32}) id=(?<rl_auth_id>[A-Za-z0-9_-]{1,64})(?: via=(?<rl_auth_via>password|remember))?(?: by=(?<rl_auth_by_kind>[a-z_]{1,32}):(?<rl_auth_by_id>[A-Za-z0-9_-]{1,64}))?(?: reason=(?<rl_auth_reason>[a-z_]{1,64}))?)$/
 | parse rl_auth_result /^(?<rl_v_auth_result>success|failure|impersonate)$/
 | parse rl_auth_kind /^(?<rl_v_auth_kind>[a-z_]{1,32})$/
@@ -18,7 +22,9 @@ parse @message /(?:^| -- : )\[(?<rl_request_id>[A-Za-z0-9_@-]{1,255})\] /
 | parse rl_auth_reason /^(?<rl_v_auth_reason>[a-z_]{1,64})$/
 | fields bin(1d) as rl_bin
 | parse rl_path /^(?<rl_m_probe_path>\/\.env.*|\/wp-login\.php.*)/
-| stats count(*) as rl_lines, count(rl_request_id) as rl_tagged, count(rl_path) as rl_starts, min(rl_bin) as day, earliest(rl_ip) as ip, earliest(rl_method) as method, earliest(rl_path) as path, latest(rl_status) as rl_status_0, count(rl_k0) as rl_n0, count(rl_k1) as rl_n1, count(rl_k2) as rl_n2, earliest(rl_m_probe_path) as probe_path, count(rl_ku) as rl_user_lines, count(rl_v_user_id) as rl_users, count(rl_v_by_id) as rl_bys, latest(rl_v_user_kind) as user_kind, latest(rl_v_user_id) as user_id, latest(rl_v_by_kind) as by_kind, latest(rl_v_by_id) as by_id, count(rl_ka) as rl_auth_lines, latest(rl_v_auth_result) as auth_result, latest(rl_v_auth_kind) as auth_kind, latest(rl_v_auth_id) as auth_id, latest(rl_v_auth_via) as auth_via, latest(rl_v_auth_by_kind) as auth_by_kind, latest(rl_v_auth_by_id) as auth_by_id, latest(rl_v_auth_reason) as auth_reason by rl_request_id
+| stats count(*) as rl_lines, count(rl_request_id) as rl_tagged, count(rl_path) as rl_starts, min(rl_bin) as day, earliest(rl_ip) as ip, earliest(rl_method) as method, earliest(rl_path) as path, latest(rl_status) as rl_status_0, count(rl_k0) as rl_n0, count(rl_k1) as rl_n1, count(rl_k2) as rl_n2, earliest(rl_m_probe_path) as probe_path, count(rl_ku) as rl_user_lines, count(rl_v_user) as rl_users, count(rl_v_by) as rl_bys, latest(rl_v_user) as rl_user, latest(rl_v_by) as rl_by, count(rl_ka) as rl_auth_lines, latest(rl_v_auth_result) as auth_result, latest(rl_v_auth_kind) as auth_kind, latest(rl_v_auth_id) as auth_id, latest(rl_v_auth_via) as auth_via, latest(rl_v_auth_by_kind) as auth_by_kind, latest(rl_v_auth_by_id) as auth_by_id, latest(rl_v_auth_reason) as auth_reason by rl_request_id
+| parse rl_user /^(?<user_kind>[a-z_]{1,32}) (?<user_id>[A-Za-z0-9_-]{1,64})$/
+| parse rl_by /^(?<by_kind>[a-z_]{1,32}) (?<by_id>[A-Za-z0-9_-]{1,64})$/
 | fields coalesce(rl_status_0, if(rl_n2 > 0, "404", "")) as status
 | stats sum(rl_lines) as lines_total, sum(rl_tagged) as lines_matched, count(*) as rl_requests, sum(rl_n0) as rl_kind_0, sum(rl_n1) as rl_kind_1, sum(rl_n2) as rl_kind_2, sum(rl_user_lines) as rl_kind_user, sum(rl_auth_lines) as rl_kind_auth by day, status, probe_path, user_kind, rl_users, rl_user_lines, rl_bys, auth_result, auth_via, auth_reason, rl_auth_lines, rl_starts
 | sort lines_total desc

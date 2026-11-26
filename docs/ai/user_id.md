@@ -128,7 +128,7 @@ profiles:
 - 動かすには、ユーザー ID を読む request_lines のソースを `checks.<チェック>.sources` に書く (既定は空で、書くまで何も読まない)。型の要る 2 つ (`user_id_enumeration`・`user_path_breadth`) は `path_ids` も要る。例 (架空): `user_denied: { sources: [app_log] }`
 - 拒否を転送 (302 など) で返すアプリは `user_id_enumeration.denied_statuses` に足せる (GET と HEAD だけ数える。ソースがメソッドを取り出すことが要る)。`user_denied.statuses` には書けない
 - 判定はどれも、本人の平常帯とアプリの平常帯 (ふだんの日のいちばん多い利用者の値) の両方を超えたもの。閾値は仮の値で、実データで見直す。導入の直後 (アプリの記録のある日が `min_baseline_days` に満たない間) は判定せず `coverage.notes` に残りの日数が出る
-- 代わりにログインした操作 (`by` の付いた要求) は数えない。1 つの要求に actor の行が複数あれば、**最後の行**の利用者に数える
+- 代わりにログインした操作 (`by` の付いた要求) は数えない。1 つの要求に actor の行が複数あれば、**最後の行**の利用者に数える (種類と ID は同じ行の組。片方が形に合わない行は使わない)
 - 指摘の読み方と片付けは `arata help ai playbook <チェック>`
 
 ## debug_sql (消えうる取り方)

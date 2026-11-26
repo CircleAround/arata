@@ -29,7 +29,7 @@ import (
 //   - 値の形は arata が規則で絞る。設定の正規表現がどう書かれていても、形に合わない値 (メールアドレス・長すぎる値など) は
 //     クエリの中で捨て、1 段目より後ろには形に合った値 (rl_v_…) だけを渡す。結果を読む Go の側でも同じ規則でもう一度確かめる。
 //     捨てた値は数だけ残す (user_id_invalid / auth_invalid)。値そのものは結果にもログにも出さない
-//   - 1 つの request_id に行が複数あれば、最後の行の値を使う (ステータスと同じ)
+//   - 1 つの request_id に行が複数あれば、最後の行の値を使う (ステータスと同じ)。actor の種類と ID (by も) は同じ行の組の最後 (userProfile)
 //   - 割合のために専用のクエリは足さない。解釈率のクエリの 2 段目の軸に足す (Insights の費用は本数に比例する。ADR 0031)
 //   - ユーザー ID の付いたリクエストが 0 件の run では、http_user を出さなかったものとして扱う (Unavailable。engine が http_user の要るチェックを skip する)
 //   - ユーザー ID を key に置く集計は、ここでは作らない (段 1 のチェックが足す)。1 段目の結果には user_id などの列を出してあり、2 段目の軸に使える
@@ -139,6 +139,15 @@ func userProfile(st *requestStage, r *config.Request) error {
 	if len(ug) > 0 {
 		st.userFrom, st.userFields = r.UserID.From, ug
 		add(rlUserFlag, r.UserID.Regex, ug)
+		// 決定 (開発リードの指摘): 種類と ID は同じ行の組として取る。1 つの要求に actor の行が複数あると、項目ごとの latest は
+		// 別々の行の値になりうる (最後の行の ID が形に合わなければ、種類は最後の行・ID は前の行で、別人の key になる)。
+		// そこで行の中で、形に合った種類と ID を 1 つの項目 (`<種類> <ID>`) にし、その項目を latest で取って 1 段目の後で分ける。
+		// どちらかが形に合わない行は組にならない (前の形に合った行の組が使われる)。by の種類と ID も同じ
+		for _, pr := range st.pairs() {
+			parts = append(parts,
+				`fields concat(coalesce(`+rlValid+pr.kind+`, ""), " ", coalesce(`+rlValid+pr.id+`, "")) as `+pr.raw,
+				"parse "+pr.raw+" /^(?<"+pr.pair+">"+userKindPattern+" "+userIDPattern+")$/")
+		}
 	}
 	if len(ag) > 0 {
 		st.authFields = ag
@@ -148,6 +157,30 @@ func userProfile(st *requestStage, r *config.Request) error {
 	return nil
 }
 
+// actorPair は同じ行の組として取る種類と ID の項目 (raw は行の中で組にした一時フィールド、pair は形に合った組、out は 1 段目の列)。
+type actorPair struct{ kind, id, raw, pair, out string }
+
+// pairs は組にする項目 (user_kind と user_id、by_kind と by_id。by は書いたときだけ)。
+func (st *requestStage) pairs() []actorPair {
+	out := []actorPair{{"user_kind", "user_id", rlPrefix + "up", rlValid + "user", rlPrefix + "user"}}
+	if st.hasUserField("by_id") {
+		out = append(out, actorPair{"by_kind", "by_id", rlPrefix + "bp", rlValid + "by", rlPrefix + "by"})
+	}
+	return out
+}
+
+// userSplit は 1 段目の後に、組の列を種類と ID の列に分ける parse (user_kind・user_id・by_kind・by_id)。
+func (st *requestStage) userSplit() []string {
+	if len(st.userFields) == 0 {
+		return nil
+	}
+	var out []string
+	for _, pr := range st.pairs() {
+		out = append(out, "parse "+pr.out+" /^(?<"+pr.kind+">"+userKindPattern+") (?<"+pr.id+">"+userIDPattern+")$/")
+	}
+	return out
+}
+
 func (st *requestStage) hasUserField(name string) bool { return containsStr(st.userFields, name) }
 func (st *requestStage) hasAuthField(name string) bool { return containsStr(st.authFields, name) }
 
@@ -155,12 +188,13 @@ func (st *requestStage) hasAuthField(name string) bool { return containsStr(st.a
 func (st *requestStage) userAggs() []string {
 	var aggs []string
 	if len(st.userFields) > 0 {
-		aggs = append(aggs, "count("+rlUserFlag+") as "+rlUserLines, "count("+rlValid+"user_id) as "+rlUsers)
+		// 数えるのは、種類と ID の両方が形に合った行 (組になった行)
+		aggs = append(aggs, "count("+rlUserFlag+") as "+rlUserLines, "count("+rlValid+"user) as "+rlUsers)
 		if st.hasUserField("by_id") {
-			aggs = append(aggs, "count("+rlValid+"by_id) as "+rlBys)
+			aggs = append(aggs, "count("+rlValid+"by) as "+rlBys)
 		}
-		for _, g := range st.userFields {
-			aggs = append(aggs, "latest("+rlValid+g+") as "+g)
+		for _, pr := range st.pairs() {
+			aggs = append(aggs, "latest("+pr.pair+") as "+pr.out)
 		}
 	}
 	if len(st.authFields) > 0 {
