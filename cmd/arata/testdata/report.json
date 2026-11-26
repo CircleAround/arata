@@ -168,6 +168,10 @@
         "reason": "no http_access source"
       },
       {
+        "check": "signin_session",
+        "reason": "checks.signin_session.session_lookback is not set (no default; set it to the longest sign-in session duration, e.g. 3d. See `arata help ai playbook signin_session`)"
+      },
+      {
         "check": "unused_region_activity",
         "reason": "no unused_region_event source"
       },

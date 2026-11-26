@@ -31,6 +31,7 @@ var Descriptions = map[string]string{ // #nosec G101 -- 設定の説明文の表
 	"public_exposure":        "セキュリティグループ・S3・RDS・スナップショットなどを外部に開く設定変更。deploy タグでも下げない (high / medium / low)",
 	"principal_new_source":   "既知の主体が初めての送信元 (/24・/48)・リージョンから使われた (アクセスキーの漏洩の典型)。導入直後は報告しない (low / medium / high)",
 	"secret_access":          "秘匿値 (Secrets Manager・SSM SecureString) の初めての読み手・一括読み出し (low / medium / high)",
+	"signin_session":         "aws login のログインのセッションの出し直しが、そのセッションでまだ見ていない送信元から来た (平常帯の外なら high、内なら low)。出し直しの失敗・セッションの数の増加 (low)。session_lookback を書くまで skip",
 	"login_bruteforce":       "sign-in 失敗の IP 別件数が平常帯超え (medium)",
 	"probe_paths":            "機密パス探索の 403/404 が平常帯超え (low)",
 	"endpoint_abuse":         "設定した画面への多数の IP からの短時間の集中・「A のあと B」の連鎖がふだん超え。endpoints が空なら何もしない (medium / low)",
@@ -146,6 +147,11 @@ var paramComments = map[string]string{ // #nosec G101 -- 設定の説明文の�
 	"secret_access.factor":                        "一括読み出しの平常帯 = その主体の日ごとの異なる秘匿値の数の中央値 × factor",
 	"secret_access.min_distinct":                  "1 日に読んだ異なる秘匿値の数がこれを超えたら一括読み出し (high)。GetParametersByPath はパス単位で 1 と数える",
 	"secret_access.bulk_exempt_within":            "allowlist の bulk: exempt で外すのは、ECS が認証情報を発行してからこの時間内の読み取りだけ (上限 15m。ADR 0076)",
+	"signin_session.baseline_days":                "主体の平常帯 (送信元の /24・/48 と 1 日のセッションの数) に使う過去の日数",
+	"signin_session.min_baseline_days":            "平常帯を使うのに要る、CloudTrail を収集し終えた過去日数 (足りない間は high を medium に下げ、セッションの数は判定しない)",
+	"signin_session.session_lookback":             "そのセッションの過去の出し直しを遡って見る長さ。既定は無い (書かなければ skip)。そのアカウントの IAM ユーザーのサインインの長さの上限に合わせる (上限 90d)",
+	"signin_session.min_failures":                 "主体 × 日の失敗した出し直しがこれ以上なら low (失敗の記録の形は未確認)",
+	"signin_session.min_sessions":                 "主体の 1 日のログインのセッションの数が、平常帯の最大より多く、これ以上なら low",
 	"credential_hygiene.unused_days":              "アクセスキーを未使用とみなす日数 (最終使用、使われていなければ作成・ローテーションから)",
 	"posture.min_password_length":                 "IAM パスワードポリシーの最小文字数の下限",
 	"log_hygiene.sources":                         "見る cloudwatch-logs のソースの id (例 [app_prod])。空なら何も読まない。weekly の run ごとに 1 本、種類ごとの行数だけを数える。集計条件",
@@ -169,6 +175,21 @@ var paramComments = map[string]string{ // #nosec G101 -- 設定の説明文の�
 	"waf_review.challenge_min_distinct_ips":       "正規の画面への Challenge / CAPTCHA の提案に要る、出した異なり IP (日ごとの最大)",
 	"waf_review.challenge_solve_ratio":            "同じ提案に要る、解かれた割合 (解いた IP / 出した IP) の下限。高い = 人が解いている",
 	"waf_review.challenge_top_rules":              "Challenge / CAPTCHA の状況 (challenge_impact) を毎回載せるルールの数",
+}
+
+// noDefaultParams は既定を持たないパラメータ (ADR 0014) の、雛形に書く値。書かなければそのチェックは skip する。
+// 決定 (ADR 0092 の 5 節): signin_session.session_lookback は利用者がサインインの長さの上限に合わせて決める。雛形には案の値を書く。
+var noDefaultParams = map[string]any{"signin_session.session_lookback": "3d"}
+
+// templateParams は雛形に書くパラメータ (この版の既定値。既定を持たないものは noDefaultParams の値)。
+func templateParams() []config.Param {
+	params := config.DefaultChecks().Params()
+	for i, p := range params {
+		if v, ok := noDefaultParams[p.Check+"."+p.Key]; ok {
+			params[i].Value = v
+		}
+	}
+	return params
 }
 
 // Profile は雛形のプロファイル 1 つ。
@@ -413,7 +434,7 @@ func GenerateWith(reg *checks.Registry, o Options) []byte {
 
 	w("\n# チェックのパラメータ (すべてのプロファイルに効く)。下の値はこの版の既定値。\n")
 	w("checks:\n")
-	params := config.DefaultChecks().Params()
+	params := templateParams()
 	for i, p := range params {
 		if i == 0 || params[i-1].Check != p.Check {
 			w("  %s:\n", p.Check)

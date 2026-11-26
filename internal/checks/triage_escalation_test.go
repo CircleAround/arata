@@ -66,6 +66,24 @@ var escalationCases = map[string]map[Severity]func(t *testing.T) (key string, li
 			return "search", light["search"], heavy["search"]
 		},
 	},
+	"signin_session": {
+		Low: func(t *testing.T) (string, Observation, Observation) {
+			key := siAlice + "|" + siUUID("bbbbbbbb") + "|" + signinFormNewPrefix
+			st := seedSigninScenario(t, 14)
+			c := signinCheck("3d")
+			light, err := c.Evaluate(context.Background(), st, appWindow, &allowlist.List{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			s := &signinSeed{t: t, st: st, n: 100}
+			s.token(at(21, 1), siAlice, siSession("bbbbbbbb"), record.GrantRefreshToken, "192.0.2.99", "true", "") // 平常帯の外の /24 に移った
+			heavy, err := c.Evaluate(context.Background(), st, appWindow, &allowlist.List{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return key, obsByKey(light)[key], obsByKey(heavy)[key]
+		},
+	},
 	"ecs_exec": {
 		Medium: func(t *testing.T) (string, Observation, Observation) {
 			light := ecsExecObs(t, "principals:\n  - arn: "+execAlice+"\n", "")                          // 承認済みの主体

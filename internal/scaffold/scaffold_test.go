@@ -97,6 +97,7 @@ func TestGenerateMatchesDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := config.DefaultChecks()
+	want.SigninSession.SessionLookback = "3d" // 既定を持たない値は、雛形に案の値を書く (noDefaultParams)
 	if !reflect.DeepEqual(normalize(got), normalize(want)) {
 		t.Fatalf("template checks differ from DefaultChecks:\n got %+v\nwant %+v", got, want)
 	}
@@ -193,6 +194,7 @@ checks:
 		"missing_param checks.probe_paths.min_count |10",
 		"missing_param checks.probe_paths.min_baseline_days |7",
 		"missing_param checks.probe_paths.top_ip_min_count |5",
+		"missing_param checks.signin_session.session_lookback |3d", // 既定が無いので節ごと無くても出す (ADR 0092)
 		"missing_key audit_account |\"<12 桁のアカウント ID>\" か none",
 		"missing_key ip_list |active: 7d, reasons: waf_block / probe / sign_in_failure",
 		"unknown_key profiles.daily.overide |",
@@ -450,5 +452,46 @@ func TestDiffMinSeverity(t *testing.T) {
 	// 書いた値は利用者の判断 (critical に上げても差分にしない)
 	if items, err := Diff([]byte(strings.Replace(string(b), "\n    min_severity: high ", "\n    min_severity: critical ", 1)), reg); err != nil || len(items) != 0 {
 		t.Fatalf("%v %+v", err, items)
+	}
+}
+
+// 既定を持たないパラメータ (signin_session.session_lookback。ADR 0092 の 5 節) は、雛形に案の値を書き、
+// 動くチェックの設定に無ければ節ごと無くても missing_param で出す。書いた値は既定と比べない (param_changed にしない)
+func TestDiffNoDefaultParam(t *testing.T) {
+	reg := checks.NewRegistry()
+	full := string(Generate(reg, config.AuditAccountNone))
+	if !strings.Contains(full, "    session_lookback: 3d ") {
+		t.Fatal("the template must write session_lookback: 3d")
+	}
+	if items, err := Diff([]byte(full), reg); err != nil || len(items) != 0 {
+		t.Fatalf("template vs itself: %+v %v", items, err)
+	}
+	changed := strings.Replace(full, "    session_lookback: 3d ", "    session_lookback: 12h ", 1)
+	if items, err := Diff([]byte(changed), reg); err != nil || len(items) != 0 {
+		t.Fatalf("a written value must not be compared: %+v %v", items, err)
+	}
+	cur := "profiles:\n  daily:\n    checks: [signin_session]\naudit_account: none\nip_list: {}\n"
+	items, err := Diff([]byte(cur), reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, it := range items {
+		if it.Kind == DiffMissingParam {
+			if it.Path != "checks.signin_session.session_lookback" || it.Template != "3d" || !strings.Contains(it.Detail, "skip") {
+				t.Errorf("unexpected missing_param: %+v", it)
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("missing session_lookback is not reported: %+v", items)
+	}
+	// どのプロファイルでも動かないなら出さない
+	items, _ = Diff([]byte("profiles:\n  daily:\n    checks: [root_usage]\naudit_account: none\nip_list: {}\n"), reg)
+	for _, it := range items {
+		if it.Kind == DiffMissingParam {
+			t.Errorf("unexpected missing_param: %+v", it)
+		}
 	}
 }

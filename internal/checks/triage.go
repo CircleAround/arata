@@ -58,17 +58,19 @@ func keyRow(prefix string, allowed []string, sevs ...Severity) TriageRow {
 }
 
 var triageTable = map[string][]TriageRow{
-	"root_usage":             {row(false, noAck, Critical)},
-	"defense_evasion":        {row(false, noAck, Critical, High, Medium)},
-	"ecs_exec":               {row(false, noAck, High), row(true, noAck, Medium, Low)},
-	"unknown_assume_role":    {row(false, apNoAck, High, Info)},
-	"oidc_assume_role":       {row(false, noAck, High, Medium), row(true, withAck, Low), row(false, noAck, Info)},
-	"secret_access":          {row(false, noAck, High), keyRow(BulkExemptUnmatchedKeyPrefix, noAck, Medium), row(true, withAck, Medium, Low), row(false, noAck, Info)},
-	"guardduty_findings":     {row(false, noAck, High, Medium, Low)},
-	"iam_changes":            {row(false, apNoAck, High, Medium, Info)},
-	"access_denied":          {row(false, apNoAck, High), row(true, apAck, Medium)},
-	"new_principal":          {row(false, apNoAck, Medium)},
-	"principal_new_source":   {row(false, noAck, High), row(true, withAck, Medium, Low)},
+	"root_usage":           {row(false, noAck, Critical)},
+	"defense_evasion":      {row(false, noAck, Critical, High, Medium)},
+	"ecs_exec":             {row(false, noAck, High), row(true, noAck, Medium, Low)},
+	"unknown_assume_role":  {row(false, apNoAck, High, Info)},
+	"oidc_assume_role":     {row(false, noAck, High, Medium), row(true, withAck, Low), row(false, noAck, Info)},
+	"secret_access":        {row(false, noAck, High), keyRow(BulkExemptUnmatchedKeyPrefix, noAck, Medium), row(true, withAck, Medium, Low), row(false, noAck, Info)},
+	"guardduty_findings":   {row(false, noAck, High, Medium, Low)},
+	"iam_changes":          {row(false, apNoAck, High, Medium, Info)},
+	"access_denied":        {row(false, apNoAck, High), row(true, apAck, Medium)},
+	"new_principal":        {row(false, apNoAck, Medium)},
+	"principal_new_source": {row(false, noAck, High), row(true, withAck, Medium, Low)},
+	// signin_session (ADR 0092): low の new_prefix は、同じセッションが平常帯の外の /24 に移れば high で出直す。medium は平常帯が短い間の high
+	"signin_session":         {row(false, noAck, High, Medium), row(true, withAck, Low)},
 	"unused_region_activity": {row(false, noAck, Critical, High), row(true, withAck, Medium)},
 	"cost_anomaly":           {row(false, noAck, High, Medium)},
 	"public_exposure":        {row(false, noAck, High, Medium, Low, Info)}, // info は Public Access Block を締めた操作 (ADR 0086)

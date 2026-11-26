@@ -115,15 +115,26 @@ func Diff(current []byte, reg *checks.Registry) ([]DiffItem, error) {
 	}
 	for _, p := range config.DefaultChecks().Params() {
 		v, ok := cur.Checks[p.Check][p.Key]
-		if !ok {
-			continue
+		if _, noDefault := noDefaultParams[p.Check+"."+p.Key]; !ok || noDefault {
+			continue // 既定を持たないパラメータは、書いた値を比べない (比べる既定が無い)
 		}
 		if c, t := flow(v), flow(p.Value); c != t {
 			out = append(out, DiffItem{Kind: DiffParamChanged, Path: "checks." + p.Check + "." + p.Key, Current: c, Template: t, Detail: "この版の既定値と違う"})
 		}
 	}
-	for _, p := range config.DefaultChecks().Params() {
+	for _, p := range templateParams() {
 		sec, ok := cur.Checks[p.Check]
+		// 決定 (ADR 0092 の 5 節): 既定を持たないパラメータは、節ごと書いていなくても出す (書かなければチェックが skip する)
+		if _, noDefault := noDefaultParams[p.Check+"."+p.Key]; noDefault && len(used[p.Check]) > 0 {
+			if _, has := sec[p.Key]; !has {
+				detail := "既定が無いので、書くまでこのチェックは skip される (run の coverage に理由が出る)"
+				if c := paramComments[p.Check+"."+p.Key]; c != "" {
+					detail += "。" + c
+				}
+				out = append(out, DiffItem{Kind: DiffMissingParam, Path: "checks." + p.Check + "." + p.Key, Template: flow(p.Value), Detail: detail})
+			}
+			continue
+		}
 		if !ok || len(used[p.Check]) == 0 {
 			continue
 		}

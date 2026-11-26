@@ -3,7 +3,7 @@
 ## この指摘の意味
 
 権限を広げ得る IAM の変更 (または変更の試行) があった (daily、medium。`tags: [deploy]` の承認済み主体なら info)。
-対象は `CreateAccessKey`・`CreateUser`・`CreateRole`・`CreateLoginProfile`・`UpdateAssumeRolePolicy`・`Attach*Policy`・`Put*Policy`。侵入者が居座るための典型的な操作でもある。
+対象は `CreateAccessKey`・`CreateUser`・`CreateRole`・`CreateLoginProfile`・`UpdateAssumeRolePolicy`・`Attach*Policy`・`Put*Policy` と、サインインの長さを変えた `UpdateLoginProfile`。侵入者が居座るための典型的な操作でもある。
 
 **既知デプロイ主体でも下げない変更** (`not_lowered` に理由。CI のロールを奪った者の手口):
 
@@ -12,10 +12,13 @@
 - 信頼ポリシーが誰でも (`*`) を許す → **high** (`trust_wildcard`。デプロイ主体でない主体も high)。`trust_has_condition: true` は Condition があるという事実だけで、
   条件が実際に絞っているかは判定していない
 - 信頼ポリシーを読めない → medium (`trust_unreadable`。拒否された呼び出し、以前の版で集めた記録、決まった形でない主体)
+- `UpdateLoginProfile` でサインインの長さ (`maxSigninSessionDuration`) を変えた → medium (`signin_duration`。ADR 0092)。
+  `max_signin_session_duration` は秒 (同じ Key の中でいちばん新しい記録の値)。延ばしたか縮めたかは、前の値が記録に無いので出さない。
+  パスワードだけの変更は報告しない。ロールのサインインの長さ (`UpdateRole`) は記録の形を確かめていないので見ない
 
 - Key は `<操作>|<変更した主体>|<対象>`
 - data: `principal`、`principal_kind`、`target` (ユーザー名・ロール名・グループ名・ポリシー名)、`policy_arn`、`count`、`ips`、
-  `known_deploy_principal`、`not_lowered`、`trust_policy` (ok / unreadable)、`trust_wildcard`、`trust_external_accounts`、`trust_external_federated`、`trust_has_condition`、
+  `known_deploy_principal`、`not_lowered`、`max_signin_session_duration`、`trust_policy` (ok / unreadable)、`trust_wildcard`、`trust_external_accounts`、`trust_external_federated`、`trust_has_condition`、
   `denied` (すべて拒否された試行)、`has_errors` (失敗が混ざる)、`error_codes`
 - `denied: true` は変更は起きていないが、権限の無い主体が IAM を変えようとした (対象は記録されないので「不明」)
 - GitHub の OIDC から来たセッション (`oidc_origins`。ADR 0081): 呼び出し側のセッションを 1 段目の `AssumeRoleWithWebIdentity` までキーの一致でたどれたら、1 段目の `repo`・`ref` / `environment`・`run_id`・`assumed_at`・`chain_depth` が付く (たどれない理由は `oidc_origin_unmatched`)。
