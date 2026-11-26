@@ -38,7 +38,7 @@ const (
 	// MaxRegexLen は segments の正規表現 1 つの長さの上限。
 	MaxRegexLen = 256
 	// MaxQueryLen は Query が組み立てる文の長さの上限。残り (request_lines の 1 段目と集計) のために 4,000 文字を空けておく。
-	// 決定: 型 13・区間の規則 2 つ (数字と UUID)・max_segments 12・formats 5 つで約 5,200 文字。組み上げたクエリ全体の長さは、そのクエリを作る側も確かめる
+	// 決定: 架空の型 10 (`/section00/:id/detail/:any` の形)・区間の規則 2 つ (数字と UUID)・max_segments 12・formats 5 つで約 4,700 文字 (型 20 では超える)。組み上げたクエリ全体の長さは、そのクエリを作る側も確かめる
 	MaxQueryLen = 6000
 	// maxLiteralLen は型に残す (伏せない) 区間の長さの上限。
 	maxLiteralLen = 32

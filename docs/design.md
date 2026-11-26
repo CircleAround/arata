@@ -535,7 +535,7 @@ auth result=success|failure|impersonate kind=user id=42|none [via=password|remem
   決定: 名前の無いキャプチャも禁止する (Insights の parse が名前の無いグループをどう扱うかを確かめていない。レビューの指摘)
   (`\Q` はファズで見つけた: `\E` が無ければ arata が包む括弧と `$` を飲み込む)。
   `templates` は `/` で始まり、各区間が `:id`・`:any`・固定の区間 (英数字と `._~-` の 32 文字まで、数字を含むなら 15 文字まで) のどれか。`:id` か `:any` が 1 つ以上、固定の区間が 1 つ以上要る。
-  区間の数は `max_segments` まで。`formats` は英小文字と数字の 1〜8 文字。**組み立てた文は 6,000 文字まで** (型 13・区間の規則 2 つ・`max_segments` 12・`formats` 5 つで約 5,200 文字)。
+  区間の数は `max_segments` まで。`formats` は英小文字と数字の 1〜8 文字。**組み立てた文は 6,000 文字まで** (架空の型 10 (`/section00/:id/detail/:any` の形)・区間の規則 2 つ・`max_segments` 12・`formats` 5 つで約 4,700 文字。型 20 では超える)。
   残りの 4,000 文字は request_lines の 1 段目と集計に空けておき、組み上げたクエリ全体の長さは、そのクエリを作る側が確かめる
 - **今の `NormalizePath` (WAF・探索パスの key) は変えない** (ADR 0087 の 6 節)。`path_ids` を読むのはパスの型の要るチェックと doctor だけ
 - **doctor の `path_ids` の行** (書いたソースだけ。クエリを 1 本流す): 直近 `--window` の件数、型の数 (ID を含む数)、ユーザー ID を読むソースでは「1 日に 1 人の利用者しか触らなかった型」の数と、
