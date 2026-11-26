@@ -97,7 +97,7 @@ func signinRecordOf(e record.TrailEvent) (signinRecord, bool) {
 // signinMove は 1 つのセッションの、窓の中の送信元の移動。
 type signinMove struct {
 	principal, session, uuid, client string
-	known, newPrefixes               []string
+	newPrefixes                      []string
 	outside                          map[string]bool // 平常帯の外の新しい /24
 	refreshes                        int
 	firstSeen                        time.Time
