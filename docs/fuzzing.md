@@ -50,6 +50,7 @@ CI は `.github/workflows/fuzz.yml` が週 1 回と手動 (`workflow_dispatch`�
 | | `FuzzPrefixCaptures` | 設定の `request.id`・`request.lines` の正規表現 (`request_lines`。ADR 0051) | キャプチャを `rl_` の名前に付け替えても RE2 で読め、数と順番が同じで、同じ文字列の同じ位置に一致する (エスケープ・文字クラスの中を書き換えない)。`/` が残らない |
 | | `FuzzRequestRows` `FuzzCollectRequestRows` | `request_lines` の Insights の結果の行 | 件数は有限で負でない。最初の行のある数 ≤ request_id の数、使い回しの数 ≤ 最初の行のある数。数えるリクエストの数は最初の行のあるリクエストの数より減らない。鍵の数が最初の行の数の半分未満なら必ず止める。`FORMAT_MISMATCH` なら record を出さない |
 | | `FuzzSingleUserExamples` | パスの型 (Insights の結果を Sanitize したもの。path_ids) | doctor の `path_ids` の行の例には、印・設定の `templates` の固定の区間・`<長さ>` だけが残る。2 人以上が触った型の同じ位置の値でも、ログ由来の値は出ない |
+| | `FuzzUserProbeRows` | 利用者ごとの総当たりの U1・U2 の結果の行 (ADR 0071・0087) | 日の値の key は `<種類>:<ID>` (ストアの規則に合う利用者) と、`:id` を含み `?` `#` `|` を含まない型と、メソッドの固定の組だけ。値は 0 以上の有限の整数 |
 | | `FuzzRequestCollect` | ログの行 (リクエストごとの request_id の割り当て。偽の Insights が 2 段の `stats` を解釈する) | 同じ request_id を何度使っても、数えた件数は request_id の付いた最初の行の数とちょうど同じ。通らないときは `FORMAT_MISMATCH` で record を 1 つも出さない。最初の角括弧を鍵にする設定は必ず止まる |
 | | `FuzzUserValues` | アプリのログから取り出した値 (種類・ID・auth の結果・手段・理由。ADR 0052) | Go の判定は、クエリの中で突き合わせる正規表現と同じものを受ける。形に合った種類と ID は `:`・`\|`・`@`・空白を含まない (主体の key を一意に分けられる) |
 | | `FuzzUserRows` | 解釈率のクエリの結果の、ユーザー ID と auth の列 | 形に合わない値は集計の key にも結果にも現れず、捨てた数に入る。ID の付いた数 ≤ 数えたリクエストの数、by の数 ≤ ID の付いた数、種類・手段・理由ごとの和が合計と合う。key は 32 個 + `other` まで |

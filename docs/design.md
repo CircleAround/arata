@@ -528,7 +528,7 @@ auth result=success|failure|impersonate kind=user id=42|none [via=password|remem
   Sim はこの形の式だけを受け、分岐に項目を置く `if`・無い項目の `concat` は panic にする
 - **Insights の中の型の印は `?id`・`?any`・`?more`** にし、結果を Go の `Sanitize` で `:id`・`:any`・`…` に直す。`?` はクエリとして (1) で落ちるので、ログのパスの区間に現れない。
   ログの値で印を偽れない (生のパス `/orders/:id` の区間 `:id` は `:` で始まるので `:x` になる)。`Sanitize` は Insights の結果を信用しない入力として扱い、区間の数も `max_segments` までに絞る
-- **伏せる区間** (`:x`): 32 バイトより長い、数字を含み 16 文字以上、メールアドレスらしい (`@`・`%40`)、`:` で始まる、`?` `#` を含む、空白・制御文字・不正な UTF-8 を含む、`…` そのもの。
+- **伏せる区間** (`:x`): 32 バイトより長い、数字を含み 16 文字以上、メールアドレスらしい (`@`・`%40`)、`:` で始まる、`?` `#` `|` を含む (`|` は日の値の key の区切り)、空白・制御文字・不正な UTF-8 を含む、`…` そのもの。
   英字だけの名前は見分けられないので、doctor の `path_ids` の行が手がかりを出す (下)。空の区間 (`/orders//42`・末尾の `/`) はそのまま残す (今の `NormalizePath` と同じ)
 - **`config check`**: `max_segments` は必須 (1〜12。暗黙の既定を持たない)、`segments` 8 個・`templates` 50 個・`formats` 20 個まで、`segments` か `templates` の少なくとも一方。
   `segments` は RE2 で 256 文字まで、`/`・改行・`\Q`・キャプチャ (名前付きも、名前の無い `( )` も。まとめるのは `(?:...)`)・`^ $ \A \z \b` を書けず、空の文字列に当たるものは誤り。
@@ -544,6 +544,44 @@ auth result=success|failure|impersonate kind=user id=42|none [via=password|remem
   利用者の ID と対象 ID は Insights の中で数えるだけで、結果は (日, 型) ごとの件数と利用者の数だけ。型が 1 つも無い・行の上限に当たったときは warn。1 人しか触らなかった型があるだけでは warn にしない
 - 未確認 (実データで確かめる。ADR 0071・0087 の「未確認の点」): Insights の `parse` の選択肢が先頭から試されること、省略できる名前付きキャプチャの並びで区間を取り出せること、
   拡張子を外す遅延の繰り返し、`ispresent` を `if` の条件に置けること、`concat` の引数の数の上限、parse の名前付きキャプチャの数の上限、`$` が末尾の改行の前に当たらないこと
+
+### 2-7. 利用者ごとの総当たりの日の値 (U1・U2。ADR 0071 の 6 節・0087 の 1〜3 節)
+
+`request_lines` でユーザー ID を読むソースが、ログインした利用者の総当たり (`user_denied`・`user_id_enumeration`・`user_path_breadth`) の日の値を作る。例の値は架空。
+
+- **流す条件** (決定。開発リードの判断、2026-11-26): ソースを `checks.user_denied` / `user_id_enumeration` / `user_path_breadth` のどれかの `sources` に書き、
+  この run に `http_user` の要るチェックがあるときだけ (暗黙の既定を持たない。ADR 0014)。U1 は `user_denied` か `user_path_breadth` (`path_ids` のあるソース)、
+  U2 は `user_id_enumeration` (`path_ids` のあるソース) が要るとき。`path_ids` が無ければ U1 は拒否の件数だけを数える
+- **集計の条件** (`sources`・`user_denied.statuses`・`user_id_enumeration.success_statuses`・`denied_statuses`・各 `store_min`・`store_top`) は、日の値の形を決めるので overrides では変えられない。
+  `user_denied.statuses` は 4xx・5xx だけ (3xx は誤り)。`denied_statuses` は 4xx・5xx と 301・302・303・307・308 で、3xx は GET と HEAD のときだけ拒否に数える (ADR 0087 の 7 節)
+- **クエリ**: 範囲の中の UTC の 1 日ずつ流す (行の上限が 1 日ごとにかかる)。request_lines の 1 段目 (request_id のまとめ) の後に 2 段の `stats`。
+  - U1: 2 段目 (日, 利用者, 型) → 3 段目 (日, 利用者)。`拒否の件数 + 型の数` の降順、`limit 10000`
+  - U2: 1 段目に対象 ID の列を足し、2 段目 (日, 利用者, 型, 対象 ID) → 3 段目 (日, 利用者, 型)。異なる ID の数の降順、`limit 10000`
+  - 代わりにログインした操作 (`by` の付いたリクエスト) と、形に合わない利用者のリクエストは 1 段目の後で除く
+  - 決定: 印は `parse` の名前付きキャプチャで作り、「印のある型・ID の数」は 2 段目の `latest(<印>)` (印の無い組は値なし) を 3 段目の `count(<列>)` で数える。stats の後の `if` は使わない (else の項目が null になる)。
+    3xx の拒否は、メソッドとステータスを 1 つの文字列 (`GET 302`) にして 1 つの `parse` で決める
+  - 決定: メソッドは GET・HEAD・POST・PUT・PATCH・DELETE と other の固定の組で数える (ログの値で key を増やさない)
+  - 決定: `part_floor` の `filter` (stats の後の filter) は入れない (確かめていない)。sort と limit で受け、`store_min` で落とすのは Go の側
+  - 決定: 組み上げた文が 9,000 文字 (Insights の上限 10,000 の 1 割の余裕。ADR 0069 の一覧の問い合わせで、上限の近くで断られた) を超えるなら、
+    `config check` と `doctor` が ng にし、run はそのクエリを流さずにソースの誤りにする。request_lines の正規表現と `path_ids` の上限の和は上限を超えうる
+- **日の値** (`metrics`、From は `http_user`)。key の利用者は `<kind>:<id>` で、結果を読むときにストアの規則 (ADR 0052 の値の形) で確かめ直し、合わない行は捨てる。対象 ID は結果の列に無い
+
+| metric | key | 値 | 残すもの |
+|---|---|---|---|
+| `user_denied` | `<kind>:<id>` | 拒否 (`user_denied.statuses`) の件数 | `user_denied.store_min` 以上を日ごとに `store_top` まで |
+| `user_templates` | `<kind>:<id>` | 触った型の異なりの数 | `user_path_breadth.store_min` 以上を `store_top` まで |
+| `user_templates_ok`・`_denied`・`_not_found` | `<kind>:<id>` | そのうち 2xx・拒否・404 のあった型の数 | `user_templates` を残した key だけ |
+| `user_ids` | `<kind>:<id>\|<型>` | 開いた異なる対象 ID の数 | `user_id_enumeration.store_min` 以上を `store_top` まで |
+| `user_ids_ok`・`user_ids_denied`・`user_denied_redirects` | `<kind>:<id>\|<型>` | そのうち成功・拒否・3xx (GET・HEAD) で拒否のあった ID の数 (`user_denied_redirects` は 3xx を書いたときだけ) | `user_ids` を残した key だけ |
+| `user_ids_methods` | `<kind>:<id>\|<型>\|<メソッド>` | メソッドごとの件数 (0 は書かない) | `user_ids` を残した key だけ |
+| `user_ids_dist` | `<型>\|users`・`\|max`・`\|p50`・`\|p99` | その日のその型の利用者の数と分布 | `user_ids` を残した型だけ。p50・p99 はその日の U2 が行の上限に当たっていないときだけ |
+
+- 決定 (ADR 0087 の 2 節の約束): 異なりの数 (`user_templates`・`user_ids` と内訳) は「その日の正確な異なり」。土台が request_lines を時の単位で読むようにした後も、U2 と U1 の異なりの列は日の単位で流す
+- 決定: 分布の行は `user_ids` を残した型の分だけ (型の数で行を増やさない)。アプリの平常帯 (いちばん多い利用者の値) はその型の `max` で作れる。残さなかった型の最多は `store_min` 未満で、判定の閾値より十分小さい
+- 決定: 型に `|` を含む区間は `:x` に伏せる (key の区切り。2-6)
+- doctor の費用の行 (ADR 0028) の本数 (`QueryCount`) に U1・U2 が入る。費用の見積もりは ADR 0087 の 3 節
+- 未確認 (実データで確かめる。PR の本文に方法): stats の後の `parse`・`fields concat(coalesce(…))`・`fields <列> + <列>`・`filter not ispresent(…)`、
+  2 段目の `latest(<印>)` と 3 段目の `count(<列>)` の組、`by` の軸の値の無い組 (型の無いリクエスト) の扱い、3 段の stats の 2 段目の中間の結果の大きさの上限 (1 日分)
 
 ### 2-3. ALB のアクセスログから http_access を取る (提案。未実装・未確認)
 

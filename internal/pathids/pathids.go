@@ -379,7 +379,8 @@ func safeLiteral(s string) bool {
 	if len(s) > maxLiteralLen || digitLong(s) || !utf8.ValidString(s) {
 		return false
 	}
-	if strings.HasPrefix(s, ":") || strings.ContainsAny(s, "?#") || s == More {
+	// | は日の値の key の区切り (`<kind>:<id>|<型>`。ADR 0071 の 6 節) なので、型に残さない
+	if strings.HasPrefix(s, ":") || strings.ContainsAny(s, "?#|") || s == More {
 		return false
 	}
 	for _, r := range s {

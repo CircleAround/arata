@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/CircleAround/arata/internal/collect"
 	"github.com/CircleAround/arata/internal/collect/cwlogs/cwlogstest"
@@ -38,7 +39,7 @@ func collectProbe(t *testing.T, src config.Source, c config.Checks, ev []cwlogst
 	f := &cwlogstest.Fake{}
 	sim := &cwlogstest.Sim{Events: ev}
 	registerRequests(f, sim, c, src.ID)
-	f.On("count(u_dn) as", sim.Response(nil))       // U1
+	f.On("count(u_dn) as", sim.Response(nil))      // U1
 	f.On("as "+MetricUserIDsOK, sim.Response(nil)) // U2
 	col, err := New(src, c, f)
 	if err != nil {
@@ -198,11 +199,11 @@ func TestUserProbeGating(t *testing.T) {
 	}
 	ev := probeEvents()
 	for _, c := range []struct {
-		name     string
-		checks   config.Checks
-		src      config.Source
-		needs    map[record.Kind]bool
-		u1, u2   int
+		name      string
+		checks    config.Checks
+		src       config.Source
+		needs     map[record.Kind]bool
+		u1, u2    int
 		templates bool
 	}{
 		{"どの sources にも無い", probeChecks(), probeSource(t), nil, 0, 0, false},
@@ -430,4 +431,71 @@ func pathIDsOrErr(p config.PathIDs) (*config.PathIDs, error) {
 		return nil, err
 	}
 	return src.PathIDs, nil
+}
+
+// FuzzUserProbeRows: U1・U2 の結果の行 (Insights の結果。ログ由来の値) を、どんな値で返されても、日の値の key は
+// `<種類>:<ID>` (ストアの規則に合う利用者) と、Sanitize した型 (:id を含む) とメソッドの固定の組だけになり、値は 0 以上の有限の整数になる。
+func FuzzUserProbeRows(f *testing.F) {
+	f.Add("user", "42", "/orders/?id", "8", "1", "GET 200")
+	f.Add("user", "a@example.com", "/u/?id", "-3", "NaN", "")
+	f.Add("staff", "5", "/x/?any/?id/?more", "1e400", "2", "x")
+	f.Add("user", "42", "/orders/42", "3", "3", "")
+	src := userSource(actorRegex, "")
+	src.PathIDs = &config.PathIDs{Segments: []string{`[0-9]+`}, Templates: []string{"/x/:any/:id"}, MaxSegments: 4}
+	if err := src.CompilePathIDs(); err != nil {
+		f.Fatal(err)
+	}
+	c := probeChecks("web")
+	c.UserIDEnumeration.DeniedStatuses = []int{403, 302}
+	c.UserDenied.StoreMin, c.UserIDEnumeration.StoreMin, c.UserPathBreadth.StoreMin = 1, 1, 1
+	col, err := New(src, c, &cwlogstest.Fake{})
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Fuzz(func(t *testing.T, kind, id, tpl, v1, v2, extra string) {
+		row := cwlogstest.Rows("day", "2026-10-21 00:00:00.000", "user_kind", kind, "user_id", id, "tpl", tpl,
+			MetricUserDenied, v1, MetricUserTemplates, v2, MetricUserTemplatesOK, v1, MetricUserIDs, v1, MetricUserIDsOK, v2, MetricUserIDsDenied, v1,
+			MetricUserDeniedRedirects, v2, "u_rq", v2, "u_s0", v1, "u_s5", extra)
+		sink := &sinkRecorder{}
+		if err := col.emitUserSummary(t.Context(), []map[string]string{row}, sink); err != nil {
+			t.Fatal(err)
+		}
+		if err := col.emitUserIDs(t.Context(), []map[string]string{row, row}, false, sink); err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range sink.recs {
+			m := r.(record.Metric)
+			if m.Value < 0 || m.Value != m.Value || m.Value > maxRequestCount*2 || m.Value != float64(int64(m.Value)) || m.From != record.KindHTTPUser {
+				t.Fatalf("value %+v", m)
+			}
+			parts := strings.Split(m.Key, "|")
+			if m.Metric == MetricUserIDsDist {
+				if len(parts) != 2 || !keyTemplate(parts[0]) {
+					t.Fatalf("dist key %q", m.Key)
+				}
+				continue
+			}
+			k, i, ok := strings.Cut(parts[0], ":")
+			if !ok || !ValidUserKind(k) || !ValidUserID(i) {
+				t.Fatalf("user in key %q (%q, %q)", m.Key, kind, id)
+			}
+			switch {
+			case len(parts) == 1:
+			case len(parts) >= 2 && strings.HasPrefix(m.Metric, "user_ids") || m.Metric == MetricUserDeniedRedirects:
+				if !keyTemplate(parts[1]) {
+					t.Fatalf("template in key %q", m.Key)
+				}
+				if m.Metric == MetricUserIDsMethods && (len(parts) != 3 || !strIn(parts[2], append(append([]string{}, userMethods...), userMethodOther))) {
+					t.Fatalf("method in key %q", m.Key)
+				}
+			default:
+				t.Fatalf("key %q for %s", m.Key, m.Metric)
+			}
+		}
+	})
+}
+
+// keyTemplate は key に置いてよい型の形か (/ で始まり、:id を含み、クエリ・フラグメント・改行・key の区切り | を含まない)。
+func keyTemplate(s string) bool {
+	return strings.HasPrefix(s, "/") && strings.Contains(s+"/", "/:id/") && !strings.ContainsAny(s, "?#\n|") && utf8.ValidString(s)
 }

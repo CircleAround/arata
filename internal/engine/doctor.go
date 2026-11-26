@@ -323,6 +323,9 @@ func (d *doctor) logs(ctx context.Context, src config.Source) {
 		d.add(src, "config", DoctorNG, CodeConfigInvalid, err.Error())
 		return
 	}
+	for _, msg := range c.LongQueries() {
+		d.add(src, "config", DoctorNG, CodeConfigInvalid, msg)
+	}
 	c.Logger = d.deps.Logger
 	c.Now = func() time.Time { return d.now }
 	if d.deps.Sleep != nil {
@@ -795,6 +798,23 @@ func UnknownChecks(cfg *config.Config, reg *checks.Registry) []string {
 				out = append(out, fmt.Sprintf("profile %s: unknown check %q", pname, name))
 			}
 		}
+	}
+	return out
+}
+
+// LongQueries は、組み上げると Logs Insights の文の上限を超える、利用者ごとのチェックのクエリ (U1・U2。cwlogs.LongQueries) の説明。
+// config check が AWS に繋がずに確かめる (doctor はソースの行に、run はそのソースの誤りとして出す)。
+func LongQueries(cfg *config.Config) []string {
+	var out []string
+	for _, src := range cfg.Sources {
+		if src.Kind != config.KindCloudWatchLogs {
+			continue
+		}
+		c, err := cwlogs.New(src, cfg.Checks, nil)
+		if err != nil {
+			continue // 形式の誤りは設定の読み込みが先に止める
+		}
+		out = append(out, c.LongQueries()...)
 	}
 	return out
 }
