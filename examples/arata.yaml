@@ -176,6 +176,8 @@ checks:
     session_lookback: 3d                       # 既定は無い (書かなければ skip)。IAM ユーザーのサインインの長さの上限に合わせる
     baseline_days: 14                          # 主体の平常帯 (送信元・1 日のセッションの数) の日数
     min_baseline_days: 7                       # 足りない間は high を medium に下げる
+    min_failures: 3                            # 主体 × 日の失敗した出し直しがこれ以上なら low
+    min_sessions: 3                            # 主体の 1 日のセッションの数が平常帯の最大より多く、これ以上なら low
   log_hygiene:                                 # アプリのログに残った「載せるべきでない値」の行数 (ADR 0050)。既定は 3 つとも空 (書いたものだけを見る)
     sources: [app_prod]                        # 見る cloudwatch-logs のソース
     kinds: [secret_aws_access_key, secret_slack_token, secret_private_key, presigned_url_long_term_key, presigned_url, unfiltered_param, debug_sql]
