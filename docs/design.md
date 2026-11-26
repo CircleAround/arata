@@ -491,6 +491,8 @@ auth result=success|failure|impersonate kind=user id=42|none [via=password|remem
 - **coverage と doctor**: `coverage.formats[].requests` に `users` (`from`・`with_user`・`user_rate`・`kinds`・`with_by`・`user_id_invalid`) と `auth` (`success`・`via`・`failure`・`reasons`・`impersonate`・`invalid`)。
   run の stats (`request_stats`) にも割合を残す。doctor の `requests` の行は同じ数を出し、「行の種類」に `user_id`・`auth` の当たった数を足す。
   `from: debug_sql` の間は取れていても warn (誤設定に頼る取り方で、直されれば予告なく 0 件になる)、ID が 0 件・形に合わない値を捨てたときも warn
+- **決定: 監査のワークフローは `users`・`auth` の数をログに出す** (`arata-audit.yml` の `user-coverage`): daily の実行には成果物が残らないので、集計が貯まっているかをストアを読まずに確かめられるようにする。
+  出すのは数と、決まった形の名前だけ。利用者のソースが無いときも `[]` を出す (「報告を読んだが対象が無い」と、step が動いていないことを見分けるため)
 - **`by` の付いたリクエスト**は、段 1 のチェックで利用者ごと・送信元ごとの異なり数に入れない (担当者の送信元を利用者の送信元として数えない)。今は数 (`with_by`) だけを出す
 - 未実装: 段 1 のチェック本体、ID の付いた割合が直近の平均から落ちたときの警告 (ADR 0051 の 4 節。割合は run の stats にある)、`json` 形式の `fields.user_id` から `http_user` を出すこと
 - 未確認 (実データで確かめる): 取り出した一時フィールドをもう一度 `parse` で突き合わせる書き方がこの値でも動くこと (探索パスの印と同じ形)、2 段目の軸を増やしても解釈率のクエリの結果が行数の上限 (10000) に遠いこと
