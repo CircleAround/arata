@@ -19,7 +19,7 @@
 | LLM | エンジン内では使わない。LLM 向けの使い方 (レポートの読み方・承認判断の基準) は `arata help ai` としてバイナリに埋め込む (決定: skill ファイルの同梱は取りやめ。ADR 0012) |
 | 任意期間レポート | `report --from --to` で月次・四半期・任意期間を生成 |
 | リポジトリの例 | 決定: リポジトリ (例・テスト・文書) に特定の顧客の情報を書かない。例は架空の値を使う (アカウント ID は `123456789012` / 外部 SaaS は `111122223333`) |
-| 公開できない情報の検査 | 決定: 一般的な秘密は gitleaks (`.gitleaks.toml`)、禁止語は Actions の secrets の一覧と `tools/wordscan` で全履歴と GitHub の本文を CI で検査する。ログに語を出さない。運用は `docs/sensitive-scan.md`。ADR 0036 |
+| 公開できない情報の検査 | 決定: 一般的な秘密は gitleaks (`.gitleaks.toml`)、禁止語は Actions の secrets の一覧と `tools/wordscan` で全履歴と GitHub の本文を CI で検査する (PR の gitleaks はその PR のコミットだけ)。ログに語を出さない。運用は `docs/sensitive-scan.md`。ADR 0036・0088 |
 | ファズテスト | 決定: 信用できない入力 (ログの行と Insights の結果・CloudTrail のイベント・LLM の出力・利用者のファイル) を解釈する箇所に、Go 標準のファズテスト (`testing.F`) を置く。性質は「パニックしない」だけでなく、その関数が守る規則 (伏せ字が元の値を残さない、通知に `<` `>` や目に見えない文字が残らない、公開の判定が見逃す側に倒れない、など) を書く。`go test ./...` は seed と `testdata/fuzz` だけを走らせ、探索は週次の `fuzz.yml` (`tools/fuzz.sh`、対象ごとに 30 秒)。見つかった失敗は seed か `testdata/fuzz` に残して本体を直す。対象の一覧と手順は `docs/fuzzing.md`。ADR 0041 |
 | 設定の名前 | 決定: 設定のトップレベルキーは `customer` ではなく `name` (レポートに出す監査対象の名前)。`customer` は受託側の目線に寄りすぎており、自社アカウントを自社で監査する使い方もあるため中立な名前にした。利用者がいない段階の改名なので旧キーの互換は持たず、`customer` は未知のキーとして設定エラーになる |
 | サプライチェーン | 決定: GitHub Actions は 40 桁の SHA で固定し版をコメントに書く。全ワークフローに最小権限の `permissions:`、checkout は `persist-credentials: false`。依存は公開から 7 日待つ 2 段構え (提案: Dependabot の `cooldown`、強制: CI の `tools/agegate` が indirect を含む全モジュールの公開時刻を GOPROXY で確かめる)。CI で `go mod verify` と `govulncheck`。release は build provenance attestation (来歴証明) を付ける (公開リポジトリまたは Enterprise Cloud で有効。非公開の間は SHA256SUMS のみ)。ADR 0017。CI の常時の検査 (Actions の固定と待機の強制、zizmor、週次の脆弱性検査)、release の権限の分離、SBOM は ADR 0035 と [supply-chain.md](supply-chain.md) |

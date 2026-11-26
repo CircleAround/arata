@@ -46,5 +46,5 @@ secretGroup = 1
 keywords = ["@"]
 
 [[rules.allowlists]]
-description = "架空のドメインと、コミットの署名に使うアドレス (Dependabot の Signed-off-by を含む)"
-regexes = ['''@example\.(com|org|net|co\.jp)$''', '''^noreply@anthropic\.com$''', '''@users\.noreply\.github\.com$''', '''^support@github\.com$''']
+description = "架空のドメイン (RFC 2606・6761 の予約。example.com などとそのサブドメイン、.example .test .invalid .localhost) と、コミットの署名に使うアドレス (Dependabot の Signed-off-by を含む)"
+regexes = ['''(?i)[@.]example\.(com|org|net|co\.jp)$''', '''(?i)@([a-z0-9-]+\.)*[a-z0-9-]+\.(example|test|invalid|localhost)$''', '''^noreply@anthropic\.com$''', '''@users\.noreply\.github\.com$''', '''^support@github\.com$''']
