@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/CircleAround/arata/internal/config"
+	"github.com/CircleAround/arata/internal/pathids"
 	"github.com/CircleAround/arata/internal/record"
 )
 
@@ -34,6 +35,8 @@ type Profile struct {
 	fields map[string]bool
 	// req は request_lines の 1 段目の材料 (request.go)。nil なら 1 行 = 1 リクエスト。
 	req *requestStage
+	// paths はパスの型の規則 (path_ids。paths.go)。書いていなければ nil。
+	paths *pathids.Compiled
 }
 
 // Has は前処理が正規化フィールド name を作るか。
@@ -54,7 +57,7 @@ var plainField = regexp.MustCompile(`^[A-Za-z_@][A-Za-z0-9_.@]*$`)
 
 // ProfileFor は設定のソースから形式プロファイルを作る。config.Validate を通ったソースを前提とする。
 func ProfileFor(src config.Source) (Profile, error) {
-	p := Profile{Format: src.Format, Yields: record.Kind(src.Yields), StripPrefix: src.StripPathPrefix}
+	p := Profile{Format: src.Format, Yields: record.Kind(src.Yields), StripPrefix: src.StripPathPrefix, paths: src.PathRules()}
 	var body string
 	p.fields = map[string]bool{}
 	if src.Format == config.FormatText {

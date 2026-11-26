@@ -21,6 +21,7 @@ type Event struct {
 // Sim はログの行の集まりから、Insights の集計クエリの結果を作るフェイク。クエリを上から順に解釈する。
 //
 //   - `fields <a> as <b>` (別名)、`fields bin(<N><d|h|m>) as <name>` (行の時刻の区切り)、
+//     `fields <式> as <name>, …` (式は文字列・項目・concat・coalesce・ispresent と、分岐が定数の if。expr.go)、
 //     `fields coalesce(<g>, if(<f> > 0, "<値>", "")) as <name>` (stats の後の補い。collector が作る形だけ)。
 //     `fields if(<条件>, "<値>", <項目>)` は受け付けない: 本物は else に項目を置くと null を返し、取れていた値が消える (実データで確認)
 //   - `parse <field> /<re>/` (名前付きキャプチャをフィールドにする。同じ名前を 2 度定義するクエリは、本物と同じく受け付けない)
@@ -137,14 +138,18 @@ func (s *Sim) Rows(query string, from, to time.Time, filter func(map[string]stri
 			// この形のクエリは取れていた値を消すので、Sim は受け付けない (同じ誤りをテストで止める)
 			panic("sim: if() with a field in the else branch returns null after stats; use coalesce(<field>, if(<cond>, \"<value>\", \"\")): " + line)
 		case strings.HasPrefix(line, "fields "):
-			for _, part := range strings.Split(strings.TrimPrefix(line, "fields "), ", ") {
+			for _, part := range splitTop(strings.TrimPrefix(line, "fields ")) {
 				if bm := binExpr.FindStringSubmatch(part); bm != nil {
 					d, name := binDur(bm[1], bm[2]), bm[3]
 					define(name)
 					ops = append(ops, each(func(r simRow) { r.f[name] = r.t.UTC().Truncate(d).Format(simTime) }))
 					continue
 				}
-				if a, b, ok := strings.Cut(part, " as "); ok && !strings.Contains(a, "(") {
+				a, b, ok := cutLast(part, " as ")
+				if !ok {
+					continue
+				}
+				if !strings.Contains(a, "(") {
 					a, b := a, b
 					define(b)
 					ops = append(ops, each(func(r simRow) {
@@ -152,7 +157,16 @@ func (s *Sim) Rows(query string, from, to time.Time, filter func(map[string]stri
 							r.f[b] = v
 						}
 					}))
+					continue
 				}
+				e := parseExpr(a)
+				name := b
+				define(name)
+				ops = append(ops, each(func(r simRow) {
+					if v, ok := e.eval(r.f); ok {
+						r.f[name] = v
+					}
+				}))
 			}
 		case parseLine.MatchString(line):
 			m := parseLine.FindStringSubmatch(line)

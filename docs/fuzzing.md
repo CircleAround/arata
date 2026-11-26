@@ -55,6 +55,9 @@ CI は `.github/workflows/fuzz.yml` が週 1 回と手動 (`workflow_dispatch`�
 | | `FuzzUserCollect` | ログの行 (種類・ID・auth の結果が任意の文字列。設定の正規表現は緩い。偽の Insights) | 形に合った種類と ID のリクエストだけが ID つきに、合わないものは捨てた数に、ちょうど入る。合わない値は record に残らない。段 0 の数は変わらない。ID が 0 件なら `http_user` は「取れない」になる |
 | | `FuzzHygieneQuery` `FuzzNotPrecededBy` | 設定の項目名・`stream_prefix` (log_hygiene。ADR 0050) | どんな値でもクエリの段の数と並び (`fields` と `stats`) が変わらない。`/.../` を抜け出さない。一時フィールドの名前は全部異なり決まった字だけ。正規表現は Go の regexp でも読め、`=>` と `:`・空白の有無の 4 つの書き方に一致し、`[FILTERED]`・空の値・別の鍵に一致しない。検査を通らない項目名はクエリに入らない。「直前が〜でない」の表現が素直な判定と同じ意味 |
 | | `FuzzHygieneRows` | Insights の結果の行 (偽の API。log_hygiene) | 受け取るのは有限で負でない整数だけ (別の方法で読んだ値と一致)。それ以外は収集の失敗で、0 件にしない・何も出さない。record とエラーの文に結果の文字列が残らない |
+| `internal/pathids` | `FuzzQueryMatchesNormalize` `FuzzTemplateAny` | ログ由来のパス (path_ids。ADR 0071・0087) | Insights の中の組み立て (偽の Insights) と Go の正規化が同じ型・同じ対象 ID になる。型は印・伏せた区間・置いてよい区間だけで、`:id` の数と対象 ID の数が同じ。`:any` の位置の値は型にも対象 ID にも現れない。拡張子は一覧のものだけを最後の区間の末尾から外し、`/` を足さない・消さない |
+| | `FuzzSanitize` | Insights の結果の型 | 置いてよい形 (印・`:x`・32 バイト以下で個人に結び付かない区間) にしかならない。区間の数は `max_segments` まで。`/` で始まらない値は空 |
+| | `FuzzCompile` | 設定の `segments`・`templates`・`formats` | 検証を通れば、組み立てた文の段の数は規則の数だけで決まり (`/.../` と `"..."` を抜け出さない)、Go の正規化と同じ結果になる |
 | `internal/collect/cloudtrail` | `FuzzNormalizeEvent` `FuzzRoleARNFromSession` `FuzzReadTrailFile` | イベントの本文 (JSON)、ARN、trail の S3 のファイル (gzip の JSON) | 取り出す値の型と上限。セッション名を主体に残さない。キーのハッシュは決まった記録 (発行の 3 種類と AssumedRole の記録) にだけ付き、キーそのものは残さない (ADR 0076・0081)。ファイルの誤りは中身の誤りだけで、解いた大きさの上限を超えて読まず、管理イベント以外を管理イベントにしない |
 | | `FuzzPublicStatements` | バケットポリシー、CIDR | 公開の判定が見逃す側に倒れない (条件を外す・公開のステートメントを足す・広い CIDR・否定の演算子) |
 | `internal/record` `internal/report` | `FuzzMask` `FuzzFindingMasksIdentity` | 任意の文字列の間に置いたメールアドレス・セッション名 | レポートに元の形で残らない。冪等 |
@@ -72,7 +75,7 @@ CI は `.github/workflows/fuzz.yml` が週 1 回と手動 (`workflow_dispatch`�
 | `internal/engine` | `FuzzParseFindingIDs` | ack / snooze / resolve の ID の並び (ワークフローの入力をそのまま渡すこともある) | 受け付けた並びは 1〜100 件で、どれも 12 桁の小文字の 16 進・重複なし・入力に現れた順。書き直して読み直しても同じ。止めたときの文は 1 行で、上限の長さ以内 (ADR 0080) |
 | `internal/report/schema` | `FuzzSilencedReasonStaysInCode` | 「黙らせているもの」の節に出す片付けの理由 | report.md で理由は 1 つのコードの中に収まり (バッククォートで閉じさせない)、改行で行を増やさない (ADR 0068) |
 | `internal/iplist` | `FuzzBuild` | 日の値の key (ログ由来の IP。怪しい IP の一覧。ADR 0069) | 一覧の行の IP はすべて正規の形 (`netip.Addr.String()` で読み直した値と同じ) で、既知の送信元を含まない。理由は 3 つのどれか、件数は正、日とソースは渡したもの (後で Logs Insights の問い合わせの文に入れる値) |
-| `internal/config` | `FuzzParseDuration` `FuzzParseStore` `FuzzLoad` | 設定の値、arata.yaml | 受け入れた値は書いたとおりの意味。source の id と profile 名にパスの区切りが無い |
+| `internal/config` | `FuzzParseDuration` `FuzzParseStore` `FuzzLoad` | 設定の値、arata.yaml | 受け入れた値は書いたとおりの意味。source の id と profile 名にパスの区切りが無い。`path_ids` を受け入れたソースは検証した規則を持ち、組み立てた文が長さの上限に収まる |
 | | `FuzzRequestValidate` | 設定の `request:` (`request_lines`。LLM が書く) | 受け付けた設定は、鍵のキャプチャが `request_id` だけ、行のキャプチャが決まった名前だけで、どれも RE2 で読め、ip と path が同じ行にあり、同じ項目を 2 つの行が取り出さず、`set` は 100〜599 の status だけ |
 | | `FuzzRequestUserValidate` | 設定の `request.user_id`・`request.auth` の正規表現 (ADR 0052) | 受け付けた正規表現は RE2 で読め、決まった名前のキャプチャだけを持ち (必須のものがある。by は 2 つとも)、どの入力に対しても一致が入力の終わりで終わる (行の途中の同じ並びを読まない) |
 | `internal/collect/account` | `FuzzParseCredentialReport` | 認証情報レポートの CSV | 行の形 (日時は RFC 3339 の UTC か空、キーは 2 本まで) |

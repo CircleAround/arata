@@ -93,6 +93,11 @@ sources:
   #     # auth:                                  # ログインの結果の行。正規表現はどちらも $ で終える (行の途中の同じ並びを読まない)
   #     #   regex: ' -- : \[[A-Za-z0-9_@-]{1,255}\] auth result=(?P<auth_result>success|failure|impersonate) kind=(?P<auth_kind>[a-z_]{1,32}) id=(?P<auth_id>[A-Za-z0-9_-]{1,64})(?: via=(?P<auth_via>password|remember))?(?: by=(?P<auth_by_kind>[a-z_]{1,32}):(?P<auth_by_id>[A-Za-z0-9_-]{1,64}))?(?: reason=(?P<auth_reason>[a-z_]{1,64}))?$'
   #   # expected_complete_rate: 0.8              # まとめられた割合 (最初の行のあるリクエスト / request_id の数) の閾値
+  #   # path_ids:                                # パスの中の ID の位置。利用者の総当たりのチェック (user_id_enumeration・user_path_breadth) が使う。書かなければそのチェックは skip。arata help ai user_id
+  #   #   segments: ['[0-9]{1,20}', '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}']
+  #   #   templates: []                          # 区間の形では分からない位置 (/users/:id/profile、/billing/charges/:id/:any)。名前・ログイン名をパスに使う位置は :id で書く
+  #   #   formats: [json, xml, csv, xlsx, pdf]   # 最後の区間の末尾から外す拡張子
+  #   #   max_segments: 8                        # これより深い区間は /… にまとめる (1〜12)
   # アプリのログの中身 → log_hygiene (下の checks.log_hygiene に sources・kinds を書くまで読まれない)
   # - id: app_prod
   #   kind: cloudwatch-logs

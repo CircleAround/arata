@@ -101,6 +101,28 @@ profiles:
 - 引くのは `records: [http_user]` か、`http_user` を要るチェックのあるプロファイルの run だけ。どれも無ければ doctor の `records` の行が warn。endpoint_abuse の `sources` には書けない
 - report.json の `coverage.formats[].yields` に `http_user` が出る。ID の付いたリクエストが 0 件の run では出ない (ソースは失敗にせず、標準エラーに WARN)
 
+## パスの型 (path_ids)
+
+ログインした利用者の総当たりを見るチェック (`user_id_enumeration`・`user_path_breadth`) は、パスを「型」(ID の位置をまとめた形) にして数える。
+規則はソースの `path_ids` に書く (書かなければ、そのチェックは skip)。例は架空。
+
+```yaml
+    path_ids:
+      segments: ['[0-9]{1,20}', '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}']   # 区間の全体に当たれば ID
+      templates:                     # 区間の形では分からない位置
+        - '/users/:id/profile'       # :id は ID (値は Insights の中で数えるだけで持ち帰らない)
+        - '/billing/charges/:id/:any'   # :any は ID ではないが形を問わない区間 (年月など。値は捨てる)
+      formats: [json, csv]           # 最後の区間の末尾から外す拡張子 (/orders/42.json と /orders/42 を同じ型にする)
+      max_segments: 8                # 必須 (1〜12)
+```
+
+- **名前・ログイン名・メールアドレスをパスに使う位置** (`/users/taro/orders`) は、`templates` に `:id` として書く。書かないと、その区間が型に残り、key としてストアと報告に入る
+  (メールアドレスらしい・数字を含む長い区間などは arata が `:x` に伏せるが、英字だけの名前は見分けられない)
+- `arata doctor` の `path_ids` の行に「1 日に 1 人の利用者しか触らなかった型」の数と例が出る。名前の区間は利用者ごとに違うので、この型になる。例の `<n>` は伏せた区間の長さで、
+  その位置を `templates` に `:id` で書き足す。値そのものは Insights で引いて確かめる (arata は出さない)
+- 年月・日付のように ID ではないが値の変わる区間は `:any` にする (`segments` の数字の規則に当たると ID として数えられ、`-` を含むと型が月の数だけ分かれる)
+- `segments` には `/`・`^`・`$`・名前付きキャプチャを書かない。`templates` は固定の区間を 1 つ以上含む (`/:any/:id` は誤り)。`arata config check` が確かめる
+
 ## debug_sql (消えうる取り方)
 
 - `from: debug_sql` は、debug レベルの SQL の行 (セッションから利用者を読み込む問い合わせ) から同じ仕組みで読む。**消えうる取り方**: 本番で debug のログが出ているのは誤設定で、
