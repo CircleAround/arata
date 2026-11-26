@@ -22,6 +22,7 @@ import (
 	"github.com/CircleAround/arata/internal/collect/cloudtrail"
 	"github.com/CircleAround/arata/internal/collect/cwlogs"
 	"github.com/CircleAround/arata/internal/config"
+	"github.com/CircleAround/arata/internal/pathids"
 	"github.com/CircleAround/arata/internal/record"
 )
 
@@ -414,6 +415,9 @@ func (d *doctor) logs(ctx context.Context, src config.Source) {
 	if prof.RequestLines() {
 		d.requests(ctx, src, c)
 	}
+	if src.PathRules() != nil {
+		d.pathIDs(ctx, src, c)
+	}
 	if src.Yields == config.YieldsHTTPUser {
 		d.userOnlyRecords(src)
 	}
@@ -604,6 +608,53 @@ func (d *doctor) requests(ctx context.Context, src config.Source, c *cwlogs.Coll
 		return
 	}
 	d.add(src, "requests", DoctorOK, "", detail)
+}
+
+// pathIDs は path_ids (パスの型の規則。ADR 0071 の 2 節・0087) で作った型の数と、1 日に 1 人の利用者しか触らなかった型を出す (クエリを 1 本流す)。
+//
+// 決定: 名前・ログイン名をパスに使う位置 (templates に :id として書き足すべき位置) は規則で見分けられないので、
+// 「1 人しか触らなかった型」を手がかりに出す (名前の区間は利用者ごとに違う)。例は先頭 5 件で、2 人以上が触った型の同じ位置にある値だけを残し、ほかの区間は長さだけにする。
+// 型が 1 つも無い・結果が行の上限に当たったときは warn。1 人しか触らなかった型があるだけでは warn にしない (ふだんの、あまり使われない画面でも起きる)。
+func (d *doctor) pathIDs(ctx context.Context, src config.Source, c *cwlogs.Collector) {
+	before := c.Scanned()
+	s, err := c.PathTemplates(ctx, d.now.Add(-d.window), d.now)
+	if err != nil {
+		d.addErr(src, "path_ids", err)
+		return
+	}
+	if s == nil {
+		return
+	}
+	withID, requests := 0, int64(0)
+	for _, t := range s.Templates {
+		if strings.Contains(t.Template, pathids.ID) {
+			withID++
+		}
+		requests += t.Requests
+	}
+	what := "要求"
+	if s.Users {
+		what = "ログインした要求"
+	}
+	detail := fmt.Sprintf("直近 %s の%s %d 件、型 %d (ID を含む %d)", d.window, what, requests, len(s.Templates), withID)
+	if s.Users {
+		detail += fmt.Sprintf("。1 日に 1 人の利用者しか触らなかった型 %d", s.SingleUser())
+		if ex := s.SingleUserExamples(5); len(ex) > 0 {
+			detail += " (例: " + strings.Join(ex, ", ") + "。<n> は伏せた区間の長さ)"
+		}
+		detail += "。名前・ログイン名・メールアドレスをパスに使う位置なら、templates に :id として書く (書けば値を持ち帰らない)"
+	} else {
+		detail += "。ユーザー ID を読まないソースなので、1 人しか触らなかった型は数えない"
+	}
+	detail += fmt.Sprintf("。スキャン %.1f MB (直近 %s の 1 本分)", (c.Scanned()-before)/1e6, d.window)
+	switch {
+	case len(s.Templates) == 0:
+		d.add(src, "path_ids", DoctorWarn, "", fmt.Sprintf("直近 %s に型を作れる要求が無い (path のある行が無いか、/ で始まらない)。", d.window)+detail)
+	case s.Truncated:
+		d.add(src, "path_ids", DoctorWarn, "", detail+fmt.Sprintf("。結果が行の上限 (%d) に当たった: 件数の少ない型が欠けている。--window を短くして確かめる", cwlogs.MaxRows))
+	default:
+		d.add(src, "path_ids", DoctorOK, "", detail)
+	}
 }
 
 // checks は各プロファイルのチェックのうち、必要なレコードを出すソースが無いものを警告する。

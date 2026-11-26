@@ -99,6 +99,8 @@ type Source struct {
 	MaxScanGB float64 `yaml:"max_scan_gb"`
 	// Request は request_lines 形式のまとめ方 (request.go、ADR 0051)。request_lines のときだけ。
 	Request *Request `yaml:"request"`
+	// PathIDs はパスの中の ID の位置 (pathids.go、ADR 0071・0087)。http_access か http_user を出すソースだけ。
+	PathIDs *PathIDs `yaml:"path_ids"`
 	// ExpectedCompleteRate は request_lines の「まとめられた割合」(最初の行のあるリクエスト / request_id の数) の閾値 (既定 0.8)。下回ると FORMAT_MISMATCH。
 	ExpectedCompleteRate    float64  `yaml:"-"`
 	ExpectedCompleteRateRaw *float64 `yaml:"expected_complete_rate"`

@@ -111,6 +111,9 @@ func (s *Source) validateLogs() error {
 	if err := s.validateRequest(); err != nil {
 		return err
 	}
+	if err := s.CompilePathIDs(); err != nil {
+		return err
+	}
 	if s.StripPathPrefix != "" {
 		if s.Format != FormatWAFv2 {
 			return fmt.Errorf("strip_path_prefix is only for format wafv2")

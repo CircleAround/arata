@@ -1,6 +1,7 @@
 package config
 
 import (
+	"github.com/CircleAround/arata/internal/pathids"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -88,6 +89,7 @@ func FuzzLoad(f *testing.F) {
 		"sources: [{id: web, kind: cloudwatch-logs, log_group: prod-nginx-access, format: nginx_access, yields: http_access, ingest_delay: 0d}]\n",
 		"name: a\nstore: dir:///tmp/x\nsources: [{id: app, kind: cloudwatch-logs, log_group: prod-app, region: ap-northeast-1, format: request_lines, yields: http_user, request: {id: '\\[(?P<request_id>\\w+)\\]', lines: [{name: s, regex: 'Started (?P<path>\\S+) for (?P<ip>\\S+)'}], user_id: {from: app_line, regex: 'actor kind=(?P<user_kind>[a-z]+) id=(?P<user_id>\\d+)$'}}}]\nprofiles: {daily: {window: 24h, checks: [probe_paths], records: [http_user]}}\n",
 		"name: a\nstore: dir:///tmp/x\nsources: [{id: t, kind: cloudtrail-lookup}]\nprofiles: {hourly: {window: 1h, min_severity: high, checks: [root_usage, ecs_exec]}}\n",
+		"name: a\nstore: dir:///tmp/x\nsources: [{id: web, kind: cloudwatch-logs, log_group: prod-nginx-access, region: ap-northeast-1, format: nginx_access, path_ids: {segments: ['[0-9]{1,20}'], templates: ['/users/:id/profile', '/billing/charges/:id/:any'], formats: [json], max_segments: 8}}]\nprofiles: {daily: {window: 24h, checks: [probe_paths]}}\n",
 		"name: a\nstore: dir:///tmp/x\nsources: [{id: t, kind: cloudtrail-lookup}]\nprofiles: {hourly: {window: 1h, min_severity: info, checks: [root_usage]}}\n",
 		"name: a\nstore: dir:///tmp/x\nsources: [{id: t, kind: cloudtrail-lookup}]\nprofiles: {hourly: {window: 1h, min_severity: '', checks: [root_usage]}}\n",
 		"name: a\nstore: dir:///tmp/x\nsources: [{id: t, kind: cloudtrail-lookup}]\nprofiles: {hourly: {window: 1h, min_severity: ~, checks: [root_usage]}}\n",
@@ -147,6 +149,10 @@ func FuzzLoad(f *testing.F) {
 			}
 			if s.UserIDFrom() != UserIDFromNone {
 				userSources++
+			}
+			// path_ids を受け入れたソースは、検証した規則を持ち、その文は長さの上限に収まる (ADR 0087 の 5 節)
+			if s.PathIDs != nil && (s.PathRules() == nil || s.PathRules().QueryLen() > pathids.MaxQueryLen) {
+				t.Fatalf("path_ids を検証せずに受け入れた: %+v", s.PathIDs)
 			}
 		}
 		for name, p := range cfg.Profiles {
