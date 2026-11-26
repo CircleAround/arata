@@ -30,7 +30,7 @@ func TestIAMChangesSigninDuration(t *testing.T) {
 	}
 	ev(deploy, "", map[string]any{"user_name": "alice", "signin_duration_changed": true, "max_signin_session_duration": 43200})
 	ev(other, "", map[string]any{"user_name": "carol", "signin_duration_changed": true}) // 値の形が違った
-	ev(other, "", map[string]any{"user_name": "dave"})                                    // パスワードだけ
+	ev(other, "", map[string]any{"user_name": "dave"})                                   // パスワードだけ
 	// 同じ Key の 2 回: 新しい方 (先に入れたもの。時刻が新しい) の値を出す
 	ev(other, "", map[string]any{"user_name": "erin", "signin_duration_changed": true, "max_signin_session_duration": 3600})
 	ev(other, "", map[string]any{"user_name": "erin", "signin_duration_changed": true, "max_signin_session_duration": 86400})

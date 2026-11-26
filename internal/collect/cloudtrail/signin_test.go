@@ -91,9 +91,9 @@ func TestNormalizeSigninVariants(t *testing.T) {
 		},
 	}
 	for _, bad := range []string{
-		"arn:aws:signin:ap-northeast-1:123456789012:session/11111111-2222-3333-4444-55555555555",   // 35 文字
-		"arn:aws:signin:ap-northeast-1:123456789012:session/11111111-2222-3333-4444-55555555555X",  // 大文字・16 進でない
-		"arn:aws:signin:ap-northeast-1:12345678901:session/11111111-2222-3333-4444-555555555555",   // 11 桁
+		"arn:aws:signin:ap-northeast-1:123456789012:session/11111111-2222-3333-4444-55555555555",    // 35 文字
+		"arn:aws:signin:ap-northeast-1:123456789012:session/11111111-2222-3333-4444-55555555555X",   // 大文字・16 進でない
+		"arn:aws:signin:ap-northeast-1:12345678901:session/11111111-2222-3333-4444-555555555555",    // 11 桁
 		"arn:aws:signin:ap-northeast-1:123456789012:session/11111111-2222-3333-4444-555555555555\n", // 末尾の改行
 		"arn:aws:iam::123456789012:user/alice",
 	} {
