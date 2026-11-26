@@ -49,6 +49,9 @@ func FuzzNormalizeEvent(f *testing.F) {
 		`{"userIdentity":{"arn":"arn:aws:sts::123456789012:assumed-role/Admin/alice@example.com"}}`,
 		`{"userIdentity":{"type":"IAMUser","arn":"arn:aws:iam::123456789012:user/alice","accountId":"123456789012"},"eventSource":"sts.amazonaws.com","eventName":"AssumeRole","requestParameters":{"roleArn":"arn:aws:iam::111122223333:role/partner-admin","serialNumber":"arn:aws:iam::123456789012:mfa/alice"},"recipientAccountId":"123456789012"}`,
 		`{"eventSource":"sts.amazonaws.com","eventName":"AssumeRole","requestParameters":{"serialNumber":["x"]},"recipientAccountId":"123456789012\n<!here>"}`,
+		deniedAssume(deniedCaller, deniedMsg(deniedCaller, "arn:aws:iam::111122223333:role/none")),
+		deniedAssume(deniedCaller, deniedMsg(deniedCaller, "arn:aws:iam::111122223333:role/none <!here>")),
+		deniedAssume(deniedCaller, `{"m":1}`),
 		`{"userIdentity":{"type":"AssumedRole","arn":"arn:aws:sts::123456789012:assumed-role/gha-deploy/s"},"eventSource":"iam.amazonaws.com","eventName":"UpdateAssumeRolePolicy","requestParameters":{"roleName":"app","policyDocument":"{\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"AWS\":[\"*\",\"111122223333\"]}}]}"}}`,
 		`{"eventSource":"iam.amazonaws.com","eventName":"CreateRole","requestParameters":{"roleName":"app","assumeRolePolicyDocument":{"Statement":{"Effect":"Allow","Principal":{"Federated":["cognito-identity.amazonaws.com",1]}}}}}`,
 		oidcBody(ghProvider, "repo:example-org@1234567/example-repo@7654321:ref:refs/heads/main", "arn:aws:iam::123456789012:role/gha-deploy", ghAgent),
@@ -108,6 +111,12 @@ func FuzzNormalizeEvent(f *testing.F) {
 		}
 		if v, has := e.Data["mfa_serial"]; has && (v != true || !strings.HasPrefix(e.Name, "AssumeRole")) {
 			t.Fatalf("data.mfa_serial が規則に合わない: %v (%s)", v, e.Name)
+		}
+		// 断られた引き受けの引き受け先は、断られた sts の AssumeRole で roleArn が無い記録にだけ付き、ロールの ARN の形
+		if v, has := e.Data["denied_role_arn"]; has {
+			if s, _ := v.(string); !deniedRoleShape.MatchString(s) || e.Name != "AssumeRole" || e.EventSource != "sts.amazonaws.com" || e.ErrorCode == "" || e.Data["role_arn"] != nil {
+				t.Fatalf("data.denied_role_arn が規則に合わない: %q (%s %s %q)", v, e.EventSource, e.Name, e.ErrorCode)
+			}
 		}
 		// 信頼ポリシーから読んだ値 (ADR 0056): UpdateAssumeRolePolicy / CreateRole にだけ付き、trust_policy は ok か unreadable。
 		// unreadable なら `*` 以外の値を持たない。アカウントは 12 桁の数字だけ

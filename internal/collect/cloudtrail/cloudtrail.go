@@ -336,8 +336,10 @@ type rawEvent struct {
 	SourceIPAddress string `json:"sourceIPAddress"`
 	UserAgent       string `json:"userAgent"`
 	ErrorCode       string `json:"errorCode"`
-	ReadOnly        bool   `json:"readOnly"`
-	EventID         string `json:"eventID"`
+	// ErrorMessage は断られた AssumeRole の引き受け先を読むのにだけ使う (文は残さない)。文字列でない値でも記録ごと捨てないように any で受ける
+	ErrorMessage any    `json:"errorMessage"`
+	ReadOnly     bool   `json:"readOnly"`
+	EventID      string `json:"eventID"`
 	// EventCategory は Management / Data / NetworkActivity など (record contents)。trail の S3 では管理イベントだけを使う (ADR 0063)。
 	EventCategory       string         `json:"eventCategory"`
 	RequestParameters   map[string]any `json:"requestParameters"`
@@ -432,6 +434,14 @@ func normalizeRaw(source string, r rawEvent, id string, t *time.Time) (record.Tr
 	if r.EventSource == "sts.amazonaws.com" && strings.HasPrefix(r.EventName, "AssumeRole") {
 		if v, ok := r.RequestParameters["serialNumber"].(string); ok && v != "" {
 			e.Data["mfa_serial"] = true
+		}
+	}
+	// 決定 (設計書 6 章): 断られた AssumeRole は requestParameters が無く、引き受け先は errorMessage の文にしか無い。
+	// roleArn が無いときだけ、決まった形の文から取った引き受け先を denied_role_arn に残す (role_arn とは分ける。成功した引き受けの値として読む他のチェックに混ぜない)
+	if r.EventSource == "sts.amazonaws.com" && r.EventName == "AssumeRole" && r.ErrorCode != "" && e.Data["role_arn"] == nil {
+		msg, _ := r.ErrorMessage.(string)
+		if role, ok := deniedAssumeTarget(msg, r.UserIdentity.ARN); ok {
+			e.Data["denied_role_arn"] = role
 		}
 	}
 	oidcDetail(r, e.Data)

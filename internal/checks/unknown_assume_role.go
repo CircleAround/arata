@@ -199,9 +199,11 @@ type knownDestAgg struct {
 //
 // 決定 (ADR 0047): dest (行き先の既知リストでの状態。外向きのときだけ unknown 以外になる) が approved / expired なら、括弧の中に報告する理由を足す。
 // 既知にした行き先なのに報告が続く理由 (MFA が無い・不明、期限切れ) を、読む人が見出しだけで分かるようにする。
-func assumeSummary(p assumeParties, accountOnly bool, caller, role string, count int, mfa string, dest allowlist.Status) string {
+//
+// 決定 (設計書 6 章): note は、引き受け先を記録の roleArn・resources 以外から取ったときの説明 (targetNotes)。括弧の最後に足す。
+func assumeSummary(p assumeParties, accountOnly bool, caller, role string, count int, mfa string, dest allowlist.Status, note string) string {
 	if p.direction == "" {
-		return fmt.Sprintf("既知リストに無い %s が %s を %d 回引き受け (%s)", caller, role, count, mfaLabels[mfa])
+		return fmt.Sprintf("既知リストに無い %s が %s を %d 回引き受け (%s%s)", caller, role, count, mfaLabels[mfa], note)
 	}
 	who := "自アカウントの " + p.callerLabel
 	switch {
@@ -216,13 +218,54 @@ func assumeSummary(p assumeParties, accountOnly bool, caller, role string, count
 	if p.direction == dirOutbound {
 		target = "外部アカウント " + p.roleAccount + " のロール " + p.roleLabel
 	}
-	return fmt.Sprintf("既知リストに無い%s が%s を %d 回引き受け (%s、%s%s)", who, target, count, dirLabels[p.direction], mfaLabels[mfa], destinationNotes[dest])
+	return fmt.Sprintf("既知リストに無い%s が%s を %d 回引き受け (%s、%s%s%s)", who, target, count, dirLabels[p.direction], mfaLabels[mfa], destinationNotes[dest], note)
+}
+
+// 引き受け先の出どころ (data.role_identity)。requestParameters.roleArn か記録の resources から取れたときは書かない。
+// 決定 (設計書 6 章): 断られた AssumeRole の記録には、どちらも無い。caller_identity (account_only) と同じく、読む人と LLM が取り違えないよう data で区別する。
+const (
+	roleFromErrorMessage = "error_message" // collector が errorMessage の決まった形から取った (data.denied_role_arn)
+	roleNotRecorded      = "not_recorded"  // 記録に無い。Key のロールの部分と role_arn は空のまま (既存の ack との一致と、data の互換を保つ)
+)
+
+// assumeTarget は 1 件の AssumeRole の引き受け先と、その出どころ (role_identity。roleArn・resources から取れたときは空)。
+// denied_role_arn はストアから読み戻した値 (元はログ由来) なので、ロールの ARN の形のときだけ使う。
+func assumeTarget(e record.TrailEvent) (role, identity string) {
+	if role, _ = e.Data["role_arn"].(string); role != "" {
+		return role, ""
+	}
+	if e.Resource != "" {
+		return e.Resource, ""
+	}
+	if r := assumeRoleRe.FindStringSubmatch(dataStr(e.Data, "denied_role_arn")); r != nil && len(r[2]) <= maxAssumeLabel {
+		return r[0], roleFromErrorMessage
+	}
+	return "", roleNotRecorded
+}
+
+// targetNotes は、引き受け先が記録の roleArn・resources から取れなかったときに、見出しの括弧の中へ足す説明。
+// エラーの文から取れるのは断られた記録だけ (collector が errorCode のある記録でだけ取る)。
+var targetNotes = map[string]string{roleFromErrorMessage: "、断られた引き受け。引き受け先はエラーの文から"}
+
+// noTargetSummary は、引き受け先が記録に無いときの見出し。ロールの位置を空にした文 (「X が  を引き受け」) にせず、呼び出し元と混ざらない形にする。
+// 向きは書かない (ロールのアカウントが分からない)。denied は断られた引き受けの数。
+func noTargetSummary(caller string, count, denied int, mfa string) string {
+	note := ""
+	switch {
+	case denied == count:
+		note = "。断られた引き受け"
+	case denied > 0:
+		note = "。断られた引き受けを含む"
+	}
+	return fmt.Sprintf("既知リストに無い %s の引き受け %d 回 (引き受け先は記録に無い%s、%s)", caller, count, note, mfaLabels[mfa])
 }
 
 // assumeAgg は Key ごとの集計に、向きと MFA の判定に要る値を足したもの。
 type assumeAgg struct {
 	*eventAgg
 	caller, role string
+	identity     string // 引き受け先の出どころ (role_identity)
+	denied       int    // 断られた (errorCode のある) 引き受けの数
 	kind         record.PrincipalKind
 	recipients   map[string]bool
 	mfa          map[string]bool
@@ -246,23 +289,25 @@ func (c UnknownAssumeRole) Evaluate(ctx context.Context, q store.Query, w collec
 		if status == allowlist.StatusApproved {
 			continue
 		}
-		role, _ := e.Data["role_arn"].(string)
-		if role == "" {
-			role = e.Resource
-		}
+		role, identity := assumeTarget(e)
 		k := e.PrincipalARN + "->" + role
 		a, ok := aggs[k]
 		if !ok {
-			a = &assumeAgg{eventAgg: newEventAgg(), caller: e.PrincipalARN, role: role, kind: e.PrincipalKind,
+			a = &assumeAgg{eventAgg: newEventAgg(), caller: e.PrincipalARN, role: role, identity: identity, kind: e.PrincipalKind,
 				recipients: map[string]bool{}, mfa: map[string]bool{}, services: map[string]bool{}}
 			a.extra["caller"] = e.PrincipalARN
 			a.extra["caller_kind"] = string(e.PrincipalKind)
+			// 引き受け先が記録に無いときも role_arn は空文字で残す (data の項目を消すのは互換を壊す変更。ADR 0054)。無いことは role_identity で示す
 			a.extra["role_arn"] = role
 			a.extra["allowlist_status"] = string(status)
 			// 決定 (設計書 6 章): 呼び出し元がアカウントしか分からないとき (ロール側の記録) は caller_identity: account_only を足す。
 			// caller と Key は ARN (`...:root`) のまま。caller_kind は主体の種類の語彙のまま (approve が種類として読む)
 			markAccountOnly(a.extra, "caller_identity", e.PrincipalARN, e.PrincipalKind)
 			aggs[k] = a
+		}
+		// 同じ Key でも、roleArn から取れた記録とエラーの文から取れた記録が混ざりうる。1 件でも roleArn・resources から取れたら、出どころは書かない
+		if identity == "" {
+			a.identity = ""
 		}
 		a.add(e.Time, e.Name, e.IP)
 		a.uses = append(a.uses, tr.note(e))
@@ -273,6 +318,7 @@ func (c UnknownAssumeRole) Evaluate(ctx context.Context, q store.Query, w collec
 		}
 		if e.ErrorCode != "" {
 			a.extra["has_errors"] = true
+			a.denied++
 		}
 	}
 	// 決定 (ADR 0081): OIDC で入ったセッションから先の引き受けに、1 段目の手がかりを付ける (判定には使わない)
@@ -283,6 +329,9 @@ func (c UnknownAssumeRole) Evaluate(ctx context.Context, q store.Query, w collec
 	known := map[string]*knownDestAgg{}
 	for k, a := range aggs {
 		// 受け取ったアカウントがイベントによって違うなら向きを決めない (1 つの証跡なら同じ値になる)
+		if a.identity != "" {
+			a.extra["role_identity"] = a.identity
+		}
 		var p assumeParties
 		if len(a.recipients) == 1 {
 			for recipient := range a.recipients {
@@ -332,11 +381,15 @@ func (c UnknownAssumeRole) Evaluate(ctx context.Context, q store.Query, w collec
 		if accountOnly {
 			caller = record.AccountOnlyLabel(acct)
 		}
+		summary := assumeSummary(p, accountOnly, caller, a.role, a.count, mfa, destStatus, targetNotes[a.identity])
+		if a.identity == roleNotRecorded {
+			summary = noTargetSummary(caller, a.count, a.denied, mfa)
+		}
 		obs[k] = Observation{
 			Check:    c.Name(),
 			Key:      k,
 			Severity: High,
-			Summary:  assumeSummary(p, accountOnly, caller, a.role, a.count, mfa, destStatus),
+			Summary:  summary,
 			// 決定: Fingerprint は変えない (向きは Key から決まる。MFA を足すと既存の finding が一斉に changed になる)
 			Fingerprint: fingerprint(High, a.ips, a.extra["allowlist_status"]),
 			Data:        a.data(),
