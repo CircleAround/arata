@@ -98,3 +98,22 @@ func TestUserChecksOverrides(t *testing.T) {
 		}
 	}
 }
+
+// 3xx を拒否に数えるには、ソースがメソッドを取り出す必要がある (GET と HEAD だけ数えるため)。取り出さないソースでは 3xx が黙って 0 になるので誤りにする。
+func TestUserChecksRedirectsNeedMethod(t *testing.T) {
+	noMethod := strings.Replace(railsRequest, `Started (?P<method>[A-Z]+) "`, `Started [A-Z]+ "`, 1)
+	body := logsSource(noMethod+userBlock("app_line", actorRegex)+pathIDsBlock) + "checks:\n  user_id_enumeration:\n    sources: [web]\n    denied_statuses: [403, 302]\n"
+	_, err := Load(write(t, body))
+	if err == nil || !strings.Contains(err.Error(), "method") || !strings.Contains(err.Error(), "302") || !strings.Contains(err.Error(), "request.lines") {
+		t.Fatalf("err = %v", err)
+	}
+	// 3xx を書かなければ、メソッドが無くてもよい
+	body = logsSource(noMethod+userBlock("app_line", actorRegex)+pathIDsBlock) + "checks:\n  user_id_enumeration:\n    sources: [web]\n"
+	if _, err := Load(write(t, body)); err != nil {
+		t.Fatal(err)
+	}
+	// メソッドを取り出すソースなら 3xx を書ける
+	if _, err := Load(write(t, userChecksConfig("  user_id_enumeration:\n    sources: [web]\n    denied_statuses: [403, 302]\n"))); err != nil {
+		t.Fatal(err)
+	}
+}

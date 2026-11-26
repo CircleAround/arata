@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -175,7 +176,40 @@ func (c *Config) validateUserSources() error {
 				return fmt.Errorf("%s: sources: source %q must be a cloudwatch-logs request_lines source with request.user_id (from: %s)",
 					x.name, id, strings.Join([]string{UserIDFromAppLine, UserIDFromDebugSQL}, " or "))
 			}
+			// 決定 (レビューの指摘): 3xx は GET と HEAD のときだけ拒否に数えるので、メソッドを取り出さないソースでは 1 件も数えられない。黙って 0 にせず誤りにする
+			if ue := c.Checks.UserIDEnumeration; x.name == "user_id_enumeration" && ue.CountsRedirects() && !s.extractsMethod() {
+				return fmt.Errorf("%s: denied_statuses has %s, which counts only for GET and HEAD, but source %q does not extract the method: "+
+					"add (?P<method>...) to one of its request.lines regexes, or remove the 3xx from denied_statuses", x.name, redirectList(ue.DeniedStatuses), id)
+			}
 		}
 	}
 	return nil
+}
+
+// redirectList は l の中の 3xx (書いた順)。
+func redirectList(l []int) string {
+	var out []string
+	for _, v := range l {
+		if IsRedirect(v) {
+			out = append(out, strconv.Itoa(v))
+		}
+	}
+	return strings.Join(out, ", ")
+}
+
+// extractsMethod は request_lines のソースが、どれかの行の種類でメソッドを取り出すか。
+func (s Source) extractsMethod() bool {
+	if s.Request == nil {
+		return false
+	}
+	groups, err := s.Request.Groups()
+	if err != nil {
+		return false
+	}
+	for _, g := range groups {
+		if containsString(g, "method") {
+			return true
+		}
+	}
+	return false
 }

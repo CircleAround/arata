@@ -553,7 +553,8 @@ auth result=success|failure|impersonate kind=user id=42|none [via=password|remem
   この run に `http_user` の要るチェックがあるときだけ (暗黙の既定を持たない。ADR 0014)。U1 は `user_denied` か `user_path_breadth` (`path_ids` のあるソース)、
   U2 は `user_id_enumeration` (`path_ids` のあるソース) が要るとき。`path_ids` が無ければ U1 は拒否の件数だけを数える
 - **集計の条件** (`sources`・`user_denied.statuses`・`user_id_enumeration.success_statuses`・`denied_statuses`・各 `store_min`・`store_top`) は、日の値の形を決めるので overrides では変えられない。
-  `user_denied.statuses` は 4xx・5xx だけ (3xx は誤り)。`denied_statuses` は 4xx・5xx と 301・302・303・307・308 で、3xx は GET と HEAD のときだけ拒否に数える (ADR 0087 の 7 節)
+  `user_denied.statuses` は 4xx・5xx だけ (3xx は誤り)。`denied_statuses` は 4xx・5xx と 301・302・303・307・308 で、3xx は GET と HEAD のときだけ拒否に数える (ADR 0087 の 7 節)。
+  3xx を書くなら、`sources` のソースは `request.lines` でメソッドを取り出す必要がある (取り出さなければ 3xx が 1 件も数えられないので `config check` の誤り)
 - **クエリ**: 範囲の中の UTC の 1 日ずつ流す (行の上限が 1 日ごとにかかる)。request_lines の 1 段目 (request_id のまとめ) の後に 2 段の `stats`。
   - U1: 2 段目 (日, 利用者, 型) → 3 段目 (日, 利用者)。`拒否の件数 + 型の数` の降順、`limit 10000`
   - U2: 1 段目に対象 ID の列を足し、2 段目 (日, 利用者, 型, 対象 ID) → 3 段目 (日, 利用者, 型)。異なる ID の数の降順、`limit 10000`
@@ -581,7 +582,7 @@ auth result=success|failure|impersonate kind=user id=42|none [via=password|remem
 - 決定: 型に `|` を含む区間は `:x` に伏せる (key の区切り。2-6)
 - doctor の費用の行 (ADR 0028) の本数 (`QueryCount`) に U1・U2 が入る。費用の見積もりは ADR 0087 の 3 節
 - 未確認 (実データで確かめる。PR の本文に方法): stats の後の `parse`・`fields concat(coalesce(…))`・`fields <列> + <列>`・`filter not ispresent(…)`、
-  2 段目の `latest(<印>)` と 3 段目の `count(<列>)` の組、`by` の軸の値の無い組 (型の無いリクエスト) の扱い、3 段の stats の 2 段目の中間の結果の大きさの上限 (1 日分)
+  2 段目の `latest(<印>)` と 3 段目の `count(<列>)` の組、`by` の軸の値の無い組 (型の無いリクエスト) の扱い (1 つの組にまとまり、U1 の拒否の件数にはその組も入り、`count(tpl)` には入らないこと)、3 段の stats の 2 段目の中間の結果の大きさの上限 (1 日分)
 
 ### 2-3. ALB のアクセスログから http_access を取る (提案。未実装・未確認)
 
