@@ -65,7 +65,7 @@
 - public_exposure (外部に開く設定変更) は deploy タグの主体でも重大度を下げていない (`known_deploy_principal` は事実として添える)。
   `exposure` (開いた中身) と `target` を根拠にし、weekly の access_analyzer・posture の同じ資源の指摘とまとめる
 - principal_new_source (既知の主体の初めての送信元・リージョン) はアクセスキー・セッションの漏洩の典型。`new_sources` の `ips` と `new_regions` を根拠にし、
-  同じ主体の access_denied・secret_access・iam_changes とまとめる (high は拒否の急増と同時)。送信元の国・事業者は arata が判定していないので、断定せず人への確認事項にする
+  同じ主体の access_denied・secret_access・iam_changes とまとめる (high は拒否の急増と同時)。送信元の国・事業者は arata が判定していないので、断定せず人への確認事項にする。signin_session の high (aws login の同じセッションがふだん使わない送信元に移った。`new_prefixes`) も同じ主体の指摘とまとめ、`cli_versions` は正規の根拠にしない
 - secret_access (秘匿値の読み取りの異常) の `bulk: true` は持ち出しの兆候。読まれた秘匿値は漏洩したものとして扱う前提で書く。
   data にあるのは名前 / ARN だけ (値は CloudTrail にも arata にも無い)。調べるために値を読みに行くことを勧めない
 - endpoint_abuse (画面への分散した集中・「A のあと B」の連鎖) は事実として書く: 画面の名前・時間幅 (UTC)・件数・異なり IP・ふだんの上限 (`baseline_p99_*`)・同じ UA の IP 数。

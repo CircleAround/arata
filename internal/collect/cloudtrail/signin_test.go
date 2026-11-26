@@ -8,8 +8,12 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/cloudtrail/types"
 
+	"github.com/CircleAround/arata/internal/allowlist"
+	"github.com/CircleAround/arata/internal/checks"
 	"github.com/CircleAround/arata/internal/collect"
+	"github.com/CircleAround/arata/internal/config"
 	"github.com/CircleAround/arata/internal/record"
+	"github.com/CircleAround/arata/internal/store"
 )
 
 // aws login のログインのセッション (ADR 0092 の 1 節)。形は背景の「実際の記録で分かった形」のとおり。値は架空。
@@ -213,5 +217,40 @@ func TestNormalizeUpdateLoginProfileDuration(t *testing.T) {
 				t.Errorf("signin_duration_changed = %v, want %v", got, tc.changed)
 			}
 		})
+	}
+}
+
+// collector が残した出し直しの記録を、ストアに入れて読み戻しても、signin_session のチェックが同じ値で読める (ADR 0092)。
+// 平常帯の無いストア (導入直後) で、lookback の中に記録の無いセッションの出し直しは、平常帯の外なので high を medium に下げて出す
+func TestSigninRoundTripThroughStore(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	day := time.Date(2026, 11, 26, 0, 0, 0, 0, time.UTC)
+	fake := &Fake{Pages: [][]types.Event{{ev("e-signin", day.Add(time.Hour), signinRefresh)}}}
+	c, _, _ := testCollector("trail", RegionClient{Region: "ap-northeast-1", API: fake})
+	sink := &captured{}
+	w := collect.Window{From: day, To: day.Add(24 * time.Hour)}
+	if err := c.Collect(ctx, w, sink); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.events) != 1 {
+		t.Fatalf("events: %d", len(sink.events))
+	}
+	if err := st.InsertEvent(ctx, sink.events[0]); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.DefaultChecks().SigninSession
+	cfg.SessionLookback = "3d"
+	obs, err := checks.SigninSession{Config: cfg}.Evaluate(ctx, st, w, &allowlist.List{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(obs) != 1 || obs[0].Severity != checks.Medium || obs[0].Key != "arn:aws:iam::123456789012:user/alice|"+signinUUID+"|new_prefix" ||
+		obs[0].Data["signin_client"] != "same-device" || obs[0].Data["first_outside_lookback"] != true || obs[0].Data["baseline_short"] != true {
+		t.Fatalf("observations: %+v", obs)
 	}
 }

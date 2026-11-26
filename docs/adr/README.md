@@ -114,4 +114,4 @@
 | [0089](0089-user-kind-mismatch.md) | ログインしている種類の組のどれもふだん使わない (ほかの種類がふだん使う) パスの型への要求を報告する (`user_kind_mismatch`。成功は high)。actor の行はログインしている scope ごとに 1 行で、0071 の利用者は最後の行の組のまま | 採用 |
 | [0090](0090-baseline-collected-days.md) | 平常帯の中央値は、そのソースを収集した日 (CloudTrail は収集し終えた日、アクセスログは `lines_total` のある日。どちらも値のある日を足す) だけで取る。収集していない日は数えず、収集した日で値の無い日は 0。導入直後の扱いは各チェックのまま | 採用 |
 | [0091](0091-ecs-exec-usual-shape.md) | ECS Exec (`ecs_exec`) は、その主体の「いつもの形」(クラスター × コンテナ・1 日の回数・MFA・送信元の種類) に収まり、同じ日にほかの普通でない指摘が無いときだけ low に下げる (AWS の IP の範囲は一覧を加工して同梱する) | 提案 |
-| [0092](0092-signin-session.md) | `aws login` の出し直し (`CreateOAuth2Token`) を残し、同じログインのセッションの出し直しが、そのセッションでも主体の平常帯でも知らない /24 から来たら high (`signin_session`)。セッションの数・失敗は low。サインインの長さの変更は iam_changes で medium (デプロイの主体でも下げない) | 提案 |
+| [0092](0092-signin-session.md) | `aws login` の出し直し (`CreateOAuth2Token`) を残し、同じログインのセッションの出し直しが、そのセッションでも主体の平常帯でも知らない /24 から来たら high (`signin_session`)。セッションの数・失敗は low。サインインの長さの変更は iam_changes で medium (デプロイの主体でも下げない) | 採用 |
