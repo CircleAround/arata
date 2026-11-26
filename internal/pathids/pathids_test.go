@@ -122,6 +122,7 @@ func TestSanitize(t *testing.T) {
 		"/orders/:id":             "/orders/:x",
 		"/orders/?x":              "/orders/:x",
 		"/orders/a\x1bb":          "/orders/:x",
+		"/a|b/?id":                "/:x/:id", // | は日の値の key の区切り
 		"/orders/a b":             "/orders/:x",
 		"/orders/\xff":            "/orders/:x",
 		"/orders/a%40example.com": "/orders/:x",

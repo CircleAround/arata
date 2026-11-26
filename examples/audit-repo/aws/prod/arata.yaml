@@ -277,6 +277,21 @@ checks:
     min_impact_usd: 10                           # 影響額 (USD) がこれ未満は割合が大きくても報告しない (1 USD → 5 USD の +400% のような誤報を防ぐ)。問い合わせの絞り込みにも使う
     medium_impact_ratio: 0.5                     # 予想に対する増加の割合 (影響額 / 予想額) がこれ以上で medium (0.5 = 予想の 1.5 倍)。固定の金額ではなく比で見る
     high_impact_ratio: 1                         # これ以上で high (1.0 = 予想の 2 倍)
+  user_denied:
+    sources: []                                  # 数えるソースの id (request_lines で request.user_id のあるもの)。空なら数えない (Logs Insights も流さない)。集計条件
+    statuses: [401, 403]                         # 拒否として数えるステータス (4xx・5xx。3xx は書けない)。集計条件
+    store_min: 3                                 # ストアに残す利用者の日の件数の下限。集計条件
+    store_top: 200                               # 日ごとに残す利用者の数 (件数の多い順)。集計条件
+  user_id_enumeration:
+    sources: []                                  # 数えるソースの id (path_ids も要る)。空なら数えない。集計条件
+    success_statuses: [200]                      # 成功として数えるステータス。集計条件
+    denied_statuses: [401, 403, 404]             # 拒否として数えるステータス。拒否を転送で返すアプリは 302 などを足せる (GET と HEAD だけ数える)。集計条件
+    store_min: 5                                 # ストアに残す (利用者, 型) の日の異なる ID の数の下限。集計条件
+    store_top: 200                               # 日ごとに残す (利用者, 型) の数 (異なる ID の多い順)。集計条件
+  user_path_breadth:
+    sources: []                                  # 数えるソースの id (path_ids も要る)。空なら数えない。集計条件
+    store_min: 20                                # ストアに残す利用者の日の型の数の下限。集計条件
+    store_top: 200                               # 日ごとに残す利用者の数 (型の多い順)。集計条件
   credential_hygiene:
     unused_days: 90                              # アクセスキーを未使用とみなす日数 (最終使用、使われていなければ作成・ローテーションから)
   posture:

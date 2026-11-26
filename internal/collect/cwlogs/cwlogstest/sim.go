@@ -53,6 +53,8 @@ var (
 	ifExpr      = regexp.MustCompile(`^fields if\((.+), "([^"]*)", ([A-Za-z_]\w*)\) as (\S+)$`)
 	coalesceIf  = regexp.MustCompile(`^fields coalesce\((\S+), if\((\S+) > 0, "([^"]*)", ""\)\) as (\S+)$`)
 	presentExpr = regexp.MustCompile(`^filter ispresent\((\S+)\)$`)
+	absentExpr  = regexp.MustCompile(`^filter not ispresent\((\S+)\)$`)
+	sortLine    = regexp.MustCompile(`^sort (\S+) desc$`)
 	inExpr      = regexp.MustCompile(`^filter (\S+) in \[("[^"\\]*"(?:, "[^"\\]*")*)\]$`)
 	inItem      = regexp.MustCompile(`^"([^"\\]*)"$`)
 )
@@ -118,7 +120,7 @@ func (s *Sim) Rows(query string, from, to time.Time, filter func(map[string]stri
 	}
 	firstStats, userFilter := -1, -1
 	limit := -1
-	sortBy := ""
+	sortBy, sortField := "", ""
 	seenStats := 0
 	for _, line := range lines {
 		switch {
@@ -149,7 +151,7 @@ func (s *Sim) Rows(query string, from, to time.Time, filter func(map[string]stri
 				if !ok {
 					continue
 				}
-				if !strings.Contains(a, "(") {
+				if !strings.Contains(a, "(") && !strings.Contains(a, " + ") {
 					a, b := a, b
 					define(b)
 					ops = append(ops, each(func(r simRow) {
@@ -194,6 +196,12 @@ func (s *Sim) Rows(query string, from, to time.Time, filter func(map[string]stri
 		case presentExpr.MatchString(line):
 			name := presentExpr.FindStringSubmatch(line)[1]
 			ops = append(ops, keep(func(f map[string]string) bool { return f[name] != "" }))
+		case absentExpr.MatchString(line):
+			name := absentExpr.FindStringSubmatch(line)[1]
+			ops = append(ops, keep(func(f map[string]string) bool { return f[name] == "" }))
+		case sortLine.MatchString(line) && seenStats == nStats && seenStats > 0:
+			// 最後の stats の後の sort は、その項目の降順 (書かなければ最後の stats の最初の集計の降順)
+			sortField = sortLine.FindStringSubmatch(line)[1]
 		case inExpr.MatchString(line):
 			m := inExpr.FindStringSubmatch(line)
 			set := map[string]bool{}
@@ -266,6 +274,9 @@ func (s *Sim) Rows(query string, from, to time.Time, filter func(map[string]stri
 	out := make([]map[string]string, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, r.f)
+	}
+	if sortField != "" {
+		sortBy = sortField
 	}
 	if sortBy != "" {
 		sort.SliceStable(out, func(i, j int) bool { return num(out[i][sortBy]) > num(out[j][sortBy]) })

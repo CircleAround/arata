@@ -1,10 +1,13 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/CircleAround/arata/internal/pathids"
 )
 
 // checkOut は config check の標準出力から一時ディレクトリを伏せたもの (ゴールデン用)。
@@ -180,5 +183,66 @@ func TestConfigCheckShowsRelativePaths(t *testing.T) {
 	want := "ok    config.yaml: name acme, sources 1, profiles 3\nng    allowlist.yaml:2: principals[0]: expires \"2027/03/31\": want YYYY-MM-DD\n"
 	if c.stdout.String() != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", c.stdout, want)
+	}
+}
+
+// 利用者ごとのチェックのクエリ (U1・U2。ADR 0087) が Logs Insights の文の上限を超える設定は、AWS に繋がずに ng にする。値はすべて架空。
+func TestConfigCheckLongUserQuery(t *testing.T) {
+	c := newCLI(t)
+	c.offline()
+	segs := []string{`[0-9]{1,20}`, `[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`}
+	var tpls []string
+	for i := 0; i < pathids.MaxTemplates; i++ {
+		try := append(append([]string{}, tpls...), fmt.Sprintf("/section%02d/:id/detail/:any/x", i))
+		if _, err := pathids.Compile(pathids.Rules{Segments: segs, Templates: try, MaxSegments: 12}); err != nil {
+			break
+		}
+		tpls = try
+	}
+	pad := strings.Repeat(`(?:x)?`, 75)
+	c.writeConfig(fmt.Sprintf(`
+name: acme
+store: dir://%s/store
+aws:
+  region: ap-northeast-1
+sources:
+  - id: trail
+    kind: cloudtrail-lookup
+  - id: web
+    kind: cloudwatch-logs
+    log_group: prod-app
+    format: request_lines
+    request:
+      id: '(?:^| -- : )\[(?P<request_id>[A-Za-z0-9_@-]{1,255})\] '
+      lines:
+        - name: started
+          regex: 'Started (?P<method>[A-Z]+) "(?P<path>[^"?]*)[^"]*" for (?P<ip>\S+) at '
+        - name: completed
+          regex: 'Completed (?P<status>\d{3}) '
+        - name: ua
+          regex: 'UA %s(?P<ua>\S+)'
+        - name: duration
+          regex: 'Duration %s(?P<duration>[0-9.]+)'
+      user_id:
+        from: app_line
+        regex: ' -- : \[[A-Za-z0-9_@-]{1,255}\] actor kind=(?P<user_kind>[a-z_]{1,32}) id=(?P<user_id>[A-Za-z0-9_-]{1,64})(?: by=(?P<by_kind>[a-z_]{1,32}):(?P<by_id>[A-Za-z0-9_-]{1,64}))?$'
+    path_ids:
+      segments: ['%s']
+      templates: ['%s']
+      max_segments: 12
+profiles:
+  daily:
+    window: 24h
+    checks: [root_usage]
+audit_account: none
+checks:
+  user_id_enumeration:
+    sources: [web]
+`, c.dir, pad, pad, strings.Join(segs, "', '"), strings.Join(tpls, "', '")))
+	if code := c.run("config", "check", "-c", c.cfg); code != 2 {
+		t.Fatalf("exit %d\n%s%s", code, c.stdout, c.stderr)
+	}
+	if out := c.stdout.String(); !strings.Contains(out, "source web") || !strings.Contains(out, "user_ids") || !strings.Contains(out, "characters") {
+		t.Fatalf("stdout:\n%s", out)
 	}
 }

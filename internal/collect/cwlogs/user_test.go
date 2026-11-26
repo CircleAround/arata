@@ -306,7 +306,7 @@ func TestUserForgedLines(t *testing.T) {
 	}
 
 	// リクエスト単位の中間の形 (1 段目の結果)。段 1 のチェック (次の PR) は、この列を 2 段目の軸や条件に使う
-	q := col.Profile().head("1d", "day", "", nil, false, false, true, false) +
+	q := col.Profile().head("1d", "day", "", nil, false, false, true, noPaths) +
 		"\n| stats sum(rl_starts) as n by day, ip, path, status, user_kind, user_id, by_kind, by_id, auth_result"
 	rows := (&cwlogstest.Sim{Events: ev}).Rows(q, userWindow.From, userWindow.To, nil)
 	var got []string

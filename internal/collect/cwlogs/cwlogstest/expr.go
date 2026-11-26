@@ -1,6 +1,7 @@
 package cwlogstest
 
 import (
+	"strconv"
 	"strings"
 )
 
@@ -10,6 +11,7 @@ import (
 //   - if の分岐は定数の文字列か、分岐が定数の if だけ (本物は stats の後で else の項目を null にした。stats の前でも頼らない)。条件は ispresent(<項目>) だけ
 //   - concat に無い項目を渡さない (本物の null の扱いを確かめていない)。coalesce か if を通す
 //   - coalesce は最初の「ある」値 (空の文字列もある値)
+//   - `<項目> + <項目>` は数の和 (U1 の sort の順。片方が無ければ値なし)
 type simExpr struct {
 	fn   string // "" なら lit / field
 	lit  *string
@@ -25,6 +27,9 @@ func parseExpr(s string) *simExpr {
 		}
 		v := s[1 : len(s)-1]
 		return &simExpr{lit: &v}
+	}
+	if a, b, ok := strings.Cut(s, " + "); ok && !strings.Contains(s, "(") {
+		return &simExpr{fn: "+", args: []*simExpr{parseExpr(a), parseExpr(b)}}
 	}
 	open := strings.IndexByte(s, '(')
 	if open < 0 {
@@ -84,6 +89,15 @@ func (e *simExpr) eval(f map[string]string) (string, bool) {
 		return v, ok
 	}
 	switch e.fn {
+	case "+":
+		a, okA := e.args[0].eval(f)
+		b, okB := e.args[1].eval(f)
+		if !okA || !okB {
+			return "", false
+		}
+		x, _ := strconv.ParseFloat(a, 64)
+		y, _ := strconv.ParseFloat(b, 64)
+		return strconv.FormatFloat(x+y, 'f', -1, 64), true
 	case "concat":
 		var b strings.Builder
 		for _, a := range e.args {

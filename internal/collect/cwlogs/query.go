@@ -57,7 +57,7 @@ func HTTPLinesQuery(p Profile, c config.Checks) string {
 		marks = append(marks, mark{"probe_path", func(name string) string { return "^(?<" + name + ">" + strings.Join(alts, "|") + ")" }})
 		group = ", status, probe_path"
 	}
-	b.WriteString(p.head("1d", "day", "", marks, true, false, true, false))
+	b.WriteString(p.head("1d", "day", "", marks, true, false, true, noPaths))
 	if p.req != nil {
 		// request_lines: 1 段目の結果 (request_id ごとの 1 行) を、日・status・探索パス・最初の行の数で数える。
 		// 行数は 1 段目で数えた行数の和。行の種類ごとの当たった数も返す (doctor 用)
@@ -117,7 +117,7 @@ func HTTPHitsQuery(p Profile, c config.Checks) string {
 		marks = append(marks, mark{"probe_ex", func(name string) string { return "^(?<" + name + ">" + prefixAlternation(pp.ExcludePaths) + ")" }})
 		group += ", probe_ex"
 	}
-	b.WriteString(p.head("1d", "day", cond, marks, false, false, false, false))
+	b.WriteString(p.head("1d", "day", cond, marks, false, false, false, noPaths))
 	b.WriteString("\n| stats " + p.count() + " as " + httpHits + " by " + p.binBy("1d", "day") + group)
 	b.WriteString("\n| sort " + httpHits + " desc")
 	b.WriteString("\n| limit " + strconv.Itoa(MaxRows))

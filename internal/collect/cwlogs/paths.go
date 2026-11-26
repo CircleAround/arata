@@ -58,7 +58,7 @@ func PathTemplatesQuery(p Profile) string {
 	}
 	var b strings.Builder
 	users := p.req != nil && p.req.hasUserField("user_id")
-	b.WriteString(p.head("1d", "day", "", nil, false, false, users, true))
+	b.WriteString(p.head("1d", "day", "", nil, false, false, users, withTemplate))
 	switch {
 	case p.req == nil:
 		b.WriteString("\n| filter ispresent(" + pathids.TemplateField + ")")

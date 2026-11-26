@@ -56,7 +56,7 @@ var equivPaths = []string{
 	"/users/taro/profile", "/users/taro/profile.json", "/users/taro", "/users//profile",
 	"/shops/7/items/31", "/shops/7/items/31/x", "/billing/charges/42/202611", "/billing/charges/42/2026-11",
 	"/reports/weekly", "/reports/", "/a/b/c/d", "/a/b/c/d/e", "/a/1/c/2/3/4", "/a/b/c/d/", "//", "///1",
-	"/u/alice@example.com/orders", "/t/abcdefgh12345678", "/orders/:id", "/orders/?id", "/orders/…",
+	"/u/alice@example.com/orders", "/t/abcdefgh12345678", "/orders/:id", "/orders/?id", "/orders/…", "/a|b/1",
 	"/orders//42", "/orders/42\n/x", "/o\x00/1", "/日本/42",
 }
 
@@ -99,7 +99,7 @@ func checkTemplate(t testing.TB, c *Compiled, p, tpl string, ids []string) {
 		}
 		return
 	}
-	if !strings.HasPrefix(tpl, "/") || strings.ContainsAny(tpl, "?#") {
+	if !strings.HasPrefix(tpl, "/") || strings.ContainsAny(tpl, "?#|") {
 		t.Fatalf("%q: template %q", p, tpl)
 	}
 	segs := strings.Split(tpl[1:], "/")
