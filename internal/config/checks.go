@@ -59,12 +59,13 @@ type Baseline struct {
 	Factor       float64 `yaml:"factor"`        // 既定 3
 	MinCount     float64 `yaml:"min_count"`     // 平常帯の下限 (中央値 0 の IP でもこの件数までは鳴らさない)
 	// MinBaselineDays は「初出」判定に必要な、データのある過去日数 (導入直後に全部が初出になるのを防ぐ)。既定 7。
+	// 中央値は baseline_days のうち、ソースを収集した日だけで取る (収集した日で値の無い日は 0。ADR 0090)。
 	MinBaselineDays int `yaml:"min_baseline_days"`
 }
 
 // OIDCAssumeRole は oidc_assume_role (OIDC でのロールの引き受け) の設定 (ADR 0055)。
 // 既知リスト (oidc_subjects) との比較に設定は無い。ここにあるのは、既知の組の回数を比べる平常帯だけ:
-// その組自身の直近 baseline_days 日の日次の回数 (成功した引き受け。無い日は 0) の中央値 × factor。ただし min_count を下限にする。
+// その組自身の直近 baseline_days 日のうち CloudTrail を収集した日の日次の回数 (成功した引き受け。収集した日で無い日は 0。ADR 0090) の中央値 × factor。ただし min_count を下限にする。
 // min_baseline_days は判定に要る、CloudTrail を収集し終えた過去日数 (それ未満の間は回数を判定しない)。
 type OIDCAssumeRole struct {
 	Baseline Baseline `yaml:",inline"`

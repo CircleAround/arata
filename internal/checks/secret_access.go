@@ -26,7 +26,8 @@ import (
 //     「秘匿値を読んだことがある」は復号した読み取りか、with_decryption の無い (以前の版で集めた) ssm の読み取り。
 //     CloudTrail を収集し終えた過去日 (collectedDays。活動の有無ではない) が min_baseline_days 未満の間 (導入直後) は初出を報告しない
 //   - 一括読み出し: 窓の異なる秘匿値の数が max(min_distinct, 中央値 × factor) を超える → high (持ち出しの兆候)。
-//     平常帯は窓の始まりの日の前日から baseline_days 日の、その主体自身の日ごとの異なり数 (無い日は 0) の中央値。導入直後でも判定する
+//     平常帯は窓の始まりの日の前日から baseline_days 日のうち CloudTrail を収集した日 (収集し終えた日と記録のある日。ADR 0090) の、
+//     その主体自身の日ごとの異なり数 (収集した日で読んでいない日は 0) の中央値。導入直後でも判定する
 //   - allowlist の secrets_access に書いた秘匿値は初出に数えない (一括読み出しの数には数える)
 //   - 主体ごとに 1 件 (重い方の重大度)。allowlist で承認済みでも下げない (承認は「居ること」を認めるもので、何でも読んでよいではない)
 //   - 決定 (ADR 0073): secrets_access の bulk: exempt の項目に一致する秘匿値は、一括読み出しの数から外す (窓と平常帯の両側)。
@@ -315,6 +316,11 @@ func (c SecretAccess) Evaluate(ctx context.Context, q store.Query, w collect.Win
 		}
 	}
 	firstReads := withData >= b.MinBaselineDays
+	// ADR 0090: 一括読み出しの平常帯は、収集した日 (収集し終えた日と記録のある日) だけで取る
+	baseDays, err := trailBaselineDays(ctx, q, bds, past)
+	if err != nil {
+		return nil, err
+	}
 	var serviceRoles map[string]bool
 	var issued map[string][]issuance
 	within := b.BulkExemptWithinDuration()
@@ -400,8 +406,7 @@ func (c SecretAccess) Evaluate(ctx context.Context, q store.Query, w collect.Win
 			}
 		}
 		exempted := patMatched - len(unmatched)
-		vals := make([]float64, 0, len(bds))
-		for _, bd := range bds {
+		vals := collectedVals(bds, baseDays, func(bd string) float64 {
 			n := 0
 			for s := range daily[arn][bd] {
 				if applyExempt {
@@ -411,8 +416,8 @@ func (c SecretAccess) Evaluate(ctx context.Context, q store.Query, w collect.Win
 				}
 				n++
 			}
-			vals = append(vals, float64(n))
-		}
+			return float64(n)
+		})
 		med := median(vals)
 		thr := med * b.Factor
 		if thr < float64(b.MinDistinct) {
@@ -584,8 +589,16 @@ const TrailCollectedStat = "trail_collected"
 // 印の無い run (CloudTrail を引かないプロファイル・CloudTrail の収集に失敗した run・日次集計を出す前の版の run) は数えない
 // (版を上げた既存のストアで、日次集計の無い過去を「活動なし」とみなして全部の送信元を新しいとしないため)。
 func collectedDays(ctx context.Context, q store.Query, dates []string) (int, error) {
+	set, err := trailCollectedSet(ctx, q, dates)
+	return len(set), err
+}
+
+// trailCollectedSet は dates のうち、arata が CloudTrail を収集し終えた日の集合 (数え方は collectedDays)。
+// 平常帯の中央値に入れる日 (ADR 0090) は、これに記録のある日を足したもの (trailBaselineDays)。
+func trailCollectedSet(ctx context.Context, q store.Query, dates []string) (map[string]bool, error) {
+	set := map[string]bool{}
 	if len(dates) == 0 {
-		return 0, nil
+		return set, nil
 	}
 	lo := dates[0]
 	for _, d := range dates {
@@ -595,7 +608,7 @@ func collectedDays(ctx context.Context, q store.Query, dates []string) (int, err
 	// 窓が from 以降を覆う run は from より後に始まっている (init も窓の終わりの時点で始まる)
 	runs, err := q.Runs(ctx, from, from.AddDate(100, 0, 0))
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	type span struct{ from, to time.Time }
 	var spans []span
@@ -624,18 +637,36 @@ func collectedDays(ctx context.Context, q store.Query, dates []string) (int, err
 		}
 		merged = append(merged, sp)
 	}
-	n := 0
 	for _, d := range dates {
 		start, _ := time.Parse(record.DateLayout, d)
 		end := start.AddDate(0, 0, 1)
 		for _, sp := range merged {
 			if !sp.from.After(start) && !sp.to.Before(end) {
-				n++
+				set[d] = true
 				break
 			}
 		}
 	}
-	return n, nil
+	return set, nil
+}
+
+// trailBaselineDays は、平常帯の中央値に入れる日 (ADR 0090): dates のうち CloudTrail を収集し終えた日と、記録 (events の日) のある日。
+// 決定: 記録のある日は収集した日として足す (日の一部だけを収集した日も、記録があれば入れる。以前はすべての日を入れていた)。
+func trailBaselineDays(ctx context.Context, q store.Query, dates []string, events []record.TrailEvent) (map[string]bool, error) {
+	set, err := trailCollectedSet(ctx, q, dates)
+	if err != nil {
+		return nil, err
+	}
+	in := map[string]bool{}
+	for _, d := range dates {
+		in[d] = true
+	}
+	for _, e := range events {
+		if d := e.Time.UTC().Format(record.DateLayout); in[d] {
+			set[d] = true
+		}
+	}
+	return set, nil
 }
 
 func apiNames(apis []API) []string {

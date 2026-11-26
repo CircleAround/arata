@@ -15,7 +15,8 @@ import (
 //
 // 決定:
 //   - 評価する日は窓に重なる UTC の日 (daily の窓 [D-1 09:00, D 09:00) なら D-1 と D)。D は途中までの値だが、翌日の run で丸 1 日分として再評価される。
-//   - 平常帯は「その key 自身の」直近 baseline_days 日の日次値 (無い日は 0) の中央値 × factor。ただし min_count を下限にする。
+//   - 平常帯は「その key 自身の」直近 baseline_days 日のうち、ログを収集した日の日次値 (収集した日で値の無い日は 0) の中央値 × factor。
+//     ただし min_count を下限にする。収集した日は http_access のソースの lines_total のある日と、その metric の値のある日 (ADR 0090)。
 //     攻撃元の IP は過去に現れないので閾値は min_count、毎日一定数失敗する社内 NAT などは自分の中央値で吸収される。
 //   - 「Top IP 初出」は、その日の最多 key が過去 baseline_days 日に一度も無く、件数が top_ip_min_count 以上のとき。
 //     データのある過去日が min_baseline_days 未満の間 (導入直後) は判定しない。
@@ -64,6 +65,17 @@ func baseDates(date string, n int) []string {
 	out := make([]string, 0, n)
 	for i := 1; i <= n; i++ {
 		out = append(out, addDays(date, -i))
+	}
+	return out
+}
+
+// collectedVals は bds のうち収集した日 (collected) の値を返す (ADR 0090)。収集していない日は数えず、収集した日で値の無い日は val が 0 を返す。
+func collectedVals(bds []string, collected map[string]bool, val func(date string) float64) []float64 {
+	out := make([]float64, 0, len(bds))
+	for _, bd := range bds {
+		if collected[bd] {
+			out = append(out, val(bd))
+		}
 	}
 	return out
 }
@@ -117,12 +129,13 @@ type spike struct {
 	Threshold    float64
 	Reason       string
 	BaselineDays int // データのあった過去日数
+	Collected    int // 収集した過去日数 (中央値に入れた日数。ADR 0090)
 }
 
 func (s spike) data(keyName string) map[string]any {
 	return map[string]any{
 		keyName: s.Key, "date": s.Date, "count": s.Count, "baseline_median": s.Median, "threshold": s.Threshold,
-		"reason": s.Reason, "baseline_days_with_data": s.BaselineDays,
+		"reason": s.Reason, "baseline_days_with_data": s.BaselineDays, "baseline_days_collected": s.Collected,
 	}
 }
 
@@ -133,6 +146,10 @@ func detectSpikes(ctx context.Context, q store.Query, metric string, w collect.W
 		return nil, nil
 	}
 	s, err := loadSeries(ctx, q, metric, addDays(dates[0], -b.BaselineDays), dates[len(dates)-1])
+	if err != nil {
+		return nil, err
+	}
+	collected, err := httpCollectedSet(ctx, q, addDays(dates[0], -b.BaselineDays), addDays(dates[len(dates)-1], -1))
 	if err != nil {
 		return nil, err
 	}
@@ -147,6 +164,7 @@ func detectSpikes(ctx context.Context, q store.Query, metric string, w collect.W
 		for _, bd := range bds {
 			if len(s[bd]) > 0 {
 				withData++
+				collected[bd] = true // 値のある日は収集した日
 			}
 			for k := range s[bd] {
 				seen[k] = true
@@ -157,16 +175,13 @@ func detectSpikes(ctx context.Context, q store.Query, metric string, w collect.W
 			if skip != nil && skip(k) {
 				continue
 			}
-			vals := make([]float64, 0, len(bds))
-			for _, bd := range bds {
-				vals = append(vals, s[bd][k])
-			}
+			vals := collectedVals(bds, collected, func(bd string) float64 { return s[bd][k] })
 			med := median(vals)
 			thr := med * b.Factor
 			if thr < b.MinCount {
 				thr = b.MinCount
 			}
-			sp := spike{Key: k, Date: d, Count: v, Median: med, Threshold: thr, BaselineDays: withData}
+			sp := spike{Key: k, Date: d, Count: v, Median: med, Threshold: thr, BaselineDays: withData, Collected: len(vals)}
 			switch {
 			case v > thr:
 				sp.Reason = reasonAboveBaseline

@@ -19,7 +19,8 @@ import (
 //   - 拒否は CloudTrail の errorCode が設定 error_codes に入るもの (完全一致)。cloudtrail collector が events に残す。
 //   - 評価するのは窓のイベント (windowEvents。再走査で遅れて届いた分を含み、重なり区間の評価済み分は含めない)。
 //     daily の窓は 24 時間なので UTC の丸 1 日と比べる。UTC の日で分けないのは、日をまたぐ列挙が割れて閾値を下回るのを防ぐため。
-//   - 平常帯は窓の始まりの日の前日から baseline_days 日の、その主体自身の日ごとの件数・異なり数 (無い日は 0) の中央値 × factor。
+//   - 平常帯は窓の始まりの日の前日から baseline_days 日のうち CloudTrail を収集した日 (収集し終えた日と記録のある日。ADR 0090) の、
+//     その主体自身の日ごとの件数・異なり数 (収集した日で拒否の無い日は 0) の中央値 × factor。
 //     拒否のある過去日が min_baseline_days 未満 (導入直後) は平常帯を 0 とみなし、絶対の閾値だけで判定する。
 //   - 幅: 拒否された API (eventSource:eventName) の種類が min_distinct_apis 以上かつ平常帯を超える → medium。high_distinct_apis 以上なら high。
 //   - 量: 件数が max(min_count, 中央値 × factor) を超える → medium。両方満たせば重い方を 1 件 (Data の threshold は breadth)。
@@ -127,22 +128,34 @@ func (c AccessDenied) Evaluate(ctx context.Context, q store.Query, w collect.Win
 	}
 	useBaseline := len(datesWithData) >= b.MinBaselineDays
 	bds := baseDates(day0.Format(record.DateLayout), b.BaselineDays)
+	// ADR 0090: 中央値は CloudTrail を収集した日 (収集し終えた日と記録のある日) だけで取る。使うかの判定 (拒否のある過去日) は変えない
+	baseDays, err := trailBaselineDays(ctx, q, bds, past)
+	if err != nil {
+		return nil, err
+	}
+	collected := 0
+	for _, bd := range bds {
+		if baseDays[bd] {
+			collected++
+		}
+	}
 
 	obs := map[string]Observation{}
 	for arn, p := range byP {
 		var medCount, medDistinct float64
 		if useBaseline {
-			counts := make([]float64, 0, len(bds))
-			distincts := make([]float64, 0, len(bds))
-			for _, bd := range bds {
+			counts := collectedVals(bds, baseDays, func(bd string) float64 {
 				if dd := hist[arn][bd]; dd != nil {
-					counts = append(counts, float64(dd.count))
-					distincts = append(distincts, float64(len(dd.apis)))
-				} else {
-					counts = append(counts, 0)
-					distincts = append(distincts, 0)
+					return float64(dd.count)
 				}
-			}
+				return 0
+			})
+			distincts := collectedVals(bds, baseDays, func(bd string) float64 {
+				if dd := hist[arn][bd]; dd != nil {
+					return float64(len(dd.apis))
+				}
+				return 0
+			})
 			medCount, medDistinct = median(counts), median(distincts)
 		}
 		distinct := len(p.apis)
@@ -177,6 +190,7 @@ func (c AccessDenied) Evaluate(ctx context.Context, q store.Query, w collect.Win
 		a.extra["baseline_median_count"] = medCount
 		a.extra["baseline_median_distinct"] = medDistinct
 		a.extra["baseline_days_with_data"] = len(datesWithData)
+		a.extra["baseline_days_collected"] = collected
 		a.extra["breadth_threshold"] = breadthThr
 		a.extra["volume_threshold"] = volumeThr
 		a.extra["threshold"] = reason

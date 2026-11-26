@@ -44,7 +44,7 @@ LLM がこの流れを手伝うときも、run と review を読んで材料を�
 | アプリのログに残った秘密の値の形・署名付き URL・隠されていない送信項目 (設定に書いたロググループだけ) | log_hygiene | 秘密の値は先に無効化。出力元を直すと次の次の週に解消する。誤検知は確かめて、見直す日まで snooze (`arata help ai playbook log_hygiene`) |
 | 監査の主体や調査用のロールの、想定内の拒否 | access_denied | 設定で直す (`expected_denied`) |
 
-secret_access の一括読み出しの注: 閾値は `max(min_distinct, その主体の日ごとの数の中央値 × factor)`。中央値は過去 `baseline_days` (既定 14) 日で取り、記録の無い日は 0 と数える。
+secret_access の一括読み出しの注: 閾値は `max(min_distinct, その主体の日ごとの数の中央値 × factor)`。中央値は過去 `baseline_days` (既定 14) 日のうち CloudTrail を収集した日で取り、収集した日で記録の無い日は 0 と数える (収集していない日は数えない。ADR 0090)。
 導入直後は中央値が 0 (data の `baseline_median_distinct: 0`、`baseline_days_with_data` が小さい) で、絶対の閾値 `min_distinct` だけで判定されるので、
 毎日同じ十数個を読むだけの正規のロールも high になる。
 

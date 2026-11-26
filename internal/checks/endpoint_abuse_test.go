@@ -173,8 +173,8 @@ func TestEndpointAbuseKeepsExistingChecks(t *testing.T) {
 		m.put("2026-10-21", "web", cwlogs.MetricSignInFailures, "198.51.100.7", 80)
 		m.put("2026-10-21", "web", cwlogs.MetricProbeHits, "198.51.100.8", 40)
 		m.put("2026-10-21", "web", cwlogs.MetricProbePaths, "/.env", 40)
+		collected(m, 14) // lines_total は収集した日として平常帯に効く (ADR 0090) ので、両方に入れる
 		if withAbuse {
-			collected(m, 14)
 			m.put("2026-10-21", "web", cwlogs.MetricEndpointIPs, "signup|03:20", 100)
 			m.put("2026-10-21", "web", cwlogs.MetricEndpointCount, "signup|03:20", 100)
 		}

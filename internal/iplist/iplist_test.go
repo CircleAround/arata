@@ -166,3 +166,41 @@ func TestFrom(t *testing.T) {
 		t.Errorf("From without sign_in_failure = %s", got)
 	}
 }
+
+// ADR 0090: 平常帯の中央値は、そのソースを収集した日 (lines_total か sign_in_failures の値のある日) だけで取る。
+// 収集していない日は数えず、収集した日で値の無い日は 0 と数える。
+func TestBuildSignInCollectedDays(t *testing.T) {
+	const shared = "203.0.113.20"
+	m := cwlogs.MetricSignInFailures
+	// 共有の IP は day(-8)〜day(-14) に毎日 10 件 (窓の載り方には届かない)。day(-1)〜day(-7) は、all なら収集した日 (失敗 0)、そうでなければ収集していない
+	build := func(all bool) Series {
+		s := Series{}
+		for i := 8; i <= 14; i++ {
+			s.set(day(-i), m, shared, 10)
+		}
+		if all {
+			for i := 1; i <= 7; i++ {
+				s.set(day(-i), cwlogs.MetricLinesTotal, "", 1000)
+			}
+		}
+		return s.set(day(0), m, shared, 21)
+	}
+	// 抜けあり: 中央値 10、しきい値 30。以前は 14 日の中央値 5 → しきい値 15 で載った
+	if got := reasons(Build(list(), "src", day(0), build(false), nil).Rows)[shared]; got != "" {
+		t.Errorf("抜けあり: %q", got)
+	}
+	// 全部収集: 収集した日の 0 は 0 と数える。中央値 5、しきい値 15
+	if got := reasons(Build(list(), "src", day(0), build(true), nil).Rows)[shared]; got != "sign_in_failure=21;" {
+		t.Errorf("全部収集: %q", got)
+	}
+}
+
+// 一覧を作るのに読む日の値に、収集した日を決める lines_total を含める。
+func TestMetricsIncludeLinesTotal(t *testing.T) {
+	for _, m := range Metrics {
+		if m == cwlogs.MetricLinesTotal {
+			return
+		}
+	}
+	t.Fatal("Metrics に lines_total が無い")
+}

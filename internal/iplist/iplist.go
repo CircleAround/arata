@@ -20,8 +20,9 @@ const (
 	ReasonSignInFailure = "sign_in_failure"
 )
 
-// Metrics は一覧を作るのに読む日の値 (どれも key = ip)。
-var Metrics = []string{cwlogs.MetricWAFBlockIPSuspect, cwlogs.MetricWAFAllowProbeIP, cwlogs.MetricProbeHits, cwlogs.MetricSignInFailures}
+// Metrics は一覧を作るのに読む日の値 (lines_total のほかは key = ip)。lines_total (ログの総行数。key は空) は、
+// sign_in_failure の平常帯に入れる「収集した日」を決めるのに読む (ADR 0090)。
+var Metrics = []string{cwlogs.MetricWAFBlockIPSuspect, cwlogs.MetricWAFAllowProbeIP, cwlogs.MetricProbeHits, cwlogs.MetricSignInFailures, cwlogs.MetricLinesTotal}
 
 // Day は metric → ip → その日の値、Series は date → Day (1 つのソースの分)。
 type (
@@ -129,6 +130,7 @@ func Build(l *config.IPList, source, date string, s Series, known func(string) b
 //     かつ窓の前の baseline_days 日の中央値 × N × factor を超えた (共有の IP の、前から続く失敗を載せない)
 //
 // 平常帯の過去の日 (その metric の行が 1 つでもある日) が min_baseline_days に足りなければ、件数 (と日数) だけで判定する。
+// 中央値は、平常帯の日のうち収集した日 (lines_total か、その metric の行のある日) だけで取る。収集した日で行の無い IP は 0 (ADR 0090)。
 func signIn(l *config.IPList, si *config.IPListSignIn, date string, s Series, today map[string]float64, add func(string, string, float64), res *Result) {
 	m := cwlogs.MetricSignInFailures
 	n := l.ActiveDays()
@@ -159,10 +161,23 @@ func signIn(l *config.IPList, si *config.IPListSignIn, date string, s Series, to
 	}
 	dayBase, dayWith := baseline(addDays(date, -1))
 	winBase, winWith := baseline(addDays(date, -n))
+	collected := func(d string) bool {
+		if len(s[d][m]) > 0 {
+			return true
+		}
+		for _, v := range s[d][cwlogs.MetricLinesTotal] {
+			if v > 0 {
+				return true
+			}
+		}
+		return false
+	}
 	median := func(dates []string, ip string) float64 {
 		vals := make([]float64, 0, len(dates))
 		for _, d := range dates {
-			vals = append(vals, valuesOn(d)[ip])
+			if collected(d) {
+				vals = append(vals, valuesOn(d)[ip])
+			}
 		}
 		return medianOf(vals)
 	}

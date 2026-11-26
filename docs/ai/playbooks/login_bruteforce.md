@@ -6,7 +6,7 @@
 パスワードの総当たりや、漏れたパスワードの一覧を試すクレデンシャルスタッフィングの兆候。どのパス・メソッド・ステータスを失敗と数えるかは設定 `checks.login_bruteforce`。
 
 - Key は IP。allowlist の `source_ips` の IP は対象外
-- data: `ip`、`date` (UTC の日)、`count`、`baseline_median`、`threshold`、`reason` (`above_baseline` 平常帯超え / `new_top_ip` 初出の最多 IP)、`baseline_days_with_data`
+- data: `ip`、`date` (UTC の日)、`count`、`baseline_median`、`threshold`、`reason` (`above_baseline` 平常帯超え / `new_top_ip` 初出の最多 IP)、`baseline_days_with_data`、`baseline_days_collected` (中央値に入れた、ログを収集した日の数。ADR 0090)
 
 ## まず確かめること
 
