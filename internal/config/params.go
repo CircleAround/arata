@@ -30,6 +30,10 @@ var CollectionParams = map[string]bool{"paths": true, "methods": true, "failure_
 	// 利用者ごとのチェックの U1・U2 の条件と、日の値の残し方も日の値の形を決める (ADR 0071・0087)
 	"success_statuses": true, "denied_statuses": true, "store_min": true, "store_top": true}
 
+// JudgmentParams は、CollectionParams と同じ名前でも判定にだけ使うパラメータ (<チェック>.<キー>)。overrides で変えられる。
+// 利用者ごとのチェックの window は日の値を足し上げる日数で、日の値の形を変えない (endpoint_abuse の window は集計の時間幅)。
+var JudgmentParams = map[string]bool{"user_denied.window": true, "user_id_enumeration.window": true}
+
 // Param はチェックのパラメータ 1 つ (checks.<Check>.<Key>)。
 type Param struct {
 	Check  string `json:"check"`
@@ -106,7 +110,7 @@ func (c *Checks) overlay(o Checks) {
 func validateOverrides(o Checks) error {
 	var bad []string
 	for _, f := range paramFields(&o) {
-		if CollectionParams[f.key] && !f.v.IsZero() {
+		if CollectionParams[f.key] && !JudgmentParams[f.check+"."+f.key] && !f.v.IsZero() {
 			bad = append(bad, f.check+"."+f.key)
 		}
 	}

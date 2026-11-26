@@ -172,6 +172,18 @@
         "reason": "no unused_region_event source"
       },
       {
+        "check": "user_denied",
+        "reason": "checks.user_denied.sources is empty (nothing to read; see `arata help ai playbook user_denied`)"
+      },
+      {
+        "check": "user_id_enumeration",
+        "reason": "checks.user_id_enumeration.sources is empty (nothing to read; see `arata help ai playbook user_id_enumeration`)"
+      },
+      {
+        "check": "user_path_breadth",
+        "reason": "checks.user_path_breadth.sources is empty (nothing to read; see `arata help ai playbook user_path_breadth`)"
+      },
+      {
         "check": "waf_block_trend",
         "reason": "no waf_action source"
       }

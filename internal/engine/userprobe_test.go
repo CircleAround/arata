@@ -104,3 +104,26 @@ func cwlogsCollector(h *harness, id string) (*cwlogs.Collector, error) {
 	}
 	return nil, fmt.Errorf("no source %s", id)
 }
+
+// 決定 (ADR 0014): default-daily に入る利用者ごとの 3 つは、sources が空 (Disabled) なら http_user を引かせない。
+// Disabled のチェックは run で skip されるので、その要る記録も引かない (log_hygiene も同じ)。
+func TestNeededKindsSkipsDisabled(t *testing.T) {
+	open := func(h *harness) *Engine {
+		e, err := Open(h.cfg, h.deps)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { e.Close() })
+		return e
+	}
+	h := newHarnessWith(t, userProbeSource(t, false), "")
+	e := open(h)
+	if e.neededKinds(h.cfg.Profiles["daily"])["http_user"] {
+		t.Fatal("http_user is needed while the user checks have no sources")
+	}
+	h = newHarnessWith(t, userProbeSource(t, false), userProbeChecks)
+	e = open(h)
+	if !e.neededKinds(h.cfg.Profiles["daily"])["http_user"] {
+		t.Fatal("http_user is not needed with sources")
+	}
+}

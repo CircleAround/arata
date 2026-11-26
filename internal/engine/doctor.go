@@ -681,6 +681,7 @@ func (d *doctor) checks() {
 	for _, pname := range profiles {
 		// 設定が空で何も見ないチェック (log_hygiene。ADR 0050) は、設定の値で組んだチェックに理由を聞く (deps.Registry は既定値)
 		configured := checks.NewRegistryFor(d.cfg.ChecksFor(pname))
+		configured.SetPathIDSources(d.cfg.PathIDSources())
 		for _, name := range d.cfg.Profiles[pname].ExpandChecks(d.deps.Registry.Defaults()) {
 			c, ok := d.deps.Registry.Get(name)
 			if !ok {

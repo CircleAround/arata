@@ -78,6 +78,13 @@ var escalationCases = map[string]map[Severity]func(t *testing.T) (key string, li
 			return execKeyAlice, light[execKeyAlice], heavy[execKeyAlice]
 		},
 	},
+	"user_id_enumeration": {
+		Medium: func(t *testing.T) (string, Observation, Observation) {
+			light := enumObs(t, 0) // 拒否だけの総当たり
+			heavy := enumObs(t, 3) // 拒否に混ざる成功
+			return "user:42", light["user:42"], heavy["user:42"]
+		},
+	},
 	"oidc_assume_role": {
 		Low: func(t *testing.T) (string, Observation, Observation) {
 			light := oidcUnknownObs(t, "AccessDenied") // 全部が拒否された引き受け
@@ -206,4 +213,17 @@ func ecsExecObs(t *testing.T, yaml, code string) map[string]Observation {
 		t.Fatal(err)
 	}
 	return execEval(t, s.st, al, execWindow)
+}
+
+// enumObs は user:42 が /orders/:id で 200 の異なる ID を開き、150 が拒否・ok が成功だった日の user_id_enumeration の観測。
+func enumObs(t *testing.T, ok float64) map[string]Observation {
+	st := newStore(t)
+	m := metricSeed{st: st, t: t}
+	userCollected(m, 14)
+	d := "2026-10-21"
+	m.put(d, "app", cwlogs.MetricUserIDs, "user:42|/orders/:id", 200)
+	m.put(d, "app", cwlogs.MetricUserIDsOK, "user:42|/orders/:id", ok)
+	m.put(d, "app", cwlogs.MetricUserIDsDenied, "user:42|/orders/:id", 150)
+	obs, _ := evalProbe(t, "user_id_enumeration", probeConfig(), st)
+	return obs
 }

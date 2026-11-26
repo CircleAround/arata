@@ -101,7 +101,8 @@ func NewRegistryFor(c config.Checks) *Registry {
 		UnusedRegionActivity{Config: c.UnusedRegionActivity}, CostAnomaly{Config: c.CostAnomaly}, WAFBlockTrend{Config: c.WAFBlockTrend}, AIPathUsage{},
 		CredentialHygiene{Config: c.CredentialHygiene}, GuardDutyFindings{}, Posture{Config: c.Posture}, AccessAnalyzer{},
 		WAFReview{Config: c.WAFReview, SignInPaths: c.LoginBruteforce.Paths, ProbePaths: c.ProbePaths.Paths},
-		LogHygiene{Config: c.LogHygiene}} {
+		LogHygiene{Config: c.LogHygiene},
+		UserDenied{userProbeBase{All: c}}, UserIDEnumeration{userProbeBase{All: c}}, UserPathBreadth{userProbeBase{All: c}}} {
 		r.Register(ch)
 	}
 	return r
@@ -121,6 +122,23 @@ func (r *Registry) SetUnusedRegionSources(ids []string) {
 	if c, ok := r.byName["unused_region_activity"].(UnusedRegionActivity); ok {
 		c.Sources = append([]string(nil), ids...)
 		r.byName[c.Name()] = c
+	}
+}
+
+// SetPathIDSources は利用者ごとのチェックに path_ids のあるソースの ID (config.Config.PathIDSources) を渡す。
+func (r *Registry) SetPathIDSources(ids []string) {
+	for _, name := range []string{userDeniedName, userIDEnumerationName, userPathBreadthName} {
+		switch c := r.byName[name].(type) {
+		case UserDenied:
+			c.PathSources = append([]string(nil), ids...)
+			r.byName[name] = c
+		case UserIDEnumeration:
+			c.PathSources = append([]string(nil), ids...)
+			r.byName[name] = c
+		case UserPathBreadth:
+			c.PathSources = append([]string(nil), ids...)
+			r.byName[name] = c
+		}
 	}
 }
 

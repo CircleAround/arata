@@ -40,5 +40,8 @@ LLM はこの手順に沿って、根拠 (finding の `data`) と利用者の事
 | secret_access | 秘匿値の読み取りの異常 | `arata help ai playbook secret_access` |
 | unknown_assume_role | 既知リストに無い主体の AssumeRole | `arata help ai playbook unknown_assume_role` |
 | unused_region_activity | ふだん使わないリージョンでの書き込み | `arata help ai playbook unused_region_activity` |
+| user_denied | ログインした利用者の拒否の急増 | `arata help ai playbook user_denied` |
+| user_id_enumeration | ログインした利用者による ID の総当たり | `arata help ai playbook user_id_enumeration` |
+| user_path_breadth | ログインした利用者が触ったパスの型の多さ | `arata help ai playbook user_path_breadth` |
 | waf_block_trend | WAF の BLOCK の変化 | `arata help ai playbook waf_block_trend` |
 | waf_review | WAF の修正提案の候補 | `arata help ai playbook waf_review` |
