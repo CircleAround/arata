@@ -19,6 +19,10 @@ import (
 //   - CreateAccessKey → medium
 //   - UpdateAssumeRolePolicy / CreateRole で、信頼ポリシーに、そのアカウントの外の主体がある・信頼ポリシーを読めない → medium
 //   - UpdateAssumeRolePolicy / CreateRole で、信頼ポリシーに `*` がある → high (デプロイ主体でない主体も high)
+//   - 決定 (ADR 0092 の 3 節): UpdateLoginProfile でサインインの長さ (maxSigninSessionDuration) を変えたもの → medium
+//     (延ばすのは、奪った者が居座りを長くする手口)。collector が signin_duration_changed を付けた記録だけを見る (パスワードだけの変更は今までどおり報告しない)。
+//     data の max_signin_session_duration (秒) は、同じ Key の中でいちばん新しい記録の値。延ばしたか縮めたかは、前の値が記録に無いので出さない。
+//     ロールのサインインの長さ (UpdateRole) は形を確かめていないので見ない (ADR 0092 の未確認の点 2)
 //
 // 信頼ポリシーは cloudtrail の collector が読み、判定に使う値だけを data に残す (trust_policy・trust_wildcard・trust_accounts・trust_federated・
 // trust_has_condition)。「読めて、`*` も外の主体も無い」と確かめられたときだけ下げる。trust_policy の無い記録 (以前の版で集めたもの) は「読めない」。
@@ -39,6 +43,7 @@ const (
 	notLoweredTrustExternal   = "trust_external"
 	notLoweredTrustWildcard   = "trust_wildcard"
 	notLoweredTrustUnreadable = "trust_unreadable"
+	notLoweredSigninDuration  = "signin_duration"
 )
 
 // maxTrustSummaryItems は見出しに出す外のアカウント・ID プロバイダの数の上限 (全部は data に出す)。
@@ -131,6 +136,12 @@ func ownAccountOf(e record.TrailEvent) string {
 	return ""
 }
 
+// isSigninDurationChange はサインインの長さを変えた UpdateLoginProfile か (ADR 0092 の 3 節)。
+func isSigninDurationChange(e record.TrailEvent) bool {
+	v, _ := dataBool(e.Data, "signin_duration_changed")
+	return e.Name == "UpdateLoginProfile" && v
+}
+
 func isIAMChange(name string) bool {
 	for _, n := range iamChangeNames {
 		if name == n {
@@ -152,8 +163,9 @@ func (c IAMChanges) Evaluate(ctx context.Context, q store.Query, w collect.Windo
 	deploy := map[string]bool{}
 	trusts := map[string]*iamTrust{}
 	tr := &originTracer{}
+	durations := map[string]record.TrailEvent{} // Key → サインインの長さを変えた記録のうち最新
 	for _, e := range evs {
-		if !isIAMChange(e.Name) {
+		if !isIAMChange(e.Name) && !isSigninDurationChange(e) {
 			continue
 		}
 		target := targetOf(e)
@@ -179,6 +191,11 @@ func (c IAMChanges) Evaluate(ctx context.Context, q store.Query, w collect.Windo
 		if t := trusts[k]; t != nil {
 			t.add(e, ownAccountOf(e))
 		}
+		if isSigninDurationChange(e) {
+			if cur, ok := durations[k]; !ok || e.Time.After(cur.Time) {
+				durations[k] = e
+			}
+		}
 		a.add(e.Time, e.Name, e.IP)
 		a.uses = append(a.uses, tr.note(e))
 		if e.ErrorCode != "" {
@@ -203,6 +220,14 @@ func (c IAMChanges) Evaluate(ctx context.Context, q store.Query, w collect.Windo
 		note := ""
 		if name == "CreateAccessKey" {
 			reasons = []string{notLoweredAccessKey}
+		}
+		if d, ok := durations[k]; ok {
+			reasons = []string{notLoweredSigninDuration}
+			note = "サインインの長さの変更 (値は読めない)"
+			if n, ok := dataInt(d.Data, "max_signin_session_duration"); ok && n >= 0 {
+				a.extra["max_signin_session_duration"] = n
+				note = fmt.Sprintf("サインインの長さの変更 (最大 %d 秒)", n)
+			}
 		}
 		if t := trusts[k]; t != nil {
 			reasons, note = t.reasons(), t.note()
