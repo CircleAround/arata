@@ -6,7 +6,7 @@
 自動化された探索で、多くはインターネットの雑音。危ないのは探索が**当たった** (200 で返った) とき。パスは設定 `checks.probe_paths`。
 
 - Key は IP。allowlist の `source_ips` の IP は対象外
-- data: `ip`、`date`、`count`、`baseline_median`、`threshold`、`reason` (`above_baseline` / `new_top_ip`)、`top_paths_of_day` (その日の全 IP 合計で多かったパスと件数)
+- data: `ip`、`date`、`count`、`baseline_median`、`threshold`、`reason` (`above_baseline` / `new_top_ip`)、`baseline_days_collected` (中央値に入れた、ログを収集した日の数。ADR 0090)、`top_paths_of_day` (その日の全 IP 合計で多かったパスと件数)
 
 ## まず確かめること
 

@@ -98,6 +98,7 @@
 - CloudTrail の errorCode は API の応答と書き方が違うことがある (応答が `AccessDeniedException` でも記録は `AccessDenied` など)
 - sandbox を deploy すると、CDK の bootstrap と deploy 自体が unknown_assume_role / iam_changes として出る (scenarios/README の抑え方を参照)
 - 「導入直後は報告しない」の判定は「データのある日」ではなく「収集し終えた日」で数える。操作の少ないアカウントでは、データのある日がいつまでも足りない (ADR 0027)
+- 平常帯の中央値は「収集した日」だけで取る。収集していない日 (導入の前・収集の抜け) を 0 と数えると中央値が下がり、ふだんの件数で鳴る。収集した日の 0 は 0 のまま (ADR 0090。secret_access の一括読み出しの 0 はこちら側なので、この規則では直らない)
 - WAF の `ListResourcesForWebACL` は資源の種類ごとに別サービスの権限を要求し、エラー文も統一されていない。文言で判定しない (ADR 0023)
 - 一般的なコスト削減は arata に入れない (別の製品の候補。月次・手動実行)。費用の急増だけをセキュリティの兆候として見る
 

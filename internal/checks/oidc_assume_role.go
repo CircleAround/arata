@@ -23,6 +23,7 @@ import (
 //   - 組が既知で、上のどれでもない → 報告しない。ロールごとに info で 1 行残す (Key は known:<ロールの ARN>。ADR 0047 と同じ)
 //   - 既知の組の、窓に重なる UTC の日の回数 (成功した引き受け) が、その組自身の過去 baseline_days 日の日次の回数の中央値 × factor
 //     (下限 min_count) を超えたら low、その medium_ratio 倍を超えたら medium (Key は volume:<組>)。材料は保存済みの注目イベント。
+//     中央値に入れるのは CloudTrail を収集した日 (収集し終えた日と記録のある日) だけ。収集した日で回数の無い日は 0 (ADR 0090)
 //     CloudTrail を収集し終えた過去日が min_baseline_days 未満の間は判定しない。過去を読むのは、窓に既知の組の引き受けがあるときだけ
 //   - sub を読むのは GitHub のプロバイダだけ (collector が各部分を残す)。ID 入りの形は ID を外した形で比べ、Key もその形にする。
 //     読めない sub (unparsed) と GitHub 以外 (-) は、sub の部分を持たない組として扱う。読めない sub は既知リストに書けないので、既知にならない
@@ -431,6 +432,15 @@ func (c OIDCAssumeRole) volume(ctx context.Context, q store.Query, w collect.Win
 	if err != nil {
 		return nil, err
 	}
+	// ADR 0090: 中央値は CloudTrail を収集した日 (収集し終えた日と記録のある日) だけで取る
+	var all []string
+	for d := addDays(dates[0], -b.BaselineDays); d < dates[len(dates)-1]; d = addDays(d, 1) {
+		all = append(all, d)
+	}
+	baseDays, err := trailBaselineDays(ctx, q, all, past)
+	if err != nil {
+		return nil, err
+	}
 	counts := map[string]map[string]float64{} // 組 → 日 → 成功した引き受けの回数
 	for _, e := range past {
 		if e.Name != OIDCAssumeEvent || e.EventSource != "sts.amazonaws.com" || e.ErrorCode != "" || oidcLegacy(e) {
@@ -450,10 +460,7 @@ func (c OIDCAssumeRole) volume(ctx context.Context, q store.Query, w collect.Win
 		var best *spike
 		for _, d := range dates {
 			n := counts[k][d]
-			vals := make([]float64, 0, b.BaselineDays)
-			for _, bd := range baseDates(d, b.BaselineDays) {
-				vals = append(vals, counts[k][bd])
-			}
+			vals := collectedVals(baseDates(d, b.BaselineDays), baseDays, func(bd string) float64 { return counts[k][bd] })
 			med := median(vals)
 			th := max(b.MinCount, med*b.Factor)
 			if n > th && (best == nil || n/th > best.Count/best.Threshold) {

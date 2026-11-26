@@ -110,15 +110,9 @@ func httpCollectedDays(ctx context.Context, q store.Query, dates []string) ([]st
 	for _, d := range dates {
 		lo, hi = min(lo, d), max(hi, d)
 	}
-	ms, err := q.Metrics(ctx, store.MetricFilter{Metric: cwlogs.MetricLinesTotal, From: lo, To: hi})
+	has, err := httpCollectedSet(ctx, q, lo, hi)
 	if err != nil {
 		return nil, err
-	}
-	has := map[string]bool{}
-	for _, m := range ms {
-		if m.From == record.KindHTTPAccess && m.Value > 0 {
-			has[m.Date] = true
-		}
 	}
 	var out []string
 	for _, d := range dates {
@@ -127,6 +121,24 @@ func httpCollectedDays(ctx context.Context, q store.Query, dates []string) ([]st
 		}
 	}
 	return out, nil
+}
+
+// httpCollectedSet は [from, to] の日のうち、http_access のソースの lines_total (ログの総行数) がある日の集合。
+func httpCollectedSet(ctx context.Context, q store.Query, from, to string) (map[string]bool, error) {
+	has := map[string]bool{}
+	if to < from {
+		return has, nil
+	}
+	ms, err := q.Metrics(ctx, store.MetricFilter{Metric: cwlogs.MetricLinesTotal, From: from, To: to})
+	if err != nil {
+		return nil, err
+	}
+	for _, m := range ms {
+		if m.From == record.KindHTTPAccess && m.Value > 0 {
+			has[m.Date] = true
+		}
+	}
+	return has, nil
 }
 
 // baselineOf は平常帯の材料 (収集した過去日と 1 日の幅の数)。
