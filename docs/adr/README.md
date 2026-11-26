@@ -111,3 +111,4 @@
 | [0086](0086-public-access-block-prior-state.md) | Public Access Block の変更を前の状態 (posture の snapshot か前の Put / Delete の記録) と比べ、開けた (high)・締めた (info)・前が分からない (medium) に分ける。何も変わらない変更は報告しない | 採用 |
 | [0087](0087-user-checks-daily-first.md) | ログインした利用者の総当たりのチェック (ADR 0071) を、利用者ごとのチェックの土台より先に、日の単位のクエリで実装する。U1・U2 は 0071 の実装が持ち、土台の後も判定と日の値の key・意味 (異なりは日の正確な値) を変えない。パスの型に `:any` と末尾の拡張子の一覧 (`formats`) を足し、`denied_statuses` に GET の 3xx を書けるようにする | 採用 |
 | [0088](0088-gitleaks-pr-range.md) | CI の gitleaks は、PR ではその PR のコミットだけを読み、全部の枝の履歴は main への push・定期実行・手動で読む。手元では push の前に送るコミットを読み、誤検知は `.gitleaksignore` で外す | 採用 |
+| [0089](0089-user-kind-mismatch.md) | ログインしている種類の組のどれもふだん使わない (ほかの種類がふだん使う) パスの型への要求を報告する (`user_kind_mismatch`。成功は high)。actor の行はログインしている scope ごとに 1 行で、0071 の利用者は最後の行の組のまま | 採用 |
