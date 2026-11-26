@@ -94,7 +94,7 @@
 | [0068](0068-triage-guard.md) | 片付けの守り: 理由と操作した人をストアに残し、high 以上の ack を止め (`--force` は理由が必須)、黙らせているものを週次に出し、許す操作を review に載せる | 採用 |
 | [0069](0069-ip-list.md) | 怪しい IP の一覧をストアに持ち、チェックをまたいで使う (判定に使う期間と保持の期間を分ける。最初の使い道は count_rule_status の suspect) | 採用 |
 | [0070](0070-waf-label-rules.md) | 目印 (ラベル) を付けるための COUNT のルールを、BLOCK にするかの材料から分けて出す | 採用 |
-| [0071](0071-user-authz-probe.md) | ログインした利用者の、パスや ID の総当たり (認可の抜け漏れの探り) を、利用者ごとの時の部品で見る (`user_denied`・`user_id_enumeration`・`user_path_breadth`) | 採用 |
+| [0071](0071-user-authz-probe.md) | ログインした利用者の、パスや ID の総当たり (認可の抜け漏れの探り) を、利用者ごとの時の部品で見る (`user_denied`・`user_id_enumeration`・`user_path_breadth`) | 採用 (6 節の U1 の持ち主・時の部品・異なりの延べは 0087 で置き換え) |
 | [0072](0072-ecs-exec.md) | 本番のコンテナでシェルを開く操作 (ECS Exec の `ExecuteCommand`) を、誰が・どこに・何を、で毎回報告する (`ecs_exec`) | 採用 |
 | [0073](0073-secret-access-bulk-exempt.md) | 起動のたびに決まった秘匿値をまとめて読むロールは、`secrets_access` の項目に `bulk: exempt` を明示して、その秘匿値だけを一括読み出しの数から外す | 採用 |
 | [0075](0075-request-lines-yields-http-user.md) | request_lines のソースに `yields: http_user` を明示して http_access を出さないようにし、プロファイルの `records` で、要るチェックが無くても引かせる | 採用 |
@@ -109,3 +109,4 @@
 | [0084](0084-waf-intended-block-rules.md) | 前提で止めるルール (国・IP セット・Host 名・レートベース・IP の評判) の BLOCK を誤検知の候補から外し、意図して止めるルールを `intended_block_rules` で書けるようにする。パスだけで止める自作のルールは review | 採用 |
 | [0085](0085-ecs-workload-changes.md) | ECS の負荷を変える操作 (タスク定義の登録・タスクの起動・サービスの更新) を、デプロイする主体の外からのものと、ロール・秘匿値の参照の変化で報告する (`ecs_workload_changes`) | 提案 |
 | [0086](0086-public-access-block-prior-state.md) | Public Access Block の変更を前の状態 (posture の snapshot か前の Put / Delete の記録) と比べ、開けた (high)・締めた (info)・前が分からない (medium) に分ける。何も変わらない変更は報告しない | 採用 |
+| [0087](0087-user-checks-daily-first.md) | ログインした利用者の総当たりのチェック (ADR 0071) を、利用者ごとのチェックの土台より先に、日の単位のクエリで実装する。U1・U2 は 0071 の実装が持ち、土台の後も判定と日の値の key・意味 (異なりは日の正確な値) を変えない | 採用 |
