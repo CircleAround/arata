@@ -305,7 +305,7 @@ func TestPartialFailureExit3(t *testing.T) {
 	if sf := r.Report.Coverage.SourcesFailed[0]; sf.Source != "trail" || sf.Code != "ACCESS_DENIED" || sf.CoveredFrom != "" {
 		t.Fatalf("sources_failed: %+v", sf)
 	}
-	if len(r.Report.Coverage.ChecksRun) != 0 || len(r.Report.Coverage.ChecksSkipped) != 18 || r.Report.Coverage.ChecksSkipped[0].Reason != "source trail failed" {
+	if len(r.Report.Coverage.ChecksRun) != 0 || len(r.Report.Coverage.ChecksSkipped) != 21 || r.Report.Coverage.ChecksSkipped[0].Reason != "source trail failed" {
 		t.Fatalf("coverage: %+v", r.Report.Coverage)
 	}
 	if codes := h.logCodes(t); strings.Join(codes, ",") != "ACCESS_DENIED" {

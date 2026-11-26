@@ -1277,6 +1277,9 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 | login_bruteforce | daily | http_access | sign-in 失敗の IP 別件数が平常帯 (14 日中央値 × 係数) 超え、Top IP 初出 | medium |
 | probe_paths | daily | http_access | 機密パス探索の 403/404 が平常帯超え | low |
 | endpoint_abuse | daily | http_access (+ ログの総行数 `lines_total`) | 設定した画面 (会員登録・メッセージ送信など) への時間幅 (既定 10 分) ごとの異なり IP 数・件数がふだん (過去の幅の p99) 超え、「A の画面のあと B の画面」の連鎖がふだん超え。決定: ADR 0030 | medium / low |
+| user_denied | daily | http_user (`checks.user_denied.sources`) | ログインした利用者 1 人への拒否 (既定 401・403) の件数が、本人の平常帯 (14 日中央値 × 3) とアプリの平常帯 (日ごとの最多の利用者の中央値 × 2) の両方を超え (または 7 日の窓で超え)。決定: ADR 0071・0087 | medium |
+| user_id_enumeration | daily | http_user (+ `path_ids`) | ログインした利用者 1 人が ID を含む型で開いた異なる ID の数が、本人とアプリの平常帯を超え (または窓で超え)。拒否に混ざる成功は high。決定: ADR 0071・0087 | high / medium |
+| user_path_breadth | daily | http_user (+ `path_ids`) | ログインした利用者 1 人が触った型の異なりの数が、本人とアプリの平常帯を超え。決定: ADR 0071 | low |
 | request_burst | daily | http_access | IP 別件数が平常帯超え (決済画面など除外パスを設定可) | low |
 | waf_block_trend | daily | waf_action | 新規に鳴り始めたルール、Top IP 入れ替わり | low |
 | admin_ops_unknown | daily | regex (admin) | 実行ユーザーが admin_users に無い | high |
@@ -1314,6 +1317,20 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 | login_bruteforce | event | `<ip>` | 重大度 + 理由 (`above_baseline` / `new_top_ip`) | `sign_in_failures` の日次値が「その IP 自身の直近 14 日の中央値 × factor (既定 3)、ただし min_count (既定 20) 以上」を超えた。または閾値未満でもその日の最多 IP が過去 14 日に一度も無く、top_ip_min_count (既定 5) 件以上 |
 | probe_paths | event | `<ip>` | 重大度 + 理由 | `probe_hits` について同上 (min_count 既定 10)。Data にその日の多かったパス (全 IP 合計の上位 5) を添える |
 | waf_block_trend | event | `rule\|<ルール ID>` / `top_ip\|<IP>` | 重大度 + 理由 (`new_rule` / `new_top_ip`) | 過去 14 日に BLOCK の無いルールが new_rule_min_count (既定 1) 件以上 BLOCK した / その日の BLOCK 件数 Top N (既定 5、min_count 10 以上) に過去 14 日合計の Top N に居ない IP が入った |
+
+決定 (利用者ごとの総当たり。ADR 0071・0087。実装の判断は PR の本文と `internal/checks/user_probe.go`):
+
+| チェック | Mode | Key | Fingerprint | 判定 |
+|---|---|---|---|---|
+| user_denied / user_id_enumeration / user_path_breadth | event | `<kind>:<id>` | 重大度 + 理由 (user_id_enumeration は型ごとの理由) | 材料は 2-7 の日の値。1 日の値が下限以上で、本人の平常帯 (`baseline_days` 日の中央値 × `factor`) とアプリの平常帯 (記録のある日の、その日いちばん多かった利用者の値の中央値 × `app_factor`) を超える。user_denied と user_id_enumeration は窓 (`window` 日の和) でも判定する |
+
+- 決定: `sources` が空なら Disabled (skip し、理由を出す)。Disabled のチェックの要る記録は run も doctor も引かない (default-daily に入っても、sources を書くまでユーザー ID のソースを引かない。ADR 0014)
+- 決定: 型の要る 2 つは、`sources` に path_ids のあるソースが無ければ skip (`no path_ids`)
+- 決定: 本人の平常帯もアプリの平常帯も、平常帯の日々のうちアプリの記録のある日だけから作る (収集の抜けた日を 0 に数えると帯が下がり、誤りの指摘が増える。レビューの指摘)
+- 決定: 新しい利用者 (本人の値の残った日が `min_baseline_days` 未満) は本人の平常帯を使わない (`new_user`)。アプリの記録のある日 (`user_requests` のある日) が足りない間は判定せず、`coverage.notes` に残りの日数を出す
+- 決定: アプリの平常帯の「いちばん多い利用者の値」は、user_denied・user_path_breadth は残した key の最大、user_id_enumeration は型ごとの `user_ids_dist` の max。窓の帯は残した key の和の最大
+- 決定: finding は利用者ごとに 1 つ (評価する日のうち値の大きい日。同じなら新しい日)。`related` は同じ利用者・同じ日に条件を満たしたほかの 2 つ (sources を書いたものだけ)
+- 決定: 片付けは user_id_enumeration の medium だけ ack を許す (同じ利用者が拒否に混ざる成功を出せば high で出直す)。ほかは上がる余地が無いので snooze・resolve
 
 決定 (endpoint_abuse。ADR 0030):
 

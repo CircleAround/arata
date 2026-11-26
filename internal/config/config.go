@@ -564,6 +564,17 @@ func (c *Config) UnusedRegionSources() []string {
 	return out
 }
 
+// PathIDSources は path_ids を書いたソースの ID (利用者ごとのチェックが型を読めるソース。ADR 0071)。
+func (c *Config) PathIDSources() []string {
+	var out []string
+	for _, s := range c.Sources {
+		if s.PathRules() != nil {
+			out = append(out, s.ID)
+		}
+	}
+	return out
+}
+
 // HasSourceKind は kind のソースがあるか。
 func (c *Config) HasSourceKind(kind string) bool {
 	for _, s := range c.Sources {

@@ -10,8 +10,11 @@ rails   cloudwatch-logs    match_rate  ok      -             0.97 (97/100 行、
 -       -                  check       warn    CHECK_UNUSED  どのプロファイルにも入っていない (実行されない): root_usage, ecs_exec, unknown_assume_role, oidc_assume_role, credential_hygiene, guardduty_findings, posture, access_analyzer, waf_review, log_hygiene
 -       -                  check       warn    -             cost_anomaly は skip される: no cost_anomaly source (profile daily)
 -       -                  check       warn    -             unused_region_activity は skip される: no unused_region_event source (profile daily)
+-       -                  check       warn    -             user_denied は skip される: checks.user_denied.sources is empty (nothing to read; see `arata help ai playbook user_denied`) (profile daily)
+-       -                  check       warn    -             user_id_enumeration は skip される: checks.user_id_enumeration.sources is empty (nothing to read; see `arata help ai playbook user_id_enumeration`) (profile daily)
+-       -                  check       warn    -             user_path_breadth は skip される: checks.user_path_breadth.sources is empty (nothing to read; see `arata help ai playbook user_path_breadth`) (profile daily)
 -       -                  check       warn    -             waf_block_trend は skip される: no waf_action source (profile daily)
   記録の集め方: arata help ai logs (「チェックと記録の対応」)
 
 必要な IAM action: cloudtrail:LookupEvents, logs:DescribeLogGroups, logs:GetQueryResults, logs:StartQuery, logs:StopQuery
-結果: ng 0 / warn 4
+結果: ng 0 / warn 7

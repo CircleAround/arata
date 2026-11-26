@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/CircleAround/arata/internal/checks"
 	"io"
 	"math"
 	"os"
@@ -173,10 +174,14 @@ func sortedProfiles(cfg *config.Config) []string {
 	return out
 }
 
-// profileNeeds はプロファイルのチェックが k を収集させるか (保存済みだけを読む StoredNeeds は数えない)。
+// profileNeeds はプロファイルのチェックが k を収集させるか (保存済みだけを読む StoredNeeds は数えない。
+// 設定が空で何も見ないチェック (Disabler) も数えない。run の neededKinds と同じ規則)。
 func (d *doctor) profileNeeds(prof config.Profile, k record.Kind) bool {
 	for _, name := range prof.ExpandChecks(d.deps.Registry.Defaults()) {
 		if c, ok := d.deps.Registry.Get(name); ok {
+			if dis, ok := c.(checks.Disabler); ok && dis.Disabled() != "" {
+				continue
+			}
 			for _, n := range c.Needs() {
 				if n == k {
 					return true

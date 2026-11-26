@@ -6,8 +6,7 @@ arata のチェックは、設定の `sources` に書いた記録からしか動
 この文書は「どの記録があればどのチェックが動くか」と、その記録の勧める出し方をまとめる。
 
 - arata は**読み取り専用**。ログの配信・保存期間・アプリのログ形式を変えるのは**人が**行う。LLM は現状を読み取りの操作で確かめ、足りないものと直し方を提案するまで
-- 順番: 下の表で動かしたいチェックの記録を決める → 記録を出す → `sources` に書く → `arata doctor` で確かめる → `arata init` (流れは `arata help ai onboarding`)
-- 例の名前・ID はすべて架空。実際の値に置き換える
+- 順番: 下の表で動かしたいチェックの記録を決める → 記録を出す → `sources` に書く → `arata doctor` で確かめる → `arata init` (流れは `arata help ai onboarding`)。例の名前・ID はすべて架空
 
 ## チェックと記録の対応
 
@@ -26,11 +25,12 @@ arata のチェックは、設定の `sources` に書いた記録からしか動
 | access-analyzer | access_analyzer | access_analyzer (weekly) |
 | waf-config + cloudwatch-logs (wafv2) | waf_config, waf_action | waf_review (weekly) |
 | cloudwatch-logs (text) | log_hygiene | log_hygiene (weekly) |
+| cloudwatch-logs (request_lines) | http_user | user_denied (daily), user_id_enumeration (daily), user_path_breadth (daily) |
 
 - `cloudtrail-lookup` (か `cloudtrail-s3`) だけで 10 個のチェックが動く。最初はこれとアカウント単位のソース (追加の準備が要らない) から始め、アプリ層 (`cloudwatch-logs`) を足していく
 - `http_access` は、送信元 IP・パス・ステータスが**同じ 1 行**にあるアクセスログ。ALB・nginx・アプリの JSON 行ログのどれか 1 つあればよい (同じリクエストを二重に数えないよう、1 つの入口につき 1 つ)。
   1 リクエストが複数行に分かれるアプリのログしか無いときは、`format: request_lines` でリクエスト単位にまとめて読む (書き方は `arata help ai request_lines`)。入口のログと並べてユーザー ID と auth だけを読むなら `yields: http_user` (`arata help ai user_id` の「入口のアクセスログと並べる」)
-- `waf_review` は weekly に WebACL の設定を読み、daily が貯めた wafv2 の日次集計と突き合わせる (両方のソースが要る)
+- `user_denied`・`user_id_enumeration`・`user_path_breadth` は、ユーザー ID を読む request_lines のソースを `checks.<チェック>.sources` に書いたときだけ動く (既定は空。型の要る 2 つは `path_ids` も。`arata help ai user_id`)。`waf_review` は weekly に WebACL の設定を読み、daily が貯めた wafv2 の日次集計と突き合わせる (両方のソースが要る)
 - `log_hygiene` は、設定の `checks.log_hygiene.sources` に書いたソースだけを読む (既定は空で、書くまで何も読まない)。アプリのログ (アクセスログでないもの) は
   `format: text` (行を解釈しない) で登録する。表の他の形式のソースも `sources` に書ける (アクセスログのクエリ文字列に署名付き URL が残ることがある)
 - `guardduty`・`access-analyzer`・`cost-anomaly` は AWS 側でその機能を有効にしていることが前提 (無効なら posture が指摘するか、そのチェックが skip)

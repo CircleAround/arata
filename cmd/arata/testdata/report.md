@@ -64,4 +64,7 @@
   - login_bruteforce: no http_access source
   - probe_paths: no http_access source
   - unused_region_activity: no unused_region_event source
+  - user_denied: checks.user_denied.sources is empty (nothing to read; see `arata help ai playbook user_denied`)
+  - user_id_enumeration: checks.user_id_enumeration.sources is empty (nothing to read; see `arata help ai playbook user_id_enumeration`)
+  - user_path_breadth: checks.user_path_breadth.sources is empty (nothing to read; see `arata help ai playbook user_path_breadth`)
   - waf_block_trend: no waf_action source

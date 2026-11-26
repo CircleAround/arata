@@ -17,6 +17,9 @@ profile daily (window 24h, max_catchup 7d)
   secret_access           daily    event  default-daily
   unknown_assume_role     hourly   event  explicit
   unused_region_activity  daily    event  default-daily
+  user_denied             daily    event  default-daily
+  user_id_enumeration     daily    event  default-daily
+  user_path_breadth       daily    event  default-daily
   waf_block_trend         daily    event  default-daily
   PARAM                                        ORIGIN     VALUE
   login_bruteforce.paths                       既定値     [/users/sign_in, /login, /signin]
@@ -79,6 +82,41 @@ profile daily (window 24h, max_catchup 7d)
   cost_anomaly.min_impact_usd                  既定値     10
   cost_anomaly.medium_impact_ratio             既定値     0.5
   cost_anomaly.high_impact_ratio               既定値     1
+  user_denied.sources                          既定値     []
+  user_denied.statuses                         既定値     [401, 403]
+  user_denied.store_min                        既定値     3
+  user_denied.store_top                        既定値     200
+  user_denied.min_count                        既定値     30
+  user_denied.baseline_days                    既定値     14
+  user_denied.min_baseline_days                既定値     7
+  user_denied.factor                           既定値     3
+  user_denied.app_factor                       既定値     2
+  user_denied.window                           既定値     7d
+  user_denied.min_count_window                 既定値     100
+  user_denied.min_days                         既定値     3
+  user_id_enumeration.sources                  既定値     []
+  user_id_enumeration.success_statuses         既定値     [200]
+  user_id_enumeration.denied_statuses          既定値     [401, 403, 404]
+  user_id_enumeration.store_min                既定値     5
+  user_id_enumeration.store_top                既定値     200
+  user_id_enumeration.min_distinct             既定値     50
+  user_id_enumeration.high_min_denied          既定値     10
+  user_id_enumeration.exclude_templates        既定値     []
+  user_id_enumeration.baseline_days            既定値     14
+  user_id_enumeration.min_baseline_days        既定値     7
+  user_id_enumeration.factor                   既定値     3
+  user_id_enumeration.app_factor               既定値     2
+  user_id_enumeration.window                   既定値     7d
+  user_id_enumeration.min_count_window         既定値     150
+  user_id_enumeration.min_days                 既定値     3
+  user_path_breadth.sources                    既定値     []
+  user_path_breadth.store_min                  既定値     20
+  user_path_breadth.store_top                  既定値     200
+  user_path_breadth.min_templates              既定値     50
+  user_path_breadth.baseline_days              既定値     14
+  user_path_breadth.min_baseline_days          既定値     7
+  user_path_breadth.factor                     既定値     3
+  user_path_breadth.app_factor                 既定値     2
 
 profile hourly (window 1h, max_catchup 7d, min_severity high)
   CHECK                CADENCE  MODE   VIA

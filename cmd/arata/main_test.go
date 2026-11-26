@@ -360,7 +360,7 @@ func TestExitCodes(t *testing.T) {
 			t.Fatalf("report must still be emitted: %v", err)
 		}
 		cov := rep["coverage"].(map[string]any)
-		if len(cov["sources_failed"].([]any)) != 1 || len(cov["checks_skipped"].([]any)) != 18 {
+		if len(cov["sources_failed"].([]any)) != 1 || len(cov["checks_skipped"].([]any)) != 21 { // 利用者ごとの 3 つを含む
 			t.Fatalf("coverage: %v", cov)
 		}
 		if sf := cov["sources_failed"].([]any)[0].(map[string]any); sf["source"] != "trail" || sf["code"] != "ACCESS_DENIED" {

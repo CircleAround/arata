@@ -82,6 +82,10 @@ var triageTable = map[string][]TriageRow{
 	"posture":                {row(false, noAck, High, Medium)},
 	"waf_review":             {row(false, noAck, Low)},
 	"log_hygiene":            {row(false, noAck, High, Medium, Low)},
+	// 利用者ごとの総当たり (ADR 0071): user_id_enumeration の medium は、同じ利用者が拒否に混ざる成功を出せば high で出直す
+	"user_denied":         {row(false, noAck, Medium)},
+	"user_id_enumeration": {row(false, noAck, High), row(true, withAck, Medium)},
+	"user_path_breadth":   {row(false, noAck, Low)},
 }
 
 // TriageChecks は表のあるチェック (名前順)。

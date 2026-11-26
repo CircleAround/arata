@@ -117,3 +117,47 @@ func TestUserChecksRedirectsNeedMethod(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// 判定の閾値 (ADR 0071 の 11 節の案。仮の値で、実データで見直す)。
+func TestUserChecksJudgmentDefaults(t *testing.T) {
+	c := DefaultChecks()
+	ud, ue, ub := c.UserDenied, c.UserIDEnumeration, c.UserPathBreadth
+	if ud.MinCount != 30 || ud.BaselineDays != 14 || ud.MinBaselineDays != 7 || ud.Factor != 3 || ud.AppFactor != 2 || ud.Window != "7d" || ud.MinCountWindow != 100 || ud.MinDays != 3 {
+		t.Fatalf("user_denied: %+v", ud)
+	}
+	if ue.MinDistinct != 50 || ue.HighMinDenied != 10 || len(ue.ExcludeTemplates) != 0 || ue.BaselineDays != 14 || ue.MinBaselineDays != 7 || ue.Factor != 3 || ue.AppFactor != 2 ||
+		ue.Window != "7d" || ue.MinCountWindow != 150 || ue.MinDays != 3 {
+		t.Fatalf("user_id_enumeration: %+v", ue)
+	}
+	if ub.MinTemplates != 50 || ub.BaselineDays != 14 || ub.MinBaselineDays != 7 || ub.Factor != 3 || ub.AppFactor != 2 {
+		t.Fatalf("user_path_breadth: %+v", ub)
+	}
+	if ud.WindowDays() != 7 || ue.WindowDays() != 7 {
+		t.Fatalf("window days %d %d", ud.WindowDays(), ue.WindowDays())
+	}
+}
+
+func TestUserChecksJudgmentInvalid(t *testing.T) {
+	for _, c := range []struct{ name, body, want string }{
+		{"min_count", "  user_denied:\n    min_count: -1\n", "min_count"},
+		{"min_baseline_days > baseline_days", "  user_denied:\n    baseline_days: 5\n    min_baseline_days: 6\n", "min_baseline_days"},
+		{"factor", "  user_path_breadth:\n    factor: -1\n", "factor"},
+		{"app_factor", "  user_id_enumeration:\n    app_factor: -2\n", "app_factor"},
+		{"window が日でない", "  user_denied:\n    window: 36h\n", "window"},
+		{"window が長すぎる", "  user_denied:\n    window: 40d\n", "window"},
+		{"min_days > window", "  user_id_enumeration:\n    min_days: 8\n", "min_days"},
+		{"exclude_templates が / で始まらない", "  user_id_enumeration:\n    exclude_templates: ['courses/:id']\n", "exclude_templates"},
+		{"exclude_templates の glob", "  user_id_enumeration:\n    exclude_templates: ['/courses/[']\n", "exclude_templates"},
+	} {
+		_, err := Load(write(t, userChecksConfig(c.body)))
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: err = %v, want containing %q", c.name, err, c.want)
+		}
+	}
+	// 判定の閾値は overrides で変えられる
+	cfg := strings.Replace(userChecksConfig(""), "    checks: [default-daily, root_usage]\n",
+		"    checks: [default-daily, root_usage]\n    overrides:\n      user_id_enumeration: { min_distinct: 80, exclude_templates: ['/courses/:id'], window: 14d }\n      user_denied: { window: 3d }\n", 1)
+	if _, err := Load(write(t, cfg)); err != nil {
+		t.Fatal(err)
+	}
+}

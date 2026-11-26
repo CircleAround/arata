@@ -136,6 +136,9 @@ sources:
 #   access_analyzer         weekly  state  access_analyzer  IAM Access Analyzer の外部アクセス findings (公開は high、他は medium)
 #   waf_review              weekly  state  waf_config      WAF の修正提案の候補を report.json の proposals に (正規の画面での大量 BLOCK は low の finding にも)
 #   log_hygiene             weekly  state  log_hygiene     アプリのログに残った秘密の値・署名付き URL・隠されていない送信項目・本番の debug の、種類ごとの行数 (値は取り出さない)。sources と kinds が空なら何も読まない (high / medium / low)
+#   user_denied             daily   event  http_user       ログインした利用者 1 人への拒否 (401・403) の急増。本人とアプリの平常帯の両方を超えたもの。sources が空なら何もしない (medium)
+#   user_id_enumeration     daily   event  http_user       ログインした利用者 1 人が、ID を含むパスの型で開いた異なる ID の多さ。拒否に混ざる成功は high。sources と path_ids が要る (high / medium)
+#   user_path_breadth       daily   event  http_user       ログインした利用者 1 人が触ったパスの型の多さ。sources と path_ids が要る (low)
 # 必要なレコードを出すソースが無いチェックは skip される (coverage に理由が出る)。http_access / waf_action は cloudwatch-logs が出す。
 profiles:
   hourly:                                        # 発生そのものが異常な事象の早期検知。Logs Insights を使うチェックは入れない (費用)
@@ -169,6 +172,9 @@ profiles:
       - cost_anomaly            # AWS Cost Anomaly Detection の費用の異常を予想に対する増加の割合で (medium / high)。費用の削減の提案はしない
       - waf_block_trend         # WAF の新しく鳴り始めたルール・Top IP の入れ替わり (low)
       - ai_path_usage           # allowlist で tags: [ai] の主体の利用を主体 × 送信元 IP で毎回 1 行 (info。自己監査)
+      - user_denied             # ログインした利用者 1 人への拒否 (401・403) の急増。本人とアプリの平常帯の両方を超えたもの。sources が空なら何もしない (medium)
+      - user_id_enumeration     # ログインした利用者 1 人が、ID を含むパスの型で開いた異なる ID の多さ。拒否に混ざる成功は high。sources と path_ids が要る (high / medium)
+      - user_path_breadth       # ログインした利用者 1 人が触ったパスの型の多さ。sources と path_ids が要る (low)
     # records: [http_user]                       # チェックが要らなくてもこの run で引く記録の種類。yields: http_user のソースの日次の集計を貯める (ADR 0075)
     # overrides:                                 # このプロファイルでだけ判定のパラメータを変える (書かなければ checks: の値)
     #   login_bruteforce: { min_count: 50 }      # 集計条件 (paths / methods / statuses など) は変えられない
@@ -282,16 +288,39 @@ checks:
     statuses: [401, 403]                         # 拒否として数えるステータス (4xx・5xx。3xx は書けない)。集計条件
     store_min: 3                                 # ストアに残す利用者の日の件数の下限。集計条件
     store_top: 200                               # 日ごとに残す利用者の数 (件数の多い順)。集計条件
+    min_count: 30                                # 1 日の拒否の件数の下限 (仮の値。実データで見直す)
+    baseline_days: 14                            # 平常帯 = 直近 baseline_days 日の日の値の中央値
+    min_baseline_days: 7                         # アプリの記録のある日がこれに満たない間は判定しない。本人の値の残った日がこれに満たない利用者は、本人の帯を使わない
+    factor: 3                                    # 本人の平常帯の倍率
+    app_factor: 2                                # アプリの平常帯 (ふだんの日の、いちばん多い利用者の値の中央値) の倍率
+    window: 7d                                   # ゆっくりした試しを見る窓 (日の値を足し上げる日数)
+    min_count_window: 100                        # 窓の和の下限 (仮の値)
+    min_days: 3                                  # 窓の中で値のあった日の数の下限
   user_id_enumeration:
     sources: []                                  # 数えるソースの id (path_ids も要る)。空なら数えない。集計条件
     success_statuses: [200]                      # 成功として数えるステータス。集計条件
     denied_statuses: [401, 403, 404]             # 拒否として数えるステータス。拒否を転送で返すアプリは 302 などを足せる (GET と HEAD だけ数える)。集計条件
     store_min: 5                                 # ストアに残す (利用者, 型) の日の異なる ID の数の下限。集計条件
     store_top: 200                               # 日ごとに残す (利用者, 型) の数 (異なる ID の多い順)。集計条件
+    min_distinct: 50                             # (利用者, 型) の 1 日の異なる ID の数の下限 (仮の値)
+    high_min_denied: 10                          # 拒否のあった ID がこれ以上で、成功が 1 つ以上あれば high
+    exclude_templates: []                        # 数えない型 (glob。* は 1 区間。例 [/courses/*])。だれでも見られる公開の画面
+    baseline_days: 14                            # 平常帯 = 直近 baseline_days 日の日の値の中央値
+    min_baseline_days: 7                         # アプリの記録のある日がこれに満たない間は判定しない
+    factor: 3                                    # 本人の平常帯の倍率
+    app_factor: 2                                # アプリの平常帯 (その型の、ふだんの日のいちばん多い利用者の値の中央値) の倍率
+    window: 7d                                   # ゆっくりした試しを見る窓
+    min_count_window: 150                        # 窓の和の下限 (仮の値)
+    min_days: 3                                  # 窓の中で値のあった日の数の下限
   user_path_breadth:
     sources: []                                  # 数えるソースの id (path_ids も要る)。空なら数えない。集計条件
     store_min: 20                                # ストアに残す利用者の日の型の数の下限。集計条件
     store_top: 200                               # 日ごとに残す利用者の数 (型の多い順)。集計条件
+    min_templates: 50                            # 1 日に触った型の数の下限 (仮の値)
+    baseline_days: 14                            # 平常帯 = 直近 baseline_days 日の日の値の中央値
+    min_baseline_days: 7                         # アプリの記録のある日がこれに満たない間は判定しない
+    factor: 3                                    # 本人の平常帯の倍率
+    app_factor: 2                                # アプリの平常帯の倍率
   credential_hygiene:
     unused_days: 90                              # アクセスキーを未使用とみなす日数 (最終使用、使われていなければ作成・ローテーションから)
   posture:

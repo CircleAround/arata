@@ -33,11 +33,13 @@ const logsGuideSources = `
   - { id: app_re, kind: cloudwatch-logs, log_group: prod-app, format: regex, regex: '(?P<ip>\S+) (?P<path>\S+)' }
   - { id: app_lines, kind: cloudwatch-logs, log_group: prod-app, format: request_lines, request: { id: '\[(?P<request_id>\S+)\] ', lines: [{ name: started, regex: '(?P<ip>\S+) (?P<path>\S+)' }] } }
   - { id: app_text, kind: cloudwatch-logs, log_group: prod-app, format: text }
+  - { id: app_user, kind: cloudwatch-logs, log_group: prod-app, format: request_lines, yields: http_user, request: { id: '\[(?P<request_id>\S+)\] ', lines: [{ name: started, regex: '(?P<ip>\S+) (?P<path>\S+)' }], user_id: { from: app_line, regex: 'actor kind=(?P<user_kind>[a-z_]{1,32}) id=(?P<user_id>[A-Za-z0-9_-]{1,64})$' } } }
 `
 
 // logsGuideChecks は log_hygiene が読むソース (設定に書いたものだけが log_hygiene の記録を出す。ADR 0050)。
 const logsGuideChecks = `checks:
   log_hygiene: { sources: [app_text], kinds: [debug_sql] }
+  user_denied: { sources: [app_user] }
 `
 
 // logsGuideTable は「チェックと記録の対応」の表を、Registry (チェックの Needs / StoredNeeds) とソースの種類 (kindsOf) から作る。

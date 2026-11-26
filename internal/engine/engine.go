@@ -266,6 +266,7 @@ func (d *Deps) fill(cfg *config.Config) {
 		d.Registry = checks.NewRegistryFor(cfg.Checks)
 		d.Registry.SetAuditLogGroups(cfg.AuditLogGroups())
 		d.Registry.SetUnusedRegionSources(cfg.UnusedRegionSources())
+		d.Registry.SetPathIDSources(cfg.PathIDSources())
 	}
 	if d.Limiter == nil {
 		d.Limiter = cloudtrail.NewLimiter()
@@ -1039,6 +1040,7 @@ func (e *Engine) registry(profileName string) *checks.Registry {
 	r := checks.NewRegistryFor(e.cfg.ChecksFor(profileName))
 	r.SetAuditLogGroups(e.cfg.AuditLogGroups())
 	r.SetUnusedRegionSources(e.cfg.UnusedRegionSources())
+	r.SetPathIDSources(e.cfg.PathIDSources())
 	return r
 }
 
@@ -1176,10 +1178,15 @@ func anyNeeded(kinds []record.Kind, needs map[record.Kind]bool) bool {
 }
 
 // neededKinds はプロファイルのチェックが必要とするレコード種類。未知のチェックは Evaluate で CONFIG_INVALID にするのでここでは無視する。
+// 決定 (ADR 0014・0087 の実装): 設定が空で何も見ないチェック (Disabler) は Evaluate で skip するので、その要る記録も引かない
+// (default-daily に入る利用者ごとのチェックが、sources を書くまでユーザー ID のソースを引かせない)。
 func (e *Engine) neededKinds(prof config.Profile) map[record.Kind]bool {
 	out := map[record.Kind]bool{}
 	for _, name := range prof.ExpandChecks(e.deps.Registry.Defaults()) {
 		if c, ok := e.deps.Registry.Get(name); ok {
+			if d, ok := c.(checks.Disabler); ok && d.Disabled() != "" {
+				continue
+			}
 			for _, k := range c.Needs() {
 				out[k] = true
 			}
