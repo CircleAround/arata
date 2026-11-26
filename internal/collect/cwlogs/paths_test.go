@@ -85,8 +85,9 @@ func TestPathTemplatesUsers(t *testing.T) {
 	if !s.Users || s.Truncated || strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("templates (users=%v truncated=%v):\n%s", s.Users, s.Truncated, strings.Join(got, "\n"))
 	}
-	// 1 人しか触らなかった型の例は、2 人以上が触った型の同じ位置にある値 (users・orders) だけを残し、ほかは長さだけにする
-	if ex := s.SingleUserExamples(5); strings.Join(ex, ", ") != "/users/<4>/orders, /users/<6>/orders" {
+	// 1 人しか触らなかった型の例は、印と設定の templates の固定の区間 (shops・items) だけを残し、ほかは長さだけにする。
+	// users・orders は 2 人以上が触った型 (/users/:id/orders) にあっても、ログ由来の値なので伏せる
+	if ex := s.SingleUserExamples(5); strings.Join(ex, ", ") != "/<5>/<4>/<6>, /<5>/<6>/<6>" {
 		t.Fatalf("examples: %q", ex)
 	}
 	// クエリは 1 本で、対象 ID は持ち帰らない (結果の列に無い)
@@ -125,4 +126,33 @@ func TestPathTemplatesLines(t *testing.T) {
 	if s, err := col.PathTemplates(context.Background(), userWindow.From, userWindow.To); s != nil || err != nil {
 		t.Fatalf("without path_ids: %v %v", s, err)
 	}
+}
+
+// FuzzSingleUserExamples: 例 (doctor の行に出す) には、ログ由来の区間の値が出ない。残るのは印 (:id など)・設定の templates の固定の区間・`<長さ>` だけ。
+// 2 人以上が触った型の同じ位置の値でも出さない (ログイン名の区間は、まさにほかの人も触る位置。ADR 0071 の 2 節)。
+func FuzzSingleUserExamples(f *testing.F) {
+	f.Add("/alice/followers", "/alice/settings")
+	f.Add("/users/taro/orders", "/shops/x/items/y")
+	f.Add("/a/:id", "/a/b")
+	rules, err := pathids.Compile(pathids.Rules{Segments: []string{`[0-9]{1,20}`}, Templates: []string{"/shops/:id/items/:id"}, MaxSegments: 8})
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Fuzz(func(t *testing.T, shared, single string) {
+		s := &PathSummary{Users: true, fixed: rules, Templates: []PathTemplate{
+			{Template: rules.Sanitize(shared), Requests: 2, MaxUsers: 2},
+			{Template: rules.Sanitize(single), Requests: 1, MaxUsers: 1},
+		}}
+		for _, ex := range s.SingleUserExamples(5) {
+			for i, seg := range strings.Split(ex, "/") {
+				switch {
+				case i == 0 && seg == "":
+				case strings.HasPrefix(seg, ":") || seg == pathids.More || rules.IsFixed(seg):
+				case len(seg) >= 3 && seg[0] == '<' && seg[len(seg)-1] == '>' && strings.Trim(seg[1:len(seg)-1], "0123456789") == "":
+				default:
+					t.Fatalf("example %q has a value %q (shared %q, single %q)", ex, seg, shared, single)
+				}
+			}
+		}
+	})
 }

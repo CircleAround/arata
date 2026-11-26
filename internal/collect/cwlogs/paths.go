@@ -47,6 +47,8 @@ type PathSummary struct {
 	Users bool
 	// Truncated は結果が行の上限に当たった (件数の少ない型が欠けている)。
 	Truncated bool
+	// fixed は例に残してよい固定の区間 (設定の templates) を持つ規則。
+	fixed *pathids.Compiled
 }
 
 // PathTemplatesQuery は型ごとの件数 (と利用者の数) のクエリ。path_ids の無いソースでは空。
@@ -87,7 +89,7 @@ func (c *Collector) PathTemplates(ctx context.Context, from, to time.Time) (*Pat
 	if c.prof.req != nil {
 		rows = inRange(rows, "day", to)
 	}
-	s := &PathSummary{Users: strings.Contains(q, pathUsersCol), Truncated: len(rows) >= MaxRows}
+	s := &PathSummary{Users: strings.Contains(q, pathUsersCol), Truncated: len(rows) >= MaxRows, fixed: c.prof.paths}
 	col := pathids.TemplateField
 	if c.prof.req != nil {
 		col = rlTemplate
@@ -132,23 +134,12 @@ func (c *Collector) PathTemplates(ctx context.Context, from, to time.Time) (*Pat
 }
 
 // SingleUserExamples は、1 日に 1 人の利用者しか触らなかった型の例を、件数の多い順に n 個まで返す。
-// 決定: 名前・ログイン名の区間 (templates に書き足すべき位置) を見つけるための例で、その値は出さない。
-// 2 人以上が触った型の同じ位置にある値 (`users`・`orders` のような固定の区間) だけを残し、ほかの区間は `<長さ>` に伏せる。印 (:id など) はそのまま。
+// 決定 (ADR 0071 の 2 節): 名前・ログイン名の区間 (templates に書き足すべき位置) を見つけるための例で、ログ由来の区間の値は出さない。
+// 残すのは印 (:id など) と、設定の templates の固定の区間だけ。ほかの区間はすべて `<長さ>` に伏せる。
+// 「2 人以上が触った型の同じ位置の値」は残す理由にならない (/alice/followers を bob も見るように、ログイン名の区間はほかの人も触る位置)。
 func (s *PathSummary) SingleUserExamples(n int) []string {
 	if s == nil || !s.Users {
 		return nil
-	}
-	shared := map[int]map[string]bool{}
-	for _, t := range s.Templates {
-		if t.MaxUsers < 2 {
-			continue
-		}
-		for i, seg := range strings.Split(t.Template, "/") {
-			if shared[i] == nil {
-				shared[i] = map[string]bool{}
-			}
-			shared[i][seg] = true
-		}
 	}
 	var out []string
 	for _, t := range s.Templates {
@@ -157,7 +148,7 @@ func (s *PathSummary) SingleUserExamples(n int) []string {
 		}
 		segs := strings.Split(t.Template, "/")
 		for i, seg := range segs {
-			if i == 0 || shared[i][seg] || strings.HasPrefix(seg, ":") || seg == pathids.More {
+			if i == 0 || strings.HasPrefix(seg, ":") || seg == pathids.More || s.fixed.IsFixed(seg) {
 				continue
 			}
 			segs[i] = "<" + strconv.Itoa(utf8.RuneCountInString(seg)) + ">"

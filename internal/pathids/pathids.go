@@ -167,8 +167,13 @@ func checkSegmentRegex(s string) error {
 	walk = func(re *syntax.Regexp) {
 		switch re.Op {
 		case syntax.OpCapture:
-			if re.Name != "" && bad == nil {
+			// 決定: 名前の無いキャプチャも禁止する。Insights の parse が名前の無いグループをどう扱うかは確かめていない (まとめるだけなら (?:...) で書ける)
+			switch {
+			case bad != nil:
+			case re.Name != "":
 				bad = fmt.Errorf("named captures are not allowed")
+			default:
+				bad = fmt.Errorf("capturing groups ( ) are not allowed: write (?:...) to group")
 			}
 		case syntax.OpBeginLine, syntax.OpEndLine, syntax.OpBeginText, syntax.OpEndText, syntax.OpWordBoundary, syntax.OpNoWordBoundary:
 			if bad == nil {
@@ -227,6 +232,21 @@ func digitLong(s string) bool {
 
 // Rules は検証した規則。
 func (c *Compiled) Rules() Rules { return c.rules }
+
+// IsFixed は s が設定の templates のどれかの固定の区間か (`:id`・`:any` は含まない)。設定の値なので、ログ由来の値と違い、出してよい。
+func (c *Compiled) IsFixed(s string) bool {
+	if c == nil || s == "" {
+		return false
+	}
+	for _, t := range c.templates {
+		for _, seg := range t {
+			if seg == s && seg != ID && seg != Any {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // Normalize はパスの型と対象 ID (`:id` の位置の値。順に) を返す。型を持たないパスは空の型。
 func (c *Compiled) Normalize(p string) (string, []string) {

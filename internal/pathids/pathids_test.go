@@ -151,6 +151,8 @@ func TestCompileErrors(t *testing.T) {
 		{"bad regex", func(r *Rules) { r.Segments = []string{`[0-9`} }, "segments"},
 		{"slash", func(r *Rules) { r.Segments = []string{`a/b`} }, "/"},
 		{"named capture", func(r *Rules) { r.Segments = []string{`(?P<x>[0-9]+)`} }, "named"},
+		{"unnamed capture", func(r *Rules) { r.Segments = []string{`([0-9]+)`} }, "(?:...)"},
+		{"unnamed capture inside", func(r *Rules) { r.Segments = []string{`a(b|c)[0-9]`} }, "(?:...)"},
 		{"anchor", func(r *Rules) { r.Segments = []string{`^[0-9]+$`} }, "anchor"},
 		{"matches empty", func(r *Rules) { r.Segments = []string{`[0-9]*`} }, "empty"},
 		{"quote", func(r *Rules) { r.Segments = []string{`\Q`} }, `\Q`},
