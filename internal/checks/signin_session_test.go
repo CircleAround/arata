@@ -297,3 +297,41 @@ func FuzzSigninRecordOf(f *testing.F) {
 		}
 	})
 }
+
+// そのセッションの最初の記録 (authorization_code) が窓の中にあり、続く refresh_token が別の /24 から来た形 (開発リードの指摘)。
+// lookback の外の扱い (first_outside_lookback) にはならず、まだ見ていない /24 として new_prefix になる。平常帯の内なら low、外なら high
+func TestSigninSessionLoginThenRefreshInWindow(t *testing.T) {
+	for _, tc := range []struct {
+		name, ip string
+		sev      Severity
+		inBase   bool
+	}{
+		{"平常帯の内の /24", "198.51.100.7", Low, true},
+		{"平常帯の外の /24", "192.0.2.7", High, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newStore(t)
+			s := &signinSeed{t: t, st: st}
+			coverage(t, st, 14)
+			s.baseline(siAlice, 14, 1, siOffice, siHome)
+			s.token(at(20, 10), siAlice, siSession("aaaaaaaa"), record.GrantAuthorizationCode, "203.0.113.10", "true", "")
+			s.token(at(20, 11), siAlice, siSession("aaaaaaaa"), record.GrantRefreshToken, tc.ip, "true", "")
+			obs, err := signinCheck("3d").Evaluate(context.Background(), st, appWindow, &allowlist.List{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			by := obsByKey(obs)
+			key := siAlice + "|" + siUUID("aaaaaaaa") + "|" + signinFormNewPrefix
+			o, ok := by[key]
+			if !ok || len(by) != 1 {
+				t.Fatalf("got %v", by)
+			}
+			p, _ := record.SourcePrefix(tc.ip)
+			if o.Severity != tc.sev || o.Data["first_outside_lookback"] != false || o.Data["in_principal_baseline"] != tc.inBase ||
+				!reflect.DeepEqual(o.Data["new_prefixes"], []string{p}) || !reflect.DeepEqual(o.Data["known_prefixes"], []string{siOffice}) ||
+				o.Data["refreshes"] != 1 || o.Data["first_seen"] != at(20, 10).Format(time.RFC3339) {
+				t.Fatalf("%s: %+v", o.Severity, o.Data)
+			}
+		})
+	}
+}
