@@ -278,3 +278,25 @@ func TestUserProbeBandSkipsMissedDays(t *testing.T) {
 		t.Fatalf("reported with a band lowered by missed days: %+v", o)
 	}
 }
+
+// 窓の判定の本人の平常帯も、アプリの記録のある日だけから作る (収集の抜けた日を 0 に数えない)。
+func TestUserProbeWindowBandSkipsMissedDays(t *testing.T) {
+	st := newStore(t)
+	m := metricSeed{st: st, t: t}
+	// 記録のある日は 10-08〜10-14 と 10-15〜10-21 (10-01〜10-07 は収集が止まっていた)
+	for day := 8; day <= 21; day++ {
+		m.put(fmt.Sprintf("2026-10-%02d", day), "app", cwlogs.MetricUserRequests, "user", 1000)
+	}
+	for day := 8; day <= 14; day++ {
+		m.put(fmt.Sprintf("2026-10-%02d", day), "app", cwlogs.MetricUserDenied, "user:48", 10)
+	}
+	for day := 17; day <= 21; day++ {
+		m.put(fmt.Sprintf("2026-10-%02d", day), "app", cwlogs.MetricUserDenied, "user:48", 22) // 1 日では min_count 未満、窓の和 110
+	}
+	// 窓の前の記録のある 7 日の中央値 10 → 本人の窓の帯 10 × 7 × 3 = 210。110 は超えない
+	// (抜けた 7 日を 0 に数えると中央値 5・帯 105 で超えてしまう。アプリの窓の帯は 80 で超える)
+	obs, _ := evalProbe(t, "user_denied", probeConfig(), st)
+	if o, ok := obs["user:48"]; ok {
+		t.Fatalf("reported with a window band lowered by missed days: %+v", o)
+	}
+}

@@ -283,6 +283,11 @@ func (p Profile) head(bin, binName, cond string, marks []mark, lines, first, use
 		aggs = append(aggs, p.req.userAggs()...)
 	}
 	b.WriteString("\n| stats " + strings.Join(aggs, ", ") + " by " + rlID)
+	if users {
+		for _, l := range p.req.userSplit() {
+			b.WriteString("\n| " + l)
+		}
+	}
 	// 決定 (実データで確認): stats の後の if() は、else に stats 由来の項目を置くと null を返す
 	// (`if(<条件>, "404", rl_status_0)` は 404 と null だけになり、取れていたステータスが消える)。
 	// そこで coalesce で「取れた値が先、無ければ補い」と書き、if の else は空の文字列にする (空は Go の側でステータスなしとして扱う)。

@@ -227,3 +227,56 @@ func FuzzUserCollect(f *testing.F) {
 		checkRecords(t, osink.recs, secrets...)
 	})
 }
+
+// FuzzUserActorPair: 1 つの要求の actor の行が 2 つで、値がどんな形でも、1 段目の後の利用者 (user_kind・user_id) は
+// 「種類と ID の両方が形に合った最後の行」の組と同じになる (無ければ空)。by の種類と ID も同じ。別の行の種類と ID を混ぜない。
+func FuzzUserActorPair(f *testing.F) {
+	f.Add("user", "42", "", "", "staff", "a@example.com", "", "")
+	f.Add("user", "43", "staff", "5", "Admin", "9", "staff", "x y")
+	f.Add("user", "44", "", "", "staff", "5", "staff", "6")
+	re := regexp.MustCompile(looseActorBy)
+	src := userSource(looseActorBy, "")
+	col, err := New(src, checksCfg(), &cwlogstest.Fake{})
+	if err != nil {
+		f.Fatal(err)
+	}
+	q := col.Profile().head("1d", "day", "", nil, false, false, true, noPaths) + "\n| stats sum(rl_starts) as n by user_kind, user_id, by_kind, by_id"
+	f.Fuzz(func(t *testing.T, k1, i1, bk1, bi1, k2, i2, bk2, bi2 string) {
+		var lines []string
+		wantUser, wantBy := ":", ":"
+		for _, l := range [][4]string{{k1, i1, bk1, bi1}, {k2, i2, bk2, bi2}} {
+			body := "actor kind=" + l[0] + " id=" + l[1]
+			if l[2] != "" || l[3] != "" {
+				body += " by=" + l[2] + ":" + l[3]
+			}
+			if strings.ContainsAny(body, "\n\r") {
+				return
+			}
+			lines = append(lines, body)
+			// Go の側で、同じ正規表現と値の形の規則から期待する組を作る (行は Logger の前置きの後ろ。userReq と同じ)
+			m := re.FindStringSubmatch("] " + body)
+			if m == nil {
+				continue
+			}
+			get := func(name string) string { return m[re.SubexpIndex(name)] }
+			if ValidUserKind(get("user_kind")) && ValidUserID(get("user_id")) {
+				wantUser = get("user_kind") + ":" + get("user_id")
+			}
+			if ValidUserKind(get("by_kind")) && ValidUserID(get("by_id")) {
+				wantBy = get("by_kind") + ":" + get("by_id")
+			}
+		}
+		ev := userReq(day21(1, 0, 1), rid(1), "GET", "/p", "192.0.2.10", 200, lines...)
+		rows := (&cwlogstest.Sim{Events: ev}).Rows(q, userWindow.From, userWindow.To, nil)
+		if len(rows) != 1 {
+			t.Fatalf("rows: %v", rows)
+		}
+		r := rows[0]
+		if got := r["user_kind"] + ":" + r["user_id"]; got != wantUser {
+			t.Fatalf("user %q, want %q (lines %q)", got, wantUser, lines)
+		}
+		if got := r["by_kind"] + ":" + r["by_id"]; got != wantBy {
+			t.Fatalf("by %q, want %q (lines %q)", got, wantBy, lines)
+		}
+	})
+}

@@ -84,8 +84,9 @@ func TestUserQueries(t *testing.T) {
 		`| parse rl_auth_reason /^(?<rl_v_auth_reason>[a-z_]{1,64})$/`,
 		// 行末の $ は、行の印の括弧の外 (実データで確かめた形)
 		`(?<rl_by_id>[A-Za-z0-9_-]{1,64}))?)$/`, `(?<rl_auth_reason>[a-z_]{1,64}))?)$/`,
-		// 最後の行の値を使う
-		"latest(rl_v_user_id) as user_id", "latest(rl_v_by_kind) as by_kind", "latest(rl_v_auth_result) as auth_result", "latest(rl_v_auth_id) as auth_id",
+		// 最後の行の値を使う。actor の種類と ID (by も) は、同じ行の組を取ってから分ける
+		"latest(rl_v_user) as rl_user", "latest(rl_v_by) as rl_by", "latest(rl_v_auth_result) as auth_result", "latest(rl_v_auth_id) as auth_id",
+		"| parse rl_user /^(?<user_kind>[a-z_]{1,32}) (?<user_id>[A-Za-z0-9_-]{1,64})$/",
 	} {
 		if !strings.Contains(lines, want) {
 			t.Errorf("解釈率のクエリに %q が無い:\n%s", want, lines)
@@ -316,5 +317,45 @@ func TestUserForgedLines(t *testing.T) {
 	want := "2026-10-21 198.51.100.7 /search 200|: by :| n=3\n2026-10-21 192.0.2.200 /items 200|staff:7 by staff:5| n=1"
 	if strings.Join(got, "\n") != want {
 		t.Fatalf("中間の形:\n%s\nwant:\n%s", strings.Join(got, "\n"), want)
+	}
+}
+
+// looseActorBy は値の形を絞らない actor の行 (by つき)。arata の側の値の形の規則が効くことを確かめるのに使う。
+const looseActorBy = `\] actor kind=(?P<user_kind>\S*) id=(?P<user_id>[^\s]*?)(?: by=(?P<by_kind>[^:\s]*):(?P<by_id>\S*))?$`
+
+// 1 つの要求に actor の行が複数あるとき、種類と ID (by の種類と ID も) は同じ行の組として取る (開発リードの指摘)。
+// 最後の行の片方が形に合わなければ、その行は使わず、前の形に合った行の組を使う (別の行の種類と ID を混ぜて別人の key にしない)。
+func TestUserActorPair(t *testing.T) {
+	var ev []cwlogstest.Event
+	req := func(i int, lines ...string) {
+		ev = append(ev, userReq(day21(1, 0, i), rid(i), "GET", fmt.Sprintf("/p%d", i), "192.0.2.10", 200, lines...)...)
+	}
+	req(1, "actor kind=user id=42", "actor kind=staff id=a@example.com") // 最後の行の ID が形に合わない
+	req(2, "actor kind=user id=43", "actor kind=Admin id=9")             // 最後の行の種類が形に合わない
+	req(3, "actor kind=user id=44", "actor kind=staff id=5")             // どちらも合う → 最後の行
+	req(4, "actor kind=user id=45 by=staff:6", "actor kind=user id=46 by=Staff:7")
+	req(5, "actor kind=user id=47 by=staff:8", "actor kind=user id=48")
+	src := userSource(looseActorBy, "")
+	col, err := New(src, checksCfg(), &cwlogstest.Fake{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := col.Profile().head("1d", "day", "", nil, false, false, true, noPaths) +
+		"\n| stats sum(rl_starts) as n by path, user_kind, user_id, by_kind, by_id, rl_users, rl_bys"
+	rows := (&cwlogstest.Sim{Events: ev}).Rows(q, userWindow.From, userWindow.To, nil)
+	got := map[string]string{}
+	for _, r := range rows {
+		got[r["path"]] = fmt.Sprintf("%s:%s by %s:%s users=%s bys=%s", r["user_kind"], r["user_id"], r["by_kind"], r["by_id"], r["rl_users"], r["rl_bys"])
+	}
+	for path, want := range map[string]string{
+		"/p1": "user:42 by : users=1 bys=0",
+		"/p2": "user:43 by : users=1 bys=0",
+		"/p3": "staff:5 by : users=2 bys=0",
+		"/p4": "user:46 by staff:6 users=2 bys=1", // by の組も同じ行から (Staff:7 は形に合わない)
+		"/p5": "user:48 by staff:8 users=2 bys=1",
+	} {
+		if got[path] != want {
+			t.Errorf("%s: %q, want %q", path, got[path], want)
+		}
 	}
 }

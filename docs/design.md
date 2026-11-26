@@ -470,7 +470,10 @@ auth result=success|failure|impersonate kind=user id=42|none [via=password|remem
   種類は `[a-z_]{1,32}`、ID は `[A-Za-z0-9_-]{1,64}`、`auth_result` は `success`・`failure`・`impersonate`、`auth_via` は `password`・`remember`、`auth_reason` は `[a-z_]{1,64}`。
   合わない値のリクエストは捨てて数だけ残す (`user_id_invalid`・`auth_invalid`)。捨てた値は結果にもログにも出さない。
   手段は成功のとき、理由は失敗のときだけ読み、形に合わなければ手段・理由なしの成功・失敗として数える。`auth_id` の `none` は ID なし
-- **1 つの request_id に行が複数あれば、最後の行の値** (`latest`。ステータスと同じ)
+- **1 つの request_id に行が複数あれば、最後の行の値** (`latest`。ステータスと同じ)。
+  決定 (開発リードの指摘、2026-11-26): actor の種類と ID (by の種類と ID も) は、**同じ行の組**として取る。行の中で、形に合った種類と ID を 1 つの項目 (`<種類> <ID>`) にしてから latest を取り、
+  1 段目の後で分ける。項目ごとに latest を取ると、最後の行の片方が形に合わないときに別々の行の値が組になり、別人の key になる。片方でも形に合わない行は組にならず、前の形に合った行の組を使う。
+  `rl_users`・`rl_bys` も組になった行を数える。未確認: 1 段目の前の `fields concat(coalesce(…))` と 1 段目の後の `parse` (Insights で確かめる。ADR 0087 の実装の PR の項目と同じ)
 - 行の種類ごとの当たった数のために、正規表現の全体を名前付きキャプチャで包む。行末の `$` は括弧の外に置く (`(?<rl_ku>…)$`。実データで確かめた形)
 - **リクエスト単位の中間の形** (クエリの中だけ): 1 段目の結果に `user_kind`・`user_id`・`by_kind`・`by_id`・`auth_result`・`auth_kind`・`auth_id`・`auth_via`・`auth_by_kind`・`auth_by_id`・`auth_reason` (形に合った値) の列が並ぶ。
   段 1 のチェックは、この列を 2 段目の軸や条件に使う。今この列を使うのは解釈率のクエリだけで、ほかの集計 (`sign_in_failures` + `probe_hits`、endpoint_abuse) のクエリには行の `parse` も足さない
