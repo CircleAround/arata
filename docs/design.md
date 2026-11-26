@@ -1119,7 +1119,7 @@ oidc_subjects:                   # OIDC でのロールの引き受けの、既�
     `role_arn` と分けるのは、`role_arn` を成功した引き受けの値として読む他のチェック (principal_new_source・secret_access など) に混ぜないため。ファズ `FuzzDeniedAssumeTarget` で固定する
   - unknown_assume_role は、引き受け先を `role_arn` → `resources[0]` → `denied_role_arn` (チェックの側でもロールの ARN の形のときだけ) の順に取る。
     `denied_role_arn` から取ったら data に `role_identity: error_message`、見出しの括弧に「断られた引き受け。引き受け先はエラーの文から」と足す。向きは今の規則で決まる
-  - どれからも取れなければ、data に `role_identity: not_recorded` を出し、`role_arn` は出さない (空の値を並べない。oidc_assume_role の `role_recorded: false` と同じ考え)。向きは決めない。
+  - どれからも取れなければ、data に `role_identity: not_recorded` を足す。`role_arn` は今までどおり空文字で残す (report.json の data の項目を消すのは互換を壊す変更。ADR 0054)。向きは決めない。
     見出しは「既知リストに無い <呼び出し元> の引き受け 1 回 (引き受け先は記録に無い。断られた引き受け、MFA なし)」(全部が断られた記録でなければ「断られた引き受けを含む」、断られた記録が無ければ句を書かない)
   - Key は `<呼び出し元>-><引き受け先>` のまま。エラーの文から取れた記録は、以前のロールの部分が空の Key (`<呼び出し元>->`) から引き受け先の ARN の Key に変わる
     (新しい finding になり、以前の Key の ack は効かない。以前の Key の finding は event 型なので、観測されなくなっても自動では resolved にならない)。取れない記録の Key と、Fingerprint の作り方は変えない

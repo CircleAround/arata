@@ -15,7 +15,7 @@ AWS のサービス主体 (EC2・Lambda などのインスタンスロール) �
 - 「外部アカウント 111122223333」と書く。「111122223333 の root」「ルートユーザーから」と書かず、ルートユーザーの利用を理由に緊急度を上げない
 - どの主体だったかは相手のアカウントの CloudTrail にある。相手の管理者に時刻 (`first_time`〜`last_time`) とロール (`role_arn`) を伝えて確かめてもらう
 
-断られた AssumeRole の記録には引き受け先の項目が無い (`role_identity`)。`error_message`: 引き受け先は記録のエラーの文から arata が取った (呼び出した側が指定した値で、実在するとは限らない)。`not_recorded`: 引き受け先は記録に無い (`role_arn`・`direction` も無い)。**`caller` は呼び出し元で、引き受け先ではない**。「外部アカウントのロール」と書かず、引き受け先は CloudTrail の記録の `errorMessage` を人に読んでもらう
+断られた AssumeRole の記録には引き受け先の項目が無い (`role_identity`)。`error_message`: 引き受け先は記録のエラーの文から arata が取った (呼び出した側が指定した値で、実在するとは限らない)。`not_recorded`: 引き受け先は記録に無い (`role_arn` は空、`direction` は無い)。**`caller` は呼び出し元で、引き受け先ではない**。「外部アカウントのロール」と書かず、引き受け先は CloudTrail の記録の `errorMessage` を人に読んでもらう
 
 見出しの末尾の括弧に、引き受けの**向き**と **MFA** が規則で書かれる。向きを自分で推測しない・書き換えない。
 
@@ -32,7 +32,7 @@ AWS のサービス主体 (EC2・Lambda などのインスタンスロール) �
 - `destination_status` がある finding は、行き先は既知だが MFA ありと確かめられない (`approved`) か期限切れ (`expired`)。「既知だから問題ない」と書かない
 
 - Key は `<呼び出し元 ARN>-><引き受けたロール ARN>`
-- data: `caller`、`caller_kind`、`caller_identity` (`account_only` のときだけ)、`role_arn` (引き受け先が記録に無いときは無い)、`role_identity` (`error_message` / `not_recorded`。引き受け先を記録の roleArn・resources から取れなかったときだけ)、`direction`・`caller_account`・`role_account` (向きが決まったとき)、`mfa`、`external_account` (そのときのアカウント ID)、`allowlist_status` (unknown / expired)、`count`、`ips`、`event_names` (AssumeRole / AssumeRoleWithSAML など)、
+- data: `caller`、`caller_kind`、`caller_identity` (`account_only` のときだけ)、`role_arn` (引き受け先が記録に無いときは空)、`role_identity` (`error_message` / `not_recorded`。引き受け先を記録の roleArn・resources から取れなかったときだけ)、`direction`・`caller_account`・`role_account` (向きが決まったとき)、`mfa`、`external_account` (そのときのアカウント ID)、`allowlist_status` (unknown / expired)、`count`、`ips`、`event_names` (AssumeRole / AssumeRoleWithSAML など)、
   `has_errors` (失敗した引き受けを含む)、`invoked_by` (送信元の IP が無く、AWS のサービス経由のとき。コンソールのスイッチロールなど)
 - `ips` が無いのは、記録の送信元が AWS のサービス名で IP が無いとき (収集で落としているのではない)
 - GitHub の OIDC から来たセッション (`oidc_origins`。ADR 0081): 呼び出し側のセッションを 1 段目の `AssumeRoleWithWebIdentity` までキーの一致でたどれたら、1 段目の `repo`・`ref` / `environment`・`run_id`・`assumed_at`・`chain_depth` が付く (たどれない理由は `oidc_origin_unmatched`)。

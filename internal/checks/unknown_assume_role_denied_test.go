@@ -15,7 +15,7 @@ import (
 // 決定 (設計書 6 章):
 //   - collector が errorMessage の決まった形から取った引き受け先 (denied_role_arn) があれば、それを引き受け先にする (role_identity: error_message)。
 //     向きは今の規則 (newAssumeParties) で決まる
-//   - 無ければ呼び出し元と混ぜず、見出しに「引き受け先は記録に無い」と書く (role_identity: not_recorded)。向きは決めない。role_arn は出さない
+//   - 無ければ呼び出し元と混ぜず、見出しに「引き受け先は記録に無い」と書く (role_identity: not_recorded)。向きは決めない。role_arn は今までどおり空文字で残す (data の項目を消すのは互換を壊す変更。ADR 0054)
 func TestUnknownAssumeRoleDeniedWithoutTarget(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()
@@ -73,7 +73,10 @@ func TestUnknownAssumeRoleDeniedWithoutTarget(t *testing.T) {
 		if o.Data["role_identity"] != "not_recorded" || o.Data["caller"] != caller {
 			t.Fatalf("data: %v", o.Data)
 		}
-		for _, k := range []string{"role_arn", "direction", "role_account", "caller_account"} {
+		if v, has := o.Data["role_arn"]; !has || v != "" {
+			t.Fatalf("role_arn は空文字で残す: %v (%v)", v, has)
+		}
+		for _, k := range []string{"direction", "role_account", "caller_account"} {
 			if _, has := o.Data[k]; has {
 				t.Fatalf("data.%s は出さない: %v", k, o.Data[k])
 			}

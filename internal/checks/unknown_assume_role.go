@@ -225,7 +225,7 @@ func assumeSummary(p assumeParties, accountOnly bool, caller, role string, count
 // 決定 (設計書 6 章): 断られた AssumeRole の記録には、どちらも無い。caller_identity (account_only) と同じく、読む人と LLM が取り違えないよう data で区別する。
 const (
 	roleFromErrorMessage = "error_message" // collector が errorMessage の決まった形から取った (data.denied_role_arn)
-	roleNotRecorded      = "not_recorded"  // 記録に無い。Key のロールの部分は空のまま (既存の ack との一致を保つ)
+	roleNotRecorded      = "not_recorded"  // 記録に無い。Key のロールの部分と role_arn は空のまま (既存の ack との一致と、data の互換を保つ)
 )
 
 // assumeTarget は 1 件の AssumeRole の引き受け先と、その出どころ (role_identity。roleArn・resources から取れたときは空)。
@@ -297,10 +297,8 @@ func (c UnknownAssumeRole) Evaluate(ctx context.Context, q store.Query, w collec
 				recipients: map[string]bool{}, mfa: map[string]bool{}, services: map[string]bool{}}
 			a.extra["caller"] = e.PrincipalARN
 			a.extra["caller_kind"] = string(e.PrincipalKind)
-			// 決定 (設計書 6 章): 引き受け先が記録に無いときは role_arn を出さない (空の値を呼び出し元と並べない。oidc_assume_role と同じ)
-			if role != "" {
-				a.extra["role_arn"] = role
-			}
+			// 引き受け先が記録に無いときも role_arn は空文字で残す (data の項目を消すのは互換を壊す変更。ADR 0054)。無いことは role_identity で示す
+			a.extra["role_arn"] = role
 			a.extra["allowlist_status"] = string(status)
 			// 決定 (設計書 6 章): 呼び出し元がアカウントしか分からないとき (ロール側の記録) は caller_identity: account_only を足す。
 			// caller と Key は ARN (`...:root`) のまま。caller_kind は主体の種類の語彙のまま (approve が種類として読む)
