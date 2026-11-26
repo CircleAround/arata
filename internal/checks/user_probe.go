@@ -24,6 +24,7 @@ import (
 //   - 窓 (user_denied・user_id_enumeration): 評価する日に値があり、その日を含む window 日の和が min_count_window 以上、値のあった日が min_days 以上で、
 //     利用者の窓の平常帯 (窓の前の baseline_days 日の中央値 × 窓の日数 × factor) と、アプリの窓の平常帯
 //     (窓の前の baseline_days 日の各日を終わりとする window 日の和の、いちばん多い利用者の値の中央値 × app_factor) を超える
+//   - 本人の平常帯もアプリの平常帯も、平常帯の日々のうちアプリの記録のある日だけから作る (収集の抜けた日を 0 に数えない)
 //   - 新しい利用者 (平常帯の日々に値の残った日が min_baseline_days 未満) は、本人の平常帯を使わない (reasons に new_user)。
 //     下限 (store_min) 未満の日は残らないので、ふだん値の小さい利用者もここに入る (本人の帯は 0 に近く、使っても結果は同じ)
 //   - アプリの記録のある日 (user_requests のある日) が平常帯の日々に min_baseline_days 未満なら、その日は判定せず、coverage.notes に残りの日数を出す
@@ -239,12 +240,13 @@ func (ps *probeSeries) daily(s series, key, d string, v, min float64, b config.U
 	var userVals, appVals []float64
 	withData := 0
 	for _, bd := range baseDates(d, b.BaselineDays) {
-		x := s[bd][key]
-		userVals = append(userVals, x)
 		if _, ok := s[bd][key]; ok {
 			withData++
 		}
+		// 決定 (レビューの指摘): 本人の帯もアプリの記録のある日だけから作る。収集の抜けた日を 0 にすると帯が下がり、誤りの指摘が増える
+		// (記録のある日に値が無いのは下限未満なので 0 で正しい)
 		if ps.collected[bd] {
+			userVals = append(userVals, s[bd][key])
 			appVals = append(appVals, appMaxOf(bd))
 		}
 	}
@@ -285,12 +287,11 @@ func (ps *probeSeries) windowed(s series, key, d string, b config.UserBands, uw 
 	var userVals, appVals []float64
 	withData := 0
 	for _, bd := range baseDates(start, b.BaselineDays) {
-		x, ok := s[bd][key]
-		userVals = append(userVals, x)
-		if ok {
+		if _, ok := s[bd][key]; ok {
 			withData++
 		}
-		if ps.collected[bd] {
+		if ps.collected[bd] { // 本人の帯も記録のある日だけ (daily と同じ)
+			userVals = append(userVals, s[bd][key])
 			appVals = append(appVals, appSumMax(bd, n))
 		}
 	}

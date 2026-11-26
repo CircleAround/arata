@@ -260,3 +260,21 @@ func TestUserProbeDisabled(t *testing.T) {
 		}
 	}
 }
+
+// 本人の平常帯は、アプリの記録のある日だけから作る (レビューの指摘)。収集の抜けた日を 0 として数えると帯が下がり、誤りの指摘が増える。
+func TestUserProbeBandSkipsMissedDays(t *testing.T) {
+	st := newStore(t)
+	m := metricSeed{st: st, t: t}
+	userCollected(m, 7) // 10-13〜10-19 だけ記録がある (10-06〜10-12 は収集が止まっていた)
+	for day := 13; day <= 19; day++ {
+		m.put(fmt.Sprintf("2026-10-%02d", day), "app", cwlogs.MetricUserDenied, "user:41", 10)
+	}
+	m.put("2026-10-21", "app", cwlogs.MetricUserDenied, "user:41", 25)
+	c := probeConfig()
+	c.UserDenied.MinCount = 20
+	// 記録のある 7 日の中央値は 10 → 本人の帯 30。25 は超えない (抜けた日を 0 に数えると中央値 5・帯 15 で超えてしまう)
+	obs, _ := evalProbe(t, "user_denied", c, st)
+	if o, ok := obs["user:41"]; ok {
+		t.Fatalf("reported with a band lowered by missed days: %+v", o)
+	}
+}

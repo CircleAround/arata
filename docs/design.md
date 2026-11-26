@@ -1326,6 +1326,7 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 
 - 決定: `sources` が空なら Disabled (skip し、理由を出す)。Disabled のチェックの要る記録は run も doctor も引かない (default-daily に入っても、sources を書くまでユーザー ID のソースを引かない。ADR 0014)
 - 決定: 型の要る 2 つは、`sources` に path_ids のあるソースが無ければ skip (`no path_ids`)
+- 決定: 本人の平常帯もアプリの平常帯も、平常帯の日々のうちアプリの記録のある日だけから作る (収集の抜けた日を 0 に数えると帯が下がり、誤りの指摘が増える。レビューの指摘)
 - 決定: 新しい利用者 (本人の値の残った日が `min_baseline_days` 未満) は本人の平常帯を使わない (`new_user`)。アプリの記録のある日 (`user_requests` のある日) が足りない間は判定せず、`coverage.notes` に残りの日数を出す
 - 決定: アプリの平常帯の「いちばん多い利用者の値」は、user_denied・user_path_breadth は残した key の最大、user_id_enumeration は型ごとの `user_ids_dist` の max。窓の帯は残した key の和の最大
 - 決定: finding は利用者ごとに 1 つ (評価する日のうち値の大きい日。同じなら新しい日)。`related` は同じ利用者・同じ日に条件を満たしたほかの 2 つ (sources を書いたものだけ)
