@@ -43,6 +43,7 @@ func periodInput() PeriodInput {
 			{Date: "2026-10-07", Source: "trail", Metric: record.MetricPrincipalSource, Key: "arn:aws:iam::123456789012:user/alice|198.51.100.0/24", Value: 5},
 			{Date: "2026-10-07", Source: "trail", Metric: record.MetricPrincipalSourceWrites, Key: "arn:aws:iam::123456789012:user/alice|198.51.100.0/24", Value: 1},
 			{Date: "2026-10-07", Source: "trail", Metric: record.MetricPrincipalWriteRegion, Key: "arn:aws:iam::123456789012:user/alice|us-east-1", Value: 1},
+			{Date: "2026-10-07", Source: "trail", Metric: record.MetricPrincipalSigninSession, Key: "arn:aws:iam::123456789012:user/alice|11111111-2222-3333-4444-555555555555", Value: 3},
 		},
 		Runs: []store.Run{
 			{ID: "i", Profile: "init", StartedAt: day(5, 9), Status: "ok"},

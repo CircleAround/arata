@@ -215,6 +215,9 @@ const (
 	MetricPrincipalSourceRuntimeWrites = "principal_source_runtime_writes"
 	// MetricPrincipalWriteRegion は主体 × リージョンの、成功した書き込みの件数。
 	MetricPrincipalWriteRegion = "principal_write_region"
+	// MetricPrincipalSigninSession は主体 × aws login のログインのセッション (SigninSessionUUID) の件数 (ADR 0092 の 1 節)。
+	// 送信元に依らず、ログインのセッションの載った全部の記録を数える。足す前の版で集めた日には無い。
+	MetricPrincipalSigninSession = "principal_signin_session"
 )
 
 // runtimeWrites は実行環境 (Lambda など) が関数の代わりに必ず行う書き込みの一覧 (eventSource → eventName)。

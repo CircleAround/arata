@@ -207,3 +207,35 @@ func FuzzRuntimeWrite(f *testing.F) {
 		}
 	})
 }
+
+// FuzzSignin はログインのセッションの ARN と CLI の版の取り出し (ADR 0092)。どちらも呼ぶ側が書ける値。
+// 規則: UUID は 36 文字の小文字の 16 進とハイフンだけで、元の ARN の末尾。CLI の版は aws-cli/ で始まり、空白・改行を含まず、元の値の先頭
+func FuzzSignin(f *testing.F) {
+	for _, s := range []string{"arn:aws:signin:ap-northeast-1:123456789012:session/11111111-2222-3333-4444-555555555555",
+		"arn:aws:signin:ap-northeast-1:123456789012:session/11111111-2222-3333-4444-555555555555\n", "aws-cli/2.31.4 md/awscrt#0.27.6",
+		"aws-cli/2.31.4", "aws-cli/2.31.4\n<!here>", "aws-cli/99999.1.1", "", "session/"} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		if id, ok := SigninSessionUUID(s); ok {
+			if len(id) != 36 || strings.Trim(id, "0123456789abcdef-") != "" || !strings.HasSuffix(s, ":session/"+id) || !strings.HasPrefix(s, "arn:aws:signin:") {
+				t.Fatalf("UUID が規則に合わない: %q → %q", s, id)
+			}
+		}
+		if v, ok := CLIVersion(s); ok {
+			if !strings.HasPrefix(v, "aws-cli/") || !strings.HasPrefix(s, v) || strings.ContainsAny(v, " \t\r\n") || len(v) > len("aws-cli/")+14 {
+				t.Fatalf("CLI の版が規則に合わない: %q → %q", s, v)
+			}
+		}
+		for _, f := range []func(any) string{SigninGrant, SigninClient} {
+			switch got := f(s); got {
+			case GrantAuthorizationCode, GrantRefreshToken, SigninCrossDevice, SigninSameDevice, SigninOther:
+			default:
+				t.Fatalf("決まった値でない: %q → %q", s, got)
+			}
+		}
+		if v, ok := SigninFlag(s); ok != (s == "true" || s == "false") || ok && v != (s == "true") {
+			t.Fatalf("SigninFlag(%q) = %v, %v", s, v, ok)
+		}
+	})
+}
