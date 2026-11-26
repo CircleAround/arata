@@ -187,7 +187,7 @@ func TestAssumeSummaryAccountOnlyInternal(t *testing.T) {
 	if p.direction != dirInternal {
 		t.Fatalf("direction: %q", p.direction)
 	}
-	got := assumeSummary(p, true, "", ownRole, 2, mfaUnknown, allowlist.StatusUnknown)
+	got := assumeSummary(p, true, "", ownRole, 2, mfaUnknown, allowlist.StatusUnknown, "")
 	if want := "既知リストに無い自アカウント (呼び出した主体は記録に無い) が自アカウントのロール Admin を 2 回引き受け (内部、MFA 不明)"; got != want {
 		t.Fatalf("\n got: %s\nwant: %s", got, want)
 	}
@@ -249,7 +249,7 @@ func FuzzAssumeDirection(f *testing.F) {
 		}
 		// 呼び出し元がアカウントしか分からないなら、見出しの呼び出し元に root の語を出さない (ロールの名前に含まれる分は別)
 		if acct, accountOnly := record.ExternalAccount(caller, kind); accountOnly {
-			sum := assumeSummary(p, true, record.AccountOnlyLabel(acct), role, 1, mfaUnknown, allowlist.StatusUnknown)
+			sum := assumeSummary(p, true, record.AccountOnlyLabel(acct), role, 1, mfaUnknown, allowlist.StatusUnknown, "")
 			if rest := strings.Replace(sum, p.roleLabel, "", 1); strings.Contains(rest, "root") || !strings.Contains(sum, "呼び出した主体は記録に無い") {
 				t.Fatalf("アカウントしか分からない呼び出し元を root と読める見出し: %q", sum)
 			}

@@ -1110,6 +1110,19 @@ oidc_subjects:                   # OIDC でのロールの引き受けの、既�
     上の記録の形と食い違う、1 つの finding のイベントで `recipientAccountId` が揃わない。このとき見出しは従来の形 (ARN のまま) で、`direction` は出さない。
     同じ文書の呼び出し側の記録の例は `recipientAccountId` がロール側のアカウントになっており、定義と合わない。この形の記録は「食い違い」として向きを書かない側に倒れる。
   - 却下: 設定にアカウント ID を書かせる (記録にある値と二重になり、書き忘れ・書き間違いで向きが逆になる)。`sts:GetCallerIdentity` で引く (hourly の収集に API 呼び出しを足す。組織の証跡では実行アカウントと記録のアカウントが違いうる)。
+- 決定 (unknown_assume_role の断られた引き受け): 断られた `AssumeRole` (`errorCode` が `AccessDenied` など) の実際の記録は、`requestParameters` が null で `resources` も無く、
+  引き受け先が記録の項目に無い。以前は引き受け先を空のまま見出しにし (「既知リストに無い <呼び出し元> が  を 1 回引き受け」)、aratam の LLM が呼び出し元のロールを外部アカウントのロールと読み違えた。
+  - 引き受け先は `errorMessage` の文にだけある (`User: <呼び出し元> is not authorized to perform: sts:AssumeRole on resource: <ロールの ARN>`)。
+    collector は、`roleArn` が無い sts の `AssumeRole` で `errorCode` があるときだけ、文全体がこの形で終わり、`<呼び出し元>` が `userIdentity.arn` と 1 字も違わず、
+    `<ロールの ARN>` がロールの ARN の形 (12 桁のアカウント、IAM が許す名前の文字、128 文字まで) のときに限り、その ARN を events の `data.denied_role_arn` に残す。
+    文そのものは残さない (呼び出し元のセッション名 = 利用者名が入る)。後ろに理由が続く文 (`because no identity-based policy allows ...`・`with an explicit deny ...`) は形に合わないとして読まない。
+    `role_arn` と分けるのは、`role_arn` を成功した引き受けの値として読む他のチェック (principal_new_source・secret_access など) に混ぜないため。ファズ `FuzzDeniedAssumeTarget` で固定する
+  - unknown_assume_role は、引き受け先を `role_arn` → `resources[0]` → `denied_role_arn` (チェックの側でもロールの ARN の形のときだけ) の順に取る。
+    `denied_role_arn` から取ったら data に `role_identity: error_message`、見出しの括弧に「断られた引き受け。引き受け先はエラーの文から」と足す。向きは今の規則で決まる
+  - どれからも取れなければ、data に `role_identity: not_recorded` を出し、`role_arn` は出さない (空の値を並べない。oidc_assume_role の `role_recorded: false` と同じ考え)。向きは決めない。
+    見出しは「既知リストに無い <呼び出し元> の引き受け 1 回 (引き受け先は記録に無い。断られた引き受け、MFA なし)」(全部が断られた記録でなければ「断られた引き受けを含む」、断られた記録が無ければ句を書かない)
+  - Key は `<呼び出し元>-><引き受け先>` のまま。エラーの文から取れた記録は、以前のロールの部分が空の Key (`<呼び出し元>->`) から引き受け先の ARN の Key に変わる
+    (新しい finding になり、以前の Key の ack は効かない。以前の Key の finding は event 型なので、観測されなくなっても自動では resolved にならない)。取れない記録の Key と、Fingerprint の作り方は変えない
 - 決定 (unknown_assume_role の MFA): data に `mfa` (true / false / unknown / mixed) を出し、見出しに「MFA あり / なし / 不明 / の有無が混在」を付ける。
   - あり: 呼び出しに MFA デバイスを指定した (`requestParameters.serialNumber` がある。STS の AssumeRole は MFA を `SerialNumber` と `TokenCode` で渡し、CloudTrail の記録には呼び出し側・ロール側とも `serialNumber` が載る)、
     または呼び出し元のセッションが MFA で認証済み (`userIdentity.sessionContext.attributes.mfaAuthenticated` が `true`。一時的な認証情報とコンソールのセッションに載る)。
