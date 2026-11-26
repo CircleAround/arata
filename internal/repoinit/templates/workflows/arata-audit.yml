@@ -196,6 +196,36 @@ jobs:
           echo "arata exit=$status"
           exit "$status"
 
+      # 利用者のログ (request_lines の users・auth) の集計の数。利用者ごとのチェック (arata の ADR 0071) の前に、
+      # 集計が貯まっているかを、ストアを読まずに確かめるため。利用者のソースが無ければ [] だけが出る。
+      # 数と、決まった形の名前 (ソースの id・利用者の種類・ログインの経路と理由) だけを出す。利用者の ID・IP・パスは出さない。
+      # ソースの id の形は設定の規則 (/・\・NUL を含まず、. と .. でない) に合わせる。ほかはログ由来の名前なので小文字・数字・_ だけにする
+      # (経路と理由の空の名前は「無いもの」の数)。
+      - id: user-coverage
+        name: 利用者のログの集計 (数だけ)
+        if: always()
+        timeout-minutes: 5
+        run: |
+          file="$RUNNER_TEMP/arata-out/report.json"
+          if [ ! -f "$file" ]; then
+            echo "報告がありません"
+            exit 0
+          fi
+          jq -c '
+            def count: if type == "number" then . else null end;
+            def source_id: if type == "string" and . != "" and . != "." and . != ".."
+              and (explode | any(. == 0 or . == 47 or . == 92) | not) then . else null end;
+            def counts: if type == "object" then with_entries(select(.key | test("^[a-z0-9_]{0,64}$")) | .value |= count) else null end;
+            [.coverage.formats[]? | select(.requests.users? != null or .requests.auth? != null) | {
+              source: (.source | source_id),
+              users: (.requests.users | if . == null then null else {
+                with_user: (.with_user | count), user_rate: (.user_rate | count), with_by: (.with_by | count),
+                user_id_invalid: (.user_id_invalid | count), kinds: (.kinds | counts)} end),
+              auth: (.requests.auth | if . == null then null else {
+                success: (.success | count), failure: (.failure | count), impersonate: (.impersonate | count),
+                invalid: (.invalid | count), via: (.via | counts), reasons: (.reasons | counts)} end)
+            }]' "$file" 2>/dev/null || echo "報告を読めませんでした"
+
       # 試しの実行 (手動実行の dry_run) の結果。通知はしないので、件数と重大度だけをここに出す。
       # ログの方針は上と同じ: 個々の指摘の中身 (主体・IP・要約) と注記の文は出さない。
       # 数と、決まった語彙の値 (重大度) と、時刻の形の値だけを選んで出す。中身を読むときは、手元で同じ arata run --dry-run を流す。
