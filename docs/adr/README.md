@@ -59,7 +59,7 @@
 | [0033](0033-rebuild-from-raw.md) | `arata rebuild` は raw から作れる表だけを作り直し、作れないものは既存の SQLite から引き継ぐ。raw には rebuild に要る印を足す | 採用 |
 | [0034](0034-s3-store.md) | S3 ストアは実行のたびに作業用の複製を出し入れし、確定は明示の Commit と条件付き書き込みで行う | 採用 |
 | [0035](0035-supply-chain-ci.md) | サプライチェーンの検査を CI で常に行い、Actions の 7 日待機を強制し、release を権限で分ける | 採用 |
-| [0036](0036-sensitive-info-scan.md) | 公開できない情報の検査は、一般的な秘密を gitleaks、禁止語を secrets の一覧と `tools/wordscan` で行い、CI で常に回す | 採用 |
+| [0036](0036-sensitive-info-scan.md) | 公開できない情報の検査は、一般的な秘密を gitleaks、禁止語を secrets の一覧と `tools/wordscan` で行い、CI で常に回す | 採用 (gitleaks がすべての実行で全履歴を読む点は 0088 で置き換え) |
 | [0037](0037-sast-and-untrusted-log-values.md) | 静的解析を CI で常に回し、ログ由来の値と LLM の出力を信用しない前提で通知を組み立てる | 採用 |
 | [0038](0038-source-catchup-and-reported-after-staging.md) | 失敗したソースはソースごとの位置から追いつき、報告済みの印は出力の準備の後に付ける | 採用 |
 | [0039](0039-actions-lock-with-sha-pins.md) | Actions のロックファイルを、uses の SHA 固定と併用して `--no-narrow` で作る | 採用 |
@@ -110,3 +110,4 @@
 | [0085](0085-ecs-workload-changes.md) | ECS の負荷を変える操作 (タスク定義の登録・タスクの起動・サービスの更新) を、デプロイする主体の外からのものと、ロール・秘匿値の参照の変化で報告する (`ecs_workload_changes`) | 提案 |
 | [0086](0086-public-access-block-prior-state.md) | Public Access Block の変更を前の状態 (posture の snapshot か前の Put / Delete の記録) と比べ、開けた (high)・締めた (info)・前が分からない (medium) に分ける。何も変わらない変更は報告しない | 採用 |
 | [0087](0087-user-checks-daily-first.md) | ログインした利用者の総当たりのチェック (ADR 0071) を、利用者ごとのチェックの土台より先に、日の単位のクエリで実装する。U1・U2 は 0071 の実装が持ち、土台の後も判定と日の値の key・意味 (異なりは日の正確な値) を変えない。パスの型に `:any` と末尾の拡張子の一覧 (`formats`) を足し、`denied_statuses` に GET の 3xx を書けるようにする | 採用 |
+| [0088](0088-gitleaks-pr-range.md) | CI の gitleaks は、PR ではその PR のコミットだけを読み、全部の枝の履歴は main への push・定期実行・手動で読む。手元では push の前に送るコミットを読み、誤検知は `.gitleaksignore` で外す | 採用 |

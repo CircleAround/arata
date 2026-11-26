@@ -5,7 +5,7 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 BIN := bin
 
-.PHONY: build build-local test test-terraform fuzz lint vet fmt clean scan-sensitive scan-sensitive-history scan-sensitive-github
+.PHONY: build build-local test test-terraform fuzz lint vet fmt clean scan-sensitive scan-sensitive-push scan-sensitive-history scan-sensitive-github
 
 CMDS := arata aratam
 
@@ -59,11 +59,14 @@ scan-sensitive: $(GITLEAKS)
 	$(GO) run ./tools/wordscan -patterns $(SENSITIVE_PATTERNS_FILE) -mode tree
 	$(GITLEAKS) git $(GITLEAKS_FLAGS) --pre-commit .
 
-## scan-sensitive-history: 全履歴の禁止語と秘密を調べる (CI と同じ)
+## scan-sensitive-push: push の前に、送るコミット (上流が無ければ origin/main から) の秘密を調べる。禁止語は見ない
+scan-sensitive-push: $(GITLEAKS)
+	GITLEAKS=$(GITLEAKS) tools/scan-commits.sh --unpushed
+
+## scan-sensitive-history: 全履歴の禁止語と秘密を調べる (main の CI と定期実行と同じ)
 scan-sensitive-history: $(GITLEAKS)
 	$(GO) run ./tools/wordscan -patterns $(SENSITIVE_PATTERNS_FILE) -mode history
-	$(GITLEAKS) git $(GITLEAKS_FLAGS) --log-opts=--all .
-	git log --all --format=%B | $(GITLEAKS) stdin $(GITLEAKS_FLAGS)
+	GITLEAKS=$(GITLEAKS) tools/scan-commits.sh --all
 
 ## scan-sensitive-github: GitHub 上の本文 (PR・Issue・コメント・Release) を調べる。gh の認証が要る
 scan-sensitive-github: $(GITLEAKS)

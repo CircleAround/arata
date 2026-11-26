@@ -15,7 +15,7 @@ LLM 向けの使い方は `go run ./cmd/arata help ai` (バイナリに埋め込
 - 例は架空の値を使う。アカウント ID は `123456789012` (自アカウント) と `111122223333` (外部 SaaS)、承認者は `alice`、ロググループは `prod-nginx-access` のような名前
 - 顧客固有の設定は顧客側のリポジトリか実行環境に置く。「最初の適用先は X」のような記述も書かない
 - PR の本文・コメント・Release の本文・ブランチ名も対象。公開すれば全部読める
-- CI (`secrets-scan.yml`) が一般的な秘密と禁止語を全履歴と GitHub の本文で検査する。禁止語の一覧はリポジトリの外にあり、その中身をどこにも書き写さない。手元では `make scan-sensitive`。運用は `docs/sensitive-scan.md`
+- CI (`secrets-scan.yml`) が一般的な秘密と禁止語を全履歴と GitHub の本文で検査する。禁止語の一覧はリポジトリの外にあり、その中身をどこにも書き写さない。手元ではコミットの前に `make scan-sensitive`、push の前に `make scan-sensitive-push`。運用は `docs/sensitive-scan.md`
 - 判断: 設計書 1 章「リポジトリの例」、ADR 0036
 
 ### 開発の方法
@@ -28,6 +28,7 @@ LLM 向けの使い方は `go run ./cmd/arata help ai` (バイナリに埋め込
   見本のワークフローや文書に、人向けの出力を grep / sed で読む例を書かない。項目を足すのは互換、消す・意味を変える・型を変えるのは
   `schema_version` を上げて Release の本文に書く (ADR 0054)
 - Go は `$HOME/.local/go/bin` の公式 tarball (README「開発」)。cgo は使わない (単一静的バイナリ。ADR 0002)
+- push の前に、コミットした後で `make scan-sensitive-push` を通す (送るコミットの秘密。`make scan-sensitive` はコミット済みの変更を読まない)。pre-push のフックにもできる (`docs/sensitive-scan.md`)
 - `go test ./...` / `go vet ./...` / `gofmt -l $(git ls-files '*.go')` を通してから push する。CI は `go mod verify`・age-gate・govulncheck・ビルドも回す
   (`gofmt -l .` は `deploy/sandbox/node_modules` の中の Go の雛形まで読んで失敗するので、git 管理のファイルだけを見る)
 - 信用できない入力 (ログ由来の値・LLM の出力・利用者のファイル) を解釈する関数を足す・変えるときは、ファズテスト (`Fuzz*`) も足す・通す。
