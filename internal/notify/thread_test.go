@@ -14,8 +14,6 @@ import (
 
 // slack.details: thread (ADR 0093)。1 通目に一番伝えたいことと確認推奨の概要、1 通目のスレッドへの返信 (3 通まで) に詳細。
 
-func withThread(o *Options) { o.Details = DetailsThread }
-
 // threadSender は送った順に記録し、1 通ごとに ts を返す。failAt 通目 (1 始まり) で失敗する。ts を tsOf で差し替えられる。
 type threadSender struct {
 	got    []sent
