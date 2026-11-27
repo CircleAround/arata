@@ -80,7 +80,7 @@ func (a *fakeAPI) bot(slept *[]time.Duration) *Bot {
 func TestPostMessageSendsChannelAndBearer(t *testing.T) {
 	a := newFakeAPI(t)
 	payload := map[string]any{"text": "通知", "blocks": []map[string]any{{"type": "divider"}}, "unfurl_links": false}
-	if err := a.bot(nil).PostMessage(context.Background(), "C0123456789", payload); err != nil {
+	if _, err := a.bot(nil).PostMessage(context.Background(), "C0123456789", "", payload); err != nil {
 		t.Fatal(err)
 	}
 	if len(a.calls) != 1 {
@@ -109,7 +109,7 @@ func TestPostMessageChecksOK(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.code, func(t *testing.T) {
 			a := newFakeAPI(t, reply{body: `{"ok":false,"error":"` + tc.code + `"}`})
-			err := a.bot(nil).PostMessage(context.Background(), "C0123456789", map[string]string{"text": "x"})
+			_, err := a.bot(nil).PostMessage(context.Background(), "C0123456789", "", map[string]string{"text": "x"})
 			var ae *APIError
 			if !errors.As(err, &ae) || ae.Code != tc.code || ae.Method != "chat.postMessage" {
 				t.Fatalf("want APIError %s, got %v", tc.code, err)
@@ -132,7 +132,7 @@ func TestPostMessageChecksOK(t *testing.T) {
 // chat:write.public には頼らない。not_in_channel は「bot を招待する」と分かる文にする。
 func TestNotInChannelTellsToInvite(t *testing.T) {
 	a := newFakeAPI(t, reply{body: `{"ok":false,"error":"not_in_channel"}`})
-	err := a.bot(nil).PostMessage(context.Background(), "C0123456789", map[string]string{"text": "x"})
+	_, err := a.bot(nil).PostMessage(context.Background(), "C0123456789", "", map[string]string{"text": "x"})
 	if err == nil || !strings.Contains(err.Error(), "bot をチャンネルに招待") || !strings.Contains(err.Error(), "/invite") {
 		t.Fatalf("%v", err)
 	}
@@ -143,7 +143,7 @@ func TestRateLimitedRetriesHonoringRetryAfter(t *testing.T) {
 	limited := reply{status: http.StatusTooManyRequests, body: `{"ok":false,"error":"ratelimited"}`, retryAfter: "3"}
 	var slept []time.Duration
 	a := newFakeAPI(t, limited, limited)
-	if err := a.bot(&slept).PostMessage(context.Background(), "C0123456789", map[string]string{"text": "x"}); err != nil {
+	if _, err := a.bot(&slept).PostMessage(context.Background(), "C0123456789", "", map[string]string{"text": "x"}); err != nil {
 		t.Fatal(err)
 	}
 	if len(a.calls) != 3 || len(slept) != 2 || slept[0] != 3*time.Second || slept[1] != 3*time.Second {
@@ -153,7 +153,7 @@ func TestRateLimitedRetriesHonoringRetryAfter(t *testing.T) {
 	// 回数の上限 (再試行は 2 回まで)
 	slept = nil
 	a = newFakeAPI(t, limited, limited, limited, limited)
-	err := a.bot(&slept).PostMessage(context.Background(), "C0123456789", map[string]string{"text": "x"})
+	_, err := a.bot(&slept).PostMessage(context.Background(), "C0123456789", "", map[string]string{"text": "x"})
 	var ae *APIError
 	if !errors.As(err, &ae) || ae.Code != "ratelimited" || len(a.calls) != 1+MaxRateLimitRetries || len(slept) != MaxRateLimitRetries {
 		t.Fatalf("err %v calls %d slept %v", err, len(a.calls), slept)
@@ -162,7 +162,7 @@ func TestRateLimitedRetriesHonoringRetryAfter(t *testing.T) {
 	// 待ち時間が上限より長ければ、短く待って送り直すことはしない (Retry-After を破らない)
 	slept = nil
 	a = newFakeAPI(t, reply{status: http.StatusTooManyRequests, body: `{"ok":false,"error":"ratelimited"}`, retryAfter: "3600"})
-	err = a.bot(&slept).PostMessage(context.Background(), "C0123456789", map[string]string{"text": "x"})
+	_, err = a.bot(&slept).PostMessage(context.Background(), "C0123456789", "", map[string]string{"text": "x"})
 	if !errors.As(err, &ae) || ae.Code != "ratelimited" || len(a.calls) != 1 || len(slept) != 0 || !strings.Contains(err.Error(), "3600") {
 		t.Fatalf("err %v calls %d slept %v", err, len(a.calls), slept)
 	}
@@ -170,7 +170,7 @@ func TestRateLimitedRetriesHonoringRetryAfter(t *testing.T) {
 	// HTTP 200 の本文で ratelimited と返っても同じ扱い。Retry-After が無ければ 1 秒
 	slept = nil
 	a = newFakeAPI(t, reply{body: `{"ok":false,"error":"ratelimited"}`})
-	if err := a.bot(&slept).PostMessage(context.Background(), "C0123456789", map[string]string{"text": "x"}); err != nil {
+	if _, err := a.bot(&slept).PostMessage(context.Background(), "C0123456789", "", map[string]string{"text": "x"}); err != nil {
 		t.Fatal(err)
 	}
 	if len(a.calls) != 2 || len(slept) != 1 || slept[0] != time.Second {
@@ -184,7 +184,7 @@ func TestRateLimitWaitHonorsContext(t *testing.T) {
 	b := NewBot(a.srv.Client(), fakeToken, a.srv.URL+"/api")
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	err := b.PostMessage(ctx, "C0123456789", map[string]string{"text": "x"})
+	_, err := b.PostMessage(ctx, "C0123456789", "", map[string]string{"text": "x"})
 	if !errors.Is(err, context.DeadlineExceeded) || len(a.calls) != 1 {
 		t.Fatalf("err %v calls %d", err, len(a.calls))
 	}
@@ -205,7 +205,7 @@ func TestErrorsDoNotLeakTokenOrBody(t *testing.T) {
 	}
 	for _, rep := range bodies {
 		a := newFakeAPI(t, rep)
-		err := a.bot(nil).PostMessage(context.Background(), "C0123456789", map[string]string{"text": "x"})
+		_, err := a.bot(nil).PostMessage(context.Background(), "C0123456789", "", map[string]string{"text": "x"})
 		if err == nil {
 			t.Fatalf("%q must fail", rep.body)
 		}
@@ -220,7 +220,7 @@ func TestErrorsDoNotLeakTokenOrBody(t *testing.T) {
 	a := newFakeAPI(t)
 	b := a.bot(nil)
 	a.srv.Close()
-	err := b.PostMessage(context.Background(), "C0123456789", map[string]string{"text": "x"})
+	_, err := b.PostMessage(context.Background(), "C0123456789", "", map[string]string{"text": "x"})
 	if err == nil || strings.Contains(err.Error(), fakeToken) {
 		t.Fatalf("network error: %v", err)
 	}
@@ -232,7 +232,7 @@ func TestErrorsDoNotLeakTokenOrBody(t *testing.T) {
 // 接続の失敗や 5xx では送り直さない (Slack が受け取っていた場合の二重送信を避ける。Webhook と同じ)。
 func TestServerErrorIsNotRetried(t *testing.T) {
 	a := newFakeAPI(t, reply{status: http.StatusBadGateway, body: "bad gateway"})
-	err := a.bot(nil).PostMessage(context.Background(), "C0123456789", map[string]string{"text": "x"})
+	_, err := a.bot(nil).PostMessage(context.Background(), "C0123456789", "", map[string]string{"text": "x"})
 	if err == nil || !strings.Contains(err.Error(), "502") || len(a.calls) != 1 {
 		t.Fatalf("err %v calls %d", err, len(a.calls))
 	}
@@ -294,14 +294,14 @@ func TestValidChannelID(t *testing.T) {
 
 func TestPostMessageRejectsBadArguments(t *testing.T) {
 	a := newFakeAPI(t)
-	if err := a.bot(nil).PostMessage(context.Background(), "#general", map[string]string{"text": "x"}); err == nil {
+	if _, err := a.bot(nil).PostMessage(context.Background(), "#general", "", map[string]string{"text": "x"}); err == nil {
 		t.Fatal("channel name must be rejected")
 	}
-	if err := a.bot(nil).PostMessage(context.Background(), "C0123456789", []string{"not an object"}); err == nil {
+	if _, err := a.bot(nil).PostMessage(context.Background(), "C0123456789", "", []string{"not an object"}); err == nil {
 		t.Fatal("payload must be a JSON object")
 	}
 	b := NewBot(a.srv.Client(), "bad token\n", a.srv.URL+"/api")
-	if err := b.PostMessage(context.Background(), "C0123456789", map[string]string{"text": "x"}); err == nil || strings.Contains(err.Error(), "bad token") {
+	if _, err := b.PostMessage(context.Background(), "C0123456789", "", map[string]string{"text": "x"}); err == nil || strings.Contains(err.Error(), "bad token") {
 		t.Fatalf("invalid token: %v", err)
 	}
 	if len(a.calls) != 0 {

@@ -21,18 +21,21 @@ var (
 	fuzzCode  = regexp.MustCompile(`^[a-z0-9_]{1,64}$`)
 	fuzzID    = regexp.MustCompile(`^[A-Z0-9]{1,32}$`)
 	fuzzScope = regexp.MustCompile(`^[a-z0-9:._-]{1,64}$`)
+	fuzzTS    = regexp.MustCompile(`^[0-9]{1,16}\.[0-9]{1,16}$`)
 )
 
 // 応答の本文。守る規則:
 //   - 成功とみなすのは、JSON のオブジェクトで "ok" が真偽値の true のときだけ
 //   - error コードは [a-z0-9_] で 64 字まで (それ以外は unknown_error)。成功のときは空
 //   - team_id / user_id は [A-Z0-9] で 32 字まで (それ以外は空)
+//   - ts は [0-9]{1,16}.[0-9]{1,16} の形だけ (それ以外は空)。空でなければ本文の "ts" の文字列そのもの (ADR 0093)
 //   - エラーの文は固定で、本文を写さない
 func FuzzParseResponse(f *testing.F) {
 	for _, s := range []string{
 		`{"ok":true}`, `{"ok":false,"error":"not_in_channel"}`, `{"ok":true,"team_id":"T0123ABCD","user_id":"U0123ABCD"}`,
 		`{"ok":"true"}`, `{"OK":true}`, `{"ok":true,"ok":false}`, `{"ok":false,"error":"<!channel>\nx"}`, `{"ok":false,"error":{"a":1}}`,
 		`{"ok":false}`, `[]`, `null`, `true`, ``, `{"ok":1}`, `{"ok":false,"error":"` + strings.Repeat("a", 65) + `"}`, "{\"ok\":true}\x00",
+		`{"ok":true,"ts":"1700000000.123456"}`, `{"ok":true,"ts":1.5}`, `{"ok":true,"ts":"1.2\n"}`, `{"ok":true,"ts":"1.2","TS":"x"}`, `{"ok":true,"ts":"١.٢"}`,
 	} {
 		f.Add([]byte(s))
 	}
@@ -62,6 +65,13 @@ func FuzzParseResponse(f *testing.F) {
 		for _, id := range []string{r.TeamID, r.UserID} {
 			if id != "" && !fuzzID.MatchString(id) {
 				t.Fatalf("id %q", id)
+			}
+		}
+		if r.TS != "" {
+			var m map[string]json.RawMessage
+			var ts string
+			if !fuzzTS.MatchString(r.TS) || json.Unmarshal(body, &m) != nil || json.Unmarshal(m["ts"], &ts) != nil || ts != r.TS {
+				t.Fatalf("ts %q from %q", r.TS, body)
 			}
 		}
 	})
@@ -110,6 +120,7 @@ func FuzzParseScopes(f *testing.F) {
 //   - 成功を返すのは、HTTP 2xx で本文の "ok" が true のときだけ
 //   - エラーの文は 1 行で、トークンも、応答の本文の断片 (目印の文字列) も含まない。長さに上限がある
 //   - 呼び出しは 1 + MaxRateLimitRetries 回まで
+//   - 返す ts は空か [0-9]{1,16}.[0-9]{1,16} の形。失敗のときは空 (ADR 0093)
 func FuzzPostMessageResponse(f *testing.F) {
 	f.Add(200, `{"ok":true}`, "")
 	f.Add(200, `{"ok":false,"error":"not_in_channel"}`, "")
@@ -120,6 +131,9 @@ func FuzzPostMessageResponse(f *testing.F) {
 	f.Add(200, `{"ok":false,"error":"MARKER xoxb-fake-secret-token"}`, "")
 	f.Add(204, ``, "")
 	f.Add(302, `{"ok":true}`, "")
+	f.Add(200, `{"ok":true,"ts":"1700000000.123456"}`, "")
+	f.Add(200, `{"ok":true,"ts":"MARKER.1"}`, "")
+	f.Add(500, `{"ok":true,"ts":"1700000000.123456"}`, "")
 	f.Fuzz(func(t *testing.T, status int, body, retry string) {
 		if status < 200 || status > 599 || status == http.StatusNotModified {
 			t.Skip()
@@ -142,9 +156,12 @@ func FuzzPostMessageResponse(f *testing.F) {
 		defer srv.Close()
 		b := NewBot(srv.Client(), fakeToken, srv.URL)
 		b.sleep = func(context.Context, time.Duration) error { return nil }
-		err := b.PostMessage(context.Background(), "C0123456789", map[string]string{"text": "x"})
+		ts, err := b.PostMessage(context.Background(), "C0123456789", "", map[string]string{"text": "x"})
 		if calls > 1+MaxRateLimitRetries {
 			t.Fatalf("%d calls", calls)
+		}
+		if (err != nil && ts != "") || (ts != "" && !fuzzTS.MatchString(ts)) {
+			t.Fatalf("ts %q err %v", ts, err)
 		}
 		if err == nil {
 			var m map[string]json.RawMessage

@@ -100,6 +100,7 @@ func newCLI(t *testing.T) *cli {
 		{"bot_token_env: ARATAM_SLACK_BOT_TOKEN", `bot_token_env: ""`},
 		{`webhook_env: "" `, "webhook_env: ARATAM_SLACK_WEBHOOK "},
 		{`urgent_webhook_env: "" `, "urgent_webhook_env: ARATAM_SLACK_URGENT_WEBHOOK "},
+		{"details: thread", "details: inline"}, // thread は bot の方式だけ (ADR 0093)。useBot() は thread に戻さない (既存のテストは 1 通の形)
 	} {
 		if !strings.Contains(body, r[0]) {
 			t.Fatalf("scaffold lacks %q", r[0])

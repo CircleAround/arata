@@ -248,6 +248,7 @@ func newTestNotifyCmd(d *Deps, g *globalFlags) *subcmd.Command {
 		Use:   "test-notify",
 		Short: "Slack に試験メッセージを 1 通送る",
 		Long: `Slack に試験メッセージを 1 通送る (既定は通常用。--urgent で緊急用)。
+slack.details: thread なら、その 1 通目のスレッドに返信を 1 通付ける (返信が届くことを本番の前に確かめる)。
 緊急用の Webhook (bot トークンの方式なら緊急用のチャンネル) が無ければ、notify と同じく通常用に送り urgent_mention を付ける。
 送信に失敗したら終了コード 5。bot トークンの方式で not_in_channel になったら、bot をそのチャンネルに招待する。`,
 		Args: subcmd.NoArgs,
@@ -274,9 +275,24 @@ func newTestNotifyCmd(d *Deps, g *globalFlags) *subcmd.Command {
 			}
 			lines = append(lines, fmt.Sprintf("aratam の試験通知です (%s、%s)。この通知が届いていれば %s の設定は正しく動いています。", notify.Escape(cfg.Name), label, what))
 			sender := newSlackSender(d, hooks)
-			if err := sender.Send(ctx, route, notify.Message{Text: strings.Join(lines, "\n")}); err != nil {
+			ts, err := sender.Send(ctx, route, notify.Message{Text: strings.Join(lines, "\n")})
+			if err != nil {
 				d.Logger.Error("試験通知の送信に失敗しました", append([]any{"code", notify.CodeSendFailed, "route", string(route)}, notify.SendErrorAttrs(err)...)...)
 				return &exitError{code: notify.ExitSend}
+			}
+			// 決定 (ADR 0093 の 5 節): slack.details: thread なら、試しの 1 通目にスレッドの返信を 1 通付ける。
+			// 返信が届くこと (受け口の転送を含む) を、本番の前に確かめられるようにする。ts の形は送る側 (internal/slack) が確かめてある
+			if cfg.Slack.DetailsMode() == notify.DetailsThread {
+				if !slack.ValidTS(ts) {
+					d.Logger.Error("試験通知の 1 通目の応答に投稿の ts が無いため、スレッドへの返信を送れません", "code", notify.CodeSendFailed, "route", string(route), "thread", "reply")
+					return &exitError{code: notify.ExitSend}
+				}
+				reply := notify.Message{Text: "aratam の試験通知の、スレッドへの返信です (slack.details: thread)。この返信が届いていれば、詳細はスレッドに届きます。", ThreadTS: ts}
+				if _, err := sender.Send(ctx, route, reply); err != nil {
+					d.Logger.Error("試験通知のスレッドへの返信の送信に失敗しました", append([]any{"code", notify.CodeSendFailed, "route", string(route), "thread", "reply"}, notify.SendErrorAttrs(err)...)...)
+					return &exitError{code: notify.ExitSend}
+				}
+				sent += " (とそのスレッドへの返信)"
 			}
 			fmt.Fprintf(d.Stdout, "%s に試験通知を送りました。\n", sent)
 			return nil

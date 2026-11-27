@@ -154,3 +154,21 @@ func TestConfigCheckJSONWithoutUrgentWebhook(t *testing.T) {
 		t.Errorf("urgent_webhook must be present even when false (readers tell an old aratam by its absence):\n%s", c.stdout)
 	}
 }
+
+// slack.details を出す (ADR 0093)。書かなければ inline。値は必ず出す (読む側は、項目が無いことで古い aratam と見分ける)。
+func TestConfigCheckJSONDetails(t *testing.T) {
+	c := newCLI(t)
+	c.offline()
+	if out := c.checkJSON(0); out.Slack == nil || out.Slack.Details != "inline" {
+		t.Fatalf("%+v", out.Slack)
+	}
+	c.useBot()
+	c.editConfig("details: inline", "details: thread")
+	if out := c.checkJSON(0); out.Slack == nil || out.Slack.Details != "thread" || out.Slack.Method != "bot" {
+		t.Fatalf("%+v", out.Slack)
+	}
+	c.editConfig("details: thread", "")
+	if out := c.checkJSON(0); out.Slack == nil || out.Slack.Details != "inline" {
+		t.Fatalf("omitted details is inline: %+v", out.Slack)
+	}
+}

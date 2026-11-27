@@ -48,6 +48,8 @@ var (
 	errorCode = regexp.MustCompile(`^[a-z0-9_]{1,64}$`)
 	slackID   = regexp.MustCompile(`^[A-Z0-9]{1,32}$`)
 	scopeName = regexp.MustCompile(`^[a-z0-9:._-]{1,64}$`)
+	// 投稿の識別子 (ts)。スレッドへの返信の thread_ts に使う (ADR 0093)。応答の値なので、この形だけを受け付ける
+	tsValue = regexp.MustCompile(`^[0-9]{1,16}\.[0-9]{1,16}$`)
 
 	errNotObject = errors.New("response is not a JSON object")
 	errNoOK      = errors.New(`response has no boolean "ok"`)
@@ -55,6 +57,9 @@ var (
 
 // ValidChannelID は s がチャンネル ID の形かを返す。
 func ValidChannelID(s string) bool { return channelID.MatchString(s) }
+
+// ValidTS は s が投稿の識別子 (ts。1700000000.123456 の形) かを返す。
+func ValidTS(s string) bool { return tsValue.MatchString(s) }
 
 // ValidToken は s がヘッダーに書けるトークンの形 (空白・制御文字の無い ASCII) かを返す。
 // 前後の空白 (secret の末尾の改行など) は呼び出し側で除いてから渡す。
@@ -160,6 +165,8 @@ type Response struct {
 	Error string
 	// TeamID / UserID は auth.test の値。[A-Z0-9] で 32 字までの形でなければ空。
 	TeamID, UserID string
+	// TS は chat.postMessage の投稿の識別子。[0-9]{1,16}.[0-9]{1,16} の形でなければ空 (ADR 0093)。
+	TS string
 }
 
 // ParseResponse は Web API の応答の本文を解釈する。応答は信用できない入力として扱う (ADR 0041)。
@@ -193,6 +200,7 @@ func ParseResponse(body []byte) (Response, error) {
 		}
 	}
 	r.TeamID, r.UserID = str("team_id", slackID), str("user_id", slackID)
+	r.TS = str("ts", tsValue)
 	return r, nil
 }
 
@@ -283,26 +291,40 @@ func (b *Bot) call(ctx context.Context, method, channel string, body []byte) (Re
 }
 
 // PostMessage は payload (text と blocks など。Incoming Webhook に送るのと同じ形の JSON のオブジェクト) に channel を足して chat.postMessage で 1 通送る。
-func (b *Bot) PostMessage(ctx context.Context, channel string, payload any) error {
+// threadTS が空でなければ、その投稿のスレッドへの返信にする (thread_ts。ADR 0093)。返信はチャンネルに出さない (reply_broadcast は payload にあっても送らない)。
+// 返すのは投稿の ts。応答に ts の形 (ValidTS) の値が無ければ空 (送れてはいるので、エラーにはしない。返信が要るかは呼び出し側が決める)。
+func (b *Bot) PostMessage(ctx context.Context, channel, threadTS string, payload any) (string, error) {
 	if !ValidChannelID(channel) {
-		return errors.New("slack: channel must be a channel ID such as C0123456789")
+		return "", errors.New("slack: channel must be a channel ID such as C0123456789")
+	}
+	if threadTS != "" && !ValidTS(threadTS) {
+		return "", errors.New("slack: thread_ts must be a message ts (digits, a dot and digits)")
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
-		return err
+		return "", err
 	}
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &m); err != nil || m == nil {
-		return errors.New("slack: payload must be a JSON object")
+		return "", errors.New("slack: payload must be a JSON object")
 	}
 	id, _ := json.Marshal(channel)
 	m["channel"] = id
+	delete(m, "thread_ts")
+	delete(m, "reply_broadcast")
+	if threadTS != "" {
+		ts, _ := json.Marshal(threadTS)
+		m["thread_ts"] = ts
+	}
 	body, err := json.Marshal(m)
 	if err != nil {
-		return err
+		return "", err
 	}
-	_, _, err = b.call(ctx, "chat.postMessage", channel, body)
-	return err
+	r, _, err := b.call(ctx, "chat.postMessage", channel, body)
+	if err != nil {
+		return "", err
+	}
+	return r.TS, nil
 }
 
 // Auth は auth.test の結果。

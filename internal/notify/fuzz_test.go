@@ -453,9 +453,9 @@ func FuzzParseWriteups(f *testing.F) {
 // fuzzSender は送った通知を集める (実 Slack には接続しない)。
 type fuzzSender struct{ got []Message }
 
-func (s *fuzzSender) Send(_ context.Context, _ Route, m Message) error {
+func (s *fuzzSender) Send(_ context.Context, _ Route, m Message) (string, error) {
 	s.got = append(s.got, m)
-	return nil
+	return fmt.Sprintf("1700000000.%06d", len(s.got)), nil
 }
 
 // report.json は arata が書くが、中の値はログに由来する。壊れた・想定外の形でも、通知の本体はパニックせず、
@@ -513,13 +513,28 @@ func FuzzRunWithReport(f *testing.F) {
 		// timezone を設定した経路 (時刻を直す) でも同じ性質を守る。夏時間があり略称が変わるゾーンで確かめる
 		zoned := fuzzRules
 		zoned.Zone = mustZone(t, "America/New_York")
+		// slack.details: thread (ADR 0093) でも同じ性質を守る。加えて、返信は 3 通まで、返信は 1 通目の ts に付ける (メンションを書かないことは TestThreadBlocksSplit)
 		for _, c := range []struct {
-			format string
-			rules  Rules
-		}{{FormatText, fuzzRules}, {FormatBlocks, fuzzRules}, {FormatText, zoned}, {FormatBlocks, zoned}} {
+			format  string
+			rules   Rules
+			details string
+		}{{FormatText, fuzzRules, ""}, {FormatBlocks, fuzzRules, ""}, {FormatText, zoned, ""}, {FormatBlocks, zoned, ""}, {FormatText, fuzzRules, DetailsThread}, {FormatBlocks, zoned, DetailsThread}} {
 			format := c.format
 			s := &fuzzSender{}
-			res := Run(context.Background(), Options{Dir: dir, Now: now, Rules: c.rules, Sender: s, Format: format, Force: true, DryRun: true})
+			res := Run(context.Background(), Options{Dir: dir, Now: now, Rules: c.rules, Sender: s, Format: format, Force: true, DryRun: true, Details: c.details})
+			replies := 0
+			for i, m := range s.got {
+				if m.ThreadTS == "" {
+					continue
+				}
+				replies++
+				if c.details != DetailsThread || m.ThreadTS != "1700000000.000001" || i == 0 {
+					t.Errorf("%s: 返信 %d の ts %q (details %q)", format, i, m.ThreadTS, c.details)
+				}
+			}
+			if replies > MaxThreadReplies {
+				t.Errorf("%s: 返信が %d 通", format, replies)
+			}
 			if res.Sent != (len(s.got) > 0) {
 				t.Errorf("%s: Sent=%v なのに %d 通", format, res.Sent, len(s.got))
 			}

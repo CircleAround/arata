@@ -40,10 +40,10 @@ type sendFailOn struct {
 	n, calls int
 }
 
-func (f *sendFailOn) Send(ctx context.Context, r Route, m Message) error {
+func (f *sendFailOn) Send(ctx context.Context, r Route, m Message) (string, error) {
 	f.calls++
 	if f.calls == f.n {
-		return errors.New("slack: 500")
+		return "", errors.New("slack: 500")
 	}
 	return f.fakeSender.Send(ctx, r, m)
 }

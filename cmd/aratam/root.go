@@ -243,8 +243,9 @@ type configCheckLLM struct {
 }
 
 type configCheckSlack struct {
-	Method string `json:"method" jsonschema:"enum=bot|webhook" desc:"Slack への送り方。webhook = Incoming Webhook (slack.webhook_env)、bot = bot トークン (slack.bot_token_env と slack.channel)。閉じた語彙 (知らない値を見たら止める)"`
-	Format string `json:"format" desc:"slack.format (blocks / text)。開いた語彙"`
+	Method  string `json:"method" jsonschema:"enum=bot|webhook" desc:"Slack への送り方。webhook = Incoming Webhook (slack.webhook_env)、bot = bot トークン (slack.bot_token_env と slack.channel)。閉じた語彙 (知らない値を見たら止める)"`
+	Format  string `json:"format" desc:"slack.format (blocks / text)。開いた語彙"`
+	Details string `json:"details" jsonschema:"enum=inline|thread" desc:"slack.details (設定に無ければ inline)。inline = 1 通にまとめる、thread = 1 通目のスレッドへの返信に詳細を送る (ADR 0093)。閉じた語彙"`
 	// UrgentWebhook は必ず出す (false でも)。読む側は、項目が無いことで、この項目を知らない古い aratam と見分ける
 	UrgentWebhook bool `json:"urgent_webhook" desc:"緊急用の Webhook を別に持つ (slack.urgent_webhook_env が空でない)。false なら、緊急の通知は通常用の送り先に送る。bot トークンの方式では常に false。環境変数の名前は出さない"`
 }
@@ -301,7 +302,7 @@ func newConfigCheckCmd(d *Deps, g *globalFlags) *subcmd.Command {
 				out.OK = true
 				out.Name = cfg.Name
 				out.LLM = &configCheckLLM{Provider: cfg.LLM.Provider}
-				out.Slack = &configCheckSlack{Method: cfg.Slack.Method(), Format: cfg.Slack.Format, UrgentWebhook: cfg.Slack.Method() == notify.SlackWebhook && cfg.Slack.UrgentWebhookEnv != ""}
+				out.Slack = &configCheckSlack{Method: cfg.Slack.Method(), Format: cfg.Slack.Format, Details: cfg.Slack.DetailsMode(), UrgentWebhook: cfg.Slack.Method() == notify.SlackWebhook && cfg.Slack.UrgentWebhookEnv != ""}
 				out.Timezone = cfg.Rules(false).Zone.Name()
 				out.Rows = append(out.Rows, configCheckRow{Status: "ok", Item: "config",
 					Message: fmt.Sprintf("name %s, provider %s, format %s, slack %s, timezone %s", out.Name, out.LLM.Provider, out.Slack.Format, out.Slack.Method, out.Timezone)})
@@ -402,18 +403,25 @@ func readTargets(d *Deps, cfg *notify.Config, require bool) (targets, error) {
 // 分割・長さ・LLM 失敗時の扱いは notify の規則のまま。
 type slackSender struct {
 	t    targets
-	post func(ctx context.Context, dest string, payload any) error
+	post func(ctx context.Context, dest, threadTS string, payload any) (string, error)
 }
 
 func newSlackSender(d *Deps, t targets) *slackSender {
 	if t.bot {
 		return &slackSender{t: t, post: slack.NewBot(d.HTTPClient, t.token, d.SlackAPIURL).PostMessage}
 	}
-	return &slackSender{t: t, post: slack.New(d.HTTPClient).Post}
+	c := slack.New(d.HTTPClient)
+	// Webhook は ts を返さず、スレッドに返信できない (slack.details: thread は設定エラーにしてある。ADR 0093)
+	return &slackSender{t: t, post: func(ctx context.Context, dest, threadTS string, payload any) (string, error) {
+		if threadTS != "" {
+			return "", errors.New("slack: the Incoming Webhook method cannot reply in a thread")
+		}
+		return "", c.Post(ctx, dest, payload)
+	}}
 }
 
-func (s *slackSender) Send(ctx context.Context, route notify.Route, m notify.Message) error {
-	return s.post(ctx, s.t.dest(route), m)
+func (s *slackSender) Send(ctx context.Context, route notify.Route, m notify.Message) (string, error) {
+	return s.post(ctx, s.t.dest(route), m.ThreadTS, m)
 }
 
 // dest は route の送り先 (Webhook の URL かチャンネル ID)。緊急用が無ければ通常用。
@@ -463,6 +471,8 @@ type dryRunMessage struct {
 	Route       string            `json:"route" jsonschema:"enum=normal|urgent" desc:"規則で決まった送り先の種類 (通常用 / 緊急用)"`
 	Destination dryRunDestination `json:"destination"`
 	Payload     any               `json:"payload" desc:"Slack に送る中身そのもの (text と、slack.format: blocks なら blocks)"`
+	// ThreadReply は必ず出す (false でも)。読む側は、項目が無いことで、この項目を知らない古い aratam と見分ける
+	ThreadReply bool `json:"thread_reply" desc:"直前の 1 通目 (thread_reply が false の通知) のスレッドへの返信 (slack.details: thread。ADR 0093)。送るときは payload に channel と thread_ts を足す"`
 }
 
 type dryRunDestination struct {
@@ -493,13 +503,21 @@ type stdoutSender struct {
 	messages []dryRunMessage
 }
 
-func (s *stdoutSender) Send(_ context.Context, route notify.Route, m notify.Message) error {
+// dryRunTS は --dry-run で 1 通目の ts の代わりに返す値 (返信の組み立てを本番と同じに通すため。Slack には送らない)。
+const dryRunTS = "0000000000.000000"
+
+func (s *stdoutSender) Send(_ context.Context, route notify.Route, m notify.Message) (string, error) {
+	reply := m.ThreadTS != ""
 	if s.format == dryRunJSON {
-		s.messages = append(s.messages, dryRunMessage{Route: string(route), Destination: s.t.destination(route), Payload: m})
-		return nil
+		s.messages = append(s.messages, dryRunMessage{Route: string(route), Destination: s.t.destination(route), Payload: m, ThreadReply: reply})
+		return dryRunTS, nil
 	}
-	_, err := fmt.Fprintf(s.w, "--- route: %s → %s ---\n%s\n", route, s.t.label(route), notify.PlainText(m))
-	return err
+	label := s.t.label(route)
+	if reply {
+		label += " (1 通目のスレッドへの返信)"
+	}
+	_, err := fmt.Fprintf(s.w, "--- route: %s → %s ---\n%s\n", route, label, notify.PlainText(m))
+	return dryRunTS, err
 }
 
 // flush は json のときに、ためた通知を 1 つの JSON として書く (送るものが無くても、空の messages を書く)。
@@ -530,6 +548,8 @@ func newNotifyCmd(d *Deps, g *globalFlags) *subcmd.Command {
   - 新規・変化・再発が無く、取れなかったソースも無い → on_quiet (short = 1 行 / silent = 送らない)
   - 送り方は bot トークン (chat.postMessage。要る scope は chat:write だけ)。bot は、送り先のチャンネルに招待しておく。Incoming Webhook の方式 (非推奨) も、これまでどおり送る
   - 送ったら入力ディレクトリの .aratam-notified に run_id を書き、同じ run は二度送らない (--force で再送)
+  - slack.details: thread (bot の方式だけ) なら、1 通目にまず対応と確認推奨の概要を、1 通目のスレッドへの返信 (3 通まで) に詳細を送る。
+    返信に失敗したら終了コード 5 (1 通目は送れているので .aratam-notified は書く)。--dry-run は返信も区切りの行を挟んで出す
   - report.json に WAF の修正提案の候補 (proposals) があれば、「WAF の改善提案」を 2 通目として通常用に送る (on_quiet: silent でも送る)。
     slack.format: blocks では、提案の全文 (設定例を含む) を入力ディレクトリの waf-proposals.md に書く (--dry-run では書かない)
 
@@ -582,7 +602,7 @@ func newNotifyCmd(d *Deps, g *globalFlags) *subcmd.Command {
 			}
 			res := notify.Run(ctx, notify.Options{
 				Dir: in, Now: d.Now(), Rules: cfg.Rules(hooks.urgent != ""),
-				Force: force, DryRun: dryRun, Sender: sender, Logger: d.Logger,
+				Force: force, DryRun: dryRun, Sender: sender, Logger: d.Logger, Details: cfg.Slack.DetailsMode(),
 				Summarizer: summarizer, LLMTimeout: timeout, Context: contextText, Format: cfg.Slack.Format,
 			})
 			if dryRun {

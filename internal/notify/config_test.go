@@ -3,6 +3,7 @@ package notify
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -276,6 +277,7 @@ func webhookScaffold() string {
 		{"bot_token_env: ARATAM_SLACK_BOT_TOKEN", `bot_token_env: ""`},
 		{`webhook_env: "" `, "webhook_env: ARATAM_SLACK_WEBHOOK "},
 		{`urgent_webhook_env: "" `, "urgent_webhook_env: ARATAM_SLACK_URGENT_WEBHOOK "},
+		{"details: thread", "details: inline"}, // thread は bot の方式だけ (ADR 0093)
 	} {
 		if !strings.Contains(body, r[0]) {
 			panic("scaffold lacks " + r[0])
@@ -299,5 +301,34 @@ func TestScaffoldIsBot(t *testing.T) {
 	c, err := LoadConfig(writeConfig(t, strings.Replace(body, `  channel: ""`, "  channel: C0123456789", 1)))
 	if err != nil || c.Slack.Method() != SlackBot || c.Slack.BotTokenEnv != "ARATAM_SLACK_BOT_TOKEN" || c.Slack.WebhookEnv != "" || c.Slack.UrgentChannel != "" {
 		t.Fatalf("%+v %v", c, err)
+	}
+}
+
+// slack.details (ADR 0093 の 1 節): inline | thread。書かなければ inline。thread は bot の方式だけ (Webhook と組むと設定エラー)。
+func TestSlackDetails(t *testing.T) {
+	bot := strings.Replace(string(Scaffold()), `  channel: ""`, "  channel: C0123456789", 1)
+	c, err := LoadConfig(writeConfig(t, bot))
+	if err != nil || c.Slack.Details != DetailsThread || c.Slack.DetailsMode() != DetailsThread {
+		t.Fatalf("the scaffold writes details: thread: %+v %v", c, err)
+	}
+	noDetails := regexp.MustCompile(`(?m)^  details: .*\n`).ReplaceAllString(bot, "")
+	if noDetails == bot {
+		t.Fatal("scaffold lacks details")
+	}
+	if c, err := LoadConfig(writeConfig(t, noDetails)); err != nil || c.Slack.Details != "" || c.Slack.DetailsMode() != DetailsInline {
+		t.Fatalf("omitted details is inline: %+v %v", c, err)
+	}
+	if _, err := LoadConfig(writeConfig(t, strings.Replace(bot, "details: thread", "details: inline", 1))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(writeConfig(t, strings.Replace(bot, "details: thread", "details: reply", 1))); err == nil || !strings.Contains(err.Error(), "slack.details must be inline or thread") {
+		t.Fatalf("%v", err)
+	}
+	hook := webhookScaffold()
+	if _, err := LoadConfig(writeConfig(t, strings.Replace(hook, "details: inline", "details: thread", 1))); err == nil || !strings.Contains(err.Error(), "slack.details: thread needs the bot token") {
+		t.Fatalf("webhook + thread must be a config error: %v", err)
+	}
+	if _, err := LoadConfig(writeConfig(t, hook)); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -32,6 +32,8 @@ type Message struct {
 	Blocks      []Block `json:"blocks,omitempty"`
 	UnfurlLinks bool    `json:"unfurl_links"`
 	UnfurlMedia bool    `json:"unfurl_media"`
+	// ThreadTS は返信先の 1 通目の ts (slack.details: thread の返信のときだけ。ADR 0093)。payload には書かない (送る側が thread_ts として足す)。
+	ThreadTS string `json:"-"`
 }
 
 // Block は Block Kit のブロック (aratam が使う header / section / divider / context だけ)。
