@@ -274,6 +274,8 @@ type item struct {
 	text  string
 	n     int
 	first int
+	// overview は 1 通目の「確認推奨」の概要の 1 行 (見出しと件数だけ。主体・値・id・「→」は持たない。ADR 0093)
+	overview string
 }
 
 // splitUrgent は new / changed / recurred を「まず対応」(urgent_severity 以上) とそれ未満に分ける (report.json の順)。
@@ -316,49 +318,75 @@ func urgentItems(top []findingRef, notes *BlockNotes) []item {
 	return out
 }
 
-// groupItems は「確認推奨」の項目。対応表にあるチェックは 1 項目にまとめる。並びは重大度の高い順、同じなら最初の出現順。
-// 1 件ずつの項目は行の末尾に id、まとめた項目は主体の行の下に id の行 (groupIDLine)。
-func groupItems(rest []findingRef) []item {
-	type group struct {
-		key string
-		fs  []findingRef
-	}
-	var order []*group
-	byKey := map[string]*group{}
+// findingGroup は「確認推奨」の 1 項目にまとめる finding (key が空なら対応表に無いチェックで、1 件だけ)。sev はまとめた中の最大。
+type findingGroup struct {
+	key string
+	fs  []findingRef
+	sev string
+}
+
+// groupFindings は「確認推奨」の finding を対応表でまとめる。並びは重大度の高い順、同じなら最初の出現順。
+func groupFindings(rest []findingRef) []*findingGroup {
+	var order []*findingGroup
+	byKey := map[string]*findingGroup{}
 	for _, f := range rest {
 		k := groupKeyOf(f)
 		if k == "" {
-			order = append(order, &group{fs: []findingRef{f}})
+			order = append(order, &findingGroup{fs: []findingRef{f}})
 			continue
 		}
 		g, ok := byKey[k]
 		if !ok {
-			g = &group{key: k}
+			g = &findingGroup{key: k}
 			byKey[k] = g
 			order = append(order, g)
 		}
 		g.fs = append(g.fs, f)
 	}
-	var out []item
-	for i, g := range order {
-		sev := g.fs[0].severity
+	for _, g := range order {
+		g.sev = g.fs[0].severity
 		for _, f := range g.fs {
-			if severityRank[f.severity] > severityRank[sev] {
-				sev = f.severity
+			if severityRank[f.severity] > severityRank[g.sev] {
+				g.sev = f.severity
 			}
 		}
+	}
+	sort.SliceStable(order, func(i, j int) bool { return severityRank[order[i].sev] > severityRank[order[j].sev] })
+	return order
+}
+
+// maxOverviewSummaryRunes は概要の行に出す summary の上限 (1 件だけの項目。概要は短く、全文は返信にある)。
+const maxOverviewSummaryRunes = 100
+
+// overviewLine は 1 通目の「確認推奨」の概要の 1 行 (ADR 0093 の 2 節)。対応表にあるチェックは「🟠 *見出し* N 単位」、
+// 無いチェックは「🟡 *summary*」(1 件だけ)。主体・値・id・「→」は書かない。
+func (g *findingGroup) overviewLine() string {
+	if r, ok := groupRules[g.key]; ok {
+		return fmt.Sprintf("%s *%s* %d %s", sevEmoji(g.sev), r.label, len(g.fs), r.unit)
+	}
+	f := g.fs[0]
+	return fmt.Sprintf("%s *%s*%s", sevEmoji(g.sev), clipRunes(Escape(noTick(oneLine(f.summary))), maxOverviewSummaryRunes), diffMark(f))
+}
+
+// groupItems は「確認推奨」の項目。対応表にあるチェックは 1 項目にまとめる。並びは重大度の高い順、同じなら最初の出現順。
+// 1 件ずつの項目は行の末尾に id、まとめた項目は主体の行の下に id の行 (groupIDLine)。
+func groupItems(rest []findingRef) []item {
+	var out []item
+	for i, g := range groupFindings(rest) {
+		sev := g.sev
+		ov := g.overviewLine()
 		if r, ok := groupRules[g.key]; ok && r.single && len(g.fs) == 1 {
 			f := g.fs[0]
 			text := withID(clipCode(fmt.Sprintf("%s *%s* — %s%s", sevEmoji(sev), r.label, r.name(f), diffMark(f))), f.id)
 			if r.next != "" {
 				text += "\n→ " + r.next
 			}
-			out = append(out, item{sev: sev, n: 1, first: i, text: text})
+			out = append(out, item{sev: sev, n: 1, first: i, text: text, overview: ov})
 			continue
 		}
 		if len(g.fs) == 1 {
 			f := g.fs[0]
-			out = append(out, item{sev: sev, n: 1, first: i, text: withID(fmt.Sprintf("%s %s%s", sevEmoji(sev), boldSummary(f.summary), diffMark(f)), f.id)})
+			out = append(out, item{sev: sev, n: 1, first: i, text: withID(fmt.Sprintf("%s %s%s", sevEmoji(sev), boldSummary(f.summary), diffMark(f)), f.id), overview: ov})
 			continue
 		}
 		r := groupRules[g.key]
@@ -377,9 +405,8 @@ func groupItems(rest []findingRef) []item {
 		if r.next != "" {
 			text += "\n→ " + r.next
 		}
-		out = append(out, item{sev: sev, n: len(g.fs), first: i, text: text})
+		out = append(out, item{sev: sev, n: len(g.fs), first: i, text: text, overview: ov})
 	}
-	sort.SliceStable(out, func(i, j int) bool { return severityRank[out[i].sev] > severityRank[out[j].sev] })
 	return out
 }
 
@@ -454,9 +481,9 @@ func headerTitle(in *Input) (string, string) {
 	return "arata 期間レポート", in.Period.Name
 }
 
-// countFields は fields (件数は report.json の値)。
+// countFields は fields (件数は report.json の値)。minor が false なら、本日報告済みと情報の件数を出さない (thread の 1 通目。返信の末尾に書く。ADR 0093)。
 // 決定: ラベルと値を 2 段に分けず、1 つの値に「解消 1 件 ・ 未対応 0 件」のように書く (2 段の表示は分かりにくいという意見があったため)。
-func countFields(in *Input) []string {
+func countFields(in *Input, minor bool) []string {
 	fs := []string{"*期間* " + Escape(windowText(in))}
 	if r := in.Run; r != nil {
 		var sevs []string
@@ -468,11 +495,8 @@ func countFields(in *Input) []string {
 			fs = append(fs, fmt.Sprintf("変化 %d 件 ・ 再発 %d 件", r.Summary.Changed, r.Summary.Recurred))
 		}
 		fs = append(fs, fmt.Sprintf("解消 %d 件 ・ 未対応 %d 件", r.Summary.Resolved, r.Summary.StillOpen))
-		if n := len(r.AlreadyReported); n > 0 {
-			fs = append(fs, fmt.Sprintf("本日報告済み %d 件", n))
-		}
-		if n := len(r.Info); n > 0 {
-			fs = append(fs, fmt.Sprintf("情報 %d 件 (件数のみ)", n))
+		if minor {
+			fs = append(fs, minorCounts(in)...)
 		}
 		return fs
 	}
@@ -487,6 +511,20 @@ func countFields(in *Input) []string {
 	}
 	fs = append(fs, fmt.Sprintf("解消 %d 件 ・ 未対応の残存 %d 件", p.Summary.Resolved, p.Summary.Open))
 	return fs
+}
+
+// minorCounts は本日報告済みと情報の件数 (0 件なら出さない)。
+func minorCounts(in *Input) []string {
+	var out []string
+	if r := in.Run; r != nil {
+		if n := len(r.AlreadyReported); n > 0 {
+			out = append(out, fmt.Sprintf("本日報告済み %d 件", n))
+		}
+		if n := len(r.Info); n > 0 {
+			out = append(out, fmt.Sprintf("情報 %d 件 (件数のみ)", n))
+		}
+	}
+	return out
 }
 
 // maxSeverityOf は header の絵文字に使う重大度 (run は summary.max_severity、期間レポートは events の最大)。
@@ -538,13 +576,12 @@ func topSection(route Route, r Rules, notice string, warnings []string) []Block 
 	return nil
 }
 
-// RunBlocks は run / 期間レポートの Block Kit。notes は LLM の要約と「→」(nil なら規則)。notice は LLM が使えなかったときの注記。
-func RunBlocks(in *Input, d Decision, r Rules, warnings []string, notes *BlockNotes, notice string) Message {
-	top, rest := splitUrgent(in, r.UrgentSeverity)
+// blocksHead は 1 通目の先頭 (メンション・注記・警告、header、fields、要約、取れていないもの)。minor は countFields と同じ。
+func blocksHead(in *Input, d Decision, r Rules, warnings []string, notes *BlockNotes, notice string, top, rest []findingRef, minor bool) []Block {
 	name, target := headerTitle(in)
 	var head []Block
 	head = append(head, topSection(d.Route, r, notice, warnings)...)
-	head = append(head, headerBlock(fmt.Sprintf("%s %s — %s", sevEmoji(maxSeverityOf(in)), name, target)), fieldsBlock(countFields(in)...))
+	head = append(head, headerBlock(fmt.Sprintf("%s %s — %s", sevEmoji(maxSeverityOf(in)), name, target)), fieldsBlock(countFields(in, minor)...))
 	summary := ""
 	if notes != nil && strings.TrimSpace(notes.Summary) != "" {
 		summary = Escape(clipRunes(oneLine(notes.Summary), maxBlockSummaryRunes))
@@ -555,51 +592,75 @@ func RunBlocks(in *Input, d Decision, r Rules, warnings []string, notes *BlockNo
 	if cov := nonEmpty(coverageLines(in)); len(cov) > 0 {
 		head = append(head, sectionBlock("⚠️ *取れていないもの* (結果が欠けている可能性があります)\n"+strings.Join(cov, "\n")))
 	}
+	return head
+}
 
-	foot := []string{"全文と対処手順: `arata review` ・ `arata help ai playbook <check>`"}
-	if in.Run != nil && len(in.Run.Proposals) > 0 {
-		foot = append(foot, "WAF の改善提案は別のメッセージ")
-	}
-	if notes != nil {
-		foot = append(foot, LLMNotice)
-	}
-	foot = append(foot, Escape(filepath.Join(in.Dir, ReportMD)))
-	tail := []Block{contextBlock(strings.Join(foot[:len(foot)-1], "  |  "), foot[len(foot)-1])}
+// guideFoot は全文と対処手順の案内の context (report.md のパスは別の要素)。
+func guideFoot(in *Input, extra ...string) Block {
+	foot := append([]string{"全文と対処手順: `arata review` ・ `arata help ai playbook <check>`"}, extra...)
+	return contextBlock(strings.Join(foot, "  |  "), Escape(filepath.Join(in.Dir, ReportMD)))
+}
 
-	// 項目を順に入れ、入らなくなったら残りを「ほか N 件」にまとめる (縮めた行の 1 ブロックは残しておく)
-	type piece struct {
-		blocks []Block
-		n      int
-	}
+// piece は縮めるときの単位 (項目 1 つ分のブロック。節の最初の項目は区切りと節の見出しを含む)。n は含む finding の数。
+type piece struct {
+	blocks []Block
+	n      int
+}
+
+// itemPieces は節の見出しと項目をブロックにする。
+func itemPieces(title string, items []item) []piece {
 	var pieces []piece
-	for _, s := range []struct {
-		title string
-		items []item
-	}{{"*まず対応*", urgentItems(top, notes)}, {"*確認推奨*", groupItems(rest)}} {
-		for i, it := range s.items {
-			p := piece{blocks: []Block{sectionBlock(it.text)}, n: it.n}
-			if i == 0 {
-				p.blocks = append([]Block{dividerBlock(), sectionBlock(s.title)}, p.blocks...)
-			}
-			pieces = append(pieces, p)
+	for i, it := range items {
+		p := piece{blocks: []Block{sectionBlock(it.text)}, n: it.n}
+		if i == 0 {
+			p.blocks = append([]Block{dividerBlock(), sectionBlock(title)}, p.blocks...)
 		}
+		pieces = append(pieces, p)
 	}
-	budget := MaxBlocks - len(head) - len(tail)
-	var body []Block
-	dropped := 0
+	return pieces
+}
+
+// fillPieces は項目を順に入れ、入らなくなった後ろの項目を返す。cut が真なら、残りがあるときの「ほか N 件」の 1 ブロックを残しておく。
+func fillPieces(pieces []piece, budget int, cut bool) (body []Block, left []piece) {
 	for i, p := range pieces {
 		reserve := 0
-		if i < len(pieces)-1 {
+		if cut && i < len(pieces)-1 {
 			reserve = 1
 		}
-		if dropped > 0 || len(body)+len(p.blocks)+reserve > budget {
-			dropped += p.n
-			continue
+		if len(body)+len(p.blocks)+reserve > budget {
+			return body, pieces[i:]
 		}
 		body = append(body, p.blocks...)
 	}
-	if dropped > 0 {
-		body = append(body, sectionBlock(fmt.Sprintf("ほか %d 件は `arata review` で確認してください", dropped)))
+	return body, nil
+}
+
+func cutBlock(left []piece) Block {
+	n := 0
+	for _, p := range left {
+		n += p.n
+	}
+	return sectionBlock(fmt.Sprintf("ほか %d 件は `arata review` で確認してください", n))
+}
+
+// RunBlocks は run / 期間レポートの Block Kit。notes は LLM の要約と「→」(nil なら規則)。notice は LLM が使えなかったときの注記。
+func RunBlocks(in *Input, d Decision, r Rules, warnings []string, notes *BlockNotes, notice string) Message {
+	top, rest := splitUrgent(in, r.UrgentSeverity)
+	head := blocksHead(in, d, r, warnings, notes, notice, top, rest, true)
+	var extra []string
+	if in.Run != nil && len(in.Run.Proposals) > 0 {
+		extra = append(extra, "WAF の改善提案は別のメッセージ")
+	}
+	if notes != nil {
+		extra = append(extra, LLMNotice)
+	}
+	tail := []Block{guideFoot(in, extra...)}
+
+	// 項目を順に入れ、入らなくなったら残りを「ほか N 件」にまとめる (縮めた行の 1 ブロックは残しておく)
+	pieces := append(itemPieces("*まず対応*", urgentItems(top, notes)), itemPieces("*確認推奨*", groupItems(rest))...)
+	body, left := fillPieces(pieces, MaxBlocks-len(head)-len(tail), true)
+	if len(left) > 0 {
+		body = append(body, cutBlock(left))
 	}
 	blocks := append(append(head, body...), tail...)
 	return Message{Text: notifyText(in), Blocks: blocks}

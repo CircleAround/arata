@@ -53,7 +53,7 @@ aratam notify --in /var/lib/arata/out/daily
    - LLM が返した分類と説明を、aratam が決まった書式で Slack のメッセージに組み立てる (`slack.format: blocks` のときは 3-4 章の構成と契約)。
    - new / changed / recurred の finding が LLM の出力から漏れていたら、規則で組み立てた行として末尾に足す (LLM が finding を消す経路を作らない)。
    - LLM が使えなかったときは report.md を送る (Slack の上限に合わせて切り詰め、出力ディレクトリのパスを添える)。冒頭に「要約に失敗したため原文を送ります」と書く。
-5. **送信** → 成功したら `.aratam-notified` に run_id を書く。
+5. **送信** → 成功したら `.aratam-notified` に run_id を書く。`slack.details: thread` なら、続けて 1 通目のスレッドに詳細を返信する (3 通まで。3-4 章、ADR 0093)。
 6. **WAF の改善提案** (report.json に `proposals` があるとき。3-2 章) → 2 通目として常に通常用に送る。LLM を使うときは候補だけを渡して書き起こさせる。
 
 期間レポート (`"kind": "period"`) も同じ流れで扱う。違いは 3 の system 文書と、2 の振り分け (期間レポートは常に通常用) だけ。
@@ -340,7 +340,49 @@ LLM に求める出力:
   - ADR 0028 の種類: `challenge_on_app_path` = 「正規の画面に Challenge / CAPTCHA — `ルール` が GET /x で Challenge 160 件 / 7 日・解かれた 80%」、
     「→ このパスを `ルール` の対象から外す (scope-down) か条件を絞る」(BLOCK に変えることは勧めない)。
     `challenge_impact` (observation) は「*Challenge / CAPTCHA*」の節に 1 ルール 1 行 (「`ルール` Challenge 900 件・解かれた 5%・GET 以外 40」。割合は解釈しない)
+- **1 通目とスレッドへの返信 (`slack.details: thread`。ADR 0093)**: 1 通目に一番伝えたいことと「確認推奨」の概要を、1 通目のスレッドへの返信に詳細を送る。組み立ては `internal/notify/thread.go`。
+
+  ```
+  ── 1 通目 (チャンネルに出る) ──
+  [メンション・注記・警告]                 (メンションは 1 通目だけ)
+  🚨 arata daily — acme                    (header)
+  *期間* … | *新規* … | 変化 1 件 ・ 再発 1 件 | 解消 1 件 ・ 未対応 0 件   (fields。本日報告済み・情報の件数は返信に回す)
+  要約 1〜2 文                             (LLM。none と LLM の失敗は規則)
+  ⚠️ 取れていないもの                       (「取れなくなった」を「何も起きていない」と取り違えないよう、1 通目に残す)
+  ── まず対応                               (今と同じ形。1 件ずつ、「→」と id)
+  🚨 *<summary>* `id: 7f16a4507445`
+  → <何をするか>
+  ── 確認推奨 (詳細はスレッド)               (概要だけ: 見出しと件数を 1 行ずつ。主体・値・id・「→」は書かない)
+  🟠 *MFA の無いコンソールユーザー* 5 人
+  🟡 *<summary>*                            (対応表に無いチェックは summary。100 字まで)
+  詳細はスレッド | WAF の改善提案は別のメッセージ | <LLM の注記>   (context)
+  ── スレッドへの返信 (3 通まで。チャンネルには出さない) ──
+  ── まず対応 (続き)                         (1 通目に入りきらなかったものがあるときだけ)
+  ── 確認推奨                               (今と同じ形。主体・値・id・「→」)
+  🟠 *MFA の無いコンソールユーザー* 5 人
+  `alice` `bob` …
+  id: `0a1b2c3d4e5f` `1b2c3d4e5f6a` …
+  本日報告済み N 件 ・ 情報 N 件 (件数のみ)  (context。最後の返信)
+  全文と対処手順: `arata review` ・ `arata help ai playbook <check>` | <dir>/report.md   (context。最後の返信)
+  ```
+
+  - 決定 (ADR 0093 の 2 節): 何をどちらに入れるかは規則で決める (LLM に任せない)。上限 (blocks 50 個など) と切り詰めは 1 通ずつ今と同じ。
+    返信が入りきらなければ、続きを同じスレッドに返信する。返信は 3 通まで (`MaxThreadReplies`) で、それでも入らないものは最後の返信で「ほか N 件は `arata review` で確認してください」に縮める
+  - 決定 (開発リードの判断): 1 通目の fields から本日報告済みと情報の件数を外し、最後の返信の末尾の context に移す (ADR 0093 の 2 節の「情報の件数、本日報告済みの件数」は返信)。
+    **返信に入れるものが無い日** (確認推奨が 0 件で、まず対応も 1 通目に入りきった) は、返信せず、`inline` と同じ 1 通 (fields に件数、末尾に全文の案内) を送る。
+    「詳細はスレッド」と書いたのに返信が無い、を作らないため
+  - 決定 (開発リードの判断): `slack.format: text` でも、blocks と同じ規則の分け方 (「まず対応」= urgent_severity 以上、「確認推奨」= それ未満を対応表でまとめる) を使い、mrkdwn の行で書く。
+    振り分けを規則に寄せ、blocks と text で 1 通目の中身をそろえるため。1 通目は、見出し・件数・要約・取れなかったもの・まず対応 (今の text の 2 行の形と id)・確認推奨の概要・「詳細はスレッド」。
+    返信は、まず対応 (続き)・確認推奨の項目 (2 行の形と id。まとめるチェックは見出しの行の下に並べる)・LLM のインシデント候補と approve の提案・解消・未対応・本日報告済み・情報の一覧 (今の text の本文にあるもの)・`全文: <dir>/report.md`。
+    1 通ずつ 3,800 字まで。LLM の要約 (headline) は 1 通目の要約に使い、LLM の分類 (要対処 / 確認依頼 / 情報) と理由の文は使わない。
+    却下: text では `thread` を設定エラーにする (ADR 0093 の 1 節の「どちらの書式でも使える」と食い違う)
+  - 縮退 (ADR 0093 の 4 節): LLM の失敗で原文を送る (text)・入力の問題・静かな 1 行は、1 通に収まる短い通知なので返信しない。
+    LLM の失敗で規則だけの Block Kit を送るとき (blocks) は、詳細も規則で組めるので `thread` の分け方を使う (先頭の注記は同じ)
+  - 返信は 1 通目と同じチャンネル (緊急用のチャンネルに送ったなら、そのスレッド)。WAF の改善提案はスレッドにしない (常に通常用に送る別の 2 通目。ADR 0024)
 - 静か (`on_quiet: short`): header `✅ arata <profile> — <name>` と 1 行。入力の問題: header `⚠️ arata の出力が無いか古い — <name>`、理由・code・入力のパス
+- `--dry-run` (ADR 0093 の 5 節): `slack.details: thread` なら、1 通目と返信を、区切りの行 (`--- route: … ---`。返信は末尾に `(1 通目のスレッドへの返信)`) を挟んで出す。
+  `--format json` では、返信は `messages[].thread_reply: true` (1 通目と、返信でない通知は `false`。必ず出す)。送るときは `payload` に `channel` と `thread_ts` を足す。
+  返信の組み立てを本番と同じに通すため、1 通目の ts の代わりに固定の値を使う (Slack には送らない)
 - `--dry-run`: `--format text` (既定) は人が読む簡易表示 (`[通知] <text>`、header は `# `、divider は `---`、context は `(小) `、fields は ` | ` でつなぐ)。
   `--format json` は、全体が 1 つの JSON (`aratam schema aratam-dry-run`)。送るはずだった通知が `messages` に送る順で並び、Slack に送る payload そのものは
   `messages[].payload` (bot トークンの方式では、これに `channel` を足して送る)。`--format` は `--dry-run` のときだけ指定できる
@@ -404,6 +446,7 @@ slack:
   urgent_channel: ""              # 緊急用のチャンネル ID。空なら channel に送り、冒頭にメンションを付ける
   urgent_mention: "<!channel>"
   format: blocks                  # blocks (Block Kit) | text (mrkdwn の本文。v0.3.0 までの書式)
+  details: thread                 # thread (1 通目のスレッドへの返信に詳細。bot の方式だけ) | inline (1 通にまとめる)。書かなければ inline (ADR 0093)
   # 非推奨 (ADR 0061): Incoming Webhook の方式。動き続けるが、新しく使わない。bot の項目と両方を書くと設定エラー
   webhook_env: ""                 # 通常用の Webhook URL を入れる環境変数の名前
   urgent_webhook_env: ""          # 緊急用。空なら通常用に送り、冒頭にメンションを付ける
@@ -417,6 +460,10 @@ slack:
   `slack.urgent_webhook_env` と `slack.urgent_mention` は省略可。未知のキーは誤記とみなして設定エラーにする (arata と同じ)。
 - `timezone` は省略可で、無ければ UTC (これまでの表示のまま)。雛形には `timezone: UTC` と明示する (4-3 章)。
 - `slack.format` (ADR 0029): `blocks` | `text`。必須 (暗黙の既定を持たない)。v0.3.0 の設定には無いので、エラー文に「v0.4.0 から必須。従来どおりなら `slack.format: text`」と書く。
+- `slack.details` (ADR 0093): `inline` | `thread`。**書かなければ `inline`** (今の設定は変えずに動く。既定を `thread` にすると、版を上げた日に通知の形が黙って変わるため)。
+  `aratam config init` と `arata repo init` の雛形は `thread` を書き出す (書いた人だけが変わる形にし、雛形で勧める。ADR 0014)。
+  `thread` は bot トークンの方式だけで使える。Webhook の方式と `thread` の組は設定エラー (Webhook は `ts` を返さず返信できないので、詳細を黙って落とさない)。
+  知らない値も設定エラー。受け口 (Slack の転送の仕組みなど) がスレッドの返信をどう扱うかは、`test-notify` で確かめる
 - `*_env` は環境変数の名前 (`[A-Za-z_][A-Za-z0-9_]*`) でなければ設定エラー。URL を貼った誤りを弾き、エラーには値を出さない。
 - `urgent_webhook_env` を書いたのに環境変数が空なら、通常用に送り `urgent_mention` を付ける (`URGENT_WEBHOOK_UNSET` の警告を出す)。緊急の通知を落とさないため。
   緊急用の Webhook があるときはメンションを付けない (チャンネル自体が緊急用のため)。
@@ -469,8 +516,9 @@ slack:
 - **気をつける点 (トークンで書ける範囲)**: bot のトークンは、bot が入っているどのチャンネルにも書ける。Webhook が 1 つのチャンネルにしか書けないのと比べて、漏れたときに書ける範囲が広い。
   読むことはできない (scope は `chat:write` だけ)。bot が入っていないチャンネルには書けない (`chat:write.public` を使わない)。
   範囲は、会社 (監査を任される組織) ごとにリポジトリと Slack アプリを分けることで閉じる。同じトークンを複数の会社の実行環境に置かない。bot を招待するのは、通知に使うチャンネルだけにする
-- 今後 (ADR 0061。まだ作らない): bot にそろえると投稿の `ts` が返るので、日次のまとめへのスレッド (指摘の詳細) と、対応済みになったときの更新 (`chat.update`) が作れる。
-  作るときは、状態の持ち方を別の ADR で決める (今は、下の「送る中身は同じ」のとおり、スレッド・更新・削除をしない)
+- 今後 (ADR 0061): bot にそろえると投稿の `ts` が返るので、日次のまとめへのスレッド (指摘の詳細) と、対応済みになったときの更新 (`chat.update`) が作れる。
+  → 決定 (ADR 0093): スレッド (詳細の返信) は作った (`slack.details: thread`。3-4 章)。`ts` は同じ run の中で 1 通目の応答から受け取るだけで、run をまたぐ状態は持たない。
+  対応済みになったときの更新・削除は作っていない (作るときは、状態の持ち方を別の ADR で決める)
 - 決定 (どちらか 1 つ): Webhook の項目 (`webhook_env`・`urgent_webhook_env`) と bot の項目の両方が書かれていたら設定エラーにする。
   片方を優先する規則にすると、移行の途中の設定で、意図しないチャンネルに送ったり緊急の通知が古い Webhook に流れたりする。通常用は bot・緊急用は Webhook という混在も受け付けない
 - 決定 (チャンネルは ID で書く): `C0123456789` の形 (`[CGD]` + 英大文字と数字 8〜20 字) だけを受け付け、名前 (`#general`) は設定エラーにする。
@@ -481,7 +529,14 @@ slack:
   (`doctor` は確かめず、`test-notify` で確かめる)。`conversations.join` で自分から入ることもしない (`channels:join` が要る)
 - 決定 (送る中身は同じ): `chat.postMessage` に送る JSON は、Webhook に送るもの (`text`・`blocks`・`unfurl_links: false`・`unfurl_media: false`) に `channel` を足しただけ。
   振り分け・長さの上限と切り詰め・2 通目 (WAF の提案)・LLM が使えないときの原文や規則だけの通知・二重送信の防止は、どちらの方式でも notify の同じ規則で決まる。
-  スレッドへの返信・メッセージの更新や削除はしない (`chat:write` で足りる範囲でも、状態を持たない方針のため)
+  メッセージの更新や削除はしない (`chat:write` で足りる範囲でも、run をまたぐ状態を持たない方針のため)。
+  決定 (ADR 0093): スレッドへの返信は `slack.details: thread` のときだけする (bot の方式だけ)。同じ `chat.postMessage` に `thread_ts` を付けるだけで、scope は `chat:write` のまま。
+  返信をチャンネルに出さない (`reply_broadcast` は payload にあっても送らない)
+- 決定 (返信の `ts`。ADR 0093 の 3・4 節): `ts` は 1 通目の `chat.postMessage` の応答から受け取るだけで、ストアにもファイルにも残さない。
+  応答は信用しない入力なので、`^[0-9]{1,16}\.[0-9]{1,16}$` の形だけを受け付け、それ以外 (無い・数値・形が違う) は空として扱う (`ParseResponse`。ファズは `FuzzParseResponse`・`FuzzPostMessageResponse`)。
+  返信が要るのに `ts` が無ければ、返信せず失敗にする (`SEND_FAILED`、終了コード 5)。
+  1 通目の送信に失敗したら、今と同じ (返信は送らない。`.aratam-notified` も書かない)。1 通目を送れて返信に失敗したら、残りの返信は送らず終了コード 5。
+  `.aratam-notified` は書く (1 通目を二重に送らない)。返信だけの送り直しはしない
 - 決定 (応答を信用しない。ADR 0037・0041): Slack の Web API は HTTP 200 でも `{"ok": false, "error": "..."}` を返すので、`ok` を必ず見る。
   成功とみなすのは、HTTP 2xx で、本文が JSON のオブジェクトで、`ok` が真偽値の `true` のときだけ。
   エラーの文とログに写すのは、`[a-z0-9_]` で 64 字までの `error` コードだけ (それ以外は `unknown_error`)。応答の本文もトークンも写さない。
@@ -587,7 +642,7 @@ aratam notify  --in <dir> [-c aratam.yaml] [--dry-run [--format text|json]] [--f
                # --dry-run は送らずに標準出力へ。LLM は呼ぶ (--llm none で呼ばない)。--format json は全体が 1 つの JSON (送る payload は messages[].payload)
 aratam doctor  [-c aratam.yaml] [--format table|json]
                # LLM に短い問い合わせを 1 回、Webhook の環境変数の有無 (bot トークンなら auth.test) を確認 (送信はしない)。--format json は機械が読む形
-aratam test-notify [-c aratam.yaml] # Slack に試験メッセージを 1 通送る
+aratam test-notify [-c aratam.yaml] # Slack に試験メッセージを 1 通送る (slack.details: thread なら、そのスレッドに返信も 1 通)
 ```
 
 - 決定: 設定ファイルのパスには既定を持つ。`-c` > 環境変数 `ARATAM_CONFIG` > カレントディレクトリの `aratam.yaml` の順に探す。
@@ -602,12 +657,12 @@ aratam test-notify [-c aratam.yaml] # Slack に試験メッセージを 1 通送
   text の ok の行に `timezone` を足したとき、行末の `slack bot` を grep して送り方を判別していた仕組みが判別を外し、定時の通知を送れなかった。
   人向けの行は、これからも文言と並びを変える。
   - 出すもの: `schema` / `schema_version`、`ok` (ng の行が無い)、`config` (検査したファイル)、`name`、`llm.provider`、`slack.method` (`bot` / `webhook`)、
-    `slack.format`、`slack.urgent_webhook` (緊急用の Webhook を別に持つか。`slack.urgent_webhook_env` が空でなければ `true`。必ず出す。`arata repo init` が書き出すワークフローが、
+    `slack.format`、`slack.details` (`inline` / `thread`。設定に無ければ `inline`。必ず出す。ADR 0093)、`slack.urgent_webhook` (緊急用の Webhook を別に持つか。`slack.urgent_webhook_env` が空でなければ `true`。必ず出す。`arata repo init` が書き出すワークフローが、
     使う秘密だけを通知の段階に渡すために読む。ADR 0059。環境変数の名前は出さない)、`timezone`、`rows` (`status`・`item`・`code`・`message`。text の行と同じ内容)。スキーマは `aratam schema aratam-config-check`
     (`schemas/aratam-config-check.schema.json`。型から作り、テストで固定する)
   - **設定を読めなかったときは、設定から決まる値 (`name`・`llm`・`slack`・`timezone`) を出さない** (`ok: false` と ng の行だけ。終了コードは 2 のまま)。
     `jq -r .slack.method` は `null` になり、「bot / webhook 以外なら止める」と書いた側は止まる。読めない設定から送り方を推し量らない
-  - 閉じた語彙 (値を足すときは `schema_version` を上げる): `slack.method`、`rows[].status`。読む側は、知らない値を見たら止める。
+  - 閉じた語彙 (値を足すときは `schema_version` を上げる): `slack.method`、`slack.details`、`rows[].status`。読む側は、知らない値を見たら止める。
     開いた語彙 (版を上げずに値が足される): `llm.provider`、`slack.format`、`rows[].item`、`rows[].code`
   - 秘密は出さない。秘密ではないが判別に要らない値 (チャンネル ID、環境変数の名前) も出さない (PR の CI のログに出る)
   - text の出力は変えない (同じ行を、同じ内容から書く)
@@ -619,7 +674,8 @@ aratam test-notify [-c aratam.yaml] # Slack に試験メッセージを 1 通送
   項目の無い報告 (足す前の arata の出力) は版 1 として読む。知らない項目は今までどおり無視する
 - プロバイダ名は呼び方を表す (`claude-cli` / `openai-api`)。同じモデルを別の経路で呼ぶプロバイダを足しても名前が衝突しない。
 - 終了コード: 0 = 送った (または on_quiet=silent / 通知済み / arata の試しの実行の報告で送らなかった)、2 = 設定エラー、
-  3 = LLM が使えず report.md で送った、4 = 入力が無い・古い (その旨は送った)、5 = 送信に失敗した。
+  3 = LLM が使えず report.md で送った、4 = 入力が無い・古い (その旨は送った)、5 = 送信に失敗した
+  (WAF の提案の 2 通目と、スレッドへの返信の失敗を含む。1 通目を送れていれば `.aratam-notified` は書く。ADR 0093)。
 - 送信に失敗したら標準エラーに出して終了コード 5。cron 側の MAILTO などで拾える。
 - 決定: CLI は arata と同じ標準 `flag` の上のコマンド層 (`internal/subcmd`) を共有する。ヘルプの書式・フラグのエラー文言・未知のコマンドで終了コード 2 も arata と同じ。
   標準エラーのログも arata と同じ JSON (`msg` と固定語彙の `code`)。
@@ -636,6 +692,8 @@ aratam test-notify [-c aratam.yaml] # Slack に試験メッセージを 1 通送
   bot がチャンネルにいるかは確かめられないので (4-1 章)、チャンネル ID を出して `test-notify` を案内する
 - 決定 (`test-notify`): 既定は通常用、`--urgent` で緊急用に送る (緊急用が無ければ notify と同じく通常用にメンション付き)。送信に失敗したら終了コード 5。
   bot トークンの方式では、届くこと (bot がチャンネルにいること) を確かめる唯一の手段になる。
+  決定 (ADR 0093 の 5 節): `slack.details: thread` なら、試しの 1 通目にスレッドの返信を 1 通付ける。返信が届くこと (受け口の転送を含む) を、本番の前に確かめられるようにする。
+  返信の失敗・1 通目の応答に `ts` が無いときも終了コード 5
 
 ### 標準エラーのログと code
 
@@ -670,6 +728,7 @@ aratam test-notify [-c aratam.yaml] # Slack に試験メッセージを 1 通送
 | `SLACK_WEBHOOK_DEPRECATED` | Slack への送り方が Incoming Webhook (非推奨。動き続ける。config check と doctor の警告。ADR 0061) |
 | `LLM_UNAVAILABLE` | LLM に繋がらない (doctor) |
 
+- 決定 (ADR 0093): スレッドへの返信の失敗も `SEND_FAILED` (新しい code は足さない。終了コードも同じ 5)。返信の行には `thread: reply` を付け、送れなかった返信は `reply_index` (1 始まり) / `replies` (返信の数) で出す。
 - 決定 (arata の ADR 0054): `SEND_FAILED` の行には、Slack の Web API が error コードを返したとき、`slack_error` (例 `not_in_channel`) を付ける。
   機械 (GitHub Actions の見本) は、`error` の文からコードを切り出さずに、この項目を読む。値は英小文字・数字・`_` の 64 文字までの形のものだけを出す
   (Slack の応答の値をそのままログの項目にしない)。Webhook の方式と、HTTP の状態だけで失敗したときは付かない

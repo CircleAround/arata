@@ -41,12 +41,12 @@ type fakeSender struct {
 	err error
 }
 
-func (f *fakeSender) Send(_ context.Context, r Route, m Message) error {
+func (f *fakeSender) Send(_ context.Context, r Route, m Message) (string, error) {
 	if f.err != nil {
-		return f.err
+		return "", f.err
 	}
 	f.got = append(f.got, sent{r, m.Text, m})
-	return nil
+	return fmt.Sprintf("1700000000.%06d", len(f.got)), nil
 }
 
 // inputDir は report.json (と report.md) を一時ディレクトリに置く。md が空なら report.md を置かない。

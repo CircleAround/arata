@@ -75,8 +75,9 @@ type Rules struct {
 }
 
 // Sender は送信先。aratam は Slack (Webhook か bot トークンの chat.postMessage)、--dry-run は標準出力。
+// 返すのは投稿の ts (bot の方式の chat.postMessage の応答。分からなければ空)。m.ThreadTS があれば、その投稿のスレッドへの返信にする (ADR 0093)。
 type Sender interface {
-	Send(ctx context.Context, route Route, m Message) error
+	Send(ctx context.Context, route Route, m Message) (string, error)
 }
 
 // Summarizer は LLM のプロバイダ (aratam 設計書 3-1)。system と report.json を渡し、LLM の出力をそのまま返す。
@@ -102,6 +103,8 @@ type Options struct {
 	Context string
 	// Format は slack.format (blocks | text)。空なら text (v0.3.0 までの mrkdwn の本文。設定では必須にしている)。
 	Format string
+	// Details は slack.details (inline | thread)。空なら inline (ADR 0093)。
+	Details string
 }
 
 // Result は Run の結果。
@@ -157,7 +160,7 @@ func Run(ctx context.Context, o Options) Result {
 		if o.Format == FormatBlocks {
 			m = InputProblemBlocks(o.Dir, ie, o.Rules)
 		}
-		if !send(ctx, o, log, RouteUrgent, m) {
+		if _, ok := send(ctx, o, log, RouteUrgent, m); !ok {
 			return Result{Exit: ExitSend, Route: RouteUrgent}
 		}
 		return Result{Exit: ExitInput, Route: RouteUrgent, Sent: true}
@@ -204,7 +207,30 @@ func Run(ctx context.Context, o Options) Result {
 	hasProposals := in.Run != nil && len(in.Run.Proposals) > 0
 	llmOK := o.Summarizer != nil
 	blocks := o.Format == FormatBlocks
+	thread := o.Details == DetailsThread
 	var msg Message
+	// replies は 1 通目のスレッドへの返信 (slack.details: thread。ADR 0093)。縮退 (静か・原文の送信・入力の問題) では作らない
+	var replies []Message
+	threadBlocks := func(notes *BlockNotes, notice string) Message {
+		if thread {
+			if p, rs := RunThreadBlocks(in, d, o.Rules, warnings, notes, notice); rs != nil {
+				replies = rs
+				return p
+			}
+		}
+		return RunBlocks(in, d, o.Rules, warnings, notes, notice)
+	}
+	threadText := func(s *Summary, inline func() string) Message {
+		if thread {
+			if p, rs := ThreadText(in, d, o.Rules, warnings, s); rs != nil {
+				for _, r := range rs {
+					replies = append(replies, Message{Text: r})
+				}
+				return Message{Text: p}
+			}
+		}
+		return Message{Text: inline()}
+	}
 	switch {
 	case d.Quiet && (scoped || o.Rules.OnQuiet == "silent" && !silencedHigh):
 		if !hasProposals {
@@ -216,18 +242,19 @@ func Run(ctx context.Context, o Options) Result {
 	case d.Quiet:
 		msg = Message{Text: QuietText(in, d, o.Rules, warnings)}
 	case o.Summarizer == nil && blocks:
-		msg = RunBlocks(in, d, o.Rules, warnings, nil, "")
+		msg = threadBlocks(nil, "")
 	case o.Summarizer == nil:
-		msg = Message{Text: ReportText(in, d, o.Rules, warnings, "")}
+		msg = threadText(nil, func() string { return ReportText(in, d, o.Rules, warnings, "") })
 	case blocks:
 		// 決定 (ADR 0029): blocks では LLM は要約と「→」だけを書く。失敗したら原文ではなく、規則だけの Block Kit を送る (終了コード 3 は同じ)
 		if n, err := summarizeBlocks(ctx, o, log, in); err != nil {
 			log.Error("LLM の要約に失敗したため規則で組み立てて送ります", "code", CodeLLMFailed, "error", err.Error())
-			msg = RunBlocks(in, d, o.Rules, warnings, nil, BlocksFallbackNotice)
+			// 決定 (ADR 0093 の 4 節): 規則だけの Block Kit は詳細も規則で組めるので、thread の分け方を使う
+			msg = threadBlocks(nil, BlocksFallbackNotice)
 			exit = ExitFallback
 			llmOK = false
 		} else {
-			msg = RunBlocks(in, d, o.Rules, warnings, n, "")
+			msg = threadBlocks(n, "")
 		}
 	default:
 		if s, err := summarize(ctx, o, log, in); err != nil {
@@ -236,17 +263,21 @@ func Run(ctx context.Context, o Options) Result {
 			exit = ExitFallback
 			llmOK = false // 決定: 要約が失敗したら提案の書き起こしは呼ばない (LLM が使えない見込みが高い)
 		} else {
-			msg = Message{Text: SummaryText(in, d, o.Rules, warnings, s)}
+			msg = threadText(s, func() string { return SummaryText(in, d, o.Rules, warnings, s) })
 		}
 	}
 	text := msg.Text
 	res := Result{Exit: exit, Route: d.Route}
 	if text != "" {
-		if !send(ctx, o, log, d.Route, msg) {
+		ts, ok := send(ctx, o, log, d.Route, msg)
+		if !ok {
 			return Result{Exit: ExitSend, Route: d.Route}
 		}
 		res.Sent = true
-		mark(o, log, key) // 本文を送れたら記録する (提案の送信に失敗しても本文を二重に送らない)
+		mark(o, log, key) // 本文を送れたら記録する (提案や返信の送信に失敗しても本文を二重に送らない)
+		if !sendReplies(ctx, o, log, d.Route, ts, replies) {
+			res.Exit = ExitSend
+		}
 	}
 	if !hasProposals {
 		return res
@@ -276,7 +307,7 @@ func Run(ctx context.Context, o Options) Result {
 		}
 		pm = ProposalsBlocks(in, warnings, writeups, notice, file)
 	}
-	if !send(ctx, o, log, RouteNormal, pm) {
+	if _, ok := send(ctx, o, log, RouteNormal, pm); !ok {
 		res.Exit = ExitSend
 		return res
 	}
@@ -373,10 +404,35 @@ func callLLM(ctx context.Context, o Options, log *slog.Logger, system string, in
 	return last
 }
 
-func send(ctx context.Context, o Options, log *slog.Logger, route Route, m Message) bool {
-	if err := o.Sender.Send(ctx, route, m); err != nil {
+func send(ctx context.Context, o Options, log *slog.Logger, route Route, m Message) (string, bool) {
+	ts, err := o.Sender.Send(ctx, route, m)
+	if err != nil {
 		log.Error("通知の送信に失敗しました", append([]any{"code", CodeSendFailed, "route", string(route)}, SendErrorAttrs(err)...)...)
+		return "", false
+	}
+	return ts, true
+}
+
+// threadTS は投稿の ts の形 (internal/slack の ValidTS と同じ。notify はネットワークの層を import しない)。
+var threadTS = regexp.MustCompile(`^[0-9]{1,16}\.[0-9]{1,16}$`)
+
+// sendReplies は 1 通目 (ts) のスレッドに返信を順に送る。1 通目と同じ送り先 (チャンネル) に送る。
+// 決定 (ADR 0093 の 3・4 節): ts は Slack の応答の値なので、形 (threadTS) が合わなければ返信せず失敗にする。
+// 返信に失敗したら残りは送らず、false (終了コード 5)。返信だけの送り直しはしない (1 通目の通知済みの印は書いてある)。
+func sendReplies(ctx context.Context, o Options, log *slog.Logger, route Route, ts string, replies []Message) bool {
+	if len(replies) == 0 {
+		return true
+	}
+	if !threadTS.MatchString(ts) {
+		log.Error("1 通目の応答に投稿の ts が無いため、スレッドへの返信を送れません", "code", CodeSendFailed, "route", string(route), "thread", "reply")
 		return false
+	}
+	for i, m := range replies {
+		m.ThreadTS = ts
+		if _, err := o.Sender.Send(ctx, route, m); err != nil {
+			log.Error("スレッドへの返信の送信に失敗しました (残りの返信も送りません)", append([]any{"code", CodeSendFailed, "route", string(route), "thread", "reply", "reply_index", i + 1, "replies", len(replies)}, SendErrorAttrs(err)...)...)
+			return false
+		}
 	}
 	return true
 }

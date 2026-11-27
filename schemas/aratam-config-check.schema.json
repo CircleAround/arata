@@ -112,6 +112,14 @@
           "description": "slack.format (blocks / text)。開いた語彙",
           "type": "string"
         },
+        "details": {
+          "description": "slack.details (設定に無ければ inline)。inline = 1 通にまとめる、thread = 1 通目のスレッドへの返信に詳細を送る (ADR 0093)。閉じた語彙",
+          "type": "string",
+          "enum": [
+            "inline",
+            "thread"
+          ]
+        },
         "urgent_webhook": {
           "description": "緊急用の Webhook を別に持つ (slack.urgent_webhook_env が空でない)。false なら、緊急の通知は通常用の送り先に送る。bot トークンの方式では常に false。環境変数の名前は出さない",
           "type": "boolean"
@@ -120,6 +128,7 @@
       "required": [
         "method",
         "format",
+        "details",
         "urgent_webhook"
       ]
     }

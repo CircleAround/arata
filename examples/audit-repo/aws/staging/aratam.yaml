@@ -24,6 +24,7 @@ slack:
   urgent_channel: ""                                # 緊急用のチャンネル ID。空にすると channel に送り、冒頭に urgent_mention を付ける
   urgent_mention: "<!channel>"                      # 緊急用を通常用に送るときのメンション (空なら付けない)
   format: blocks                                    # blocks = Block Kit (見出し・件数・まず対応・まとめて確認) | text = mrkdwn の本文だけ (v0.3.0 までの書式)
+  details: thread                                   # thread = 1 通目にまず対応と確認推奨の概要、詳細は 1 通目のスレッドへの返信 (3 通まで。bot の方式だけ) | inline = 1 通にまとめる (書かなければ inline)
   # 非推奨 (ADR 0061): Incoming Webhook の方式。動き続けるが、config check と doctor が警告を出す。新しく使わない (空のままにする)。
   # bot の項目 (bot_token_env / channel / urgent_channel) と両方を書くと設定エラー。
   webhook_env: ""                                   # 通常用の Webhook URL を入れる環境変数の名前

@@ -100,7 +100,7 @@ gh api repos/OWNER/REPO/environments/audit/secrets --jq '[.secrets[].name]'
 - environment の設定を変えられるのは admin を持つ人。admin の人数が最小か (`collaborators` の `permissions.admin`) を人に確かめてもらう
 - 置いてあるのが、ワークフローが使う 3 つの名前 (`ARATA_RUNNER_ROLE_ARN`、`ARATA_AUDIT_ROLE_ARNS` (アカウントの名前からロールを引く JSON)、`ARATAM_SLACK_BOT_TOKEN`) だけ。足りない名前・余った名前 (Webhook の秘密など) は `arata repo check --github` の `secret`・`secret_unused` の行に出る。長期の AWS のアクセスキーが無い
 - 読み出されて困るのは bot トークン (偽の通知を送れる。bot を招待したすべてのチャンネルに送れるので、会社ごとに Slack アプリを分けているか、招待が通知用のチャンネルだけか、Slack アプリの scope が `chat:write` だけかを人に確かめてもらう)。ロールの ARN は読めても、`sub` が合わないので引き受けられない (分かるのはアカウント ID)
-- 漏れた疑いがあれば、人が bot トークンを取り消して入れ直す (`gh secret set`)。定時の通知が送れなかったことの知らせも同じトークンで送るので、入れ替えたら `arata-notify-test` (`normal`・`urgent`・`alert`) で確かめる
+- 漏れた疑いがあれば、人が bot トークンを取り消して入れ直す (`gh secret set`)。定時の通知が送れなかったことの知らせも同じトークンで送るので、入れ替えたら `arata-notify-test` (`normal`・`urgent`・`alert`) で確かめる。`aws/<アカウント>/aratam.yaml` の `slack.details` が `thread` (ADR 0093) のときは返信も届くかを同じワークフローで見る: `thread` なら、通知の 1 通目に一番伝えたいことと確認推奨の概要、1 通目のスレッドへの返信 (3 通まで) に詳細が届く。書かなければ 1 通 (`inline`)。値は `aratam config check --format json` の `.slack.details` で読む (人向けの出力を読まない)。受け口 (Slack の転送の仕組みなど) がスレッドの返信をどう扱うかは、`arata-notify-test` (`aratam test-notify` は `thread` なら返信も 1 通送る) で人が確かめる。返信だけが届かないときは終了コード 5 で、1 通目は送り直さない
 - environment を使っていない構成 (秘密がリポジトリの secrets、`sub` が `:ref:` の形) なら、守りは「書き込み権限を持つ人を最小に」だけ。environment への移行を勧める (順番は見本の README「既に動いている監査を environment に移す」: environment を作る → スタックを `GitHubEnvironment` と `KeepBranchSubject=true` で更新 → ワークフローに `environment:` を足す → 秘密を移してリポジトリから消す → `KeepBranchSubject=false`)。勧めるときは、非公開のリポジトリでは GitHub の有料プラン (Team など) が要ることを添える。設定を変えるのは人
 
 ## Actions の設定

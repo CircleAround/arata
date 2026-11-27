@@ -1,0 +1,65 @@
+<!channel>
+*arata daily (acme)* 2026-10-20T09:00:00Z 〜 2026-10-21T09:00:00Z
+新規 10 / 変化 0 / 再発 0 / 解消 1 / 未対応 1 / 最大重大度 *critical*
+まず対応 2 件 (最も重いのは「ルートユーザーが使われた」)、確認推奨 8 件。
+
+*取れなかったソース*
+• cloudtrail: `ACCESS_DENIED` 取れた期間なし
+
+*形式の解釈率の警告*
+• app (json): 解釈率 0.50、閾値 0.40 `FORMAT_DRIFT`
+
+*スキップしたチェック*: login_bruteforce (no http_access source)
+
+*まず対応*
+• *[critical]* ルートユーザーが使われた `root_usage` (新規)
+    count 2 · 初出 2026-10-21T09:00:00Z · `id: r-1`
+• *[high]* GuardDuty: インスタンスの認証情報が AWS の外で使われた `guardduty_findings` (新規)
+    type UnauthorizedAccess:IAMUser/InstanceCredentialExfiltration.OutsideAWS · 初出 2026-10-21T09:00:00Z · `id: g-1`
+
+*確認推奨* (詳細はスレッド)
+🟠 *MFA の無いコンソールユーザー* 5 人
+🟡 *指摘 000*
+🟡 *指摘 001*
+🟡 *指摘 002*
+
+詳細はスレッド
+=== スレッドへの返信 ===
+*確認推奨*
+🟠 *MFA の無いコンソールユーザー* 5 人
+• *[medium]* alice に MFA が無い `credential_hygiene` (新規)
+    初出 2026-10-21T09:00:00Z · `id: m-0`
+• *[medium]* bob に MFA が無い `credential_hygiene` (新規)
+    初出 2026-10-21T09:00:00Z · `id: m-1`
+• *[medium]* carol に MFA が無い `credential_hygiene` (新規)
+    初出 2026-10-21T09:00:00Z · `id: m-2`
+• *[medium]* dave に MFA が無い `credential_hygiene` (新規)
+    初出 2026-10-21T09:00:00Z · `id: m-3`
+• *[medium]* erin に MFA が無い `credential_hygiene` (新規)
+    初出 2026-10-21T09:00:00Z · `id: m-4`
+• *[low]* 指摘 000 `custom_000` (新規)
+    初出 2026-10-21T09:00:00Z · `id: x-000`
+• *[low]* 指摘 001 `custom_001` (新規)
+    初出 2026-10-21T09:00:00Z · `id: x-001`
+• *[low]* 指摘 002 `custom_002` (新規)
+    初出 2026-10-21T09:00:00Z · `id: x-002`
+
+*解消 (1)*
+• *[medium]* summary of CreateUser|p|t `iam_changes` (解消)
+    初出 2026-10-18T09:00:00Z · `id: f-004`
+
+*未対応 (1)*
+• *[medium]* summary of arn:aws:iam::1:user/old `new_principal` (未対応)
+    count 1 · 初出 2026-10-17T09:00:00Z · `id: f-005`
+
+*本日報告済み (1)*
+• *[medium]* 報告済み `custom` (報告済み)
+    初出 2026-10-21T09:00:00Z · `id: a-1`
+
+*情報 (2)*
+• *[info]* 情報 `custom` (情報)
+    初出 2026-10-21T09:00:00Z · `id: i-1`
+• *[info]* 情報 2 `custom` (情報)
+    初出 2026-10-21T09:00:00Z · `id: i-2`
+
+全文: <dir>/report.md

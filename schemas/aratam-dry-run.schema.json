@@ -72,12 +72,17 @@
         },
         "payload": {
           "description": "Slack に送る中身そのもの (text と、slack.format: blocks なら blocks)"
+        },
+        "thread_reply": {
+          "description": "直前の 1 通目 (thread_reply が false の通知) のスレッドへの返信 (slack.details: thread。ADR 0093)。送るときは payload に channel と thread_ts を足す",
+          "type": "boolean"
         }
       },
       "required": [
         "route",
         "destination",
-        "payload"
+        "payload",
+        "thread_reply"
       ]
     }
   }

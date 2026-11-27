@@ -61,6 +61,22 @@ type SlackConfig struct {
 	UrgentMention string `yaml:"urgent_mention"`
 	// Format は通知の書式。blocks = Block Kit / text = mrkdwn の本文だけ (v0.3.0 までの書式)。ADR 0029
 	Format string `yaml:"format"`
+	// Details は詳細の送り方。inline = 1 通にまとめる / thread = 1 通目のスレッドへの返信に詳細を送る (bot の方式だけ)。空なら inline (ADR 0093)
+	Details string `yaml:"details"`
+}
+
+// 詳細の送り方 (slack.details。ADR 0093)。
+const (
+	DetailsInline = "inline" // 1 通にまとめる (今までの形。書かなければこれ)
+	DetailsThread = "thread" // 1 通目に一番伝えたいことと確認推奨の概要、スレッドへの返信に詳細
+)
+
+// DetailsMode は slack.details の値 (空なら inline)。
+func (s SlackConfig) DetailsMode() string {
+	if s.Details == "" {
+		return DetailsInline
+	}
+	return s.Details
 }
 
 // Slack への送り方。
@@ -224,6 +240,17 @@ func (c *Config) Validate() error {
 		errs = append(errs, errors.New("slack.format is required since v0.4.0: write `slack.format: blocks` for Block Kit, or `slack.format: text` to keep the previous mrkdwn body"))
 	default:
 		errs = append(errs, fmt.Errorf("slack.format must be blocks or text (got %q)", c.Slack.Format))
+	}
+	// 決定 (ADR 0093): slack.details は書かなければ inline (今の設定は変えずに動く)。thread は返信の ts が返る bot の方式だけで使える。
+	// Webhook と thread の組を設定エラーにするのは、返信できないのに詳細を黙って落とさないため
+	switch c.Slack.Details {
+	case "", DetailsInline:
+	case DetailsThread:
+		if c.Slack.Method() != SlackBot {
+			errs = append(errs, errors.New("slack.details: thread needs the bot token method (slack.bot_token_env and slack.channel); Incoming Webhook cannot reply in a thread. Write `slack.details: inline` to keep one message"))
+		}
+	default:
+		errs = append(errs, fmt.Errorf("slack.details must be inline or thread (got %q)", oneLine(clipRunes(c.Slack.Details, 32))))
 	}
 	for _, f := range []struct{ name, v, secret string }{
 		{"slack.webhook_env", c.Slack.WebhookEnv, "webhook URL"},
