@@ -36,6 +36,7 @@ LLM はこの手順に沿って、根拠 (finding の `data`) と利用者の事
 | principal_new_source | 既知の主体の初めての送信元・リージョン | `arata help ai playbook principal_new_source` |
 | probe_paths | 機密パスの探索 | `arata help ai playbook probe_paths` |
 | public_exposure | 資源を外部に開く設定変更 | `arata help ai playbook public_exposure` |
+| rate_limited_ip | 429 の集まった IP | `arata help ai playbook rate_limited_ip` |
 | root_usage | ルートユーザーの利用 | `arata help ai playbook root_usage` |
 | secret_access | 秘匿値の読み取りの異常 | `arata help ai playbook secret_access` |
 | signin_session | aws login のログインのセッションの出し直し | `arata help ai playbook signin_session` |

@@ -140,6 +140,7 @@ sources:
 #   user_denied             daily   event  http_user       ログインした利用者 1 人への拒否 (401・403) の急増。本人とアプリの平常帯の両方を超えたもの。sources が空なら何もしない (medium)
 #   user_id_enumeration     daily   event  http_user       ログインした利用者 1 人が、ID を含むパスの型で開いた異なる ID の多さ。拒否に混ざる成功は high。sources と path_ids が要る (high / medium)
 #   user_path_breadth       daily   event  http_user       ログインした利用者 1 人が触ったパスの型の多さ。sources と path_ids が要る (low)
+#   rate_limited_ip         daily   event  http_access     アプリの回数の制限 (429) が 1 日に集まった IP。user_sources を書けば、同じ IP からログインできた利用者の数を添える (low)
 # 必要なレコードを出すソースが無いチェックは skip される (coverage に理由が出る)。http_access / waf_action は cloudwatch-logs が出す。
 profiles:
   hourly:                                        # 発生そのものが異常な事象の早期検知。Logs Insights を使うチェックは入れない (費用)
@@ -177,6 +178,7 @@ profiles:
       - user_denied             # ログインした利用者 1 人への拒否 (401・403) の急増。本人とアプリの平常帯の両方を超えたもの。sources が空なら何もしない (medium)
       - user_id_enumeration     # ログインした利用者 1 人が、ID を含むパスの型で開いた異なる ID の多さ。拒否に混ざる成功は high。sources と path_ids が要る (high / medium)
       - user_path_breadth       # ログインした利用者 1 人が触ったパスの型の多さ。sources と path_ids が要る (low)
+      - rate_limited_ip         # アプリの回数の制限 (429) が 1 日に集まった IP。user_sources を書けば、同じ IP からログインできた利用者の数を添える (low)
     # records: [http_user]                       # チェックが要らなくてもこの run で引く記録の種類。yields: http_user のソースの日次の集計を貯める (ADR 0075)
     # overrides:                                 # このプロファイルでだけ判定のパラメータを変える (書かなければ checks: の値)
     #   login_bruteforce: { min_count: 50 }      # 集計条件 (paths / methods / statuses など) は変えられない
@@ -329,6 +331,14 @@ checks:
     min_baseline_days: 7                         # アプリの記録のある日がこれに満たない間は判定しない
     factor: 3                                    # 本人の平常帯の倍率
     app_factor: 2                                # アプリの平常帯の倍率
+  rate_limited_ip:
+    statuses: [429]                              # 数えるステータス (アプリの回数の制限が返すもの)。集計条件
+    paths: []                                    # 数えるパスの接頭辞。空なら全パス。集計条件
+    user_sources: []                             # 同じ IP からログインできた利用者の数 (ip_users) を数えるソースの id (request_lines で request.user_id と ip のあるもの)。空なら数えない。集計条件
+    ip_users_store_min: 3                        # ストアに残す ip_users の下限 (人)。集計条件
+    ip_users_store_top: 200                      # 日ごとに残す IP の数 (ip_users の多い順)。集計条件
+    min_count: 20                                # 報告する 1 日の件数の下限 (仮の値。平常帯は持たない)
+    suggest_min_users: 10                        # ip_users がこれ以上なら suggest_shared、未満なら few_users (仮の値)
   credential_hygiene:
     unused_days: 90                              # アクセスキーを未使用とみなす日数 (最終使用、使われていなければ作成・ローテーションから)
   posture:

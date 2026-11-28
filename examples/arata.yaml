@@ -96,7 +96,7 @@ sources:
 # チェック: root_usage (hourly), unknown_assume_role (hourly), oidc_assume_role (hourly), new_principal (daily), iam_changes (daily), access_denied (daily),
 #           defense_evasion / public_exposure (daily), principal_new_source / secret_access / signin_session (daily),
 #           unused_region_activity / cost_anomaly (daily),
-#           ai_path_usage (daily), login_bruteforce / probe_paths / endpoint_abuse (daily, http_access), waf_block_trend (daily, waf_action),
+#           ai_path_usage (daily), login_bruteforce / probe_paths / endpoint_abuse / rate_limited_ip (daily, http_access), waf_block_trend (daily, waf_action),
 #           credential_hygiene / guardduty_findings / posture / access_analyzer / waf_review (weekly),
 #           log_hygiene (weekly。下の checks.log_hygiene に書いたソースだけを読む)
 # hourly に http_access / waf_action を使うチェックを入れなければ hourly では Logs Insights を回さない

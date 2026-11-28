@@ -201,7 +201,7 @@ func TestDeniedEventsDoNotAffectOtherChecks(t *testing.T) {
 
 func TestRegistry(t *testing.T) {
 	r := NewRegistry()
-	if strings.Join(r.Names(), ",") != "root_usage,ecs_exec,unknown_assume_role,oidc_assume_role,new_principal,iam_changes,access_denied,defense_evasion,public_exposure,principal_new_source,secret_access,signin_session,login_bruteforce,probe_paths,endpoint_abuse,unused_region_activity,cost_anomaly,waf_block_trend,ai_path_usage,credential_hygiene,guardduty_findings,posture,access_analyzer,waf_review,log_hygiene,user_denied,user_id_enumeration,user_path_breadth" {
+	if strings.Join(r.Names(), ",") != "root_usage,ecs_exec,unknown_assume_role,oidc_assume_role,new_principal,iam_changes,access_denied,defense_evasion,public_exposure,principal_new_source,secret_access,signin_session,login_bruteforce,probe_paths,endpoint_abuse,unused_region_activity,cost_anomaly,waf_block_trend,ai_path_usage,credential_hygiene,guardduty_findings,posture,access_analyzer,waf_review,log_hygiene,user_denied,user_id_enumeration,user_path_breadth,rate_limited_ip" {
 		t.Fatalf("%v", r.Names())
 	}
 	for _, n := range r.Names() {
@@ -212,7 +212,7 @@ func TestRegistry(t *testing.T) {
 		}
 	}
 	d := r.Defaults()
-	if strings.Join(d["daily"], ",") != "access_denied,ai_path_usage,cost_anomaly,defense_evasion,endpoint_abuse,iam_changes,login_bruteforce,new_principal,principal_new_source,probe_paths,public_exposure,secret_access,signin_session,unused_region_activity,user_denied,user_id_enumeration,user_path_breadth,waf_block_trend" || strings.Join(d["hourly"], ",") != "ecs_exec,oidc_assume_role,root_usage,unknown_assume_role" ||
+	if strings.Join(d["daily"], ",") != "access_denied,ai_path_usage,cost_anomaly,defense_evasion,endpoint_abuse,iam_changes,login_bruteforce,new_principal,principal_new_source,probe_paths,public_exposure,rate_limited_ip,secret_access,signin_session,unused_region_activity,user_denied,user_id_enumeration,user_path_breadth,waf_block_trend" || strings.Join(d["hourly"], ",") != "ecs_exec,oidc_assume_role,root_usage,unknown_assume_role" ||
 		strings.Join(d["weekly"], ",") != "access_analyzer,credential_hygiene,guardduty_findings,log_hygiene,posture,waf_review" {
 		t.Fatalf("%v", d)
 	}

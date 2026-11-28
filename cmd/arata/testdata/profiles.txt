@@ -13,6 +13,7 @@ profile daily (window 24h, max_catchup 7d)
   principal_new_source    daily    event  default-daily
   probe_paths             daily    event  default-daily
   public_exposure         daily    event  default-daily
+  rate_limited_ip         daily    event  default-daily
   root_usage              hourly   event  explicit
   secret_access           daily    event  default-daily
   signin_session          daily    event  default-daily
@@ -123,6 +124,13 @@ profile daily (window 24h, max_catchup 7d)
   user_path_breadth.min_baseline_days          既定値     7
   user_path_breadth.factor                     既定値     3
   user_path_breadth.app_factor                 既定値     2
+  rate_limited_ip.statuses                     既定値     [429]
+  rate_limited_ip.paths                        既定値     []
+  rate_limited_ip.user_sources                 既定値     []
+  rate_limited_ip.ip_users_store_min           既定値     3
+  rate_limited_ip.ip_users_store_top           既定値     200
+  rate_limited_ip.min_count                    既定値     20
+  rate_limited_ip.suggest_min_users            既定値     10
 
 profile hourly (window 1h, max_catchup 7d, min_severity high)
   CHECK                CADENCE  MODE   VIA

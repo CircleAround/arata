@@ -79,6 +79,21 @@ type Check interface {
 	Evaluate(ctx context.Context, q store.Query, w collect.Window, al *allowlist.List) ([]Observation, error)
 }
 
+// OptionalNeeder は、収集はさせるが、取れなくても skip しないレコード種類を宣言するチェックが満たす (rate_limited_ip の http_user。ADR 0094)。
+// engine と doctor は、この種類を Needs と同じく引かせる (neededKinds)。取れない・出すソースが無いときは、チェックがその材料を添えずに判定する。
+type OptionalNeeder interface {
+	OptionalNeeds() []record.Kind
+}
+
+// CollectKinds は c が収集させるレコード種類 (Needs と OptionalNeeds)。
+func CollectKinds(c Check) []record.Kind {
+	out := append([]record.Kind(nil), c.Needs()...)
+	if o, ok := c.(OptionalNeeder); ok {
+		out = append(out, o.OptionalNeeds()...)
+	}
+	return out
+}
+
 // Registry は利用可能なチェックの一覧。
 type Registry struct {
 	byName map[string]Check
@@ -102,7 +117,8 @@ func NewRegistryFor(c config.Checks) *Registry {
 		CredentialHygiene{Config: c.CredentialHygiene}, GuardDutyFindings{}, Posture{Config: c.Posture}, AccessAnalyzer{},
 		WAFReview{Config: c.WAFReview, SignInPaths: c.LoginBruteforce.Paths, ProbePaths: c.ProbePaths.Paths},
 		LogHygiene{Config: c.LogHygiene},
-		UserDenied{userProbeBase{All: c}}, UserIDEnumeration{userProbeBase{All: c}}, UserPathBreadth{userProbeBase{All: c}}} {
+		UserDenied{userProbeBase{All: c}}, UserIDEnumeration{userProbeBase{All: c}}, UserPathBreadth{userProbeBase{All: c}},
+		RateLimitedIP{Config: c.RateLimitedIP}} {
 		r.Register(ch)
 	}
 	return r
