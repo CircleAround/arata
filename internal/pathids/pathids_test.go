@@ -1,6 +1,7 @@
 package pathids
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -209,5 +210,41 @@ func TestCompileQueryTooLong(t *testing.T) {
 	}
 	if _, err := Compile(r); err == nil || !strings.Contains(err.Error(), "query") {
 		t.Fatalf("err = %v, want query too long", err)
+	}
+}
+
+// TestConcatExprNests: concat の引数は maxConcatArgs 個まで (Insights の Too Many Arguments)。超える部品は入れ子にし、部品の順は変えない。
+func TestConcatExprNests(t *testing.T) {
+	for _, n := range []int{1, 10, 11, 25, 101} {
+		parts := make([]string, n)
+		for i := range parts {
+			parts[i] = fmt.Sprintf("p%d", i)
+		}
+		e := concatExpr(parts)
+		// 部品の順 (concat の名前と括弧を除くと、部品がそのまま並ぶ)
+		var toks []string
+		for _, f := range strings.FieldsFunc(e, func(r rune) bool { return r == '(' || r == ')' || r == ',' || r == ' ' }) {
+			if f != "concat" {
+				toks = append(toks, f)
+			}
+		}
+		if !reflect.DeepEqual(toks, parts) {
+			t.Fatalf("n=%d: order: %s", n, e)
+		}
+		// どの concat も引数が maxConcatArgs 個まで
+		var stack []int
+		for i := 0; i < len(e); i++ {
+			switch e[i] {
+			case '(':
+				stack = append(stack, 1)
+			case ',':
+				stack[len(stack)-1]++
+			case ')':
+				if c := stack[len(stack)-1]; c > maxConcatArgs {
+					t.Fatalf("n=%d: concat with %d args: %s", n, c, e)
+				}
+				stack = stack[:len(stack)-1]
+			}
+		}
 	}
 }
