@@ -26,9 +26,11 @@ const (
 	TriageResolve = "resolve"
 )
 
-// ApproveChecks は arata approve が受け付けるチェック (主体・行き先の承認、access_denied の想定済みの拒否)。
+// ApproveChecks は arata approve が受け付けるチェック (主体・行き先の承認、access_denied の想定済みの拒否、
+// rate_limited_ip・login_bruteforce の人の多い送信元 (--shared。ADR 0094 の 1 節))。
 // oidc_assume_role は allowlist.yaml の oidc_subjects を人が書く (approve は書かない)。
-var ApproveChecks = map[string]bool{"new_principal": true, "unknown_assume_role": true, "iam_changes": true, "access_denied": true}
+var ApproveChecks = map[string]bool{"new_principal": true, "unknown_assume_role": true, "iam_changes": true, "access_denied": true,
+	"rate_limited_ip": true, "login_bruteforce": true}
 
 // TriageRow は片付けの表の 1 行。
 type TriageRow struct {
@@ -74,7 +76,7 @@ var triageTable = map[string][]TriageRow{
 	"unused_region_activity": {row(false, noAck, Critical, High), row(true, withAck, Medium)},
 	"cost_anomaly":           {row(false, noAck, High, Medium)},
 	"public_exposure":        {row(false, noAck, High, Medium, Low, Info)}, // info は Public Access Block を締めた操作 (ADR 0086)
-	"login_bruteforce":       {row(false, noAck, Medium)},
+	"login_bruteforce":       {row(false, apNoAck, Medium)},                // approve は --shared だけ (人の多い送信元。ADR 0094 の 1 節)
 	"probe_paths":            {row(false, noAck, Low)},
 	"endpoint_abuse":         {row(false, noAck, Medium), row(true, withAck, Low)},
 	"waf_block_trend":        {row(false, noAck, Low)},
@@ -88,8 +90,8 @@ var triageTable = map[string][]TriageRow{
 	"user_denied":         {row(false, noAck, Medium)},
 	"user_id_enumeration": {row(false, noAck, High), row(true, withAck, Medium)},
 	"user_path_breadth":   {row(false, noAck, Low)},
-	// 429 の集まった IP (ADR 0094): low だけ。理由が変われば changed で出直す (重大度は上がらない)
-	"rate_limited_ip": {row(false, noAck, Low)},
+	// 429 の集まった IP (ADR 0094): low だけ。理由が変われば changed で出直す (重大度は上がらない)。approve は --shared だけ
+	"rate_limited_ip": {row(false, apNoAck, Low)},
 }
 
 // TriageChecks は表のあるチェック (名前順)。

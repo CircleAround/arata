@@ -25,8 +25,9 @@ import (
 //     (ip_users_store_min 未満は残らない)。数えていない日は ip_users も理由も添えず、件数だけを報告する
 //   - 理由: suggest_shared (ip_users が suggest_min_users 以上。shared_sources に足す候補・アプリの上限の見直しの候補)、
 //     few_users (数えていて suggest_min_users 未満。総当たり・機械的な送信の疑い)
-//   - 決定 1 (shared_sources) はまだ無い。入れるときは minCount で shared_sources の IP に shared_min_count を返し、data に shared・shared_note を足し、
-//     shared_sources の IP には suggest_shared の代わりに shared_heavy を付ける (ADR 0094 の 1 節・2 節)
+//   - allowlist の shared_sources (人の多い送信元。ADR 0094 の 1 節) の IP は、その日に期限内なら下限を shared_min_count にし、data に shared・shared_note を足す。
+//     理由は suggest_shared の代わりに shared_heavy (数えていなくても付ける)。ip_users を数えていて suggest_min_users 未満なら few_users も添える
+//     (人の多い送信元でも、ログインできた利用者が少ないのは総当たりの疑い)。source_ips とも当たる IP は source_ips を優先する (対象外)
 //   - user_sources を書いたときだけ http_user も引かせる (OptionalNeeds)。ユーザー ID が取れない run でも、429 の報告は止めない (Needs は http_access だけ)
 type RateLimitedIP struct {
 	Config config.RateLimitedIP
@@ -38,6 +39,7 @@ const rateLimitedIPName = "rate_limited_ip"
 const (
 	reasonSuggestShared = "suggest_shared"
 	reasonFewUsers      = "few_users"
+	reasonSharedHeavy   = "shared_heavy"
 )
 
 func (RateLimitedIP) Name() string         { return rateLimitedIPName }
@@ -53,8 +55,13 @@ func (c RateLimitedIP) OptionalNeeds() []record.Kind {
 	return []record.Kind{record.KindHTTPUser}
 }
 
-// minCount は ip を報告する 1 日の件数の下限。shared_sources (ADR 0094 の 1 節) を入れるときは、ここで shared_min_count に切り替える。
-func (c RateLimitedIP) minCount(string) float64 { return c.Config.MinCount }
+// minCount は ip を日 date に報告する 1 日の件数の下限。人の多い送信元 (shared_sources) なら shared_min_count。
+func (c RateLimitedIP) minCount(al *allowlist.List, ip, date string) float64 {
+	if _, ok := sharedSourceOn(al, ip, date); ok {
+		return c.Config.SharedMinCount
+	}
+	return c.Config.MinCount
+}
 
 type rateHit struct {
 	day   string
@@ -74,7 +81,7 @@ func (c RateLimitedIP) Evaluate(ctx context.Context, q store.Query, w collect.Wi
 	best := map[string]rateHit{}
 	for _, d := range dates {
 		for ip, v := range rl[d] {
-			if al.SourceIPAllowed(ip) || v < c.minCount(ip) {
+			if al.SourceIPAllowed(ip) || v < c.minCount(al, ip, d) {
 				continue
 			}
 			if cur, ok := best[ip]; !ok || v > cur.count || v == cur.count && d > cur.day {
@@ -101,18 +108,28 @@ func (c RateLimitedIP) Evaluate(ctx context.Context, q store.Query, w collect.Wi
 	obs := make([]Observation, 0, len(ips))
 	for _, ip := range ips {
 		h := best[ip]
-		data := map[string]any{"ip": ip, "date": h.day, "count": h.count, "min_count": c.minCount(ip), "sign_in_failures": signIn[h.day][ip]}
-		summary := fmt.Sprintf("アプリの回数の制限 (%s) が集まった IP: %s から %.0f 件 (%s UTC、下限 %.0f)", statusList(c.Config.Statuses), ip, h.count, h.day, c.minCount(ip))
+		minCount := c.minCount(al, ip, h.day)
+		data := map[string]any{"ip": ip, "date": h.day, "count": h.count, "min_count": minCount, "sign_in_failures": signIn[h.day][ip]}
+		summary := fmt.Sprintf("アプリの回数の制限 (%s) が集まった IP: %s から %.0f 件 (%s UTC、下限 %.0f)", statusList(c.Config.Statuses), ip, h.count, h.day, minCount)
 		var reasons []string
+		entry, shared := sharedSourceOn(al, ip, h.day)
+		if shared {
+			addShared(data, entry)
+			summary += "。人の多い送信元 (shared_sources) の下限を超えた"
+			reasons = append(reasons, reasonSharedHeavy)
+		}
 		if counted[h.day] {
 			n := users[h.day][ip]
 			data["ip_users"] = n
 			summary += fmt.Sprintf("。同じ IP からログインできた利用者 %.0f 人", n)
-			if n >= c.Config.SuggestMinUsers {
-				reasons = append(reasons, reasonSuggestShared)
-			} else {
+			switch {
+			case n < c.Config.SuggestMinUsers:
 				reasons = append(reasons, reasonFewUsers)
+			case !shared:
+				reasons = append(reasons, reasonSuggestShared)
 			}
+		}
+		if len(reasons) > 0 {
 			data["reasons"] = reasons
 		}
 		obs = append(obs, Observation{Check: c.Name(), Key: ip, Severity: Low, Summary: summary,

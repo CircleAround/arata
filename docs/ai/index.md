@@ -117,6 +117,7 @@ assume_destinations:              # 外向きの引き受けで、行き先と�
   - { account: "111122223333", note: 運用を受託しているアカウント, expires: 2027-03-31 }   # principals の account: とは別 (主体は承認されない)。note 必須。roles: ["ReadOnly"] でロールに絞れる
 oidc_subjects:                    # OIDC でのロールの引き受け (GitHub Actions など) の既知の入り口。oidc_assume_role が比べる。approve は書かない (人が書く。arata help ai playbook oidc_assume_role)
   - { provider: token.actions.githubusercontent.com, role: "arn:aws:iam::123456789012:role/github-actions-deploy", repo: example-org/example-repo, refs: ["refs/heads/main"], note: 本番のデプロイ }
+shared_sources: [{ cidr: 198.51.100.0/24, note: 試験の会場, approved_by: alice, approved_at: 2026-11-28, expires: 2026-12-20 }]   # NAT の内側に多くの利用者がいる送信元 (学校・会場・社内の回線)。外さず、login_bruteforce・rate_limited_ip が高い下限 (shared_min_count) で見る。note 必須。source_ips とも当たる IP は source_ips が優先 (外す)。IPv4 は /24、IPv6 は /48 より広い範囲は config check が warn
 ```
 
 承認の判断基準は `arata help ai approve`。
@@ -125,8 +126,7 @@ oidc_subjects:                    # OIDC でのロールの引き受け (GitHub 
 
 - エンジンは AWS SDK の標準認証チェーン (環境変数 / `~/.aws/config` の profile / ロール) に従う
 - `aws login` (ブラウザでのサインイン) のセッションは Go SDK から直接読めない。
-  `credential_process = aws configure export-credentials --profile <login 済み profile> --format process` の profile を作るか、
-  本番は Roles Anywhere / インスタンスロールを使う
+  `credential_process = aws configure export-credentials --profile <login 済み profile> --format process` の profile を作るか、本番は Roles Anywhere / インスタンスロールを使う
 - 権限は読み取りのみ。追加の裏取りをするときも読み取り API だけを使う
 - 例外は `iam:GenerateCredentialReport` (書き込み系: 認証情報レポートの生成のみ)。拒否されても 4 時間以内に生成済みのレポートがあれば使う。
   必要な action の一覧は `arata doctor` の表の最後に出る

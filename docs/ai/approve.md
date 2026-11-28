@@ -25,7 +25,7 @@ PR は提案で、承認するのは差分を見てマージする人 (上の原
        tags: [deploy]                                # 任意。語彙は下
    ```
 
-2. `arata config check -c <arata.yaml>` を実行し、`ng` と `warn` (同じ主体の重複、行き先の重複・期限切れ) が無いことを確かめる (AWS にもストアにも繋がない)
+2. `arata config check -c <arata.yaml>` を実行し、`ng` と `warn` (同じ主体の重複、行き先の重複・期限切れ、人の多い送信元の `source_ips` との重なり・広すぎる範囲・期限切れ) が無いことを確かめる (AWS にもストアにも繋がない)
 3. PR の本文に、finding の `id`・承認の対象・承認してよい理由 (下の目安に照らして) を書く。ARN やアカウント ID を、リポジトリの外 (公開の場所) に書かない
 4. 人が差分を見てマージする。次の run が、一致する finding を allowlisted として解消する (resolve は要らない)。
    行き先 (`assume_destinations`。下の「行き先を既知にする」) を足したときは、外向き・MFA ありの finding が known_destination として、OIDC の入り口 (`oidc_subjects`。書き方は `arata help ai playbook oidc_assume_role`) を足したときは、その入り口の finding が known_oidc_subject として解消する (ack 済みのものも)
@@ -62,36 +62,35 @@ assume_destinations:                # principals とは別の節。account: の�
     expires: 2027-03-31             # 任意。契約の終わりに合わせる。roles: ["ReadOnly", "ops-*"] (任意。ロール名の glob) でロールに絞れる
 ```
 
-- 報告されなくなるのは、**外向き・このアカウントのロール・MFA あり** の全部を満たす引き受けだけ。誰のものでも止まる (info の 1 行に件数が残る)。
-  MFA なし・不明の引き受け、ほかのアカウントへの引き受け、内向き・内部の引き受けは今までどおり high
-- 人が実行するコマンド: `arata approve <id> --destination --note "<理由>" [--expires YYYY-MM-DD] [--destination-role '<glob>'] [--by <承認者>]`。
-  使えるのは unknown_assume_role の外向きで `mfa: true` の finding だけ (`arata review --format json` の `approve_destination` に行き先のアカウントが出る)。
-  PR で直す運用では、上の形の項目を `assume_destinations` の末尾に足す (節が無ければファイルの末尾に作る)
-- **既知にしてよい行き先の目安**: そのアカウントが何者かを説明でき (受託・保守の契約、自社の別アカウント)、ID を契約書や相手の管理者で確かめた。
-  そこへのスイッチロールが複数の社員の日常の業務である (1 回きり・1 人だけなら ack で足りる)。契約に終わりがあれば `expires`、
-  管理者のロールだけは毎回見たいなら `roles` で絞る
-- **既知にしてはいけないもの**: 何者か分からないアカウント、個人のアカウント、監査対象のアカウントそのもの (効かない。`arata doctor` が ng にする)。
-  「MFA があるから」だけを理由にしない (MFA は本人確認で、行き先の妥当性は示さない)
-- **残るリスク** (提案に書き添える): MFA 済みのセッションを奪われると、既知の行き先への引き受けは本人のものと区別できず報告されない
-  (principal_new_source と、行き先のアカウント側の監査で補う)。行き先の中での操作は相手の CloudTrail にしか残らない。
-  契約が終わったら項目を消す (残すと、終わった後の引き受けも黙る。`arata config check` は期限切れを warn にする)
+- 報告されなくなるのは、**外向き・このアカウントのロール・MFA あり** の全部を満たす引き受けだけ。誰のものでも止まる (info の 1 行に件数が残る)。MFA なし・不明の引き受け、ほかのアカウントへの引き受け、内向き・内部の引き受けは今までどおり high
+- 人が実行するコマンド: `arata approve <id> --destination --note "<理由>" [--expires YYYY-MM-DD] [--destination-role '<glob>'] [--by <承認者>]`。使えるのは unknown_assume_role の外向きで `mfa: true` の finding だけ (`arata review --format json` の `approve_destination` に行き先のアカウントが出る)。PR で直す運用では、上の形の項目を `assume_destinations` の末尾に足す (節が無ければファイルの末尾に作る)
+- **既知にしてよい行き先の目安**: そのアカウントが何者かを説明でき (受託・保守の契約、自社の別アカウント)、ID を契約書や相手の管理者で確かめた。そこへのスイッチロールが複数の社員の日常の業務である (1 回きり・1 人だけなら ack で足りる)。契約に終わりがあれば `expires`、管理者のロールだけは毎回見たいなら `roles` で絞る
+- **既知にしてはいけないもの**: 何者か分からないアカウント、個人のアカウント、監査対象のアカウントそのもの (効かない。`arata doctor` が ng にする)。「MFA があるから」だけを理由にしない (MFA は本人確認で、行き先の妥当性は示さない)
+- **残るリスク** (提案に書き添える): MFA 済みのセッションを奪われると、既知の行き先への引き受けは本人のものと区別できず報告されない (principal_new_source と、行き先のアカウント側の監査で補う)。行き先の中での操作は相手の CloudTrail にしか残らない。契約が終わったら項目を消す (残すと、終わった後の引き受けも黙る。`arata config check` は期限切れを warn にする)
+
+## 人の多い送信元 (shared_sources)
+
+学校・試験の会場・社内の回線のように NAT の内側の多くの人が 1 つの IP からログインする送信元は、login_bruteforce・rate_limited_ip に出やすい。`source_ips` に入れると丸ごと外れ、**その回線からの総当たりも見えなくなる**。代わりに `shared_sources` (形式は `arata help ai`) に入れる。外さず、高い下限 (`checks.login_bruteforce.shared_min_count`・`checks.rate_limited_ip.shared_min_count`) で見続ける。
+
+- **人が判断して実行する** (ほかの approve と同じ)。LLM は自分で approve も allowlist の編集もせず、材料を添えて人に提案するだけにする
+- 人が実行するコマンド: `arata approve <id> --shared --note "<なぜ人が多いのか>" [--shared-cidr <CIDR>] [--expires YYYY-MM-DD] [--by <承認者>]`。使えるのは rate_limited_ip と login_bruteforce の、まだ shared でない IP の finding だけ (`arata review --format json` の `approve_shared` に既定の範囲が出る)。既定は IP そのもの (/32、IPv6 は /128)。`--shared-cidr` は IP を含むネットワークの形だけで、IPv4 は /24、IPv6 は /48 より広い範囲と `source_ips` に重なる範囲は書かない。過去の `--expires` は拒む。PR で直す運用では `shared_sources` の末尾に `cidr`・`note` (必須)・`approved_by`・`approved_at`・`expires` (任意) の項目を足す
+- **提案してよい目安**: rate_limited_ip の `suggest_shared` (同じ IP からログインできた利用者が多い) で、利用者の側の心当たり (試験・講習・一斉の申し込み) をアプリの運用者が確かめた。1 日だけの催しなら `expires` を付ける。範囲は運用者が分かる回線の範囲まで (分からなければ IP そのもの)
+- **提案してはいけないもの**: `few_users` の IP、`sign_in_failures` だけが多い IP、逆引きのドメイン名 (PTR) が学校らしいだけの IP (持ち主が自由に書ける)、広い範囲 (クラウドの事業者の範囲など)。「429 が多いから」だけを理由にしない
+- **残るリスク** (提案に書き添える): その回線からの総当たり (乗っ取った端末、内部の利用者) は高い下限を超えるまで報告されず、login_bruteforce はその IP の「最多 IP が初出」も報告しない。催しが終わったら項目を消す (`arata config check` は期限切れを warn にする)
 
 ## 監査する側のアカウント (audit_account)
 
 別のアカウントのロールが監査対象の読み取り専用ロールを引き受けて arata を動かす構成では、監査そのものが「外部アカウント NNN の AssumeRole」として記録される。
 
-- `arata config init --audit-account NNN` が、設定に `audit_account: "NNN"` を、allowlist.yaml に `account: "NNN"` (note つき) を書く。
-  監査対象を足すたびに init を使えば書き忘れない
-- 設定の `audit_account` と同じアカウントからの読み取り専用ロールの引き受けが unknown_assume_role に出ていたら、allowlist の書き忘れか期限切れ。
-  `arata config check` が ng で示す。承認ではなく、allowlist.yaml に `account: "NNN"` を足す PR を提案する
+- `arata config init --audit-account NNN` が、設定に `audit_account: "NNN"` を、allowlist.yaml に `account: "NNN"` (note つき) を書く。監査対象を足すたびに init を使えば書き忘れない
+- 設定の `audit_account` と同じアカウントからの読み取り専用ロールの引き受けが unknown_assume_role に出ていたら、allowlist の書き忘れか期限切れ。`arata config check` が ng で示す。承認ではなく、allowlist.yaml に `account: "NNN"` を足す PR を提案する
 - `audit_account` と違うアカウントが読み取り専用ロールを引き受けていたら、正規の監査ではない。承認を提案せず、信頼ポリシーの確認を提案する
 - `audit_account: none` (外から監査しない) なのに外部アカウントが読み取り専用ロールを引き受けていたら、同じく信頼ポリシーの確認を提案する
 - `audit_account` に監査対象のアカウント自身の ID を書いてはいけない (`account:` がそのアカウントの全主体を承認する。`arata doctor` が ng にする)
 
 ## 外部アカウント root の見方
 
-- 「外部アカウント NNN」は、そのアカウントの誰か (どの IAM 主体かは CloudTrail に残らない) が操作したことを表す。
-  自社アカウントのルートユーザーの利用 (root_usage、critical) とは別物
+- 「外部アカウント NNN」は、そのアカウントの誰か (どの IAM 主体かは CloudTrail に残らない) が操作したことを表す。自社アカウントのルートユーザーの利用 (root_usage、critical) とは別物
 - ARN の末尾の `root` は「アカウントそのもの」の意味で、**そのアカウントのルートユーザーが使われたことを表さない**。
   data の `caller_identity` / `principal_identity` が `account_only` なら、見出しのとおり「外部アカウント NNN (呼び出した主体は記録に無い)」と書き、「NNN の root」「ルートユーザー」と書かない
 - 知らないアカウント ID からの AssumeRole は、ロールの信頼ポリシーが広すぎる可能性がある。承認より先に信頼ポリシーの確認を提案する
@@ -144,7 +143,7 @@ access_denied は allowlist で主体を承認しても止まらない (承認�
 
 ## approve ではなく ack / snooze / resolve にするもの
 
-- 主体の承認ではない finding (root_usage、login_bruteforce、probe_paths、endpoint_abuse、waf_block_trend、principal_new_source、secret_access など) は approve できない。ecs_exec も approve できない (主体を既知にするのは new_principal の approve。既知でも medium で毎回報告される。片付けは snooze か resolve)。access_denied は上の `--expected-denied` だけ
+- 主体の承認ではない finding (root_usage、probe_paths、endpoint_abuse、waf_block_trend、principal_new_source、secret_access など) は approve できない。login_bruteforce と rate_limited_ip は上の `--shared` だけ (主体の承認はできない)。ecs_exec も approve できない (主体を既知にするのは new_principal の approve。既知でも medium で毎回報告される。片付けは snooze か resolve)。access_denied は上の `--expected-denied` だけ
 - `ack`: 確認したが allowlist に入れたくないもの。再報告しないが未対応一覧に残る。ack したときより重大度が上がったら変化 (changed) として再報告される。使えるのは、playbook の「片付け」の表 (`arata review --format json` の `triage.allowed`) が許す重大度だけ
 - `snooze --until YYYY-MM-DD`: 対処の予定が決まっているもの。期日以降に再び観測されたら新規として再報告される。期日前でも重大度が上がれば再報告される
 - `resolve`: 対処が終わったもの。再び観測されたら新規として報告される。選び方の基準と導入直後に片付ける流れは `arata help ai onboarding`

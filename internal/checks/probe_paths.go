@@ -27,7 +27,7 @@ func (ProbePaths) Needs() []record.Kind { return []record.Kind{record.KindHTTPAc
 const probeTopPaths = 5
 
 func (c ProbePaths) Evaluate(ctx context.Context, q store.Query, w collect.Window, al *allowlist.List) ([]Observation, error) {
-	sps, err := detectSpikes(ctx, q, cwlogs.MetricProbeHits, w, c.Config.Baseline, c.Config.TopIPMinCount, al.SourceIPAllowed)
+	sps, err := detectSpikes(ctx, q, cwlogs.MetricProbeHits, w, c.Config.Baseline, c.Config.TopIPMinCount, al.SourceIPAllowed, nil, 0) // shared_sources は効かせない (ADR 0094 の 1 節)
 	if err != nil || len(sps) == 0 {
 		return nil, err
 	}

@@ -75,7 +75,7 @@ type SilencedAction struct {
 
 // AllowlistExpiry は期限のある allowlist の項目 1 件。
 type AllowlistExpiry struct {
-	// Section は allowlist.yaml の節 (principals / assume_destinations / oidc_subjects)。
+	// Section は allowlist.yaml の節 (principals / assume_destinations / oidc_subjects / shared_sources)。
 	Section string `json:"section"`
 	// Subject は項目の対象 (主体の ARN・アカウント・入り口など)。
 	Subject string `json:"subject"`

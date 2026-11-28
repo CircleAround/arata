@@ -121,6 +121,9 @@
         "approve_destination": {
           "type": "string"
         },
+        "approve_shared": {
+          "type": "string"
+        },
         "triage": {
           "$ref": "#/$defs/TriageInfo"
         },

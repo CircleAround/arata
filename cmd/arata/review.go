@@ -80,6 +80,9 @@ func newApproveCmd(d *Deps, g *globalFlags) *subcmd.Command {
     主体ではなく行き先のアカウントを assume_destinations に追記できる (ADR 0047)。以後、そのアカウントへの MFA ありの引き受けは誰のものでも
     報告しない (info の 1 行に件数を残す)。MFA なし・不明の引き受けと、ほかのアカウントへの引き受けは報告する。主体は承認されない。
     --destination-role <ロール名の glob> (複数可) でロールに絞れる。MFA ありと確かめられない finding には使えない
+  - rate_limited_ip・login_bruteforce の finding は、--shared で主体ではなく finding の IP を人の多い送信元 (shared_sources) に追記できる
+    (ADR 0094)。以後、その送信元は外さずに高い下限 (shared_min_count) で見る。既定は IP そのもの (/32、IPv6 は /128)。
+    --shared-cidr <CIDR> で、IP を含むネットワーク (IPv4 は /24、IPv6 は /48 まで) を書ける。--expires で期限を付けられる (試験の日だけ、など)
   - approved_by は --by、省略時は OS のユーザー名。approved_at は今日 (UTC)
   - git への commit は人が行う。--commit を付けると allowlist.yaml だけを commit する
 
@@ -127,6 +130,8 @@ LLM は approve を実行せず、人に提案するだけにすること (arata
 	cmd.StringVar(&o.ARNPattern, "arn-pattern", "", "主体ではなく glob で承認する (arn_pattern:)")
 	cmd.BoolVar(&o.Destination, "destination", false, "unknown_assume_role (外向き・MFA あり) の行き先のアカウントを既知にする (assume_destinations:。主体は承認しない)")
 	cmd.StringArrayVar(&o.DestinationRoles, "destination-role", "--destination をこのロールだけに絞る (ロール名の glob。例 ReadOnly、ops-*。複数可)")
+	cmd.BoolVar(&o.Shared, "shared", false, "rate_limited_ip・login_bruteforce の IP を人の多い送信元にする (shared_sources:。外さず高い下限で見る。主体は承認しない)")
+	cmd.StringVar(&o.SharedCIDR, "shared-cidr", "", "--shared で書く範囲 (finding の IP を含む CIDR。IPv4 は /24、IPv6 は /48 まで。既定は IP そのもの)")
 	cmd.StringArrayVar(&o.ExpectedDenied, "expected-denied", "access_denied の想定済みの拒否 (サービス:操作の glob。例 logs:StartQuery、logs:Get*。複数可)")
 	return cmd
 }

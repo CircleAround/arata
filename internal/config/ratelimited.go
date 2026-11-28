@@ -12,7 +12,7 @@ import (
 // 決定 (ADR 0094 の 2 節の実装):
 //   - 429 は http_access の http_hits のクエリ (sign_in_failures・probe_hits と同じ 1 本) の 3 つ目の選択肢として数える (rate_limited。ADR 0031)
 //   - 同じ IP からログインできた利用者の数 (ip_users) は、user_sources に書いたソースだけで数える (書かなければ数えず、材料に添えない。ADR 0014)
-//   - shared_sources (ADR 0094 の 1 節) はまだ無い。入れるときは shared_min_count をここに足し、下限の切り替えはチェックの側 (checks.RateLimitedIP.minCount) で行う
+//   - allowlist の shared_sources (ADR 0094 の 1 節) の IP の下限は shared_min_count (既定 200)。下限の切り替えはチェックの側 (checks.RateLimitedIP.minCount) で行う
 type RateLimitedIP struct {
 	// Statuses は数えるステータス (アプリの回数の制限が返すもの)。
 	Statuses []int `yaml:"statuses"`
@@ -25,6 +25,8 @@ type RateLimitedIP struct {
 	IPUsersStoreTop int `yaml:"ip_users_store_top"`
 	// MinCount は報告する 1 日の件数の下限。
 	MinCount float64 `yaml:"min_count"`
+	// SharedMinCount は、allowlist の shared_sources (人の多い送信元) の IP を報告する 1 日の件数の下限 (min_count の代わり)。
+	SharedMinCount float64 `yaml:"shared_min_count"`
 	// SuggestMinUsers は、ip_users がこれ以上なら suggest_shared、未満なら few_users を付ける人数。
 	SuggestMinUsers float64 `yaml:"suggest_min_users"`
 }
@@ -42,6 +44,7 @@ func (r *RateLimitedIP) applyDefaults() {
 	setInt(&r.IPUsersStoreMin, 3)
 	setInt(&r.IPUsersStoreTop, 200)
 	setFloat(&r.MinCount, 20)
+	setFloat(&r.SharedMinCount, 200)
 	setFloat(&r.SuggestMinUsers, 10)
 }
 
@@ -56,6 +59,9 @@ func (r RateLimitedIP) validate() error {
 	}
 	if r.MinCount < 1 {
 		return fmt.Errorf("min_count >= 1")
+	}
+	if r.SharedMinCount < 1 {
+		return fmt.Errorf("shared_min_count >= 1")
 	}
 	if r.SuggestMinUsers < 1 {
 		return fmt.Errorf("suggest_min_users >= 1")

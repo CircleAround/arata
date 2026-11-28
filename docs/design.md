@@ -1088,7 +1088,25 @@ oidc_subjects:                   # OIDC でのロールの引き受けの、既�
     repo: example-org/example-repo
     refs: ["refs/heads/main"]
     note: 本番のデプロイ
+shared_sources:                  # NAT の内側に多くの利用者がいる送信元 (ADR 0094 の 1 節)。外さず、別のしきい値で見る
+  - cidr: 198.51.100.0/24
+    note: 試験の会場
+    approved_by: alice
+    approved_at: 2026-11-28
+    expires: 2026-12-20          # 任意。過ぎたら普通の送信元に戻る
 ```
+
+決定 (shared_sources。ADR 0094 の 1 節の実装):
+- `cidr` と `note` は必須 (note は「なぜ人が多いのか」で、後から外す判断の材料)。`expires` は期限日の終わりまで有効で、過ぎたら普通の送信元に戻る。
+  daily の日の値は、その日の始まり (UTC) で期限を見る (expires の日までが shared)
+- `source_ips` とも当たる IP は `source_ips` を優先する (丸ごと外す)。重なる範囲が複数あれば、最も狭い項目の note を使う
+- 効くのは login_bruteforce (平常帯の下限を `shared_min_count`、new_top_ip を出さない) と rate_limited_ip (下限を `shared_min_count`、理由 `shared_heavy`) だけ。
+  probe_paths・endpoint_abuse には効かせない
+- login_bruteforce の「その日の最多 IP」は shared の IP も含めて決める (shared の IP が最多の日は、ほかの IP も初出の最多にならない)。`source_ips` の IP が最多のときと同じ今の扱い
+- `config check` は、`source_ips` との重なり・広すぎる範囲 (IPv4 は /24、IPv6 は /48 より広い。IPv4 射影の IPv6 は IPv4 の広さで見る)・期限切れを warn にする。
+  run は広すぎる範囲も受け付ける (手で書いたものを止めない)。`approve --shared` は広すぎる範囲・`source_ips` と重なる範囲・ネットワークの形でない値を書かない
+- `approve <id> --shared` (rate_limited_ip・login_bruteforce の、まだ shared でない IP の finding) で追記できる。既定は IP そのもの (/32、IPv6 は /128)、
+  `--shared-cidr` で IP を含む範囲、`--expires` で期限 (過去の日付は拒む)。review の `approve_shared` に既定の範囲を出す。LLM は実行しない (人が判断する)
 
 決定: `allowlist.yaml` が無い場合は空のリストとして扱う (init 直後の運用を許す)。主体 ARN の突合は完全一致。AssumedRole 主体はセッション ARN ではなくロール ARN (`sessionContext.sessionIssuer.arn`) に正規化してから突合する (セッション名に個人名やメールが入るため)。
 決定 (ADR 0041): userIdentity の種類が知らないものでも、ARN がセッションの形 (`arn:aws:sts::<アカウント>:assumed-role/<ロール>/<セッション>`) ならロール ARN に寄せる。アカウントの欄が無い壊れた ARN は寄せない。
@@ -1365,7 +1383,7 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 
 | チェック | Mode | Key | Fingerprint | 判定 |
 |---|---|---|---|---|
-| login_bruteforce | event | `<ip>` | 重大度 + 理由 (`above_baseline` / `new_top_ip`) | `sign_in_failures` の日次値が「その IP 自身の直近 14 日の中央値 × factor (既定 3)、ただし min_count (既定 20) 以上」を超えた。または閾値未満でもその日の最多 IP が過去 14 日に一度も無く、top_ip_min_count (既定 5) 件以上 |
+| login_bruteforce | event | `<ip>` | 重大度 + 理由 (`above_baseline` / `new_top_ip`) | `sign_in_failures` の日次値が「その IP 自身の直近 14 日の中央値 × factor (既定 3)、ただし min_count (既定 20) 以上」を超えた。または閾値未満でもその日の最多 IP が過去 14 日に一度も無く、top_ip_min_count (既定 5) 件以上。allowlist の `shared_sources` の IP は、下限を `shared_min_count` (既定 min_count の 5 倍) にし、初出は報告せず、data に `shared`・`shared_note` を足す (ADR 0094 の 1 節) |
 | probe_paths | event | `<ip>` | 重大度 + 理由 | `probe_hits` について同上 (min_count 既定 10)。Data にその日の多かったパス (全 IP 合計の上位 5) を添える |
 | waf_block_trend | event | `rule\|<ルール ID>` / `top_ip\|<IP>` | 重大度 + 理由 (`new_rule` / `new_top_ip`) | 過去 14 日に BLOCK の無いルールが new_rule_min_count (既定 1) 件以上 BLOCK した / その日の BLOCK 件数 Top N (既定 5、min_count 10 以上) に過去 14 日合計の Top N に居ない IP が入った |
 
@@ -1374,7 +1392,7 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 | チェック | Mode | Key | Fingerprint | 判定 |
 |---|---|---|---|---|
 | user_denied / user_id_enumeration / user_path_breadth | event | `<kind>:<id>` | 重大度 + 理由 (user_id_enumeration は型ごとの理由) | 材料は 2-7 の日の値。1 日の値が下限以上で、本人の平常帯 (`baseline_days` 日の中央値 × `factor`) とアプリの平常帯 (記録のある日の、その日いちばん多かった利用者の値の中央値 × `app_factor`) を超える。user_denied と user_id_enumeration は窓 (`window` 日の和) でも判定する |
-| rate_limited_ip | event | `<ip>` | 重大度 + 理由 (`suggest_shared` / `few_users`。数えていなければ空) | 材料は 2-8 の日の値。窓に重なる日の `rate_limited` が `min_count` 以上の IP を、件数の多い日で 1 つ。`source_ips` は対象外。U3 の印のある日は `ip_users` (無い IP は 0) を添え、`suggest_min_users` 以上なら `suggest_shared`、未満なら `few_users`。決定 1 (`shared_sources`) は未実装で、入れるときは下限の切り替え (`minCount`) と data の `shared`・`shared_note`、理由 `shared_heavy` を足す |
+| rate_limited_ip | event | `<ip>` | 重大度 + 理由 (`suggest_shared` / `few_users` / `shared_heavy`。数えていなくて shared でなければ空) | 材料は 2-8 の日の値。窓に重なる日の `rate_limited` が `min_count` 以上の IP を、件数の多い日で 1 つ。`source_ips` は対象外。U3 の印のある日は `ip_users` (無い IP は 0) を添え、`suggest_min_users` 以上なら `suggest_shared`、未満なら `few_users`。`shared_sources` の IP は下限を `shared_min_count` (既定 200) にし、data に `shared`・`shared_note`、理由に `suggest_shared` の代わりに `shared_heavy` を付ける (数えていて `suggest_min_users` 未満なら `few_users` も) |
 
 - 決定: `sources` が空なら Disabled (skip し、理由を出す)。Disabled のチェックの要る記録は run も doctor も引かない (default-daily に入っても、sources を書くまでユーザー ID のソースを引かない。ADR 0014)
 - 決定: 型の要る 2 つは、`sources` に path_ids のあるソースが無ければ skip (`no path_ids`)

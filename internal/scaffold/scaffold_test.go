@@ -187,6 +187,7 @@ checks:
 		"missing_param checks.login_bruteforce.baseline_days |14",
 		"missing_param checks.login_bruteforce.min_baseline_days |7",
 		"missing_param checks.login_bruteforce.top_ip_min_count |5",
+		"missing_param checks.login_bruteforce.shared_min_count |100",
 		"missing_param checks.probe_paths.paths |[/.env, /.git/, /.aws/, /.ssh/, /wp-login.php, /wp-admin, /xmlrpc.php, /phpmyadmin, /pma, /server-status, /actuator, /config.json, /backup, /.DS_Store]",
 		"missing_param checks.probe_paths.statuses |[403, 404]",
 		"missing_param checks.probe_paths.baseline_days |14",

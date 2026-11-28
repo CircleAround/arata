@@ -11,7 +11,7 @@ import (
 // EntryError は Parse が 1 つの項目 (principals[2] など) で見つけた検証エラー。
 // 文言は従来どおり「principals[2]: …」。Check が項目の行番号を引くために、節と番号を持つ。
 type EntryError struct {
-	Section string // principals / source_ips / secrets_access / assume_destinations / oidc_subjects
+	Section string // principals / source_ips / secrets_access / assume_destinations / oidc_subjects / shared_sources
 	Index   int
 	Err     error
 }
@@ -51,6 +51,9 @@ type Problem struct {
 //
 //   - oidc_subjects (ADR 0055) の、同じ入り口を書いた項目 (プロバイダ・ロール・リポジトリ・refs / environments の集合・pull_request が同じ) と、
 //     期限の切れた項目も警告にする (期限が切れると、その入り口からの引き受けは次の run から報告される)
+//
+//   - shared_sources (ADR 0094 の 1 節) の、source_ips と重なる項目 (重なる IP は source_ips が優先して丸ごと外れる)、
+//     広すぎる項目 (IPv4 は /24、IPv6 は /48 より広い。総当たりのしきい値を広く上げる穴になる)、期限の切れた項目を警告にする
 //
 // エラーがあれば List は nil。
 func Check(b []byte, at time.Time) (*List, []Problem) {
@@ -104,6 +107,25 @@ func Check(b []byte, at time.Time) (*List, []Problem) {
 		if !e.active(at) {
 			out = append(out, Problem{Line: lines[i], Warn: true, Msg: fmt.Sprintf(
 				"oidc_subjects[%d]: expired on %s: %s (assuming the role from there is reported again; extend expires if it is still in use, or remove the entry)", i, e.Expires, e.Subject())})
+		}
+	}
+	lines = entryLines(b, "shared_sources")
+	for i := range l.SharedSources {
+		e := &l.SharedSources[i]
+		for j := range l.SourceIPs {
+			if netsOverlap(e.net, l.SourceIPs[j].net) {
+				out = append(out, Problem{Line: lines[i], Warn: true, Msg: fmt.Sprintf(
+					"shared_sources[%d]: overlaps source_ips[%d] (%s): %s (source_ips wins: the overlapping IPs are not checked at all; remove one of them)", i, j, l.SourceIPs[j].CIDR, e.CIDR)})
+				break
+			}
+		}
+		if SharedCIDRTooBroad(e.CIDR) {
+			out = append(out, Problem{Line: lines[i], Warn: true, Msg: fmt.Sprintf(
+				"shared_sources[%d]: %s is broader than /%d (IPv4) or /%d (IPv6): it raises the brute-force thresholds for too many addresses; narrow it to the network of the school or venue", i, e.CIDR, SharedMinPrefixV4, SharedMinPrefixV6)})
+		}
+		if !e.active(at) {
+			out = append(out, Problem{Line: lines[i], Warn: true, Msg: fmt.Sprintf(
+				"shared_sources[%d]: expired on %s: %s (the source is checked with the normal thresholds again; extend expires if it is still shared, or remove the entry)", i, e.Expires, e.CIDR)})
 		}
 	}
 	return l, out

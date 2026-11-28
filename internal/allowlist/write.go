@@ -137,7 +137,7 @@ func AppendBytes(src []byte, e NewEntry) ([]byte, string, error) {
 }
 
 // sectionFirstKey は、節をブロック形式に直すよう求めるエラー文の例に書くキー。
-var sectionFirstKey = map[string]string{"principals": "arn", "assume_destinations": "account"}
+var sectionFirstKey = map[string]string{"principals": "arn", "assume_destinations": "account", "shared_sources": "cidr"}
 
 // appendToSection は allowlist.yaml のテキストの節 section (トップレベルの列) の末尾に、render が書く 1 要素を差し込む (ADR 0010)。
 // 検証 (今のファイルが読めるか・足した結果が読めるか) は呼ぶ側がする。

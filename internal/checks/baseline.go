@@ -128,9 +128,13 @@ type spike struct {
 	Median       float64
 	Threshold    float64
 	Reason       string
-	BaselineDays int // データのあった過去日数
-	Collected    int // 収集した過去日数 (中央値に入れた日数。ADR 0090)
+	BaselineDays int  // データのあった過去日数
+	Collected    int  // 収集した過去日数 (中央値に入れた日数。ADR 0090)
+	Shared       bool // その日に人の多い送信元 (allowlist の shared_sources) だった (ADR 0094 の 1 節)
 }
+
+// spikeShared は、key がその日 (date) に人の多い送信元か (ADR 0094 の 1 節)。nil なら人の多い送信元は無い。
+type spikeShared func(key, date string) bool
 
 func (s spike) data(keyName string) map[string]any {
 	return map[string]any{
@@ -140,7 +144,10 @@ func (s spike) data(keyName string) map[string]any {
 }
 
 // detectSpikes は metric の窓内の日について平常帯超過と Top key 初出を探す。key ごとに件数が最大の日を 1 件返す (key 順)。
-func detectSpikes(ctx context.Context, q store.Query, metric string, w collect.Window, b config.Baseline, topMin float64, skip func(string) bool) ([]spike, error) {
+//
+// shared がその日に真を返す key は、平常帯の下限を sharedMin にし、Top key 初出を報告しない (ADR 0094 の 1 節)。
+// その日の Top key は shared の key も含めて決める (shared の key が最多の日は、ほかの key も初出の最多にならない。skip の key と同じ扱い)。
+func detectSpikes(ctx context.Context, q store.Query, metric string, w collect.Window, b config.Baseline, topMin float64, skip func(string) bool, shared spikeShared, sharedMin float64) ([]spike, error) {
 	dates := windowDates(w)
 	if len(dates) == 0 {
 		return nil, nil
@@ -177,15 +184,20 @@ func detectSpikes(ctx context.Context, q store.Query, metric string, w collect.W
 			}
 			vals := collectedVals(bds, collected, func(bd string) float64 { return s[bd][k] })
 			med := median(vals)
-			thr := med * b.Factor
-			if thr < b.MinCount {
-				thr = b.MinCount
+			isShared := shared != nil && shared(k, d)
+			floor := b.MinCount
+			if isShared {
+				floor = sharedMin
 			}
-			sp := spike{Key: k, Date: d, Count: v, Median: med, Threshold: thr, BaselineDays: withData, Collected: len(vals)}
+			thr := med * b.Factor
+			if thr < floor {
+				thr = floor
+			}
+			sp := spike{Key: k, Date: d, Count: v, Median: med, Threshold: thr, BaselineDays: withData, Collected: len(vals), Shared: isShared}
 			switch {
 			case v > thr:
 				sp.Reason = reasonAboveBaseline
-			case len(top) == 1 && top[0] == k && !seen[k] && withData >= b.MinBaselineDays:
+			case !isShared && len(top) == 1 && top[0] == k && !seen[k] && withData >= b.MinBaselineDays:
 				sp.Reason = reasonNewTopIP
 			default:
 				continue
