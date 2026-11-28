@@ -60,6 +60,9 @@ type ReviewItem struct {
 	// ApproveDestination は、`approve --destination` で行き先として既知にできる finding (unknown_assume_role の外向き・MFA あり) の、
 	// 行き先のアカウント ID (ADR 0047)。それ以外は空。
 	ApproveDestination string `json:"approve_destination,omitempty"`
+	// ApproveShared は、`approve --shared` で人の多い送信元にできる finding (rate_limited_ip・login_bruteforce で、まだ shared_sources に無い IP) の、
+	// 既定で書く範囲 (IP の /32、IPv6 は /128。ADR 0094 の 1 節)。それ以外は空。
+	ApproveShared string `json:"approve_shared,omitempty"`
 	// Triage は許す操作と根拠の文書 (ADR 0068 の 4 節)。AI が片付けの案を出すときは、ここに無い操作を提案しない。
 	Triage TriageInfo `json:"triage"`
 	// LastAction は最後の人の片付けの操作 (ADR 0068)。記録が無ければ省く (acked / snoozed で無いのは、ストアの schema 8 より前の操作)。
@@ -147,6 +150,9 @@ func (e *Engine) Review(ctx context.Context, statuses []string) ([]ReviewItem, e
 		}
 		if acct, _, err := destinationTargetOf(f); err == nil {
 			it.ApproveDestination = acct
+		}
+		if cidr, err := sharedTargetOf(f); err == nil {
+			it.ApproveShared = cidr
 		}
 		out = append(out, it)
 	}
@@ -351,6 +357,10 @@ type ApproveOptions struct {
 	// DestinationRoles を付けると、そのロール (名前の glob) だけに絞る (付ければ Destination も指定したものとして扱う)。
 	Destination      bool
 	DestinationRoles []string
+	// Shared は、主体ではなく、finding の IP を人の多い送信元として shared_sources に追記する (ADR 0094 の 1 節)。
+	// SharedCIDR を付けると、その範囲 (finding の IP を含むネットワーク) で書く (付ければ Shared も指定したものとして扱う)。
+	Shared     bool
+	SharedCIDR string
 }
 
 // ApproveResult は approve の結果。
@@ -359,8 +369,10 @@ type ApproveResult struct {
 	Entry   allowlist.NewEntry
 	// Destination は --destination で assume_destinations に追記した行き先 (このとき Entry は空)。
 	Destination *allowlist.NewDestination
-	Added       string // allowlist.yaml に追記したテキスト
-	Committed   bool
+	// Shared は --shared で shared_sources に追記した送信元 (このとき Entry は空)。
+	Shared    *allowlist.NewSharedSource
+	Added     string // allowlist.yaml に追記したテキスト
+	Committed bool
 	// AlsoResolved は、追記後の allowlist で対象主体が承認済みになったため一緒に resolved にした他の finding。
 	AlsoResolved []store.Finding
 	// KeptOpen は finding を resolved にしなかったこと (--expected-denied。次の run で除いて数え直す)。
@@ -371,6 +383,9 @@ type ApproveResult struct {
 func (r *ApproveResult) Subject() string {
 	if r.Destination != nil {
 		return r.Destination.Subject()
+	}
+	if r.Shared != nil {
+		return r.Shared.Subject()
 	}
 	return r.Entry.Subject()
 }
@@ -401,8 +416,14 @@ func (e *Engine) Approve(ctx context.Context, id string, o ApproveOptions) (*App
 	if _, err := e.triageAction(store.ActionApprove, e.approvedBy(o), o.Note); err != nil {
 		return nil, err
 	}
+	if (o.Destination || len(o.DestinationRoles) > 0) && (o.Shared || o.SharedCIDR != "") {
+		return nil, e.configErr(errors.New("--destination and --shared cannot be combined"))
+	}
 	if o.Destination || len(o.DestinationRoles) > 0 {
 		return e.approveDestination(ctx, f, o)
+	}
+	if o.Shared || o.SharedCIDR != "" {
+		return e.approveShared(ctx, f, o)
 	}
 	var target *ApproveTarget
 	switch {

@@ -12,7 +12,7 @@ type ExpiringEntry struct {
 	Expires string
 }
 
-// Expiring は期限のある項目 (principals・assume_destinations・oidc_subjects) を、期限の早い順に返す (ADR 0068 の 3 節)。
+// Expiring は期限のある項目 (principals・assume_destinations・oidc_subjects・shared_sources) を、期限の早い順に返す (ADR 0068 の 3 節)。
 // 期限の近さで絞るのは呼び出し側 (報告の作り手) が行う。
 func (l *List) Expiring() []ExpiringEntry {
 	var out []ExpiringEntry
@@ -29,6 +29,11 @@ func (l *List) Expiring() []ExpiringEntry {
 	for i := range l.OIDCSubjects {
 		if e := &l.OIDCSubjects[i]; e.Expires != "" {
 			out = append(out, ExpiringEntry{Section: "oidc_subjects", Subject: e.Subject(), Expires: e.Expires})
+		}
+	}
+	for i := range l.SharedSources {
+		if e := &l.SharedSources[i]; e.Expires != "" {
+			out = append(out, ExpiringEntry{Section: "shared_sources", Subject: e.Subject(), Expires: e.Expires})
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Expires < out[j].Expires })

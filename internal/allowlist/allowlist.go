@@ -203,6 +203,8 @@ type List struct {
 	AssumeDestinations []DestinationEntry `yaml:"assume_destinations"`
 	// OIDCSubjects は、OIDC でのロールの引き受けの既知の入り口 (ADR 0055)。principals (主体の承認) とは別。
 	OIDCSubjects []OIDCSubjectEntry `yaml:"oidc_subjects"`
+	// SharedSources は、NAT の内側に多くの利用者がいる送信元 (ADR 0094 の 1 節。shared.go)。外さず、別のしきい値で見る。
+	SharedSources []SharedSourceEntry `yaml:"shared_sources"`
 
 	byARN map[string]*PrincipalEntry
 	// broad は account / arn_pattern のエントリ
@@ -340,6 +342,11 @@ func Parse(b []byte) (*List, error) {
 			return nil, entryErr("source_ips", i, "%w", err)
 		}
 		e.net = n
+	}
+	for i := range l.SharedSources {
+		if err := l.SharedSources[i].validate(); err != nil {
+			return nil, entryErr("shared_sources", i, "%w", err)
+		}
 	}
 	return &l, nil
 }

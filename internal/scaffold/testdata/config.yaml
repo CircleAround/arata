@@ -206,6 +206,7 @@ checks:
     min_count: 20                                # 平常帯の下限 (中央値 0 の IP もこの件数までは鳴らさない)
     min_baseline_days: 7                         # 「初出」判定に要る、データのある過去日数 (導入直後に全部が初出になるのを防ぐ)
     top_ip_min_count: 5                          # その日の最多 IP が初出なら、この件数以上で報告
+    shared_min_count: 100                        # allowlist の shared_sources (人の多い送信元) の IP の平常帯の下限 (min_count の代わり。書かなければ min_count の 5 倍)。その IP の初出は報告しない
   probe_paths:
     paths: [/.env, /.git/, /.aws/, /.ssh/, /wp-login.php, /wp-admin, /xmlrpc.php, /phpmyadmin, /pma, /server-status, /actuator, /config.json, /backup, /.DS_Store] # 機密パスの接頭辞。集計条件なので overrides では変えられない
     exclude_paths: []                            # 対象から外す接頭辞 (正規の管理画面など)
@@ -339,7 +340,8 @@ checks:
     ip_users_store_min: 3                        # ストアに残す ip_users の下限 (人)。集計条件
     ip_users_store_top: 200                      # 日ごとに残す IP の数 (ip_users の多い順)。集計条件
     min_count: 20                                # 報告する 1 日の件数の下限 (仮の値。平常帯は持たない)
-    suggest_min_users: 10                        # ip_users がこれ以上なら suggest_shared、未満なら few_users (仮の値)
+    shared_min_count: 200                        # allowlist の shared_sources (人の多い送信元) の IP の下限 (仮の値。超えたら shared_heavy)
+    suggest_min_users: 10                        # ip_users がこれ以上なら suggest_shared (shared_sources の IP には付けない)、未満なら few_users (仮の値)
   credential_hygiene:
     unused_days: 90                              # アクセスキーを未使用とみなす日数 (最終使用、使われていなければ作成・ローテーションから)
   posture:

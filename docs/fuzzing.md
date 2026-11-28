@@ -66,9 +66,10 @@ CI は `.github/workflows/fuzz.yml` が週 1 回と手動 (`workflow_dispatch`�
 | | `FuzzPublicStatements` | バケットポリシー、CIDR | 公開の判定が見逃す側に倒れない (条件を外す・公開のステートメントを足す・広い CIDR・否定の演算子) |
 | `internal/record` `internal/report` | `FuzzMask` `FuzzFindingMasksIdentity` | 任意の文字列の間に置いたメールアドレス・セッション名 | レポートに元の形で残らない。冪等 |
 | `internal/report/schema` | `FuzzParse` `FuzzMarkdownLogValues` | report.json、ログ由来の値 | 読めたものは書き直しても同じ。report.md の行を増やせない (run と期間レポート) |
-| `internal/allowlist` | `FuzzParse` `FuzzMatchPattern` | allowlist.yaml、glob | 主体の指定は 1 つ・arn_pattern はアカウントを固定。書いていないアカウントの主体を承認しない。行き先 (`assume_destinations`) のアカウントは 12 桁の数字だけ・note 必須で、呼び出し元の承認と行き先の既知が互いに効かない |
+| `internal/allowlist` | `FuzzParse` `FuzzMatchPattern` | allowlist.yaml、glob | 主体の指定は 1 つ・arn_pattern はアカウントを固定。書いていないアカウントの主体を承認しない。行き先 (`assume_destinations`) のアカウントは 12 桁の数字だけ・note 必須で、呼び出し元の承認と行き先の既知が互いに効かない。人の多い送信元 (`shared_sources`) は note 必須で、当たるのは期限内・範囲内・`source_ips` に無い IP だけ |
 | | `FuzzAppendDestination` | `approve --destination` が書く行き先 (アカウントは finding の data、ロールと note は人の入力) | 書けたなら読め、行き先がちょうど 1 件増え、ほかの節と元の行は変わらない。12 桁の数字でないアカウント・空の note は書かない |
-| | `FuzzCheck` | allowlist.yaml (`config check`) | エラーの有無が `Parse` と一致する (check が通したものは run でも読める)。エラーは 1 件まで、警告は重複した主体・重なる行き先・期限切れの行き先の数と一致。行番号がファイルの行数を超えない |
+| | `FuzzAppendShared` | `approve --shared` が書く人の多い送信元 (範囲は finding の IP か人の入力、note は人の入力) | 書けたなら読め、`shared_sources` がちょうど 1 件増え、範囲は渡したネットワークの形そのもの。ほかの節と元の行は変わらない。広すぎる範囲・空の note・`source_ips` と重なる範囲は書かない |
+| | `FuzzCheck` | allowlist.yaml (`config check`) | エラーの有無が `Parse` と一致する (check が通したものは run でも読める)。エラーは 1 件まで、警告は重複した主体・重なる行き先・期限切れの行き先・人の多い送信元の `source_ips` との重なり・広すぎる範囲・期限切れの数と一致。行番号がファイルの行数を超えない |
 | `internal/checks` | `FuzzKnownDestination` | 呼び出し元・ロールの ARN、受け取ったアカウント、MFA の値 (ログ由来) | 行き先が既知になるのは、外向きで、ロールの ARN のアカウントが既知リストに書いた 12 桁と文字どおり同じときだけ。finding の data からの判定は、それに加えて `mfa` が文字どおり `true` のときだけ |
 | | `FuzzOriginTrace` | 保存済みの発行 (AssumeRole*) の種類・キーのハッシュ・時刻の任意の組 | 必ず止まる。たどれたら段数は 1〜4、根は AssumeRoleWithWebIdentity で、1 段目までの時刻の差は寿命の和 (12 時間 + 1 時間 × 段数 - 1) を超えない。たどれなければ 1 段目の値を返さない (ADR 0081) |
 | | `FuzzALBsWithoutWAF` | posture_item の `without_waf` (ストアから戻した JSON。ALB の名前は利用者が決める) | 返す名前は空でなく、finding の key の区切り (`\|`) を含まない |

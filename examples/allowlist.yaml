@@ -31,6 +31,15 @@ source_ips:
   - cidr: 203.0.113.0/24
     note: 本社オフィス
 admin_users: []                  # アプリ層の管理者 ID (後続 Step)
+# NAT の内側に多くの利用者がいる送信元 (学校・試験の会場・社内の回線。ADR 0094)。source_ips と違い外さず、
+# login_bruteforce・rate_limited_ip が高い下限 (shared_min_count) で見る。source_ips とも当たる IP は source_ips が優先。note 必須
+# 広い範囲 (IPv4 は /24、IPv6 は /48 より広い) は arata config check が warn にする。arata approve <id> --shared でも足せる
+shared_sources:
+  - cidr: 198.51.100.0/24
+    note: 試験の会場 (2026-12 の試験の日だけ)
+    approved_by: alice
+    approved_at: 2026-11-28
+    expires: 2026-12-20          # 任意。過ぎたら普通の送信元に戻る
 # 外向きの引き受け (自アカウントの主体が、別のアカウントのロールを引き受ける) で、行き先として既知のアカウント (ADR 0047)。
 # unknown_assume_role は、外向き・ここに期限内で載っている・MFA あり、の全部を満たす引き受けだけを報告しない (info の 1 行に件数を残す)。
 # MFA なし・不明の引き受けと、ここに無いアカウントへの引き受けは high のまま。principals の account: (呼び出し元の承認) とは別で、主体は承認されない

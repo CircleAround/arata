@@ -74,6 +74,11 @@ func TestApproveChecksMatchApprove(t *testing.T) {
 		_, err := ApproveTargetOf(store.Finding{Check: c})
 		rejectedByCheck := err != nil && (strings.Contains(err.Error(), "not about a principal") || strings.Contains(err.Error(), "does not write oidc_subjects"))
 		switch {
+		case sharedChecks[c]:
+			// --shared でだけ approve できる (人の多い送信元。主体の承認は拒む。ADR 0094 の 1 節)
+			if !checks.ApproveChecks[c] || !rejectedByCheck {
+				t.Errorf("%s must be approvable only with --shared: %v", c, err)
+			}
 		case c == "access_denied":
 			// --expected-denied でだけ approve できる (主体の承認は拒む)
 			if !checks.ApproveChecks[c] {

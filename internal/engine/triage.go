@@ -82,7 +82,7 @@ func triageOf(f store.Finding) TriageInfo {
 	return info
 }
 
-// approvable は finding を arata approve で片付けられるか (主体・行き先の承認、access_denied の想定済みの拒否)。
+// approvable は finding を arata approve で片付けられるか (主体・行き先の承認、access_denied の想定済みの拒否、人の多い送信元)。
 func approvable(f store.Finding) bool {
 	if !checks.ApproveChecks[f.Check] {
 		return false
@@ -91,6 +91,9 @@ func approvable(f store.Finding) bool {
 		return true
 	}
 	if _, _, err := destinationTargetOf(f); err == nil {
+		return true
+	}
+	if _, err := sharedTargetOf(f); err == nil {
 		return true
 	}
 	return f.Check == "access_denied"

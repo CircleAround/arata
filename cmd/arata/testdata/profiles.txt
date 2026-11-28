@@ -32,6 +32,7 @@ profile daily (window 24h, max_catchup 7d)
   login_bruteforce.min_count                   checks:    30
   login_bruteforce.min_baseline_days           既定値     7
   login_bruteforce.top_ip_min_count            既定値     5
+  login_bruteforce.shared_min_count            既定値     150
   probe_paths.paths                            既定値     [/.env, /.git/, /.aws/, /.ssh/, /wp-login.php, /wp-admin, /xmlrpc.php, /phpmyadmin, /pma, /server-status, /actuator, /config.json, /backup, /.DS_Store]
   probe_paths.exclude_paths                    既定値     []
   probe_paths.statuses                         既定値     [403, 404]
@@ -130,6 +131,7 @@ profile daily (window 24h, max_catchup 7d)
   rate_limited_ip.ip_users_store_min           既定値     3
   rate_limited_ip.ip_users_store_top           既定値     200
   rate_limited_ip.min_count                    既定値     20
+  rate_limited_ip.shared_min_count             既定値     200
   rate_limited_ip.suggest_min_users            既定値     10
 
 profile hourly (window 1h, max_catchup 7d, min_severity high)

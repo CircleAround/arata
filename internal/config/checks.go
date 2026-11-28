@@ -88,6 +88,9 @@ type LoginBruteforce struct {
 	Baseline        Baseline `yaml:",inline"`
 	// TopIPMinCount は「その日の Top IP が過去に無い」を報告する件数の下限。
 	TopIPMinCount float64 `yaml:"top_ip_min_count"`
+	// SharedMinCount は、allowlist の shared_sources (人の多い送信元) の IP の平常帯の下限 (min_count の代わり。ADR 0094 の 1 節)。
+	// 決定: 書かなければ min_count の 5 倍 (全体の checks: の値で決める。overrides の min_count には追従しない。arata profiles と config init --diff に出る)。
+	SharedMinCount float64 `yaml:"shared_min_count"`
 }
 
 // ProbePaths は probe_paths の設定。
@@ -532,6 +535,7 @@ func (c *Checks) applyDefaults() {
 	if lb.TopIPMinCount == 0 {
 		lb.TopIPMinCount = 5
 	}
+	setFloat(&lb.SharedMinCount, 5*lb.Baseline.MinCount)
 	pp := &c.ProbePaths
 	if len(pp.Paths) == 0 {
 		pp.Paths = DefaultProbePathPrefix
@@ -638,6 +642,9 @@ func (c *Checks) applyDefaults() {
 func (c *Checks) validate() error {
 	if err := c.LoginBruteforce.Baseline.validate(); err != nil {
 		return fmt.Errorf("login_bruteforce: %w", err)
+	}
+	if c.LoginBruteforce.SharedMinCount < 0 {
+		return fmt.Errorf("login_bruteforce: shared_min_count >= 0")
 	}
 	if err := c.ProbePaths.Baseline.validate(); err != nil {
 		return fmt.Errorf("probe_paths: %w", err)

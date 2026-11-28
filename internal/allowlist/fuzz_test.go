@@ -1,6 +1,7 @@
 package allowlist
 
 import (
+	"net"
 	"os"
 	"strings"
 	"testing"
@@ -41,6 +42,8 @@ func FuzzParse(f *testing.F) {
 		"secrets_access:\n  - principal_pattern: arn:aws:iam::123456789012:role/example-app-prod-AppTaskDefExecutionRole1A2B3C4D-*\n    secrets: [\"/example-app/prod/secrets/*\"]\n    bulk: exempt\n    note: n\n",
 		"secrets_access:\n  - principal_pattern: arn:aws:iam::123456789012:role/example-app-*\n    principal: arn:aws:iam::123456789012:role/x\n    secrets: [\"*\"]\n",
 		"secrets_access:\n  - principal_pattern: arn:aws:iam::999999999999:role/a-fuzz-*\n    secrets: [\"*\"]\n  - principal_pattern: \"arn:aws:iam::123456789012:role/a/b-c-*\"\n    secrets: [\"x\"]\n",
+		"shared_sources:\n  - cidr: 198.51.100.0/24\n    note: n\n    expires: 2026-11-08\n  - cidr: ::ffff:0.0.0.0/96\n    note: n\nsource_ips:\n  - cidr: 198.51.100.0/25\n",
+		"shared_sources: [{cidr: 2001:db8::/48, note: n}, {cidr: 0.0.0.0/0, note: \" \"}]\n", "shared_sources: &s [*s]\n",
 		"oidc_subjects: &o [*o]\n", "principals:\n  - arn: arn:aws:iam::123456789012:role/gha-deploy\n    tags: [deploy]\noidc_subjects: []\n",
 	} {
 		f.Add([]byte(s))
@@ -244,6 +247,21 @@ func FuzzParse(f *testing.F) {
 				t.Fatalf("source_ips が無いのに %q を許可した", ip)
 			}
 		}
+		// shared_sources (ADR 0094 の 1 節): note は必須。当たるのは、期限内で、その IP を含み、source_ips に無い IP だけ
+		for i := range l.SharedSources {
+			if strings.TrimSpace(l.SharedSources[i].Note) == "" || l.SharedSources[i].net == nil {
+				t.Fatalf("shared_sources[%d]: note か範囲の無い項目を受け付けた", i)
+			}
+		}
+		for _, ip := range []string{"198.51.100.7", "203.0.113.7", "2001:db8::1", "::ffff:198.51.100.7", "x", ""} {
+			e, ok := l.SharedSource(ip, at)
+			if !ok {
+				continue
+			}
+			if l.SourceIPAllowed(ip) || !e.active(at) || !e.net.Contains(net.ParseIP(ip)) {
+				t.Fatalf("%q に当たってはいけない項目 %+v が当たった", ip, e)
+			}
+		}
 	})
 }
 
@@ -373,6 +391,65 @@ func FuzzAppendDestination(f *testing.F) {
 		for _, line := range strings.Split(strings.TrimSuffix(src, "\n"), "\n") {
 			if line == "assume_destinations: []" {
 				continue // この行だけは `assume_destinations:` に書き換える
+			}
+			j := strings.Index(rest, line)
+			if j < 0 {
+				t.Fatalf("元の行が消えた・順序が変わった: %q\n%s", line, out)
+			}
+			rest = rest[j+len(line):]
+		}
+	})
+}
+
+// approve --shared が既知リストに書く人の多い送信元 (ADR 0094 の 1 節)。範囲は finding の IP (ログ由来の値) か人の入力、note は人の入力。守る規則:
+//   - 書けたなら、結果は Parse でき、shared_sources がちょうど 1 件増え、その項目の cidr は渡した値そのもの (ネットワークの形)
+//   - 広すぎる範囲・空の note・source_ips と重なる範囲は書かない
+//   - ほかの節の件数は変わらず、元のテキストの行は順序も中身もそのまま残る
+func FuzzAppendShared(f *testing.F) {
+	srcs := []string{
+		"", "shared_sources: []\n", "source_ips:\n  - cidr: 203.0.113.0/24\n",
+		"# c\nshared_sources:\n  - cidr: 192.0.2.0/24\n    note: n\n\n# next\nprincipals: []\n",
+	}
+	for i := range srcs {
+		f.Add(uint8(i), "198.51.100.0/24", "試験の会場")
+		f.Add(uint8(i), "198.51.100.0/24\n  - cidr: 0.0.0.0/0", "n")
+		f.Add(uint8(i), "203.0.113.0/28", "n\nprincipals:\n  - arn: a")
+		f.Add(uint8(i), "::ffff:0.0.0.0/96", "x")
+		f.Add(uint8(i), "2001:db8::/48", "- a: b # c")
+	}
+	f.Fuzz(func(t *testing.T, i uint8, cidr, note string) {
+		src := srcs[int(i)%len(srcs)]
+		out, added, err := AppendSharedBytes([]byte(src), NewSharedSource{CIDR: cidr, Note: note, ApprovedBy: "alice", ApprovedAt: "2026-11-28"})
+		if err != nil {
+			if out != nil || added != "" {
+				t.Fatal("エラーなのに結果を返した")
+			}
+			return
+		}
+		if SharedCIDRTooBroad(cidr) || strings.TrimSpace(note) == "" {
+			t.Fatalf("書いてはいけない値を書いた: cidr %q note %q", cidr, note)
+		}
+		before, _ := Parse([]byte(src))
+		after, err := Parse(out)
+		if err != nil {
+			t.Fatalf("書いた結果が読めない: %v\n%s", err, out)
+		}
+		n := len(after.SharedSources)
+		if n != len(before.SharedSources)+1 || after.SharedSources[n-1].CIDR != cidr || after.SharedSources[n-1].net.String() != cidr {
+			t.Fatalf("足した項目が違う: %+v\n%s", after.SharedSources, out)
+		}
+		for j := range after.SourceIPs {
+			if netsOverlap(after.SourceIPs[j].net, after.SharedSources[n-1].net) {
+				t.Fatalf("source_ips と重なる範囲を書いた: %s", cidr)
+			}
+		}
+		if len(after.Principals) != len(before.Principals) || len(after.SourceIPs) != len(before.SourceIPs) || len(after.AssumeDestinations) != len(before.AssumeDestinations) {
+			t.Fatalf("ほかの節が変わった:\n%s", out)
+		}
+		rest := string(out)
+		for _, line := range strings.Split(strings.TrimSuffix(src, "\n"), "\n") {
+			if line == "shared_sources: []" {
+				continue
 			}
 			j := strings.Index(rest, line)
 			if j < 0 {

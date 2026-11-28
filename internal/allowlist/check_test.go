@@ -71,7 +71,8 @@ func TestCheck(t *testing.T) {
 
 // ファズテスト (ADR 0041)。Check は利用者が書いたファイルを読む。規則:
 //   - エラーの有無は Parse と一致する (config check が通した allowlist は run でも読める。逆も同じ)
-//   - エラーは多くても 1 件。警告は Parse が通ったときだけで、重複した主体の数 + 行き先 (assume_destinations) の重なる項目と期限切れの数と一致する
+//   - エラーは多くても 1 件。警告は Parse が通ったときだけで、重複した主体の数 + 行き先 (assume_destinations) の重なる項目と期限切れの数 +
+//     人の多い送信元 (shared_sources) の source_ips との重なり・広すぎる範囲・期限切れの数と一致する
 //   - 行番号は負にならず、ファイルの行数を超えない
 func FuzzCheck(f *testing.F) {
 	for _, s := range []string{
@@ -84,6 +85,7 @@ func FuzzCheck(f *testing.F) {
 		"assume_destinations:\n  - account: \"111122223333\"\n    note: n\n  - account: \"111122223333\"\n    roles: [ReadOnly]\n    note: n\n    expires: 2026-01-01\n",
 		"assume_destinations:\n  - account: \"111122223333\"\n    roles: [a, b]\n    note: n\n  - account: \"111122223333\"\n    roles: [b, a]\n    note: n\n  - account: \"111122223333\"\n    roles: [c]\n    note: n\n",
 		"assume_destinations: [{account: \"111122223333\"}]\n", "assume_destinations: &a\n  - account: x\nprincipals: *a\n",
+		"source_ips:\n  - cidr: 198.51.100.0/24\nshared_sources:\n  - cidr: 198.51.100.128/25\n    note: n\n    expires: 2026-01-01\n  - cidr: 10.0.0.0/8\n    note: n\n",
 	} {
 		f.Add([]byte(s))
 	}
@@ -130,6 +132,21 @@ func FuzzCheck(f *testing.F) {
 				}
 			}
 			if e.Expires != "" && e.Expires < "2026-11-13" { // YYYY-MM-DD は文字列の順が日付の順
+				want++
+			}
+		}
+		for i := range pl.SharedSources {
+			e := &pl.SharedSources[i]
+			for j := range pl.SourceIPs {
+				if netsOverlap(e.net, pl.SourceIPs[j].net) {
+					want++
+					break
+				}
+			}
+			if SharedCIDRTooBroad(e.CIDR) {
+				want++
+			}
+			if e.Expires != "" && e.Expires < "2026-11-13" {
 				want++
 			}
 		}
