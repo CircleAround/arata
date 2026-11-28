@@ -75,7 +75,7 @@ func rid(i int) string { return fmt.Sprintf("5b0c1d2e-0000-4000-8000-%012d", i) 
 func registerRequests(f *cwlogstest.Fake, sim *cwlogstest.Sim, c config.Checks, srcID string) {
 	p := httpPreds{c: c}
 	f.On("as lines_total", sim.Response(nil))
-	f.On("as http_hits", sim.Response(func(r map[string]string) bool { return p.signIn(r) || p.probe(r) }))
+	f.On("as http_hits", sim.Response(p.hits))
 	var eps []func(map[string]string) bool
 	for _, ep := range c.EndpointAbuse.Endpoints {
 		if len(ep.Sources) == 0 || strIn(srcID, ep.Sources) {
@@ -457,7 +457,7 @@ func TestRequestSplitByDay(t *testing.T) {
 	if got := strings.Join(spans, " "); got != "20T00-21T08:59:59 20T00-21T00:00:59 21T00-21T08:59:59" {
 		t.Fatalf("分け方: %s", got)
 	}
-	if tr := col.FormatStats().Truncated; strings.Join(tr, ",") != "sign_in_failures,probe_hits" {
+	if tr := col.FormatStats().Truncated; strings.Join(tr, ",") != "sign_in_failures,probe_hits,rate_limited" {
 		t.Fatalf("truncated: %v", tr)
 	}
 }

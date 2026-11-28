@@ -319,7 +319,10 @@ func redirectList(l []int) string {
 }
 
 // extractsMethod は request_lines のソースが、どれかの行の種類でメソッドを取り出すか。
-func (s Source) extractsMethod() bool {
+func (s Source) extractsMethod() bool { return s.extractsField("method") }
+
+// extractsField は request_lines のソースが、どれかの行の種類で項目 field を取り出すか。
+func (s Source) extractsField(field string) bool {
 	if s.Request == nil {
 		return false
 	}
@@ -328,7 +331,7 @@ func (s Source) extractsMethod() bool {
 		return false
 	}
 	for _, g := range groups {
-		if containsString(g, "method") {
+		if containsString(g, field) {
 			return true
 		}
 	}

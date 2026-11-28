@@ -36,6 +36,8 @@ type Checks struct {
 	UserDenied        UserDenied        `yaml:"user_denied"`
 	UserIDEnumeration UserIDEnumeration `yaml:"user_id_enumeration"`
 	UserPathBreadth   UserPathBreadth   `yaml:"user_path_breadth"`
+	// RateLimitedIP は 429 の集まった IP を、同じ IP からログインできた利用者の数を添えて見る daily のチェック (ADR 0094 の 2 節。ratelimited.go)。
+	RateLimitedIP RateLimitedIP `yaml:"rate_limited_ip"`
 	// 以下は週次チェック (Step 3)。
 	CredentialHygiene CredentialHygiene `yaml:"credential_hygiene"`
 	Posture           Posture           `yaml:"posture"`
@@ -569,6 +571,7 @@ func (c *Checks) applyDefaults() {
 	setFloat(&c.OIDCAssumeRole.MediumRatio, 3)
 	c.EndpointAbuse.applyDefaults()
 	c.applyUserDefaults()
+	c.RateLimitedIP.applyDefaults()
 	if len(c.UnusedRegionActivity.ComputeAPIs) == 0 {
 		c.UnusedRegionActivity.ComputeAPIs = DefaultComputeAPIs
 	}
@@ -694,6 +697,9 @@ func (c *Checks) validate() error {
 	}
 	if err := c.validateUser(); err != nil {
 		return err
+	}
+	if err := c.RateLimitedIP.validate(); err != nil {
+		return fmt.Errorf("rate_limited_ip: %w", err)
 	}
 	if err := c.UnusedRegionActivity.validate(); err != nil {
 		return fmt.Errorf("unused_region_activity: %w", err)

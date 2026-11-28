@@ -28,7 +28,9 @@ var CollectionParams = map[string]bool{"paths": true, "methods": true, "failure_
 	// log_hygiene の見るソース・種類・項目名も問い合わせの条件 (スナップショットは全プロファイル共有。ADR 0050)
 	"sources": true, "kinds": true, "param_fields": true,
 	// 利用者ごとのチェックの U1・U2 の条件と、日の値の残し方も日の値の形を決める (ADR 0071・0087)
-	"success_statuses": true, "denied_statuses": true, "store_min": true, "store_top": true}
+	"success_statuses": true, "denied_statuses": true, "store_min": true, "store_top": true,
+	// rate_limited_ip の U3 を流すソースと、ip_users の日の値の残し方も日の値の形を決める (ADR 0094。statuses・paths は上にある)
+	"user_sources": true, "ip_users_store_min": true, "ip_users_store_top": true}
 
 // JudgmentParams は、CollectionParams と同じ名前でも判定にだけ使うパラメータ (<チェック>.<キー>)。overrides で変えられる。
 // 利用者ごとのチェックの window は日の値を足し上げる日数で、日の値の形を変えない (endpoint_abuse の window は集計の時間幅)。

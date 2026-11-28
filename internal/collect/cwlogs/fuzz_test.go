@@ -14,6 +14,7 @@ import (
 
 	"github.com/CircleAround/arata/internal/collect"
 	"github.com/CircleAround/arata/internal/collect/cwlogs/cwlogstest"
+	"github.com/CircleAround/arata/internal/config"
 	"github.com/CircleAround/arata/internal/record"
 )
 
@@ -215,6 +216,7 @@ func FuzzCollectHTTPRows(f *testing.F) {
 			cwlogstest.Rows("day", day, "ip", ipv, "method", method, "status", status, "sign_in", pathv, "probe", pathv, "http_hits", n),
 			cwlogstest.Rows("day", day, "ip", ipv, "method", "POST", "status", "401", "sign_in", "/users/sign_in", "http_hits", n),
 			cwlogstest.Rows("day", day, "ip", ipv, "method", "GET", "status", "404", "probe", "/.env", "probe_ex", path, "http_hits", n),
+			cwlogstest.Rows("day", day, "ip", ipv, "method", method, "status", "429", rateMark, pathv, "http_hits", n),
 		}})
 		var hits []map[string]string
 		for i := 0; i < 6; i++ {
@@ -225,7 +227,9 @@ func FuzzCollectHTTPRows(f *testing.F) {
 		}
 		hits = append(hits, cwlogstest.Rows("t", bin, "ip", ipv, "ua", fuzzUA, "method", method, "status", status, "ep0_0", pathv, endpointHits, n, "first_seen", day, "last_seen", bin))
 		fake.On(endpointHits, cwlogstest.Response{Rows: hits})
-		c, err := New(nginxSource(), abuseChecks(), fake)
+		checks := abuseChecks()
+		checks.RateLimitedIP = config.RateLimitedIP{Statuses: []int{429}, Paths: []string{"/api/"}}
+		c, err := New(nginxSource(), checks, fake)
 		if err != nil {
 			t.Fatal(err)
 		}

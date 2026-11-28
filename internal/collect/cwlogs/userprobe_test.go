@@ -41,6 +41,7 @@ func collectProbe(t *testing.T, src config.Source, c config.Checks, ev []cwlogst
 	registerRequests(f, sim, c, src.ID)
 	f.On("count(u_dn) as", sim.Response(nil))      // U1
 	f.On("as "+MetricUserIDsOK, sim.Response(nil)) // U2
+	f.On("as "+MetricIPUsers, sim.Response(nil))   // U3
 	col, err := New(src, c, f)
 	if err != nil {
 		t.Fatal(err)
