@@ -46,13 +46,24 @@ import (
 //   - 分布の行 (user_ids_dist) は、その日に user_ids を残した型の分だけ書く (型の数で行を増やさない。アプリの平常帯は、残した型の最多の利用者の値で足りる)。
 //     p50・p99 はその日の U2 が行の上限に当たっていないときだけ
 const (
-	userSummaryQuery = "user_summary"
-	userIDsQuery     = "user_ids"
+	userSummaryQuery = UserProbeSummary
+	userIDsQuery     = UserProbeIDs
 	rlTargetID       = "tid" // request_lines の 1 段目の列 (最初の行の対象 ID。結果には出さない)
+)
+
+// U1・U2 の名前 (MetricUserProbeDays の key)。
+const (
+	UserProbeSummary = "user_summary"
+	UserProbeIDs     = "user_ids"
 )
 
 // 利用者ごとのチェックの日の値 (From は http_user)。
 const (
+	// MetricUserProbeDays は U1・U2 を流した日の印 (key = UserProbeSummary・UserProbeIDs、値 1)。
+	// 決定: 平常帯の蓄積待ち (ADR 0071 の 6 節) は、この印のある日で数える。user_requests はこの 3 つのチェックより前から貯まりうる
+	// (http_user の集計は別の機能) ので、それで数えると、U1・U2 の値の無い日を 0 として平常帯に入れ、待たずに判定してしまう (2026-11-28 に導入先で起きた)
+	MetricUserProbeDays = "user_probe_days"
+
 	MetricUserDenied             = "user_denied"              // key = <kind>:<id>。拒否 (user_denied.statuses) の件数
 	MetricUserTemplates          = "user_templates"           // key = <kind>:<id>。触った型の異なりの数
 	MetricUserTemplatesOK        = "user_templates_ok"        // そのうち 2xx のあった型の数
@@ -241,6 +252,9 @@ func (c *Collector) collectUsers(ctx context.Context, from, to time.Time, sink c
 				err = c.emitUserIDs(ctx, rows, truncated, sink)
 			}
 			if err != nil {
+				return err
+			}
+			if err := c.emitUser(ctx, sink, DayStart(d).Format(record.DateLayout), MetricUserProbeDays, q.Name, 1); err != nil {
 				return err
 			}
 		}

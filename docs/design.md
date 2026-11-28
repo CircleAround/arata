@@ -583,6 +583,7 @@ auth result=success|failure|impersonate kind=user id=42|none [via=password|remem
 | `user_ids_ok`・`user_ids_denied`・`user_denied_redirects` | `<kind>:<id>\|<型>` | そのうち成功・拒否・3xx (GET・HEAD) で拒否のあった ID の数 (`user_denied_redirects` は 3xx を書いたときだけ) | `user_ids` を残した key だけ |
 | `user_ids_methods` | `<kind>:<id>\|<型>\|<メソッド>` | メソッドごとの件数 (0 は書かない) | `user_ids` を残した key だけ |
 | `user_ids_dist` | `<型>\|users`・`\|max`・`\|p50`・`\|p99` | その日のその型の利用者の数と分布 | `user_ids` を残した型だけ。p50・p99 はその日の U2 が行の上限に当たっていないときだけ |
+| `user_probe_days` | `user_summary`・`user_ids` | 1 (その日の U1・U2 を流した印) | 流した日すべて (値の残らなかった日も。平常帯の蓄積待ちを数える) |
 
 - 決定 (ADR 0087 の 2 節の約束): 異なりの数 (`user_templates`・`user_ids` と内訳) は「その日の正確な異なり」。土台が request_lines を時の単位で読むようにした後も、U2 と U1 の異なりの列は日の単位で流す
 - 決定: 分布の行は `user_ids` を残した型の分だけ (型の数で行を増やさない)。アプリの平常帯 (いちばん多い利用者の値) はその型の `max` で作れる。残さなかった型の最多は `store_min` 未満で、判定の閾値より十分小さい
@@ -1355,6 +1356,9 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 - 決定: 型の要る 2 つは、`sources` に path_ids のあるソースが無ければ skip (`no path_ids`)
 - 決定: 本人の平常帯もアプリの平常帯も、平常帯の日々のうちアプリの記録のある日だけから作る (収集の抜けた日を 0 に数えると帯が下がり、誤りの指摘が増える。レビューの指摘)
 - 決定: 新しい利用者 (本人の値の残った日が `min_baseline_days` 未満) は本人の平常帯を使わない (`new_user`)。アプリの記録のある日 (`user_requests` のある日) が足りない間は判定せず、`coverage.notes` に残りの日数を出す
+- 決定 (2026-11-28 の直し): アプリの記録のある日は、`user_requests` があり、**そのチェックの集計 (U1 か U2) を流した印 (`user_probe_days`) のある日**。
+  `user_requests` は http_user の集計で、3 つのチェックより前から貯まりうる。それだけで数えると、U1・U2 の値の無い日を 0 として平常帯に入れ (アプリの平常帯 0)、
+  導入の直後に待たずに `min_count` だけで判定してしまう (導入先で起きた)。印を出す前の版で貯めた日は、印が無いので数えない (版を上げた日から待ちが始まる)
 - 決定: アプリの平常帯の「いちばん多い利用者の値」は、user_denied・user_path_breadth は残した key の最大、user_id_enumeration は型ごとの `user_ids_dist` の max。窓の帯は残した key の和の最大
 - 決定: finding は利用者ごとに 1 つ (評価する日のうち値の大きい日。同じなら新しい日)。`related` は同じ利用者・同じ日に条件を満たしたほかの 2 つ (sources を書いたものだけ)
 - 決定: 片付けは user_id_enumeration の medium だけ ack を許す (同じ利用者が拒否に混ざる成功を出せば high で出直す)。ほかは上がる余地が無いので snooze・resolve

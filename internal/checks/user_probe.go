@@ -30,7 +30,7 @@ import (
 //   - アプリの記録のある日 (user_requests のある日) が平常帯の日々に min_baseline_days 未満なら、その日は判定せず、coverage.notes に残りの日数を出す
 //
 // 決定 (実装):
-//   - アプリの記録のある日は、同じソースの user_requests (ログインした要求の数) のある日。利用者の値が下限未満で残らなかった日も「記録のある日」として 0 で数える
+//   - アプリの記録のある日は、同じソースの user_requests (ログインした要求の数) があり、そのチェックの集計 (U1 か U2) を流した印 (user_probe_days) のある日。利用者の値が下限未満で残らなかった日も「記録のある日」として 0 で数える
 //   - アプリの平常帯の「いちばん多かった利用者の値」は、user_denied・user_templates では残した key の最大、user_id_enumeration では型ごとの分布の行 (user_ids_dist の max)。
 //     窓の平常帯は、残した key の日の値の和の最大 (上位だけを残すので、上限で落ちた利用者は数えない。いちばん多い利用者は残る)
 //   - finding は利用者ごとに 1 つ。評価する日 (窓に重なる日) のうち値の大きい日 (同じなら新しい日) を出す。
@@ -165,7 +165,7 @@ type probeSeries struct {
 	collected map[string]bool
 }
 
-func newProbeSeries(ctx context.Context, q store.Query, sources []string, w collect.Window, b config.UserBands, windowDays int) (*probeSeries, []string, error) {
+func newProbeSeries(ctx context.Context, q store.Query, sources []string, probe string, w collect.Window, b config.UserBands, windowDays int) (*probeSeries, []string, error) {
 	dates := windowDates(w)
 	if len(dates) == 0 {
 		return nil, nil, nil
@@ -175,9 +175,15 @@ func newProbeSeries(ctx context.Context, q store.Query, sources []string, w coll
 	if err != nil {
 		return nil, nil, err
 	}
+	ran, err := ps.load(cwlogs.MetricUserProbeDays)
+	if err != nil {
+		return nil, nil, err
+	}
 	ps.collected = map[string]bool{}
 	for d := range rows {
-		ps.collected[d] = true
+		if ran[d][probe] > 0 {
+			ps.collected[d] = true
+		}
 	}
 	return ps, dates, nil
 }
@@ -362,7 +368,7 @@ func userOf(key string) map[string]string {
 // deniedHits は user_denied の条件を満たした利用者 (key → 日の判定)。wait は平常帯の蓄積待ちの残りの日数 (待ちの日があれば最大)。
 func (b userProbeBase) deniedHits(ctx context.Context, q store.Query, w collect.Window) (map[string]probeHit, int, error) {
 	cfg := b.All.UserDenied
-	ps, dates, err := newProbeSeries(ctx, q, cfg.Sources, w, cfg.UserBands, cfg.WindowDays())
+	ps, dates, err := newProbeSeries(ctx, q, cfg.Sources, cwlogs.UserProbeSummary, w, cfg.UserBands, cfg.WindowDays())
 	if err != nil || ps == nil {
 		return nil, 0, err
 	}
@@ -376,7 +382,7 @@ func (b userProbeBase) deniedHits(ctx context.Context, q store.Query, w collect.
 // breadthHits は user_path_breadth の条件を満たした利用者。
 func (b userProbeBase) breadthHits(ctx context.Context, q store.Query, w collect.Window) (map[string]probeHit, int, series, error) {
 	cfg := b.All.UserPathBreadth
-	ps, dates, err := newProbeSeries(ctx, q, b.pathSources(cfg.Sources), w, cfg.UserBands, 0)
+	ps, dates, err := newProbeSeries(ctx, q, b.pathSources(cfg.Sources), cwlogs.UserProbeSummary, w, cfg.UserBands, 0)
 	if err != nil || ps == nil {
 		return nil, 0, nil, err
 	}
@@ -447,7 +453,7 @@ type enumHit struct {
 // enumHits は user_id_enumeration の条件を満たした (利用者, 型) を利用者ごとにまとめる。
 func (b userProbeBase) enumHits(ctx context.Context, q store.Query, w collect.Window) (map[string][]enumHit, int, error) {
 	cfg := b.All.UserIDEnumeration
-	ps, dates, err := newProbeSeries(ctx, q, b.pathSources(cfg.Sources), w, cfg.UserBands, cfg.WindowDays())
+	ps, dates, err := newProbeSeries(ctx, q, b.pathSources(cfg.Sources), cwlogs.UserProbeIDs, w, cfg.UserBands, cfg.WindowDays())
 	if err != nil || ps == nil {
 		return nil, 0, err
 	}
