@@ -58,7 +58,7 @@ func collectProbe(t *testing.T, src config.Source, c config.Checks, ev []cwlogst
 func userMetrics(s *sinkRecorder) map[string]float64 {
 	out := map[string]float64{}
 	for k, v := range s.metrics() {
-		if m := strings.Split(k, "|")[1]; strings.HasPrefix(m, "user_ids") || strings.HasPrefix(m, "user_templates") || m == MetricUserDenied || m == MetricUserDeniedRedirects {
+		if m := strings.Split(k, "|")[1]; strings.HasPrefix(m, "user_ids") || strings.HasPrefix(m, "user_templates") || m == MetricUserDenied || m == MetricUserDeniedRedirects || m == MetricUserProbeDays {
 			out[k] = v
 		}
 	}
@@ -127,6 +127,9 @@ func TestUserProbeMetrics(t *testing.T) {
 		// 分布は user_ids を残した型だけ。user:43 の 2 (store_min 3 未満) も分布には入る
 		"2026-10-21|user_ids_dist|/orders/:id|users": 2, "2026-10-21|user_ids_dist|/orders/:id|max": 8,
 		"2026-10-21|user_ids_dist|/orders/:id|p50": 2, "2026-10-21|user_ids_dist|/orders/:id|p99": 8,
+		// U1・U2 を流した日の印 (平常帯の蓄積待ちを数える。窓の始まりを含む日から)。値の残らなかった 10-20 にも付く
+		"2026-10-20|user_probe_days|user_summary": 1, "2026-10-20|user_probe_days|user_ids": 1,
+		"2026-10-21|user_probe_days|user_summary": 1, "2026-10-21|user_probe_days|user_ids": 1,
 	}
 	if got := userMetrics(sink); dump(got) != dump(want) {
 		t.Fatalf("got:\n%swant:\n%s", dump(got), dump(want))
@@ -364,8 +367,14 @@ func TestUserProbeInvalidUserRows(t *testing.T) {
 	if err := col.Collect(t.Context(), userWindow, sink); err != nil {
 		t.Fatal(err)
 	}
-	// 形に合わない利用者の行も、:id を含まない型 (結果の値は信用しない) の行も残さない
-	if m := userMetrics(sink); len(m) != 0 {
+	// 形に合わない利用者の行も、:id を含まない型 (結果の値は信用しない) の行も残さない。残るのは U1・U2 を流した日の印だけ
+	m := userMetrics(sink)
+	for k := range m {
+		if strings.Split(k, "|")[1] == MetricUserProbeDays {
+			delete(m, k)
+		}
+	}
+	if len(m) != 0 {
 		t.Fatalf("kept:\n%s", dump(m))
 	}
 }

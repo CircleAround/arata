@@ -30,7 +30,39 @@ func probeConfig() config.Checks {
 // userCollected は 10-19 から遡って days 日に、ログインした要求の数 (user_requests) を入れる (アプリの記録のある日)。
 func userCollected(m metricSeed, days int) {
 	for i := 0; i < days; i++ {
-		m.put(time.Date(2026, 10, 19-i, 0, 0, 0, 0, time.UTC).Format(record.DateLayout), "app", cwlogs.MetricUserRequests, "user", 1000)
+		userProbeRan(m, time.Date(2026, 10, 19-i, 0, 0, 0, 0, time.UTC).Format(record.DateLayout))
+	}
+}
+
+// userProbeRan は day に、ログインした要求の数と、U1・U2 を流した印を入れる (アプリの記録のある日)。
+func userProbeRan(m metricSeed, day string) {
+	m.put(day, "app", cwlogs.MetricUserRequests, "user", 1000)
+	m.put(day, "app", cwlogs.MetricUserProbeDays, cwlogs.UserProbeSummary, 1)
+	m.put(day, "app", cwlogs.MetricUserProbeDays, cwlogs.UserProbeIDs, 1)
+}
+
+// 3 つのチェックより前から user_requests (ログインした要求の数) だけが貯まっていても、U1・U2 を流した日が min_baseline_days に満たない間は
+// 判定せず、待ちの注記を出す (ADR 0071 の 6 節: アプリの平常帯の日数で待つ)。
+func TestUserProbeWaitsForProbeDaysNotUserRequests(t *testing.T) {
+	st := newStore(t)
+	m := metricSeed{st: st, t: t}
+	for day := 6; day <= 21; day++ {
+		m.put(fmt.Sprintf("2026-10-%02d", day), "app", cwlogs.MetricUserRequests, "user", 1000)
+	}
+	for day := 20; day <= 21; day++ { // U1・U2 を流したのは 2 日だけ
+		m.put(fmt.Sprintf("2026-10-%02d", day), "app", cwlogs.MetricUserProbeDays, cwlogs.UserProbeSummary, 1)
+		m.put(fmt.Sprintf("2026-10-%02d", day), "app", cwlogs.MetricUserProbeDays, cwlogs.UserProbeIDs, 1)
+		m.put(fmt.Sprintf("2026-10-%02d", day), "app", cwlogs.MetricUserDenied, "user:52", 500)
+		m.put(fmt.Sprintf("2026-10-%02d", day), "app", cwlogs.MetricUserTemplates, "user:52", 500)
+	}
+	for _, name := range []string{"user_denied", "user_id_enumeration", "user_path_breadth"} {
+		obs, notes := evalProbe(t, name, probeConfig(), st)
+		if len(obs) > 0 {
+			t.Fatalf("%s: judged before probe days were enough: %+v", name, obs)
+		}
+		if len(notes) != 1 || !strings.Contains(notes[0], "蓄積待ち") {
+			t.Fatalf("%s: notes = %q", name, notes)
+		}
 	}
 }
 
@@ -285,7 +317,7 @@ func TestUserProbeWindowBandSkipsMissedDays(t *testing.T) {
 	m := metricSeed{st: st, t: t}
 	// 記録のある日は 10-08〜10-14 と 10-15〜10-21 (10-01〜10-07 は収集が止まっていた)
 	for day := 8; day <= 21; day++ {
-		m.put(fmt.Sprintf("2026-10-%02d", day), "app", cwlogs.MetricUserRequests, "user", 1000)
+		userProbeRan(m, fmt.Sprintf("2026-10-%02d", day))
 	}
 	for day := 8; day <= 14; day++ {
 		m.put(fmt.Sprintf("2026-10-%02d", day), "app", cwlogs.MetricUserDenied, "user:48", 10)
