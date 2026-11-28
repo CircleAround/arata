@@ -211,7 +211,7 @@ func (c *Collector) formatQueries() []MergedQuery {
 	case record.KindHTTPAccess:
 		qs := []MergedQuery{
 			{Name: httpLines, Query: HTTPLinesQuery(c.prof, c.checks), Metrics: []string{MetricProbePaths}, Bin: c.prof.binName("day")},
-			{Name: httpHits, Query: HTTPHitsQuery(c.prof, c.checks), Metrics: []string{MetricSignInFailures, MetricProbeHits}, Bin: c.prof.binName("day")},
+			{Name: httpHits, Query: HTTPHitsQuery(c.prof, c.checks), Metrics: []string{MetricSignInFailures, MetricProbeHits, MetricRateLimited}, Bin: c.prof.binName("day")},
 		}
 		if q, ok := EndpointsQuery(c.prof, c.src.ID, c.checks.EndpointAbuse); ok {
 			qs = append(qs, q)
@@ -417,10 +417,10 @@ func (c *Collector) collectFormat(ctx context.Context, w collect.Window, sink co
 	return err
 }
 
-// collectHTTP は http_access のまとめた集計から sign_in_failures / probe_hits / probe_paths と endpoint_abuse の metric を出す。
+// collectHTTP は http_access のまとめた集計から sign_in_failures / probe_hits / rate_limited / probe_paths と endpoint_abuse の metric を出す。
 func (c *Collector) collectHTTP(ctx context.Context, qs []MergedQuery, linesRows []map[string]string, from, to time.Time, sink collect.RecordSink) error {
 	lb, pp := c.checks.LoginBruteforce, c.checks.ProbePaths
-	out := map[string]dayCounts{MetricSignInFailures: {}, MetricProbeHits: {}, MetricProbePaths: {}}
+	out := map[string]dayCounts{MetricSignInFailures: {}, MetricProbeHits: {}, MetricProbePaths: {}, MetricRateLimited: {}}
 	if len(pp.Paths) > 0 {
 		for _, r := range linesRows {
 			day, ok := parseDay(r["day"])
@@ -448,8 +448,11 @@ func (c *Collector) collectHTTP(ctx context.Context, qs []MergedQuery, linesRows
 		if statusIn(r["status"], pp.Statuses) && (len(pp.Paths) == 0 || r["probe"] != "") && r["probe_ex"] == "" {
 			out[MetricProbeHits].add(day, ip, n)
 		}
+		if rateLimitedRow(c.checks.RateLimitedIP, r) {
+			out[MetricRateLimited].add(day, ip, n)
+		}
 	}
-	for _, m := range []string{MetricSignInFailures, MetricProbeHits, MetricProbePaths} {
+	for _, m := range []string{MetricSignInFailures, MetricProbeHits, MetricRateLimited, MetricProbePaths} {
 		for _, day := range sortedDays(out[m]) {
 			for _, k := range sortedNames(out[m][day]) {
 				if err := sink.Emit(ctx, c.metric(day, m, k, out[m][day][k])); err != nil {

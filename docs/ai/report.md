@@ -69,7 +69,7 @@
 - secret_access (秘匿値の読み取りの異常) の `bulk: true` は持ち出しの兆候。読まれた秘匿値は漏洩したものとして扱う前提で書く。
   data にあるのは名前 / ARN だけ (値は CloudTrail にも arata にも無い)。調べるために値を読みに行くことを勧めない
 - endpoint_abuse (画面への分散した集中・「A のあと B」の連鎖) は事実として書く: 画面の名前・時間幅 (UTC)・件数・異なり IP・ふだんの上限 (`baseline_p99_*`)・同じ UA の IP 数。
-  遮断 (IP の拒否・登録の停止) を勧めず、その時間幅に登録・送信されたものを運営が確認・保留することにつなぐ。`baseline_used: false` は導入直後 (絶対の閾値だけ) と書き添える。利用者ごとの 3 つ (user_denied・user_id_enumeration・user_path_breadth) も事実として書く: 利用者は `user:42` の形 (種類と ID) だけ、`related` で指し合う同じ利用者・同じ日の指摘は 1 つの見出しにまとめてよい。user_id_enumeration の high (拒否に混ざる成功) を先に書く
+  遮断 (IP の拒否・登録の停止) を勧めず、その時間幅に登録・送信されたものを運営が確認・保留することにつなぐ。`baseline_used: false` は導入直後 (絶対の閾値だけ) と書き添える。利用者ごとの 3 つ (user_denied・user_id_enumeration・user_path_breadth) も事実として書く: 利用者は `user:42` の形 (種類と ID) だけ、`related` で指し合う同じ利用者・同じ日の指摘は 1 つの見出しにまとめてよい。user_id_enumeration の high (拒否に混ざる成功) を先に書く。rate_limited_ip (429 の集まった IP) は攻撃と決めずに、`reasons` の `suggest_shared` (ログインできた利用者が多い。正しい利用者が止められている疑い) と `few_users` (少ない。総当たりの疑い。同じ IP の login_bruteforce とまとめる) を分けて書き、理由が無ければ件数だけ。IP の持ち主は推測しない
   UA はハッシュしか無いので原文を推測しない
 - unused_region_activity (ふだん使わないリージョンでの書き込み) は漏洩した認証情報の悪用 (採掘など) の典型。`region`・`apis`・`compute_apis` を根拠に、同じ主体の principal_new_source・
   access_denied・iam_changes と cost_anomaly の同じリージョンの根本原因とまとめ、今も動いている資源の確認を最初に勧める。正規なら `cloudtrail-lookup` の `regions` に足すことを提案する

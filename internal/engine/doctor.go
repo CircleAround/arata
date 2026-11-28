@@ -417,6 +417,9 @@ func (d *doctor) logs(ctx context.Context, src config.Source) {
 	}
 	if prof.RequestLines() {
 		d.requests(ctx, src, c)
+		if d.cfg.Checks.RateLimitedIP.CountsUsers(src.ID) {
+			d.ipUsers(ctx, src, c)
+		}
 	}
 	if src.PathRules() != nil {
 		d.pathIDs(ctx, src, c)

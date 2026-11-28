@@ -86,7 +86,7 @@ func TestConfigInitThenRun(t *testing.T) {
 	if err := json.Unmarshal(c.stdout.Bytes(), &rep); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(rep.Coverage.ChecksRun, ",") != "access_denied,ai_path_usage,defense_evasion,ecs_exec,iam_changes,new_principal,oidc_assume_role,principal_new_source,public_exposure,root_usage,secret_access,signin_session,unknown_assume_role,unused_region_activity" || len(rep.Coverage.ChecksSkipped) != 8 { // 利用者ごとの 3 つは sources が空で skip
+	if strings.Join(rep.Coverage.ChecksRun, ",") != "access_denied,ai_path_usage,defense_evasion,ecs_exec,iam_changes,new_principal,oidc_assume_role,principal_new_source,public_exposure,root_usage,secret_access,signin_session,unknown_assume_role,unused_region_activity" || len(rep.Coverage.ChecksSkipped) != 9 { // 利用者ごとの 3 つは sources が空で skip
 		t.Fatalf("coverage: %+v", rep.Coverage)
 	}
 	if code := c.run("config", "init", "--diff", "-c", c.cfg); code != 0 || c.stdout.String() != "この版の雛形との差分はありません。\n" {

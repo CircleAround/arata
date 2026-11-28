@@ -14,6 +14,7 @@ const (
 	MetricSignInFailures = "sign_in_failures" // http_access: sign-in 失敗 (key = ip)
 	MetricProbeHits      = "probe_hits"       // http_access: 機密パスへの 403/404 (key = ip)
 	MetricProbePaths     = "probe_paths"      // http_access: 機密パスへの 403/404 (key = path)
+	MetricRateLimited    = "rate_limited"     // http_access: rate_limited_ip.statuses (既定 429) の件数 (key = ip。ADR 0094)
 	MetricWAFBlock       = "waf_block"        // waf_action: BLOCK (key = rule)。waf_rule_action から作る (waf.go)
 	MetricWAFBlockIP     = "waf_block_ip"     // waf_action: BLOCK (key = ip)
 )
@@ -35,14 +36,17 @@ type MergedQuery struct {
 // http_access のまとめた集計の名前 (保存しない。クエリの列名)。
 const (
 	httpLines = "http_lines" // 解釈率 + probe_paths
-	httpHits  = "http_hits"  // sign_in_failures + probe_hits
+	httpHits  = "http_hits"  // sign_in_failures + probe_hits + rate_limited
 )
 
 // 決定 (ADR 0031): 集計を 1 本ずつ流すと、Insights は 1 本ごとに範囲のログ全体を読む (費用は本数に比例する)。
 // そこで同じソースの集計を細かい group by の 1 本にまとめ、振り分けを Go で行う。行が爆発する組み合わせ (ip × path) はまとめない。
 //   - lines + probe_paths: 全行を (日, status, 探索パスのときだけ値を持つ probe_path) で数える。行は日 × status × (1 + 探索パスの数) 程度
-//   - sign_in_failures + probe_hits: どちらも IP 別。filter で両方の行に絞り、(日, ip, method, status, パスの印) で数える
-//     (パスの印は parse の名前付き捕獲。sign-in は完全一致、探索は接頭辞)
+//   - sign_in_failures + probe_hits + rate_limited: どれも IP 別。filter でそれらの行に絞り、(日, ip, method, status, パスの印) で数える
+//     (パスの印は parse の名前付き捕獲。sign-in は完全一致、探索と rate_limited は接頭辞)
+//
+// 決定 (ADR 0094 の 2 節): rate_limited は新しいクエリを足さず、この filter の 3 つ目の選択肢にする (ADR 0031。読む量は変わらず、行が 429 の組の分だけ増える)。
+// rate_limited_ip.statuses が空 (既定の無い設定。テストだけ) なら選択肢を足さない。paths が空なら全パスで、パスの印も付けない。
 //
 // HTTPLinesQuery は解釈率と probe_paths のクエリ。結果の列は day / status / probe_path / lines_total / lines_matched。
 func HTTPLinesQuery(p Profile, c config.Checks) string {
@@ -83,9 +87,9 @@ func HTTPLinesQuery(p Profile, c config.Checks) string {
 	return b.String()
 }
 
-// HTTPHitsQuery は sign_in_failures と probe_hits のクエリ。結果の列は day / ip / method / status / sign_in / probe / probe_ex / http_hits。
+// HTTPHitsQuery は sign_in_failures・probe_hits・rate_limited のクエリ。結果の列は day / ip / method / status / sign_in / probe / probe_ex / rate_path / http_hits。
 func HTTPHitsQuery(p Profile, c config.Checks) string {
-	lb, pp := c.LoginBruteforce, c.ProbePaths
+	lb, pp, rl := c.LoginBruteforce, c.ProbePaths, c.RateLimitedIP
 	signIn := and(
 		inList("method", quoteAll(lb.Methods)),
 		inList("path", quoteAll(lb.Paths)),
@@ -102,6 +106,9 @@ func HTTPHitsQuery(p Profile, c config.Checks) string {
 	cond := ""
 	if signIn != "" && probe != "" {
 		cond = "(" + signIn + ") or (" + probe + ")"
+		if rate := rateCond(rl); rate != "" {
+			cond += " or (" + rate + ")"
+		}
 	}
 	var marks []mark
 	group := ", ip, method, status"
@@ -117,11 +124,35 @@ func HTTPHitsQuery(p Profile, c config.Checks) string {
 		marks = append(marks, mark{"probe_ex", func(name string) string { return "^(?<" + name + ">" + prefixAlternation(pp.ExcludePaths) + ")" }})
 		group += ", probe_ex"
 	}
+	if len(rl.Statuses) > 0 && len(rl.Paths) > 0 {
+		marks = append(marks, mark{rateMark, func(name string) string { return "^(?<" + name + ">" + prefixAlternation(rl.Paths) + ")" }})
+		group += ", " + rateMark
+	}
 	b.WriteString(p.head("1d", "day", cond, marks, false, false, false, noPaths))
 	b.WriteString("\n| stats " + p.count() + " as " + httpHits + " by " + p.binBy("1d", "day") + group)
 	b.WriteString("\n| sort " + httpHits + " desc")
 	b.WriteString("\n| limit " + strconv.Itoa(MaxRows))
 	return b.String()
+}
+
+// rateMark は rate_limited_ip.paths に当たったパスの印の列。
+const rateMark = "rate_path"
+
+// rateCond は rate_limited の filter の条件 (statuses が空なら空)。
+func rateCond(rl config.RateLimitedIP) string {
+	if len(rl.Statuses) == 0 {
+		return ""
+	}
+	cond := inList("status", intsToStrings(rl.Statuses))
+	if len(rl.Paths) > 0 {
+		cond = and(cond, "path like /^("+prefixAlternation(rl.Paths)+")/")
+	}
+	return cond
+}
+
+// rateLimitedRow は http_hits の結果の行が rate_limited に入るか (rateCond と同じ意味)。
+func rateLimitedRow(rl config.RateLimitedIP, r map[string]string) bool {
+	return len(rl.Statuses) > 0 && statusIn(r["status"], rl.Statuses) && (len(rl.Paths) == 0 || r[rateMark] != "")
 }
 
 // LinesQuery は解釈率だけの計測クエリ。日ごとの総行数と解釈できた行数を返す (設計書 2-2)。

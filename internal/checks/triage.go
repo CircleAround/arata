@@ -88,6 +88,8 @@ var triageTable = map[string][]TriageRow{
 	"user_denied":         {row(false, noAck, Medium)},
 	"user_id_enumeration": {row(false, noAck, High), row(true, withAck, Medium)},
 	"user_path_breadth":   {row(false, noAck, Low)},
+	// 429 の集まった IP (ADR 0094): low だけ。理由が変われば changed で出直す (重大度は上がらない)
+	"rate_limited_ip": {row(false, noAck, Low)},
 }
 
 // TriageChecks は表のあるチェック (名前順)。

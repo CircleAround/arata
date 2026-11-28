@@ -596,6 +596,28 @@ auth result=success|failure|impersonate kind=user id=42|none [via=password|remem
 - 未確認 (実データで確かめる。PR の本文に方法): stats の後の `parse`・`fields concat(coalesce(…))`・`fields <列> + <列>`・`filter not ispresent(…)`、
   2 段目の `max(<印>)` と 3 段目の `count(<列>)` の組を実データの値で確かめること、`by` の軸の値の無い組 (型の無いリクエスト) の扱い (1 つの組にまとまり、U1 の拒否の件数にはその組も入り、`count(tpl)` には入らないこと)、3 段の stats の 2 段目の中間の結果の大きさの上限 (1 日分)
 
+### 2-8. 429 の集まった IP と、同じ IP からログインできた利用者の数 (`rate_limited`・`ip_users`。ADR 0094 の 2 節)
+
+`rate_limited_ip` (7 章) の材料。例の値は架空。
+
+- **`rate_limited`** (http_access、key = ip): `sign_in_failures`・`probe_hits` と同じ http_hits のクエリの `filter` に、3 つ目の選択肢
+  `(status in [<rate_limited_ip.statuses>] and path like /^(<paths>)/)` を足して数える (新しいクエリを足さない。ADR 0031。読む量は変わらず、結果の行が 429 の組の分だけ増える)。
+  `paths` が空なら全パスで、パスの印 (`rate_path`) も付けない。`statuses` の既定は `[429]`
+- **`ip_users`** (http_user、key = ip): `checks.rate_limited_ip.user_sources` に書いた request_lines のソース (`request.user_id` と ip を取り出すもの。`config check` が確かめる) だけで、U3 を 1 本流す。
+  流す条件は U1・U2 と同じく、この run に `http_user` を引くチェックがあるとき。`rate_limited_ip` は `user_sources` を書くと `http_user` を **OptionalNeeds** で引かせる
+  (決定: Needs に入れると、ユーザー ID が取れない run で `rate_limited_ip` ごと skip され、429 の報告まで止まる。OptionalNeeds は収集だけさせ、取れなくても skip しない)
+  - U3: 1 段目 (request_id のまとめ) → 利用者のいるリクエスト (代わりにログインした操作 `by` を除く) → `filter ispresent(ip)` →
+    `stats count(*) as u_n by day, ip, user_kind, user_id` → `stats count(*) as ip_users by day, ip` → `sort ip_users desc` → `limit 10000`。
+    2 段目以降は `count(*)` だけ (2-7 の確かめた制約: `earliest`・`latest`・数でない `min`・`max` を使わない)。利用者の ID は結果の列に無い
+  - 決定: U1 に IP の軸を足さない (行が (利用者 × IP × 型) に増える)
+  - 決定: 結果の IP はログ由来の値なので、`netip` で読める値だけを残し、正規の形 (IPv4 に写した IPv6 は IPv4、ゾーンは外す) にそろえる (http_access の key と突き合わせるため)
+  - 日の値は `ip_users_store_min` (既定 3) 以上の IP を、日ごとに多い順に `ip_users_store_top` (既定 200) まで。429 の無い IP も残す
+  - 流した日の印は `user_probe_days` の key `ip_users`。決定: その日に形に合った IP の行が 1 つでもあったときだけ書く (ユーザー ID が取れなくなった日を「どの IP も 0 人」と読み違えない)
+  - doctor: 構文の検査と費用の本数 (`QueryCount`) に U3 が入る。`ip_users` の行で、直近の窓の U3 の上位 20 の IP を、ほかの http_access のソースで `filter ip in [...]` の 1 本ずつ探し、
+    現れた割合を出す (ADR 0094 の「確かめが要る点」の 1。半分未満なら warn: アプリのログの ip が ALB の内側の IP だと、`ip_users` は 429 の IP と突き合わせられない)
+- 未確認 (実データで確かめる): request_lines の ip と ALB の client の IP が同じ値か (doctor の `ip_users` の行)、U3 の 2 段目の中間の結果の大きさの上限 (1 日分)、
+  既定のしきい値 (`min_count` 20・`suggest_min_users` 10。ADR 0094 は仮の値)
+
 ### 2-3. ALB のアクセスログから http_access を取る (提案。未実装・未確認)
 
 **ここは提案。** (第 1 段の plain・既定の項目は実環境で確かめた。9 章の「記録の集め方」の決定) 案の比較 (S3 を直接読む、Athena、S3 Select)・費用の見積もり・出典は ADR 0046 (状態: 提案)。実際のログで確かめて採用を決めたら、この節を仕様に書き直す。
@@ -1306,6 +1328,7 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 | user_denied | daily | http_user (`checks.user_denied.sources`) | ログインした利用者 1 人への拒否 (既定 401・403) の件数が、本人の平常帯 (14 日中央値 × 3) とアプリの平常帯 (日ごとの最多の利用者の中央値 × 2) の両方を超え (または 7 日の窓で超え)。決定: ADR 0071・0087 | medium |
 | user_id_enumeration | daily | http_user (+ `path_ids`) | ログインした利用者 1 人が ID を含む型で開いた異なる ID の数が、本人とアプリの平常帯を超え (または窓で超え)。拒否に混ざる成功は high。決定: ADR 0071・0087 | high / medium |
 | user_path_breadth | daily | http_user (+ `path_ids`) | ログインした利用者 1 人が触った型の異なりの数が、本人とアプリの平常帯を超え。決定: ADR 0071 | low |
+| rate_limited_ip | daily | http_access (+ `user_sources` を書けば http_user) | アプリの回数の制限 (既定 429) が 1 日に `min_count` (既定 20) 以上返った IP。同じ IP からログインできた利用者の数 (`ip_users`) を添える。平常帯は持たない。決定: ADR 0094 の 2 節 | low |
 | request_burst | daily | http_access | IP 別件数が平常帯超え (決済画面など除外パスを設定可) | low |
 | waf_block_trend | daily | waf_action | 新規に鳴り始めたルール、Top IP 入れ替わり | low |
 | admin_ops_unknown | daily | regex (admin) | 実行ユーザーが admin_users に無い | high |
@@ -1351,6 +1374,7 @@ approve は allowlist を書き換えるので、組み込み側ではなく人 
 | チェック | Mode | Key | Fingerprint | 判定 |
 |---|---|---|---|---|
 | user_denied / user_id_enumeration / user_path_breadth | event | `<kind>:<id>` | 重大度 + 理由 (user_id_enumeration は型ごとの理由) | 材料は 2-7 の日の値。1 日の値が下限以上で、本人の平常帯 (`baseline_days` 日の中央値 × `factor`) とアプリの平常帯 (記録のある日の、その日いちばん多かった利用者の値の中央値 × `app_factor`) を超える。user_denied と user_id_enumeration は窓 (`window` 日の和) でも判定する |
+| rate_limited_ip | event | `<ip>` | 重大度 + 理由 (`suggest_shared` / `few_users`。数えていなければ空) | 材料は 2-8 の日の値。窓に重なる日の `rate_limited` が `min_count` 以上の IP を、件数の多い日で 1 つ。`source_ips` は対象外。U3 の印のある日は `ip_users` (無い IP は 0) を添え、`suggest_min_users` 以上なら `suggest_shared`、未満なら `few_users`。決定 1 (`shared_sources`) は未実装で、入れるときは下限の切り替え (`minCount`) と data の `shared`・`shared_note`、理由 `shared_heavy` を足す |
 
 - 決定: `sources` が空なら Disabled (skip し、理由を出す)。Disabled のチェックの要る記録は run も doctor も引かない (default-daily に入っても、sources を書くまでユーザー ID のソースを引かない。ADR 0014)
 - 決定: 型の要る 2 つは、`sources` に path_ids のあるソースが無ければ skip (`no path_ids`)

@@ -292,6 +292,8 @@ func TestWAFEquivalence(t *testing.T) {
 func httpEquivChecks() config.Checks {
 	c := abuseChecks()
 	c.ProbePaths.ExcludePaths = []string{"/.env.example"}
+	c.RateLimitedIP.Statuses = []int{429}
+	c.RateLimitedIP.Paths = []string{"/users/", "/api/"}
 	return c
 }
 
@@ -323,6 +325,11 @@ func httpEvents() []cwlogstest.Event {
 		nginxEv(at(21, 6, 0, 0), "198.51.100.9", "GET", "/.env", 200, "scan/1", 5),
 		nginxEv(at(21, 6, 0, 0), "198.51.100.9", "GET", "/.env.example", 404, "scan/1", 5),
 		nginxEv(at(20, 6, 0, 0), "198.51.100.10", "GET", "/.env.bak", 404, "scan/1", 6),
+		// 429 (rate_limited。ADR 0094): paths の接頭辞 (/users/・/api/) に当たるものだけ
+		nginxEv(at(21, 7, 0, 0), "198.51.100.20", "POST", "/users/sign_in", 429, "Browser/1", 30),
+		nginxEv(at(20, 7, 0, 0), "198.51.100.20", "POST", "/users/sign_in", 429, "Browser/1", 8),
+		nginxEv(at(21, 7, 0, 0), "198.51.100.21", "GET", "/api/items?page=2", 429, "Browser/1", 4),
+		nginxEv(at(21, 7, 0, 0), "198.51.100.21", "GET", "/items", 429, "Browser/1", 5),
 	)
 	// endpoint_abuse: 03:20 の幅に 25 IP が登録 (22 IP が同じ UA)、うち 6 IP が 30 分以内にメッセージ送信
 	for i := 0; i < 25; i++ {
@@ -359,6 +366,18 @@ func (p httpPreds) signIn(f map[string]string) bool {
 	lb := p.c.LoginBruteforce
 	return strIn(f["method"], lb.Methods) && strIn(f["path"], lb.Paths) && intIn(f["status"], lb.FailureStatuses)
 }
+
+// rateLimited は rate_limited (ADR 0094) の条件。statuses が空なら数えない。
+func (p httpPreds) rateLimited(f map[string]string) bool {
+	rl := p.c.RateLimitedIP
+	return len(rl.Statuses) > 0 && intIn(f["status"], rl.Statuses) && (len(rl.Paths) == 0 || hasAnyPrefix(f["path"], "", rl.Paths))
+}
+
+// hits は http_hits の filter と同じ意味。
+func (p httpPreds) hits(f map[string]string) bool {
+	return p.signIn(f) || p.probe(f) || p.rateLimited(f)
+}
+
 func (p httpPreds) probe(f map[string]string) bool {
 	pp := p.c.ProbePaths
 	return intIn(f["status"], pp.Statuses) && hasAnyPrefix(f["path"], "", pp.Paths) && !hasAnyPrefix(f["path"], "", pp.ExcludePaths)
@@ -390,7 +409,7 @@ func (p httpPreds) endpoint(ep config.AbuseEndpoint) func(map[string]string) boo
 
 func registerHTTP(f *cwlogstest.Fake, sim *cwlogstest.Sim, p httpPreds) {
 	f.On("as lines_total", sim.Response(nil))
-	f.On("as http_hits", sim.Response(func(r map[string]string) bool { return p.signIn(r) || p.probe(r) }))
+	f.On("as http_hits", sim.Response(p.hits))
 	var eps []func(map[string]string) bool
 	for _, ep := range p.c.EndpointAbuse.Endpoints {
 		if len(ep.Sources) == 0 || strIn("web", ep.Sources) {

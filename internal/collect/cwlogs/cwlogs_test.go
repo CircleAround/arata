@@ -469,7 +469,7 @@ func TestCollectHTTPHitsTruncated(t *testing.T) {
 		}
 		got := strings.Join(c.FormatStats().Truncated, ",")
 		if always {
-			if got != "sign_in_failures,probe_hits" {
+			if got != "sign_in_failures,probe_hits,rate_limited" {
 				t.Fatalf("truncated: %q", got)
 			}
 			continue

@@ -131,6 +131,7 @@ profiles:
 - 判定はどれも、本人の平常帯とアプリの平常帯 (ふだんの日のいちばん多い利用者の値) の両方を超えたもの。閾値は仮の値で、実データで見直す。導入の直後 (アプリの記録のある日が `min_baseline_days` に満たない間) は判定せず `coverage.notes` に残りの日数が出る
 - 代わりにログインした操作 (`by` の付いた要求) は数えない。1 つの要求に actor の行が複数あれば、**最後の行**の利用者に数える (種類と ID は同じ行の組。片方が形に合わない行は使わない)
 - 指摘の読み方と片付けは `arata help ai playbook <チェック>`
+- `rate_limited_ip` (429 の集まった IP) に同じ IP からログインできた利用者の数を添えるには、ID と ip を読むソースを `checks.rate_limited_ip.user_sources` に書く (U3 が 1 日 1 本増える)。ALB の IP と同じ値かは doctor の `ip_users` の行で見る (Rails の `remote_ip` が信頼するプロキシの設定次第)
 
 ## debug_sql (消えうる取り方)
 

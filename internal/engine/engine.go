@@ -1187,7 +1187,8 @@ func (e *Engine) neededKinds(prof config.Profile) map[record.Kind]bool {
 			if d, ok := c.(checks.Disabler); ok && d.Disabled() != "" {
 				continue
 			}
-			for _, k := range c.Needs() {
+			// OptionalNeeds (rate_limited_ip の http_user。ADR 0094) も引かせる。取れなくても skipReason は見ない
+			for _, k := range checks.CollectKinds(c) {
 				out[k] = true
 			}
 		}

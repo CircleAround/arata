@@ -51,6 +51,7 @@ CI は `.github/workflows/fuzz.yml` が週 1 回と手動 (`workflow_dispatch`�
 | | `FuzzRequestRows` `FuzzCollectRequestRows` | `request_lines` の Insights の結果の行 | 件数は有限で負でない。最初の行のある数 ≤ request_id の数、使い回しの数 ≤ 最初の行のある数。数えるリクエストの数は最初の行のあるリクエストの数より減らない。鍵の数が最初の行の数の半分未満なら必ず止める。`FORMAT_MISMATCH` なら record を出さない |
 | | `FuzzSingleUserExamples` | パスの型 (Insights の結果を Sanitize したもの。path_ids) | doctor の `path_ids` の行の例には、印・設定の `templates` の固定の区間・`<長さ>` だけが残る。2 人以上が触った型の同じ位置の値でも、ログ由来の値は出ない |
 | | `FuzzUserProbeRows` | 利用者ごとの総当たりの U1・U2 の結果の行 (ADR 0071・0087) | 日の値の key は `<種類>:<ID>` (ストアの規則に合う利用者) と、`:id` を含み `?` `#` `|` を含まない型と、メソッドの固定の組だけ。値は 0 以上の有限の整数 |
+| | `FuzzIPUsersRows` | 同じ IP からログインできた利用者の数 (U3) の結果の行 (ADR 0094) | `ip_users` の key は netip で読める正規の形の IP (ゾーンなし、IPv4 に写した IPv6 は IPv4) だけ。値は `ip_users_store_min` 以上の有限の整数。流した日の印は、IP を 1 つでも読めた日にだけ付く |
 | | `FuzzRequestCollect` | ログの行 (リクエストごとの request_id の割り当て。偽の Insights が 2 段の `stats` を解釈する) | 同じ request_id を何度使っても、数えた件数は request_id の付いた最初の行の数とちょうど同じ。通らないときは `FORMAT_MISMATCH` で record を 1 つも出さない。最初の角括弧を鍵にする設定は必ず止まる |
 | | `FuzzUserValues` | アプリのログから取り出した値 (種類・ID・auth の結果・手段・理由。ADR 0052) | Go の判定は、クエリの中で突き合わせる正規表現と同じものを受ける。形に合った種類と ID は `:`・`\|`・`@`・空白を含まない (主体の key を一意に分けられる) |
 | | `FuzzUserActorPair` | 1 つの要求の 2 つの actor の行 (任意の値) | 1 段目の後の利用者と by は、種類と ID の両方が形に合った最後の行の組と同じ (無ければ空)。別の行の種類と ID を混ぜない |

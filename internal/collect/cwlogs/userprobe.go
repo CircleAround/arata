@@ -85,7 +85,7 @@ const (
 // run はそのクエリを流さずにソースの誤りにする (断られるクエリを送らない)
 const UserQueryLen = ListedQueryLen
 
-// LongQueries は、長さが UserQueryLen を超える U1・U2 の説明 (無ければ空)。
+// LongQueries は、長さが UserQueryLen を超える U1・U2・U3 の説明 (無ければ空)。
 func (c *Collector) LongQueries() []string {
 	var out []string
 	for _, q := range c.userQueries() {
@@ -112,7 +112,7 @@ func (c *Collector) userNeeds() (summary, ids bool) {
 	return us.Denied || us.Breadth && paths, us.IDs && paths
 }
 
-// userQueries は U1・U2 (要るものだけ)。
+// userQueries は U1・U2・U3 (要るものだけ)。
 func (c *Collector) userQueries() []MergedQuery {
 	summary, ids := c.userNeeds()
 	var out []MergedQuery
@@ -122,6 +122,10 @@ func (c *Collector) userQueries() []MergedQuery {
 	}
 	if ids {
 		out = append(out, MergedQuery{Name: userIDsQuery, Query: UserIDsQuery(c.prof, c.checks), Metrics: []string{MetricUserIDs}, Bin: c.prof.binName("day")})
+	}
+	// U3 (ipusers.go。ADR 0094)
+	if c.ipUsersNeeded() {
+		out = append(out, MergedQuery{Name: UserProbeIPUsers, Query: IPUsersQuery(c.prof), Metrics: []string{MetricIPUsers}, Bin: c.prof.binName("day")})
 	}
 	return out
 }
@@ -227,7 +231,7 @@ func UserIDsQuery(p Profile, ch config.Checks) string {
 	return b.String()
 }
 
-// collectUsers は U1・U2 を範囲の中の UTC の 1 日ずつ流し、日の値を出す。この run に http_user の要るチェックが無ければ流さない。
+// collectUsers は U1・U2・U3 を範囲の中の UTC の 1 日ずつ流し、日の値を出す。この run に http_user の要るチェックが無ければ流さない。
 func (c *Collector) collectUsers(ctx context.Context, from, to time.Time, sink collect.RecordSink) error {
 	if c.selected != nil && !c.selected[record.KindHTTPUser] {
 		return nil
@@ -246,9 +250,16 @@ func (c *Collector) collectUsers(ctx context.Context, from, to time.Time, sink c
 				return err
 			}
 			truncated := len(rows) >= MaxRows
-			if q.Name == userSummaryQuery {
+			switch q.Name {
+			case userSummaryQuery:
 				err = c.emitUserSummary(ctx, rows, sink)
-			} else {
+			case UserProbeIPUsers:
+				// 流した日の印は emitIPUsers が、形に合った行のあった日だけに書く
+				if err := c.emitIPUsers(ctx, rows, sink); err != nil {
+					return err
+				}
+				continue
+			default:
 				err = c.emitUserIDs(ctx, rows, truncated, sink)
 			}
 			if err != nil {
