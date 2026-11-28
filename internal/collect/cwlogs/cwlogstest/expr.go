@@ -12,6 +12,12 @@ import (
 //   - concat に無い項目を渡さない (本物の null の扱いを確かめていない)。coalesce か if を通す
 //   - coalesce は最初の「ある」値 (空の文字列もある値)
 //   - `<項目> + <項目>` は数の和 (U1 の sort の順。片方が無ければ値なし)
+//   - concat の引数は MaxConcatArgs 個まで (本物は項目・式の引数が 11 個で「Too Many Arguments」の MalformedQueryException。
+//     2026-11-28 に確かめた。文字列だけなら 20 個でも通ったが、ここでは数え分けずに引数の数で止める)
+//
+// MaxConcatArgs は concat の引数の上限 (本物の Insights で 10 個は通り、11 個で断られた)。
+const MaxConcatArgs = 10
+
 type simExpr struct {
 	fn   string // "" なら lit / field
 	lit  *string
@@ -49,6 +55,9 @@ func parseExpr(s string) *simExpr {
 	case "concat", "coalesce":
 		if len(e.args) == 0 {
 			panic("sim: " + e.fn + " needs arguments: " + s)
+		}
+		if e.fn == "concat" && len(e.args) > MaxConcatArgs {
+			panic("sim: concat() takes at most " + strconv.Itoa(MaxConcatArgs) + " arguments (Insights: Too Many Arguments): " + s)
 		}
 	case "ispresent":
 		if len(e.args) != 1 || e.args[0].fld == "" {

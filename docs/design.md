@@ -546,7 +546,11 @@ auth result=success|failure|impersonate kind=user id=42|none [via=password|remem
   決定: 「2 人以上が触った型の同じ位置の値」は残さない。ログイン名の区間はほかの人も触る位置で (`/alice/followers` を bob も見る)、残すとそのまま出る (レビューの指摘)。
   利用者の ID と対象 ID は Insights の中で数えるだけで、結果は (日, 型) ごとの件数と利用者の数だけ。型が 1 つも無い・行の上限に当たったときは warn。1 人しか触らなかった型があるだけでは warn にしない
 - 未確認 (実データで確かめる。ADR 0071・0087 の「未確認の点」): Insights の `parse` の選択肢が先頭から試されること、省略できる名前付きキャプチャの並びで区間を取り出せること、
-  拡張子を外す遅延の繰り返し、`ispresent` を `if` の条件に置けること、`concat` の引数の数の上限、parse の名前付きキャプチャの数の上限、`$` が末尾の改行の前に当たらないこと
+  拡張子を外す遅延の繰り返し、`ispresent` を `if` の条件に置けること、parse の名前付きキャプチャの数の上限、`$` が末尾の改行の前に当たらないこと
+- 確かめた事実 (本物の Logs Insights、2026-11-28): **`concat` の引数は 10 個まで**。項目・式の引数が 11 個で `Too Many Arguments` (MalformedQueryException) になる
+  (文字列の定数だけなら 20 個でも通った)。型の部品は `templates` の数 + `max_segments` + 1 個、ID の部品は `templates` の `:id` の数 + `max_segments` 個になり、
+  `templates` 3 つ・`max_segments` 8 で上限を超えて U1・U2・doctor の `path_ids` の行のクエリが `QUERY_INVALID` になった。
+  決定: 10 個ずつの `concat` に分けて入れ子にする (入れ子の `concat` は 30 個でも通った)。Sim は 11 個以上の引数の `concat` を panic にする
 
 ### 2-7. 利用者ごとの総当たりの日の値 (U1・U2。ADR 0071 の 6 節・0087 の 1〜3 節)
 
@@ -562,7 +566,7 @@ auth result=success|failure|impersonate kind=user id=42|none [via=password|remem
   - U1: 2 段目 (日, 利用者, 型) → 3 段目 (日, 利用者)。`拒否の件数 + 型の数` の降順、`limit 10000`
   - U2: 1 段目に対象 ID の列を足し、2 段目 (日, 利用者, 型, 対象 ID) → 3 段目 (日, 利用者, 型)。異なる ID の数の降順、`limit 10000`
   - 代わりにログインした操作 (`by` の付いたリクエスト) と、形に合わない利用者のリクエストは 1 段目の後で除く
-  - 決定: 印は `parse` の名前付きキャプチャで作り、「印のある型・ID の数」は 2 段目の `latest(<印>)` (印の無い組は値なし) を 3 段目の `count(<列>)` で数える。stats の後の `if` は使わない (else の項目が null になる)。
+  - 決定: 印は `parse` の名前付きキャプチャで作り、「印のある型・ID の数」は 2 段目の `max(<印>)` (印の無い組は値なし) を 3 段目の `count(<列>)` で数える。印は数 (ステータスの 3 桁) にする。stats の後の `if` は使わない (else の項目が null になる)。
     3xx の拒否は、メソッドとステータスを 1 つの文字列 (`GET 302`) にして 1 つの `parse` で決める
   - 決定: メソッドは GET・HEAD・POST・PUT・PATCH・DELETE と other の固定の組で数える (ログの値で key を増やさない)
   - 決定: `part_floor` の `filter` (stats の後の filter) は入れない (確かめていない)。sort と limit で受け、`store_min` で落とすのは Go の側
@@ -584,8 +588,12 @@ auth result=success|failure|impersonate kind=user id=42|none [via=password|remem
 - 決定: 分布の行は `user_ids` を残した型の分だけ (型の数で行を増やさない)。アプリの平常帯 (いちばん多い利用者の値) はその型の `max` で作れる。残さなかった型の最多は `store_min` 未満で、判定の閾値より十分小さい
 - 決定: 型に `|` を含む区間は `:x` に伏せる (key の区切り。2-6)
 - doctor の費用の行 (ADR 0028) の本数 (`QueryCount`) に U1・U2 が入る。費用の見積もりは ADR 0087 の 3 節
+- 確かめた事実 (本物の Logs Insights、2026-11-28): `earliest`・`latest` は 2 段目以降の stats で使えない (行の時刻を暗に使い、`Unknown symbols found in or after stats: @timestamp` の
+  MalformedQueryException)。`max` は 2 段目以降でも通り、数の値 (`"200"`) なら、値のある行が 1 つでもあれば値あり、無い行だけなら値なしになる。数でない値 (`"GET 404"`) の `max` は値なしになる。
+  決定: 2 段目の印は `max` で取り、U2 のメソッドとステータスで決めた印は、もう一度 `parse` してステータスの 3 桁だけにしてから渡す。Sim は 2 段目以降の `earliest`・`latest` と、数でない値の `min`・`max` を panic にする。
+  U1・U2 (`templates` 3〜5 つ・`max_segments` 8 の設定から組んだ文) は、構文の検査を通り、空の範囲で最後まで流れた
 - 未確認 (実データで確かめる。PR の本文に方法): stats の後の `parse`・`fields concat(coalesce(…))`・`fields <列> + <列>`・`filter not ispresent(…)`、
-  2 段目の `latest(<印>)` と 3 段目の `count(<列>)` の組、`by` の軸の値の無い組 (型の無いリクエスト) の扱い (1 つの組にまとまり、U1 の拒否の件数にはその組も入り、`count(tpl)` には入らないこと)、3 段の stats の 2 段目の中間の結果の大きさの上限 (1 日分)
+  2 段目の `max(<印>)` と 3 段目の `count(<列>)` の組を実データの値で確かめること、`by` の軸の値の無い組 (型の無いリクエスト) の扱い (1 つの組にまとまり、U1 の拒否の件数にはその組も入り、`count(tpl)` には入らないこと)、3 段の stats の 2 段目の中間の結果の大きさの上限 (1 日分)
 
 ### 2-3. ALB のアクセスログから http_access を取る (提案。未実装・未確認)
 

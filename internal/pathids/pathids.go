@@ -411,6 +411,24 @@ func (c *Compiled) QueryLen() int { return len(c.query) - len(inPlaceholder) }
 
 const inPlaceholder = "\x00in\x00"
 
+// maxConcatArgs は Insights の concat の引数の上限。
+// 決定: 本物の Insights で、項目・式の引数が 10 個の concat は通り、11 個で「Too Many Arguments」(MalformedQueryException) になった (2026-11-28 に確かめた)。
+// 入れ子の concat (10 個の concat を 3 つ並べた concat) は通った。型は templates の数 + max_segments + 1 個、ID は templates の :id の数 + max_segments 個の部品になるので、
+// 10 個ずつの concat に分けて入れ子にする。
+const maxConcatArgs = 10
+
+// concatExpr は parts をつなぐ concat の式 (引数が maxConcatArgs を超えるときは入れ子にする)。
+func concatExpr(parts []string) string {
+	if len(parts) <= maxConcatArgs {
+		return "concat(" + strings.Join(parts, ", ") + ")"
+	}
+	var groups []string
+	for i := 0; i < len(parts); i += maxConcatArgs {
+		groups = append(groups, concatExpr(parts[i:min(i+maxConcatArgs, len(parts))]))
+	}
+	return concatExpr(groups)
+}
+
 // buildQuery は Query の文を組み立てる。
 //
 // 決定 (確かめた事実に合わせる。設計書 2-4・2-5):
@@ -479,7 +497,7 @@ func (c *Compiled) buildQuery() string {
 	if len(idParts) == 0 {
 		idParts = append(idParts, `""`)
 	}
-	lines = append(lines, "fields concat("+strings.Join(tplParts, ", ")+") as pi_tpl0, concat("+strings.Join(idParts, ", ")+") as pi_id0")
+	lines = append(lines, "fields "+concatExpr(tplParts)+" as pi_tpl0, "+concatExpr(idParts)+" as pi_id0")
 	lines = append(lines, `parse pi_tpl0 /^(?<`+TemplateField+`>\/[\s\S]*)$/`, `parse pi_id0 /^(?<`+IDField+`>\/[\s\S]*)$/`)
 	return strings.Join(lines, "\n| ")
 }

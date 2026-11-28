@@ -34,7 +34,7 @@ import (
 //   - 流すのは、ユーザー ID を読むソースを 3 つのチェックのどれかの sources に書き、http_user を要るチェックがこの run にあるときだけ。
 //     U1 は user_denied か user_path_breadth (path_ids のあるソース)、U2 は user_id_enumeration (path_ids のあるソース) が要るとき
 //   - 印は、確かめた形 (parse の名前付きキャプチャ・count(<項目>) が値のある行だけを数えること) で作り、stats の後の if を使わない。
-//     「型のうち成功のあったものの数」は、2 段目で latest(<印>) を取り (印の無い型は値なし)、3 段目で count(<その列>) で数える
+//     「型のうち成功のあったものの数」は、2 段目で max(<印>) を取り (印の無い型は値なし。latest は 2 段目以降の stats で使えない: 行の時刻を暗に使い、本物の Insights が「Unknown symbols found in or after stats: @timestamp」で断った。2026-11-28 に確かめた)、3 段目で count(<その列>) で数える
 //   - 3xx は、メソッドが GET か HEAD のときだけ拒否に数える (0087 の 7 節)。メソッドとステータスを 1 つの文字列にして 1 つの parse で決める
 //   - メソッドごとの件数は GET・HEAD・POST・PUT・PATCH・DELETE と other に固定する (ログの値で key を増やさない)
 //   - part_floor の filter (stats の後の filter) は入れない (Insights で確かめていない)。sort と limit で受け、store_min で落とすのは Go の側
@@ -150,7 +150,7 @@ func UserSummaryQuery(p Profile, ch config.Checks, templates bool) string {
 		b.WriteString("\n| sort " + MetricUserDenied + " desc")
 	} else {
 		b.WriteString("\n| parse status /^(?<u_ok>2[0-9][0-9])$/\n| parse status /^(?<u_nf>404)$/")
-		b.WriteString("\n| stats sum(" + rlStarts + ") as u_n, count(u_dn) as u_d, latest(u_ok) as u_tok, latest(u_dn) as u_tdn, latest(u_nf) as u_tnf by day, user_kind, user_id, " + rlTemplate)
+		b.WriteString("\n| stats sum(" + rlStarts + ") as u_n, count(u_dn) as u_d, max(u_ok) as u_tok, max(u_dn) as u_tdn, max(u_nf) as u_tnf by day, user_kind, user_id, " + rlTemplate)
 		b.WriteString("\n| stats sum(u_d) as " + MetricUserDenied + ", count(" + rlTemplate + ") as " + MetricUserTemplates +
 			", count(u_tok) as " + MetricUserTemplatesOK + ", count(u_tdn) as " + MetricUserTemplatesDenied + ", count(u_tnf) as " + MetricUserTemplatesNotFound +
 			", sum(u_n) as u_rq by day, user_kind, user_id")
@@ -187,9 +187,12 @@ func UserIDsQuery(p Profile, ch config.Checks) string {
 	if len(redirects) > 0 {
 		denied = append(denied, "(?:GET|HEAD) (?:"+statusAlt(redirects)+")")
 	}
-	b.WriteString("\n| parse u_ms /^(?<u_dn>" + strings.Join(denied, "|") + ")$/")
+	// 2 段目の max に渡す印は数にする (数でない値の max は値なしになる。2026-11-28 に本物の Insights で確かめた)。メソッドとステータスで決めた印から、ステータスだけを取り出す
+	b.WriteString("\n| parse u_ms /^(?<u_dm>" + strings.Join(denied, "|") + ")$/")
+	b.WriteString("\n| parse u_dm / (?<u_dn>[0-9]{3})$/")
 	if len(redirects) > 0 {
-		b.WriteString("\n| parse u_ms /^(?<u_rd>(?:GET|HEAD) (?:" + statusAlt(redirects) + "))$/")
+		b.WriteString("\n| parse u_ms /^(?<u_rm>(?:GET|HEAD) (?:" + statusAlt(redirects) + "))$/")
+		b.WriteString("\n| parse u_rm / (?<u_rd>[0-9]{3})$/")
 	}
 	var alts, aggs2, aggs3 []string
 	for i, m := range userMethods {
@@ -199,10 +202,10 @@ func UserIDsQuery(p Profile, ch config.Checks) string {
 		aggs3 = append(aggs3, "sum(u_c"+strconv.Itoa(i)+") as u_s"+strconv.Itoa(i))
 	}
 	b.WriteString("\n| parse u_ms /^(?:" + strings.Join(alts, "|") + ") /")
-	two := []string{"count(*) as u_n", "latest(u_ok) as u_iok", "latest(u_dn) as u_idn"}
+	two := []string{"count(*) as u_n", "max(u_ok) as u_iok", "max(u_dn) as u_idn"}
 	three := []string{"count(*) as " + MetricUserIDs, "count(u_iok) as " + MetricUserIDsOK, "count(u_idn) as " + MetricUserIDsDenied}
 	if len(redirects) > 0 {
-		two = append(two, "latest(u_rd) as u_ird")
+		two = append(two, "max(u_rd) as u_ird")
 		three = append(three, "count(u_ird) as "+MetricUserDeniedRedirects)
 	}
 	two = append(two, aggs2...)

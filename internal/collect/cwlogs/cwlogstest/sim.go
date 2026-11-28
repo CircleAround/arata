@@ -29,7 +29,10 @@ type Event struct {
 //     評価する位置は、最初の stats より後ろに filter があればその位置 (リクエスト単位の filter)、無ければ最初の stats の直前
 //   - `stats <集計>, ... [by <軸>, ...]` を何段でも (ADR 0051。2 段目以降は前の段の結果の行を集計する)。
 //     集計は count(*) / count(<f>) / sum(<f>) / min(<f>) / max(<f>) / earliest(<f>) / latest(<f>)。
-//     earliest / latest は、その項目の無い行を飛ばす。軸は `bin(<N><d|h|m>) as <name>` かフィールド
+//     earliest / latest は、その項目の無い行を飛ばす。軸は `bin(<N><d|h|m>) as <name>` かフィールド。
+//     earliest / latest は最初の stats だけで受け付ける (本物は 2 段目以降で「Unknown symbols found in or after stats: @timestamp」の
+//     MalformedQueryException。行の時刻を暗に使うため。2026-11-28 に確かめた。max は 2 段目以降でも通り、値のある行が 1 つでもあれば値あり、無ければ値なしだった。
+//     ただし 2 段目以降の max に数でない値 ("GET 404") を渡すと値なしになったので、2 段目以降の min / max は数でない値で止める)
 //   - `limit`
 //
 // 問い合わせの範囲 [StartTime, EndTime] (両端を含む) の行だけを数える。group by のフィールドが無い行は null の組にまとめ、結果の行にそのフィールドを出さない。
@@ -57,6 +60,8 @@ var (
 	sortLine    = regexp.MustCompile(`^sort (\S+) desc$`)
 	inExpr      = regexp.MustCompile(`^filter (\S+) in \[("[^"\\]*"(?:, "[^"\\]*")*)\]$`)
 	inItem      = regexp.MustCompile(`^"([^"\\]*)"$`)
+	// laterTimeAgg は 2 段目以降の stats で使えない集計 (行の時刻を暗に使う)。
+	laterTimeAgg = regexp.MustCompile(`(?:^|[ ,])(?:earliest|latest)\(`)
 )
 
 const simTime = "2006-01-02 15:04:05.000"
@@ -225,11 +230,14 @@ func (s *Sim) Rows(query string, from, to time.Time, filter func(map[string]stri
 				panic("sim: unsupported stats " + line)
 			}
 			seenStats++
+			if seenStats > 1 && laterTimeAgg.MatchString(m[1]) {
+				panic("sim: earliest() / latest() use @timestamp, which is gone after the first stats (Insights: Unknown symbols found in or after stats: @timestamp); use min() / max(): " + line)
+			}
 			if firstStats < 0 {
 				firstStats = len(ops)
 				ops = append(ops, nil) // 最初の stats の直前の filter の場所
 			}
-			op, first := statsOp(m[1], m[2], seenStats == nStats, define)
+			op, first := statsOp(m[1], m[2], seenStats == nStats, seenStats > 1, define)
 			sortBy = first
 			ops = append(ops, op)
 		case strings.HasPrefix(line, "limit "):
@@ -288,7 +296,7 @@ func (s *Sim) Rows(query string, from, to time.Time, filter func(map[string]stri
 }
 
 // statsOp は stats の 1 段。last は最後の段か (時刻の出し方が変わる)。返す名前は最初の集計の名前 (結果の並び順に使う)。
-func statsOp(aggList, byList string, last bool, define func(string)) (simOp, string) {
+func statsOp(aggList, byList string, last, later bool, define func(string)) (simOp, string) {
 	var aggs []agg
 	for _, a := range strings.Split(aggList, ", ") {
 		am := aggExpr.FindStringSubmatch(a)
@@ -381,6 +389,8 @@ func statsOp(aggList, byList string, last bool, define func(string)) (simOp, str
 						st.val, st.at = v, r.t
 					}
 					st.has = true
+				case later && (ag.fn == "min" || ag.fn == "max") && !isNumber(v):
+					panic("sim: " + ag.fn + "() of a non-number after the first stats is null in Insights; parse the digits out first: " + ag.fn + "(" + ag.arg + ") = " + strconv.Quote(v))
 				case ag.fn == "min":
 					if !st.has || less(v, st.val) {
 						st.val = v
@@ -424,6 +434,12 @@ func statsOp(aggList, byList string, last bool, define func(string)) (simOp, str
 }
 
 // less は数として読める値は数で、それ以外は文字列として比べる。
+// isNumber は数として読める値か (2 段目以降の min / max に渡してよい値)。
+func isNumber(s string) bool {
+	_, err := strconv.ParseFloat(s, 64)
+	return err == nil
+}
+
 func less(a, b string) bool {
 	x, errA := strconv.ParseFloat(a, 64)
 	y, errB := strconv.ParseFloat(b, 64)
