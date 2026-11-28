@@ -116,3 +116,4 @@
 | [0091](0091-ecs-exec-usual-shape.md) | ECS Exec (`ecs_exec`) は、その主体の「いつもの形」(クラスター × コンテナ・1 日の回数・MFA・送信元の種類) に収まり、同じ日にほかの普通でない指摘が無いときだけ low に下げる (AWS の IP の範囲は一覧を加工して同梱する) | 提案 |
 | [0092](0092-signin-session.md) | `aws login` の出し直し (`CreateOAuth2Token`) を残し、同じログインのセッションの出し直しが、そのセッションでも主体の平常帯でも知らない /24 から来たら high (`signin_session`)。セッションの数・失敗は low。サインインの長さの変更は iam_changes で medium (デプロイの主体でも下げない) | 採用 |
 | [0093](0093-slack-thread-details.md) | aratam は 1 通目に一番伝えたいこと (まず対応・取れていないもの・件数) と確認推奨の概要を、1 通目のスレッドへの返信 (3 通まで) に詳細を送る (`slack.details: thread`。bot の方式だけ。書かなければ今の 1 通)。`ts` は同じ run の中だけで使い、run をまたぐ状態は持たない | 採用 |
+| [0094](0094-shared-sources-rate-limited.md) | 人の多い送信元 (学校・会場の NAT) を allowlist の `shared_sources` に置き、丸ごと外さず別のしきい値で見る。429 の集まった IP を、同じ IP からログインできた利用者の数を添えて low で報告する (`rate_limited_ip`)。IP の素性はクラウドの事業者 → 国・AS の順に同梱のデータで引き、逆引きは既定で引かない | 採用 |
